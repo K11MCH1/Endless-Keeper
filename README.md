@@ -209,11 +209,8 @@ Dungeon Keeper, there is a place for you.
 |---|---|
 | 🎮 **Bullfrog Productions** | For creating *Dungeon Keeper* (1997), published by Electronic Arts. |
 | 🔥 **The KeeperFX team and contributors** | For [KeeperFX](https://github.com/dkfans/keeperfx), the open-source engine Endless Keeper is built on. None of this would exist without their years of work. |
-| 🏰 **Keeper Klan** | For keeping the Dungeon Keeper community alive. Join them on [Discord](https://discord.com/invite/hE4p7vy2Hb). |
 | 🔒 **Flip-FriendSpace** | For the Lua security fix, ported from [keeperfx-dx12](https://github.com/Flip-FriendSpace/keeperfx-dx12). |
 | 📦 **Open-source libraries** | SDL, SDL_mixer and SDL_image, LuaJIT, ENet, zlib, libspng, FFmpeg, OpenAL Soft, libcurl, miniupnpc, libnatpmp and the other libraries KeeperFX builds on. |
-| ⛏️ **Minecraft** | For the inspiration: chunks, day and night, and a world that never ends. |
-| 😈 **KIMCHI** | Endless Keeper. |
 
 ---
 
