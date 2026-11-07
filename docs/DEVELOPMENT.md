@@ -128,12 +128,13 @@ installer/make-package.sh pkg/endless-keeper.7z
 example), then compile, giving that folder:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.0 /DPackageDir=C:\path\to\unpacked installer\endless-keeper.iss
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DRelease=1 /DStage=Alpha /DPackageDir=C:\path\to\unpacked installer\endless-keeper.iss
 ```
 
-This makes `EndlessKeeperSetup-0.1.0.exe`. The KeeperFX release it downloads (its address, checksum and size) is set
-at the top of `installer/endless-keeper.iss`. To test without clicking through the wizard:
-`EndlessKeeperSetup-0.1.0.exe /VERYSILENT /DIR="C:\Games\EndlessKeeper-test" /DKDIR="<your Dungeon Keeper folder>"`.
+This makes `EndlessKeeperSetup-1_4_0-1-Alpha.exe`: releases are named `<KeeperFX stable>-<Endless Keeper release>-<stage>`.
+The KeeperFX release it downloads (its version, address, checksum and size) is set at the top of
+`installer/endless-keeper.iss`. To test without clicking through the wizard:
+`EndlessKeeperSetup-1_4_0-1-Alpha.exe /VERYSILENT /DIR="C:\Games\EndlessKeeper-test" /DKDIR="<your Dungeon Keeper folder>"`.
 
 ---
 

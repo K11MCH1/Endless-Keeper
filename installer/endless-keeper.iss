@@ -8,11 +8,17 @@
 ;      lists as obsolete since the base package.
 ; An update skips the download when the folder already has the same base. Uninstalling keeps the saved games.
 ;
-; Build:  ISCC /DAppVersion=0.1.0 /DPackageDir=<the unpacked Endless Keeper package> installer\endless-keeper.iss
-; Silent: EndlessKeeperSetup-x.y.z.exe /VERYSILENT /DIR="C:\Games\EndlessKeeper" /DKDIR="<Dungeon Keeper folder>"
+; Versions: <KeeperFX stable>-<Endless Keeper release> <stage>, e.g. 1.4.0-1 Alpha: Endless Keeper release 1, on
+; KeeperFX 1.4.0. The files are named EndlessKeeperSetup-1_4_0-1-Alpha.exe.
+;
+; Build:  ISCC /DRelease=1 /DStage=Alpha /DPackageDir=<the unpacked Endless Keeper package> installer\endless-keeper.iss
+; Silent: EndlessKeeperSetup-1_4_0-1-Alpha.exe /VERYSILENT /DIR="C:\Games\EndlessKeeper" /DKDIR="<Dungeon Keeper folder>"
 
-#ifndef AppVersion
-  #define AppVersion "0.0.0"
+#ifndef Release
+  #define Release "0"
+#endif
+#ifndef Stage
+  #define Stage "Alpha"
 #endif
 #ifndef PackageDir
   #error PackageDir must be the folder of the unpacked Endless Keeper package (ISCC /DPackageDir=...)
@@ -22,12 +28,16 @@
 #endif
 
 ; The KeeperFX release the Endless Keeper package is laid over
+#define BaseVersion  "1.4.0"
 #define BaseName     "keeperfx_1_4_0_complete"
 #define BaseBuild    "5136"
 #define BaseUrl      "https://github.com/dkfans/keeperfx/releases/download/v1.4.0/keeperfx_1_4_0_complete.7z"
 #define BaseHash     "82d9d5634e8ea6cabb8f62fbd4830b758919893863cd313517af256a3040a279"
 #define BaseSize     "374587275"
 #define BaseUnpacked "668012479"
+
+#define AppVersion   BaseVersion + "-" + Release + " " + Stage
+#define FileVersion  StringChange(BaseVersion, ".", "_") + "-" + Release + "-" + Stage
 
 [Setup]
 AppId={{79BFF639-7219-482F-B46A-D2A8ECFEC411}
@@ -45,7 +55,10 @@ DisableWelcomePage=no
 PrivilegesRequired=lowest
 UsedUserAreasWarning=no
 OutputDir={#OutputDir}
-OutputBaseFilename=EndlessKeeperSetup-{#AppVersion}
+OutputBaseFilename=EndlessKeeperSetup-{#FileVersion}
+VersionInfoVersion={#BaseVersion}.{#Release}
+VersionInfoProductVersion={#BaseVersion}.{#Release}
+VersionInfoTextVersion={#AppVersion}
 SetupIconFile=endless-keeper.ico
 UninstallDisplayIcon={app}\keeperfx.exe
 UninstallDisplayName=Endless Keeper
