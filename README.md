@@ -123,26 +123,41 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 |:-:|---|
 | 💻 | **Windows 10 or 11**. 64-bit is recommended: big worlds can use up to 4 GB of memory. |
 | 💿 | **An original copy of Dungeon Keeper** (GOG, Steam or the original CD). Endless Keeper contains none of the original game's art, sound or music. |
-| 🔥 | **KeeperFX 1.4.0 Alpha (build 5593)**, installed with your Dungeon Keeper files. Endless Keeper is built on this version and uses its game data. |
+| 🌐 | **An internet connection during setup.** The setup downloads the KeeperFX base game (about 360 MB) from KeeperFX's own GitHub releases. |
 | 🌐 | **For hosting over the internet:** port 5556 open (UDP) on your router or firewall. |
 
 ---
 
 ## 🎮 How to play
 
-1. **Install KeeperFX.** Get it from [keeperfx.net](https://keeperfx.net), point it at your Dungeon Keeper files and
-   start it once to check that it runs.
-2. **Get Endless Keeper.** Ready-to-play downloads are coming soon. For now, build it from source with the
-   [Development Guide](docs/DEVELOPMENT.md) (it takes a few minutes).
-3. **Copy the files** into your KeeperFX folder. Keep a backup of your original `keeperfx.exe` first!
+1. **Download** `EndlessKeeperSetup-x.y.z.exe` from the [latest release](https://github.com/K11MCH1/Endless-Keeper/releases/latest).
+2. **Run it.** Endless Keeper gets its own folder (`C:\Games\EndlessKeeper` unless you pick another), so an existing
+   KeeperFX installation stays exactly as it is.
+3. **Show it your Dungeon Keeper.** The setup finds GOG, Steam, EA/Origin and KeeperFX installations by itself, or
+   you can choose the folder. It copies the few original files the game needs (palettes, two texture files, three
+   sound banks and, for digital copies, the music).
+4. **Wait a minute** while it downloads the KeeperFX base game and installs Endless Keeper on top of it.
+5. **Start Endless Keeper** from the Start menu (or the desktop) and choose **Endless Mode** in the main menu.
 
-   | From this project | To your KeeperFX folder |
-   |---|---|
-   | `out/keeperfx.exe` (your build) | `keeperfx.exe` |
-   | `levels/endless.cfg`, `levels/endless/`, `levels/endless_cfgs/` | `levels/` |
-   | `config/fxdata/lua/` | `fxdata/lua/` |
+> [!TIP]
+> **Updating:** run the newer setup and keep the same folder. It only downloads what changed, and your saves and
+> settings stay. **Uninstalling** removes everything except your saved games.
 
-4. **Start `keeperfx.exe`** and choose **Endless Mode** in the main menu (it takes the place of Free Play Levels).
+<details>
+<summary>Installing by hand instead</summary>
+
+1. Unpack KeeperFX's [`keeperfx_1_4_0_complete.7z`](https://github.com/dkfans/keeperfx/releases/tag/v1.4.0) into
+   an empty folder.
+2. Unpack `endless-keeper-x.y.z.7z` from the [latest release](https://github.com/K11MCH1/Endless-Keeper/releases/latest)
+   over it, replacing files.
+3. Copy `data\bluepal.dat`, `bluepall.dat`, `dogpal.pal`, `hitpall.dat`, `lightng.pal`, `redpal.col`, `redpall.dat`,
+   `slab0-0.dat`, `slab0-1.dat`, `vampal.pal`, `whitepal.col` and `sound\atmos1.sbk`, `atmos2.sbk`, `bullfrog.sbk`
+   from your Dungeon Keeper (or KeeperFX) folder into the same places, and the music (`keeper02.ogg` to
+   `keeper07.ogg`) into `music\` if you have it.
+4. Delete `keeperfx-launcher-qt.exe` and `keeperfx-launcher-legacy.exe`: KeeperFX's launcher would update the folder
+   to plain KeeperFX.
+
+</details>
 
 | Endless Mode menu | |
 |---|---|
@@ -159,9 +174,9 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 - Click research books on your own ground with the Hand. The first one gives you a Library.
 - Build your defences before the first night, and keep an eye on the dial in the top right corner.
 
-> [!WARNING]
-> The KeeperFX launcher replaces `keeperfx.exe` when it updates the game. If that happens, copy the Endless Keeper
-> files again (or skip the update).
+> [!NOTE]
+> Endless Keeper has no launcher of its own and doesn't use KeeperFX's, so KeeperFX's updates never touch it.
+> Endless Keeper follows KeeperFX's stable releases with its own releases.
 
 ---
 

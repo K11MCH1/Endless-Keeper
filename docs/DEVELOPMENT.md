@@ -52,7 +52,7 @@ cd Endless-Keeper
 cmake -S . -B out -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchains/mingw32.cmake \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DBUILD_NUMBER=5593 -DPACKAGE_SUFFIX=Alpha
+  -DBUILD_NUMBER=$(cat installer/keeperfx-build.txt) -DPACKAGE_SUFFIX=Alpha
 ```
 
 The first run downloads the libraries KeeperFX uses (SDL3, LuaJIT, ENet, zlib and others) into `out/deps`. You only
@@ -62,7 +62,7 @@ configure once; after that, step 5 is all you need.
 |---|---|
 | `CMAKE_TOOLCHAIN_FILE` | Use the MinGW-w64 cross compiler for 32-bit Windows. |
 | `CMAKE_BUILD_TYPE` | `RelWithDebInfo` (fast, with debug symbols) or `Debug`. |
-| `BUILD_NUMBER`, `PACKAGE_SUFFIX` | The version the game reports: 1.4.0.5593 Alpha. It must match the game data you play with. |
+| `BUILD_NUMBER`, `PACKAGE_SUFFIX` | The version the game reports, e.g. 1.4.0.5593 Alpha: the KeeperFX build Endless Keeper is built on (`installer/keeperfx-build.txt`). |
 
 ## 5. Build
 
@@ -109,6 +109,32 @@ Start `keeperfx.exe` and choose **Endless Mode** in the main menu. Some command 
 Add `-nointro -nosound` to start faster. The game writes everything it does to **`keeperfx.log`** in the game
 folder. That is the first place to look when something goes wrong, and the file to attach to bug reports.
 
+## 8. Build the setup (optional)
+
+The setup is what players download. Like KeeperFX's own setup, it downloads the KeeperFX base game during
+installation, then lays the Endless Keeper package over it and copies the original game files from the player's
+Dungeon Keeper.
+
+**The package** (in Ubuntu, from the `Endless-Keeper` folder): the game, its DLLs and its data, made the way KeeperFX
+makes its alpha patches, plus the Unicode fonts and the Endless Mode stub level.
+
+```bash
+sudo apt install -y build-essential python3 libpng16-16t64
+installer/make-package.sh pkg/endless-keeper.7z
+```
+
+**The setup** (on Windows): install [Inno Setup](https://jrsoftware.org/isinfo.php) 6.5 or newer
+(`winget install JRSoftware.InnoSetup`), unpack `pkg/endless-keeper.7z` into an empty folder (with 7-Zip, for
+example), then compile, giving that folder:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.0 /DPackageDir=C:\path\to\unpacked installer\endless-keeper.iss
+```
+
+This makes `EndlessKeeperSetup-0.1.0.exe`. The KeeperFX release it downloads (its address, checksum and size) is set
+at the top of `installer/endless-keeper.iss`. To test without clicking through the wizard:
+`EndlessKeeperSetup-0.1.0.exe /VERYSILENT /DIR="C:\Games\EndlessKeeper-test" /DKDIR="<your Dungeon Keeper folder>"`.
+
 ---
 
 ## 🗂️ Where things are
@@ -126,6 +152,7 @@ folder. That is the first place to look when something goes wrong, and the file 
 | `src/net_state.c` | Server-run multiplayer: the state stream from the server to the players. |
 | `src/server_admin.c` | The dedicated server's admin connection (local only). |
 | `levels/endless*` | The Endless Mode map pack. |
+| `installer/` | The setup: `endless-keeper.iss` (Inno Setup), `make-package.sh`, the KeeperFX build number. |
 | everything else | KeeperFX. Its own documentation is in [`docs/`](.). |
 
 All the endless systems switch on only when a level asks for them (`ENDLESS_WORLD` in the level script), so the
