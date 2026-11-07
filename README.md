@@ -11,8 +11,6 @@
 [![License: GPL v2](https://img.shields.io/badge/license-GPL--2.0-blue)](LICENSE)
 [![Discord: Keeper Klan](https://img.shields.io/badge/Discord-Keeper%20Klan-5865F2?logo=discord&logoColor=white)](https://discord.com/invite/hE4p7vy2Hb)
 
-<img src="docs/images/endless-dungeon.png" alt="A young dungeon in an Endless Keeper world" width="820">
-
 </div>
 
 ---
