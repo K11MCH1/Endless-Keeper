@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/images/endless-keeper-banner.png" alt="Endless Keeper" width="100%">
+
 # ⛏️ Endless Keeper
 
 ### Dungeon Keeper survival sandbox mod.
