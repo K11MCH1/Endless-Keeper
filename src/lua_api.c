@@ -431,7 +431,7 @@ static int lua_Add_creature_to_level(lua_State *L)
         spawn_type = SpwnT_Default;
     }
 
-    if ((crtr_level < 1) || (crtr_level > CREATURE_MAX_LEVEL))
+    if ((crtr_level < 1) || (crtr_level > CREATURE_MAX_LEVEL_LIMIT))
     {
         SCRPTERRLOG("Invalid CREATURE LEVEL parameter");
         return 0;
@@ -476,9 +476,9 @@ static int lua_Add_to_party(lua_State *L)
     long countdown         = luaL_checklong (L, 6);
 
 
-    if ((experience < 1) || (experience > CREATURE_MAX_LEVEL))
+    if ((experience < 1) || (experience > CREATURE_MAX_LEVEL_LIMIT))
     {
-      SCRPTERRLOG("Invalid Creature Level parameter; %ld not in range (%d,%d)",experience,1,CREATURE_MAX_LEVEL);
+      SCRPTERRLOG("Invalid Creature Level parameter; %ld not in range (%d,%d)",experience,1,CREATURE_MAX_LEVEL_LIMIT);
       return 0;
     }
 
@@ -1191,7 +1191,7 @@ static int lua_Add_corpse_to_level(lua_State* L)
         return 0;
     }
 
-    if ((crtr_level < 1) || (crtr_level > CREATURE_MAX_LEVEL))
+    if ((crtr_level < 1) || (crtr_level > CREATURE_MAX_LEVEL_LIMIT))
     {
         SCRPTERRLOG("Invalid CREATURE LEVEL parameter");
         return 0;
@@ -1329,7 +1329,7 @@ static int lua_New_creature_type(lua_State* L)
         struct Dungeon* dungeon = get_dungeon(plyr_idx);
         if (dungeon_invalid(dungeon))
             continue;
-        dungeon->creature_max_level[game.conf.crtr_conf.model_count-1] = CREATURE_MAX_LEVEL + 1;
+        dungeon->creature_max_level[game.conf.crtr_conf.model_count-1] = CREATURE_MAX_LEVEL_LIMIT + 1;
     }
     return 0;
 }
@@ -1502,7 +1502,7 @@ static int lua_Set_creature_max_level(lua_State *L)
         if (dungeon_invalid(dungeon))
             continue;
         if (max_level == -1)
-            max_level = CREATURE_MAX_LEVEL + 1;
+            max_level = CREATURE_MAX_LEVEL_LIMIT + 1;
         dungeon->creature_max_level[crtr_model%game.conf.crtr_conf.model_count] = max_level;
     }
     return 0;

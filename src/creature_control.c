@@ -346,7 +346,7 @@ TbBool creature_can_gain_experience(const struct Thing *thing)
         return false;
     // Creatures which reached absolute max level and have no grow up creature
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-    if ((cctrl->exp_level >= (CREATURE_MAX_LEVEL-1)) && (crconf->grow_up == 0))
+    if ((cctrl->exp_level >= (creature_levels_count(thing)-1)) && (crconf->grow_up == 0))
         return false;
     return true;
 }

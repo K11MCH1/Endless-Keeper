@@ -751,9 +751,9 @@ static void add_to_party_check(const struct ScriptLine *scline)
         SCRPTERRLOG("Invalid Party:%s",scline->tp[0]);
         return;
     }
-    if ((scline->np[2] < 1) || (scline->np[2] > CREATURE_MAX_LEVEL))
+    if ((scline->np[2] < 1) || (scline->np[2] > CREATURE_MAX_LEVEL_LIMIT))
     {
-      SCRPTERRLOG("Invalid Creature Level parameter; %ld not in range (%d,%d)",scline->np[2],1,CREATURE_MAX_LEVEL);
+      SCRPTERRLOG("Invalid Creature Level parameter; %ld not in range (%d,%d)",scline->np[2],1,CREATURE_MAX_LEVEL_LIMIT);
       return;
     }
     long crtr_id = get_rid(creature_desc, scline->tp[1]);
@@ -6002,7 +6002,7 @@ static void set_creature_max_level_check(const struct ScriptLine* scline)
         DEALLOCATE_SCRIPT_VALUE
         return;
     }
-    if ((crtr_lvl < -1) || (crtr_lvl > CREATURE_MAX_LEVEL))
+    if ((crtr_lvl < -1) || (crtr_lvl > CREATURE_MAX_LEVEL_LIMIT))
     {
         SCRPTERRLOG("Unable to set max level of creature '%s' to %d, value is out of range.", creature_code_name(crtr_id), crtr_lvl);
         DEALLOCATE_SCRIPT_VALUE
@@ -6027,7 +6027,7 @@ static void set_creature_max_level_process(struct ScriptContext* context)
             if (crtr_id < game.conf.crtr_conf.model_count) {
                 if (crtr_lvl < 0)
                 {
-                    crtr_lvl = CREATURE_MAX_LEVEL + 1;
+                    crtr_lvl = CREATURE_MAX_LEVEL_LIMIT + 1;
                     dungeon->creature_max_level[crtr_id] = crtr_lvl;
                     SCRIPTDBG(7,"Max level of creature '%s' set to default for player %d.", creature_code_name(crtr_id), (int)plyr_idx);
                 } else {
@@ -6043,7 +6043,7 @@ static void set_creature_max_level_process(struct ScriptContext* context)
                 {
                     if (crtr_lvl < 0)
                     {
-                        crtr_lvl = CREATURE_MAX_LEVEL + 1;
+                        crtr_lvl = CREATURE_MAX_LEVEL_LIMIT + 1;
                         dungeon->creature_max_level[i] = crtr_lvl;
                         SCRIPTDBG(7,"Max level of creature '%s' set to default for player %d.", creature_code_name(i), (int)plyr_idx);
                     } else {

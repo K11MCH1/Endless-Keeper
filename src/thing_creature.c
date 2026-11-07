@@ -2217,7 +2217,7 @@ void level_up_familiar(struct Thing* famlrtng)
     if (level <= 0)
     {
         //we know already the Summoner will levelup next turn?
-        if ((summonercctrl->exp_level_up) && (summonercctrl->exp_level + 1 < CREATURE_MAX_LEVEL))
+        if ((summonercctrl->exp_level_up) && (summonercctrl->exp_level + 1 < creature_levels_count(summonertng)))
         {
             summonerxp += 1;
         }
@@ -3736,11 +3736,11 @@ void thing_fire_shot(struct Thing *firing, struct Thing *target, ThingModel shot
         dexterity = calculate_correct_creature_dexterity(firing);
         max_dexterity = crconf->dexterity + ((crconf->dexterity * cctrl->exp_level * game.conf.crtr_conf.exp.dexterity_increase_on_exp) / 100);
 
-        pos1.x.val += distance_with_angle_to_coord_x((cctrl->shot_shift_x + (cctrl->shot_shift_x * game.conf.crtr_conf.exp.size_increase_on_exp * cctrl->exp_level) / 100), firing->move_angle_xy + DEGREES_90);
-        pos1.y.val += distance_with_angle_to_coord_y((cctrl->shot_shift_x + (cctrl->shot_shift_x * game.conf.crtr_conf.exp.size_increase_on_exp * cctrl->exp_level) / 100), firing->move_angle_xy + DEGREES_90);
-        pos1.x.val += distance_with_angle_to_coord_x((cctrl->shot_shift_y + (cctrl->shot_shift_y * game.conf.crtr_conf.exp.size_increase_on_exp * cctrl->exp_level) / 100), firing->move_angle_xy);
-        pos1.y.val += distance_with_angle_to_coord_y((cctrl->shot_shift_y + (cctrl->shot_shift_y * game.conf.crtr_conf.exp.size_increase_on_exp * cctrl->exp_level) / 100), firing->move_angle_xy);
-        pos1.z.val += (cctrl->shot_shift_z + (cctrl->shot_shift_z * game.conf.crtr_conf.exp.size_increase_on_exp * cctrl->exp_level) / 100);
+        pos1.x.val += distance_with_angle_to_coord_x((cctrl->shot_shift_x + (cctrl->shot_shift_x * game.conf.crtr_conf.exp.size_increase_on_exp * creature_size_exp_level(cctrl->exp_level)) / 100), firing->move_angle_xy + DEGREES_90);
+        pos1.y.val += distance_with_angle_to_coord_y((cctrl->shot_shift_x + (cctrl->shot_shift_x * game.conf.crtr_conf.exp.size_increase_on_exp * creature_size_exp_level(cctrl->exp_level)) / 100), firing->move_angle_xy + DEGREES_90);
+        pos1.x.val += distance_with_angle_to_coord_x((cctrl->shot_shift_y + (cctrl->shot_shift_y * game.conf.crtr_conf.exp.size_increase_on_exp * creature_size_exp_level(cctrl->exp_level)) / 100), firing->move_angle_xy);
+        pos1.y.val += distance_with_angle_to_coord_y((cctrl->shot_shift_y + (cctrl->shot_shift_y * game.conf.crtr_conf.exp.size_increase_on_exp * creature_size_exp_level(cctrl->exp_level)) / 100), firing->move_angle_xy);
+        pos1.z.val += (cctrl->shot_shift_z + (cctrl->shot_shift_z * game.conf.crtr_conf.exp.size_increase_on_exp * creature_size_exp_level(cctrl->exp_level)) / 100);
     }
     // Compute launch angles
     if (thing_is_invalid(target))
@@ -3927,10 +3927,11 @@ void set_creature_level(struct Thing *thing, CrtrExpLevel exp_level)
         ERRORLOG("Creature has no control");
         return;
     }
-    if (exp_level > CREATURE_MAX_LEVEL - 1)
+    if (exp_level > creature_levels_count(thing) - 1)
     {
-        ERRORLOG("Level %d too high, bounding", (int)exp_level);
-        exp_level = CREATURE_MAX_LEVEL - 1;
+        if (exp_level > CREATURE_MAX_LEVEL_LIMIT - 1)
+            ERRORLOG("Level %d too high, bounding", (int)exp_level);
+        exp_level = creature_levels_count(thing) - 1;
     }
     cctrl->exp_level = exp_level;
     set_creature_size_stuff(thing);
@@ -5020,7 +5021,7 @@ TbBool creature_increase_level(struct Thing *thing)
     if (dungeon->creature_max_level[thing->model] > cctrl->exp_level)
     {
         struct CreatureModelConfig *crconf = creature_stats_get_from_thing(thing);
-        if ((cctrl->exp_level < CREATURE_MAX_LEVEL - 1) || (crconf->grow_up != 0))
+        if ((cctrl->exp_level < creature_levels_count(thing) - 1) || (crconf->grow_up != 0))
         {
             cctrl->exp_level_up = true;
             return true;
@@ -5046,7 +5047,7 @@ TbBool creature_change_multiple_levels(struct Thing *thing, int count)
             if (dungeon->creature_max_level[thing->model] > cctrl->exp_level)
             {
                 struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-                if ((cctrl->exp_level < CREATURE_MAX_LEVEL - 1) || (crconf->grow_up != 0))
+                if ((cctrl->exp_level < creature_levels_count(thing) - 1) || (crconf->grow_up != 0))
                 {
                     cctrl->exp_level_up = true;
                     update_creature_levels(thing);
@@ -5269,7 +5270,7 @@ long player_list_creature_filter_least_experienced(const struct Thing *thing, Ma
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     // New 'maximizer' value. Should be at least 1; maximum is, in this case, CREATURE_MAX_LEVEL.
-    CrtrExpLevel nmaxim = CREATURE_MAX_LEVEL - cctrl->exp_level;
+    CrtrExpLevel nmaxim = CREATURE_MAX_LEVEL_LIMIT - cctrl->exp_level;
     if ( ((param->plyr_idx == -1) || (thing->owner == param->plyr_idx))
       && (thing->class_id == param->class_id)
       && ((thing_matches_model(thing,param->model_id)))
@@ -5294,7 +5295,7 @@ long player_list_creature_filter_least_experienced_and_pickable1(const struct Th
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     // New 'maximizer' value. Should be at least 1; maximum is, in this case, CREATURE_MAX_LEVEL.
-    CrtrExpLevel nmaxim = CREATURE_MAX_LEVEL - cctrl->exp_level;
+    CrtrExpLevel nmaxim = CREATURE_MAX_LEVEL_LIMIT - cctrl->exp_level;
     if ( ((param->plyr_idx == -1) || (thing->owner == param->plyr_idx))
       && (thing->class_id == param->class_id)
       && ((thing_matches_model(thing,param->model_id)))
@@ -5323,7 +5324,7 @@ long player_list_creature_filter_least_experienced_and_pickable2(const struct Th
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     // New 'maximizer' value. Should be at least 1; maximum is, in this case, CREATURE_MAX_LEVEL.
-    CrtrExpLevel nmaxim = CREATURE_MAX_LEVEL - cctrl->exp_level;
+    CrtrExpLevel nmaxim = CREATURE_MAX_LEVEL_LIMIT - cctrl->exp_level;
     if ( ((param->plyr_idx == -1) || (thing->owner == param->plyr_idx))
       && (thing->class_id == param->class_id)
       && ((thing_matches_model(thing,param->model_id)))
@@ -6441,7 +6442,7 @@ long update_creature_levels(struct Thing *thing)
     lua_on_level_up(thing);
 
     // If a creature is not on highest level, just update the level.
-    if (cctrl->exp_level+1 < CREATURE_MAX_LEVEL)
+    if (cctrl->exp_level+1 < creature_levels_count(thing))
     {
         remove_creature_score_from_owner(thing); // the opposite is in set_creature_level()
         set_creature_level(thing, cctrl->exp_level+1);

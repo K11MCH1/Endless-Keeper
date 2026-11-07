@@ -96,6 +96,7 @@ struct GameRulesConfig {
     TbBool winner_tortures_loser;
     TbBool display_portal_limit;
     unsigned char max_things_in_hand;
+    unsigned char max_creature_level;
     unsigned short torture_payday;
     short torture_training_cost;
     short torture_scavenging_cost;

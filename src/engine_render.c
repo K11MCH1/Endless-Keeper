@@ -3938,7 +3938,7 @@ static void add_draw_status_box(struct Thing *thing, struct EngineCoord *ecor)
     const struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     short offset = thing->clipbox_size_z + crconf->status_offset;
-    offset += (offset * game.conf.crtr_conf.exp.size_increase_on_exp * cctrl->exp_level) / 100;
+    offset += (offset * game.conf.crtr_conf.exp.size_increase_on_exp * creature_size_exp_level(cctrl->exp_level)) / 100;
     coord.y += offset;
     rotpers(&coord, &camera_matrix);
 
@@ -5448,17 +5448,58 @@ void draw_status_sprites(long scrpos_x, long scrpos_y, struct Thing *thing)
         || (has_lair)
         || (is_parchment_map_view))
         {
+            // Past level 10 the flower shows the level as a number, and the whole flower grows so the number
+            // fits in its middle at a readable size.
+            int level_scale = 100;
+            int ndigits = 0;
+            int dw = 0;
+            int dh = 0;
+            const struct TbSprite *dspr = get_button_sprite(GBS_fontchars_number_dig0);
+            if (cctrl->exp_level >= CREATURE_MAX_LEVEL)
+            {
+                const struct TbSprite *lspr = get_button_sprite(GBS_creature_flower_level_01 + exp_level);
+                int lw = (base_size * lspr->SWidth * bs_units_per_px / 16) >> 13;
+                int lh = (base_size * lspr->SHeight * bs_units_per_px / 16) >> 13;
+                ndigits = (cctrl->exp_level + 1 >= 100) ? 3 : 2;
+                dh = lh * 2 / 5;
+                dw = (dspr->SHeight > 0) ? (dh * dspr->SWidth / dspr->SHeight) : dh;
+                // the number may take 45% of the flower's width
+                int need_w = (dw * ndigits) * 100 / 45;
+                if ((lw > 0) && (need_w > lw))
+                    level_scale = need_w * 100 / lw;
+            }
+            int flower_h = 0;
             if (health_spridx > 0)
             {
                 spr = get_button_sprite_for_player(health_spridx, thing->owner);
+                w = ((base_size * spr->SWidth * bs_units_per_px / 16) >> 13) * level_scale / 100;
+                h = ((base_size * spr->SHeight * bs_units_per_px / 16) >> 13) * level_scale / 100;
+                LbSpriteDrawScaled(scrpos_x - w / 2, scrpos_y - h - h_add, spr, w, h);
+                flower_h = h;
+            }
+            if (ndigits == 0)
+            {
+                spr = get_button_sprite(GBS_creature_flower_level_01 + exp_level);
                 w = (base_size * spr->SWidth * bs_units_per_px / 16) >> 13;
                 h = (base_size * spr->SHeight * bs_units_per_px / 16) >> 13;
                 LbSpriteDrawScaled(scrpos_x - w / 2, scrpos_y - h - h_add, spr, w, h);
+            } else
+            {
+                if (flower_h <= 0)
+                {
+                    spr = get_button_sprite(GBS_creature_flower_level_01 + exp_level);
+                    flower_h = (((base_size * spr->SHeight * bs_units_per_px / 16) >> 13) * level_scale / 100);
+                }
+                // digits must not be mirrored with the creature's sprite
+                RendererClearDrawFlags(Lb_SPRITE_FLIP_HORIZ);
+                int dx = scrpos_x + (dw * ndigits) / 2 - dw;
+                int dy = scrpos_y - flower_h - h_add + (flower_h - dh) / 2;
+                for (int rem = cctrl->exp_level + 1; rem > 0; rem /= 10)
+                {
+                    LbSpriteDrawScaled(dx, dy, get_button_sprite(GBS_fontchars_number_dig0 + (rem % 10)), dw, dh);
+                    dx -= dw;
+                }
             }
-            spr = get_button_sprite(GBS_creature_flower_level_01 + exp_level);
-            w = (base_size * spr->SWidth * bs_units_per_px / 16) >> 13;
-            h = (base_size * spr->SHeight * bs_units_per_px / 16) >> 13;
-            LbSpriteDrawScaled(scrpos_x - w / 2, scrpos_y - h - h_add, spr, w, h);
         }
     }
     RendererSetDrawFlags(flg_mem);

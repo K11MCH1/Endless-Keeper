@@ -353,7 +353,7 @@ unsigned char luaL_checkCrtLevel(lua_State *L, int index)
 {
     MapSubtlCoord crtr_level = luaL_checkint(L,index);
 
-    luaL_argcheck(L, (crtr_level > 0) && (crtr_level <= CREATURE_MAX_LEVEL), index,
+    luaL_argcheck(L, (crtr_level > 0) && (crtr_level <= CREATURE_MAX_LEVEL_LIMIT), index,
                        "Invalid CREATURE LEVEL parameter");
     return crtr_level - 1; //-1 because C code counts 0-9 instead of 1-10
 

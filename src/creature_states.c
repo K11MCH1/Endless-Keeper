@@ -1733,7 +1733,7 @@ void set_creature_size_stuff(struct Thing *creatng)
     }
     else
     {
-        creatng->sprite_size = game.conf.crtr_conf.sprite_size + (game.conf.crtr_conf.sprite_size * game.conf.crtr_conf.exp.size_increase_on_exp * cctrl->exp_level) / 100;
+        creatng->sprite_size = game.conf.crtr_conf.sprite_size + (game.conf.crtr_conf.sprite_size * game.conf.crtr_conf.exp.size_increase_on_exp * creature_size_exp_level(cctrl->exp_level)) / 100;
     }
 }
 
@@ -4942,7 +4942,7 @@ TbBool check_experience_upgrade(struct Thing *thing)
 {
     struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig *crconf = creature_stats_get_from_thing(thing);
-    long i = crconf->to_level[cctrl->exp_level] << 8;
+    long i = creature_exp_to_next_level(crconf, cctrl->exp_level) << 8;
     if (cctrl->exp_points < i)
     {
         return false;
@@ -4951,7 +4951,7 @@ TbBool check_experience_upgrade(struct Thing *thing)
     struct Dungeon *dungeon = get_dungeon(thing->owner);
     if (cctrl->exp_level < dungeon->creature_max_level[thing->model])
     {
-        if ((cctrl->exp_level < CREATURE_MAX_LEVEL - 1) || (crconf->grow_up != 0))
+        if ((cctrl->exp_level < creature_levels_count(thing) - 1) || (crconf->grow_up != 0))
         {
             cctrl->exp_level_up = true;
         }

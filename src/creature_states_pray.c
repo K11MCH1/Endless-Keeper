@@ -618,7 +618,7 @@ long process_sacrifice_award(struct Coord3d *pos, ThingModel model, PlayerNumber
         switch (sac->action)
         {
         case SacA_MkCreature:
-            if (exp_level >= CREATURE_MAX_LEVEL) exp_level = CREATURE_MAX_LEVEL-1;
+            if (exp_level >= CREATURE_MAX_LEVEL_LIMIT) exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
             if ( summon_creature(sac->param, pos, plyr_idx, exp_level) )
             {
                 dungeon->lvstats.creatures_from_sacrifice++;
@@ -627,7 +627,7 @@ long process_sacrifice_award(struct Coord3d *pos, ThingModel model, PlayerNumber
             ret = SacR_Awarded;
             break;
         case SacA_MkGoodHero:
-            if (exp_level >= CREATURE_MAX_LEVEL) exp_level = CREATURE_MAX_LEVEL-1;
+            if (exp_level >= CREATURE_MAX_LEVEL_LIMIT) exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
             if ( summon_creature(sac->param, pos, 4, exp_level) )
               dungeon->lvstats.creatures_from_sacrifice++;
             ret = SacR_Punished;

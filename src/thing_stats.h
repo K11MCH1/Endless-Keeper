@@ -27,6 +27,9 @@ extern "C" {
 #endif
 /******************************************************************************/
 #define CREATURE_MAX_LEVEL      10
+/** Creatures can level up to this many levels where the MaxCreatureLevel rule allows it (10 by default). The
+ *  per-level config tables keep CREATURE_MAX_LEVEL entries; levels past them are worked out (thing_stats.c). */
+#define CREATURE_MAX_LEVEL_LIMIT 100
 #define LEARNED_INSTANCES_COUNT 10
 
 enum CreatureLiveStatistics {
@@ -91,6 +94,11 @@ long compute_creature_attack_range(long base_param, long luck, CrtrExpLevel exp_
 HitPoints compute_creature_spell_damage_over_time(HitPoints spell_damage, CrtrExpLevel caster_level, PlayerNumber caster_owner);
 long compute_creature_work_value(long base_param, long efficiency, CrtrExpLevel exp_level);
 HitPoints compute_creature_max_health(HitPoints base_health, CrtrExpLevel exp_level);
+struct CreatureModelConfig;
+CrtrExpLevel creature_max_levels_for_owner(PlayerNumber owner);
+CrtrExpLevel creature_levels_count(const struct Thing *thing);
+long creature_exp_to_next_level(const struct CreatureModelConfig *crconf, CrtrExpLevel exp_level);
+CrtrExpLevel creature_size_exp_level(CrtrExpLevel exp_level);
 long compute_creature_max_strength(long base_param, CrtrExpLevel exp_level);
 long compute_creature_max_armour(long base_param, CrtrExpLevel exp_level);
 long compute_creature_max_defense(long base_param, CrtrExpLevel exp_level);

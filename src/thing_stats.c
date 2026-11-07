@@ -354,12 +354,63 @@ long compute_creature_kind_score(ThingModel crkind, CrtrExpLevel exp_level)
            + compute_creature_max_strength(crconf->strength, exp_level);
 }
 
+/** How many levels creatures of a player can have: the MaxCreatureLevel rule, 10..CREATURE_MAX_LEVEL_LIMIT. */
+CrtrExpLevel creature_max_levels_for_owner(PlayerNumber owner)
+{
+    if ((owner < 0) || (owner >= PLAYERS_COUNT))
+        return CREATURE_MAX_LEVEL;
+    long n = game.conf.rules[owner].gameplay.max_creature_level;
+    if (n < CREATURE_MAX_LEVEL)
+        n = CREATURE_MAX_LEVEL;
+    if (n > CREATURE_MAX_LEVEL_LIMIT)
+        n = CREATURE_MAX_LEVEL_LIMIT;
+    return (CrtrExpLevel)n;
+}
+
+/** How many levels this creature can have. A creature that grows up into another one (GrowUp) still does so at
+ *  level 10, and a creature whose config has no training values stays at 10 as before. */
+CrtrExpLevel creature_levels_count(const struct Thing *thing)
+{
+    const struct CreatureModelConfig *crconf = creature_stats_get_from_thing(thing);
+    if ((crconf->grow_up != 0) || (crconf->to_level[CREATURE_MAX_LEVEL - 2] == 0))
+        return CREATURE_MAX_LEVEL;
+    return creature_max_levels_for_owner(thing->owner);
+}
+
+/** Experience needed to go from exp_level to the next level (without the <<8 scaling). Levels past the config's
+ *  table (LevelsTrainValues, 9 values) each need the table's last step more than the level before. */
+long creature_exp_to_next_level(const struct CreatureModelConfig *crconf, CrtrExpLevel exp_level)
+{
+    if (exp_level < CREATURE_MAX_LEVEL - 1)
+        return crconf->to_level[exp_level];
+    if ((exp_level == CREATURE_MAX_LEVEL - 1) && (crconf->grow_up != 0))
+        return crconf->to_level[exp_level];
+    int64_t last = crconf->to_level[CREATURE_MAX_LEVEL - 2];
+    int64_t prev = crconf->to_level[CREATURE_MAX_LEVEL - 3];
+    int64_t step = last - prev;
+    if (step < last / 10)
+        step = last / 10;
+    if (step < 1)
+        step = 1;
+    int64_t need = last + step * ((int64_t)exp_level - (CREATURE_MAX_LEVEL - 2));
+    // the caller shifts it left by 8 into 32 bits
+    if (need > 0x7FFFFF)
+        need = 0x7FFFFF;
+    return (long)need;
+}
+
+/** Creatures grow in size with their level up to level 10, not further. */
+CrtrExpLevel creature_size_exp_level(CrtrExpLevel exp_level)
+{
+    return (exp_level < CREATURE_MAX_LEVEL) ? exp_level : (CREATURE_MAX_LEVEL - 1);
+}
+
 /* Computes max health of a creature on given level. */
 HitPoints compute_creature_max_health(HitPoints base_health, CrtrExpLevel exp_level)
 {
-    if (exp_level >= CREATURE_MAX_LEVEL)
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
     {
-        exp_level = CREATURE_MAX_LEVEL-1;
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     }
     // Compute max health using 64-bit arithmetic to ensure precision when multiplied by 'health_increase_on_exp'.
     int64_t compute_max_health = (int64_t)base_health + ((int64_t)game.conf.crtr_conf.exp.health_increase_on_exp * (int64_t)base_health * (int64_t)exp_level) / 100;
@@ -374,9 +425,9 @@ HitPoints compute_creature_max_health(HitPoints base_health, CrtrExpLevel exp_le
 /* Computes strength of a creature on given level. */
 long compute_creature_max_strength(long base_param, CrtrExpLevel exp_level)
 {
-    if (exp_level >= CREATURE_MAX_LEVEL)
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
     {
-        exp_level = CREATURE_MAX_LEVEL-1;
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     }
     long max_param = base_param + (game.conf.crtr_conf.exp.strength_increase_on_exp * base_param * (long)exp_level) / 100;
     if (flag_is_set(game.conf.rules[0].gameplay.classic_bugs_flags, ClscBug_Overflow8bitVal))
@@ -393,8 +444,8 @@ long compute_creature_max_armour(long base_param, CrtrExpLevel exp_level)
         return 0;
     if (base_param > 60000)
         base_param = 60000;
-    if (exp_level >= CREATURE_MAX_LEVEL)
-        exp_level = CREATURE_MAX_LEVEL-1;
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     long max_param = base_param + (game.conf.crtr_conf.exp.armour_increase_on_exp * base_param * (long)exp_level) / 100;
     return max_param;
 }
@@ -406,8 +457,8 @@ long compute_creature_max_defense(long base_param, CrtrExpLevel exp_level)
         return 0;
     if (base_param > 10000)
         base_param = 10000;
-    if (exp_level >= CREATURE_MAX_LEVEL)
-        exp_level = CREATURE_MAX_LEVEL-1;
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     long max_param = base_param + (game.conf.crtr_conf.exp.defense_increase_on_exp * base_param * (long)exp_level) / 100;
     unsigned long long overflow = (1 << (8)) - 1;
     if ((max_param >= overflow) && (!emulate_integer_overflow(8)))
@@ -422,8 +473,8 @@ long compute_creature_max_dexterity(long base_param, CrtrExpLevel exp_level)
         return 0;
     if (base_param > 10000)
         base_param = 10000;
-    if (exp_level >= CREATURE_MAX_LEVEL)
-        exp_level = CREATURE_MAX_LEVEL-1;
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     long max_param = base_param + (game.conf.crtr_conf.exp.dexterity_increase_on_exp * base_param * (long)exp_level) / 100;
     return saturate_set_unsigned(max_param, 8);
 }
@@ -435,8 +486,8 @@ long compute_creature_max_loyalty(long base_param, CrtrExpLevel exp_level)
         return 0;
     if (base_param > 60000)
         base_param = 60000;
-    if (exp_level >= CREATURE_MAX_LEVEL)
-        exp_level = CREATURE_MAX_LEVEL-1;
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     long max_param = base_param + (game.conf.crtr_conf.exp.loyalty_increase_on_exp * base_param * (long)exp_level) / 100;
     return saturate_set_unsigned(max_param, 24);
 }
@@ -448,8 +499,8 @@ GoldAmount compute_creature_max_pay(GoldAmount base_param, CrtrExpLevel exp_leve
         return 0;
     if (base_param > 100000)
         base_param = 100000;
-    if (exp_level >= CREATURE_MAX_LEVEL)
-        exp_level = CREATURE_MAX_LEVEL-1;
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     GoldAmount max_param = base_param + (game.conf.crtr_conf.exp.pay_increase_on_exp * base_param * (long)exp_level) / 100;
     return saturate_set_signed(max_param, 16);
 }
@@ -461,8 +512,8 @@ GoldAmount compute_creature_max_training_cost(GoldAmount base_param, CrtrExpLeve
         return 0;
     if (base_param > 100000)
         base_param = 100000;
-    if (exp_level >= CREATURE_MAX_LEVEL)
-        exp_level = CREATURE_MAX_LEVEL-1;
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     GoldAmount max_param = base_param + (game.conf.crtr_conf.exp.training_cost_increase_on_exp * base_param * (long)exp_level) / 100;
     return saturate_set_signed(max_param, 16);
 }
@@ -474,8 +525,8 @@ GoldAmount compute_creature_max_scavenging_cost(GoldAmount base_param, CrtrExpLe
         return 0;
     if (base_param > 100000)
         base_param = 100000;
-    if (exp_level >= CREATURE_MAX_LEVEL)
-        exp_level = CREATURE_MAX_LEVEL-1;
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     GoldAmount max_param = base_param + (game.conf.crtr_conf.exp.scavenging_cost_increase_on_exp * base_param * (long)exp_level) / 100;
     return saturate_set_signed(max_param, 16);
 }
@@ -529,8 +580,8 @@ long compute_creature_attack_melee_damage(long base_param, long luck, CrtrExpLev
 long compute_creature_attack_spell_damage(long base_param, long luck, CrtrExpLevel exp_level, PlayerNumber plyr_idx)
 {
     struct Dungeon* dungeon = get_dungeon(plyr_idx);
-    if (exp_level >= CREATURE_MAX_LEVEL)
-        exp_level = CREATURE_MAX_LEVEL-1;
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     long max_param = base_param + (game.conf.crtr_conf.exp.spell_damage_increase_on_exp * base_param * (long)exp_level) / 100;
     // Apply modifier.
     if (!dungeon_invalid(dungeon))
@@ -553,8 +604,8 @@ long compute_creature_attack_range(long base_param, long luck, CrtrExpLevel exp_
         return 0;
     if (base_param > 100000)
         base_param = 100000;
-    if (exp_level >= CREATURE_MAX_LEVEL)
-        exp_level = CREATURE_MAX_LEVEL-1;
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     long max_param = base_param + (game.conf.crtr_conf.exp.range_increase_on_exp * base_param * (long)exp_level) / 100;
     return saturate_set_signed(max_param, 16);
 }
@@ -568,9 +619,9 @@ long compute_creature_attack_range(long base_param, long luck, CrtrExpLevel exp_
 HitPoints compute_creature_spell_damage_over_time(HitPoints spell_damage, CrtrExpLevel caster_level, PlayerNumber caster_owner)
 {
     struct Dungeon* dungeon;
-    if (caster_level >= CREATURE_MAX_LEVEL)
+    if (caster_level >= CREATURE_MAX_LEVEL_LIMIT)
     {
-        caster_level = CREATURE_MAX_LEVEL-1;
+        caster_level = CREATURE_MAX_LEVEL_LIMIT-1;
     }
     HitPoints max_damage = spell_damage + (game.conf.crtr_conf.exp.spell_damage_increase_on_exp * spell_damage * caster_level) / 100;
     // Apply modifier.
@@ -596,8 +647,8 @@ long compute_creature_work_value(long base_param, long efficiency, CrtrExpLevel 
         base_param = -100000;
     if (base_param > 100000)
         base_param = 100000;
-    if (exp_level >= CREATURE_MAX_LEVEL)
-        exp_level = CREATURE_MAX_LEVEL-1;
+    if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
+        exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
     if (efficiency > 1024)
         efficiency = 1024;
     long max_param = base_param + (game.conf.crtr_conf.exp.job_value_increase_on_exp * base_param * (long)exp_level) / 100;

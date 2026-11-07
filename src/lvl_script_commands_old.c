@@ -122,7 +122,7 @@ static void command_add_party_to_level(long plr_range_id, const char *prtname, c
 static void command_add_creature_to_level(long plr_range_id, const char *crtr_name, const char *locname, long ncopies, CrtrExpLevel exp_level, long carried_gold, const char *spawn_type)
 {
     TbMapLocation location;
-    if ((exp_level < 1) || (exp_level > CREATURE_MAX_LEVEL))
+    if ((exp_level < 1) || (exp_level > CREATURE_MAX_LEVEL_LIMIT))
     {
         SCRPTERRLOG("Invalid CREATURE LEVEL parameter");
         return;
@@ -447,7 +447,7 @@ static void command_add_tunneller_to_level(long plr_range_id, const char *locnam
 {
     TbMapLocation location;
     TbMapLocation heading;
-    if ((exp_level < 1) || (exp_level > CREATURE_MAX_LEVEL))
+    if ((exp_level < 1) || (exp_level > CREATURE_MAX_LEVEL_LIMIT))
     {
         SCRPTERRLOG("Invalid CREATURE LEVEL parameter");
         return;
@@ -493,7 +493,7 @@ static void command_add_tunneller_party_to_level(long plr_range_id, const char *
 {
     TbMapLocation location;
     TbMapLocation heading;
-    if ((exp_level < 1) || (exp_level > CREATURE_MAX_LEVEL))
+    if ((exp_level < 1) || (exp_level > CREATURE_MAX_LEVEL_LIMIT))
     {
         SCRPTERRLOG("Invalid CREATURE LEVEL parameter");
         return;

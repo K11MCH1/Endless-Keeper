@@ -293,7 +293,7 @@ long gfa_can_level_up(struct GuiBox *gbox, struct GuiBoxOption *goptn, int32_t *
 	if (thing_is_creature(thing))
 	{
 		struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
-		if (cctrl->exp_level >= CREATURE_MAX_LEVEL - 1)
+		if (cctrl->exp_level >= creature_levels_count(thing) - 1)
 		{
 			return false;
 		}

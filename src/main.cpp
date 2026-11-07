@@ -1141,7 +1141,7 @@ void reset_creature_max_levels(void)
         dungeon = get_dungeon(i);
         for (k=1; k < game.conf.crtr_conf.model_count; k++)
         {
-            dungeon->creature_max_level[k] = CREATURE_MAX_LEVEL+1;
+            dungeon->creature_max_level[k] = CREATURE_MAX_LEVEL_LIMIT+1;
         }
     }
 }
