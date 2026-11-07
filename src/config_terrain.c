@@ -588,7 +588,7 @@ TbBool is_room_available(PlayerNumber plyr_idx, RoomKind rkind)
         return false;
     }
     // Player must have dungeon heart to build rooms
-    if (!player_has_heart(plyr_idx)) {
+    if (!player_has_heart_or_needs_none(plyr_idx)) {
         return false;
     }
     if (rkind >= game.conf.slab_conf.room_types_count)
@@ -613,7 +613,7 @@ TbBool is_room_obtainable(PlayerNumber plyr_idx, RoomKind rkind)
         return false;
     }
     // Player must have dungeon heart to build rooms
-    if (!player_has_heart(plyr_idx)) {
+    if (!player_has_heart_or_needs_none(plyr_idx)) {
         return false;
     }
     if (rkind >= game.conf.slab_conf.room_types_count) {
@@ -636,7 +636,7 @@ RoomKind find_first_available_roomkind_with_role(PlayerNumber plyr_idx, RoomRole
         return RoK_NONE;
     }
     // Player must have dungeon heart to build rooms
-    if (!player_has_heart(plyr_idx)) {
+    if (!player_has_heart_or_needs_none(plyr_idx)) {
         return RoK_NONE;
     }
 

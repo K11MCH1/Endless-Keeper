@@ -162,6 +162,15 @@ TbBool get_coords_at_dungeon_heart(struct Coord3d *pos, PlayerNumber plyr_idx)
     TRACE_THING(heartng);
     if (!thing_exists(heartng))
     {
+        // A player who plays without a heart (HEARTREQUIRED off): its dungeon stands in for the heart
+        struct Coord3d homepos;
+        if (get_heartless_home_pos(plyr_idx, &homepos))
+        {
+            pos->x.val = homepos.x.val + PLAYER_RANDOM(plyr_idx, 65) - 32;
+            pos->y.val = homepos.y.val + PLAYER_RANDOM(plyr_idx, 65) - 32;
+            pos->z.val = homepos.z.val;
+            return true;
+        }
         ERRORLOG("Script error - attempt to create thing in player %d dungeon with no heart",(int)plyr_idx);
         return false;
     }
@@ -315,6 +324,10 @@ void find_location_pos(TbMapLocation location, PlayerNumber plyr_idx, struct Coo
       {
         *pos = thing->mappos;
       } else
+      if ((i < PLAYERS_COUNT) && get_heartless_home_pos(i, pos))
+      {
+        // A player who plays without a heart (HEARTREQUIRED off): its dungeon stands in for the heart
+      } else
         WARNMSG("%s: Dungeon Heart location for player %lu not found",func_name,i);
       break;
     case MLoc_NONE:
@@ -406,7 +419,7 @@ TbBool get_map_location_id_f(const char *locname, TbMapLocation *location, const
     if (i != -1)
     {
       if ((i != ALL_PLAYERS) && (i != PLAYER_NEUTRAL)) {
-          if (!player_has_heart(i)) {
+          if (!player_has_heart_or_needs_none(i)) {
               WARNMSG("%s(line %lu): Target player %d has no heart",func_name,ln_num, (int)i);
           }
           *location = ((unsigned long)i << 4) | MLoc_PLAYERSHEART;
@@ -629,7 +642,7 @@ TbBool get_map_heading_id_f(const char *headname, long target, TbMapLocation *lo
     case MLoc_PLAYERSDUNGEON:
     case MLoc_PLAYERSHEART:
         *location = ((unsigned long)target << 4) | head_id;
-        if (!player_has_heart(target)) {
+        if (!player_has_heart_or_needs_none(target)) {
             SCRPTWRNLOG("Target player %d has no heart", (int)target);
         }
         return true;
@@ -689,6 +702,12 @@ void find_map_location_coords(TbMapLocation location, MapSubtlCoord *x, MapSubtl
         {
           pos_y = thing->mappos.y.stl.num;
           pos_x = thing->mappos.x.stl.num;
+        } else
+        if ((i < PLAYERS_COUNT) && get_heartless_home_pos(i, &pos))
+        {
+          // A player who plays without a heart (HEARTREQUIRED off): its dungeon stands in for the heart
+          pos_y = pos.y.stl.num;
+          pos_x = pos.x.stl.num;
         } else
           WARNMSG("%s: Dungeon Heart location for player %ld not found",func_name,i);
         break;

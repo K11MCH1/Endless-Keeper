@@ -105,10 +105,15 @@ struct GameRulesConfig {
     int32_t thing_minimum_illumination;
     TbBool light_enabled;
     unsigned short creatures_count;
+    TbBool heart_required;
+    TbBool seek_enemy_heart;
+    TbBool diggers_drop_on_path;
 };
 
 struct ComputerRulesConfig {
     unsigned short disease_to_temple_pct;
+    TbBool defend_against_diggers;
+    TbBool wake_creatures_to_defend;
 };
 
 struct CreatureRulesConfig {

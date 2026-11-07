@@ -790,6 +790,14 @@ long create_transferred_creatures_on_level(void)
                 }
 
                 struct Coord3d* pos = &(srcetng->mappos);
+                // A player who plays without a heart (HEARTREQUIRED off) and has none gets them at its dungeon, as its own
+                // (they can't join it by coming near its heart)
+                struct Coord3d homepos;
+                if (!thing_exists(srcetng) && get_heartless_home_pos(p, &homepos))
+                {
+                    pos = &homepos;
+                    plyr_idx = p;
+                }
                 if (!creature_count_below_map_limit(0))
                 {
                     WARNLOG("Can't create transferred creature %s due to map creature limit.", creature_code_name(intralvl.transferred_creatures[p][i].model));

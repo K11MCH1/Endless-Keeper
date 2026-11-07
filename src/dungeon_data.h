@@ -331,6 +331,9 @@ void player_add_offmap_gold(PlayerNumber plyr_idx, GoldAmount value);
 void init_dungeons_essential_position(void);
 const struct Coord3d *dungeon_get_essential_pos(PlayerNumber plyr_idx);
 TbBool player_has_heart(PlayerNumber plyr_idx);
+TbBool player_needs_heart(PlayerNumber plyr_idx);
+TbBool player_has_heart_or_needs_none(PlayerNumber plyr_idx);
+TbBool get_heartless_home_pos(PlayerNumber plyr_idx, struct Coord3d *pos);
 struct Thing *get_player_soul_container(PlayerNumber plyr_idx);
 
 TbBool player_has_room_of_role(PlayerNumber plyr_idx, RoomRole rrole);

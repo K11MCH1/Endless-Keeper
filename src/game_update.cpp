@@ -82,6 +82,9 @@ static void check_players_lost(void)
       dungeon = get_players_dungeon(player);
       if (is_active_keeper(player))
       {
+          // A player who plays without a heart is only defeated by the level script
+          if (!player_needs_heart(i))
+              continue;
           struct Thing *heartng;
           heartng = get_player_soul_container(i);
           if (heartng->owner != i)

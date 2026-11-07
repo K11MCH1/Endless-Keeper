@@ -208,6 +208,100 @@ TbBool player_has_heart(PlayerNumber plyr_idx)
     return thing_exists(get_player_soul_container(plyr_idx));
 }
 
+/**
+ * Returns whether losing (or never having) a Dungeon Heart defeats the player.
+ * Set per player with the HEARTREQUIRED game rule, e.g. SET_GAME_RULE(HeartRequired,0,PLAYER_GOOD);
+ * such a player is only defeated by the level script.
+ */
+TbBool player_needs_heart(PlayerNumber plyr_idx)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_COUNT))
+        return true;
+    return game.conf.rules[plyr_idx].gameplay.heart_required;
+}
+
+/**
+ * Returns whether the player can act as a keeper: it has a Dungeon Heart, or plays without one.
+ */
+TbBool player_has_heart_or_needs_none(PlayerNumber plyr_idx)
+{
+    return player_has_heart(plyr_idx) || !player_needs_heart(plyr_idx);
+}
+
+/**
+ * For a player who has no Dungeon Heart and plays without one (HEARTREQUIRED off): sets pos to where its
+ * dungeon is, for use where the heart's position would be. That is the centre of its first room, else the
+ * claimed slab nearest to the middle of its claimed ground, else its essential position (where its heart
+ * was, or the map centre).
+ * @return true if pos was set; false, leaving pos unchanged, if the player has a heart or needs one.
+ */
+TbBool get_heartless_home_pos(PlayerNumber plyr_idx, struct Coord3d *pos)
+{
+    if (player_needs_heart(plyr_idx) || player_has_heart(plyr_idx))
+        return false;
+    struct Dungeon* dungeon = get_players_num_dungeon(plyr_idx);
+    if (dungeon_invalid(dungeon))
+        return false;
+    for (RoomKind rkind = 1; rkind < game.conf.slab_conf.room_types_count; rkind++)
+    {
+        struct Room* room = room_get(dungeon->room_list_start[rkind]);
+        if (!room_is_invalid(room))
+        {
+            pos->x.val = subtile_coord_center(room->central_stl_x);
+            pos->y.val = subtile_coord_center(room->central_stl_y);
+            pos->z.val = get_floor_height_at(pos);
+            return true;
+        }
+    }
+    long sum_x = 0;
+    long sum_y = 0;
+    long count = 0;
+    for (MapSlabCoord slb_y = 0; slb_y < game.map_tiles_y; slb_y++)
+    {
+        for (MapSlabCoord slb_x = 0; slb_x < game.map_tiles_x; slb_x++)
+        {
+            struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
+            if ((slb->kind == SlbT_CLAIMED) && (slabmap_owner(slb) == plyr_idx))
+            {
+                sum_x += slb_x;
+                sum_y += slb_y;
+                count++;
+            }
+        }
+    }
+    if (count > 0)
+    {
+        MapSlabCoord mid_x = sum_x / count;
+        MapSlabCoord mid_y = sum_y / count;
+        MapSlabCoord best_x = mid_x;
+        MapSlabCoord best_y = mid_y;
+        long best_dist = INT32_MAX;
+        for (MapSlabCoord slb_y = 0; slb_y < game.map_tiles_y; slb_y++)
+        {
+            for (MapSlabCoord slb_x = 0; slb_x < game.map_tiles_x; slb_x++)
+            {
+                struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
+                if ((slb->kind == SlbT_CLAIMED) && (slabmap_owner(slb) == plyr_idx))
+                {
+                    long dist = abs(slb_x - mid_x) + abs(slb_y - mid_y);
+                    if (dist < best_dist)
+                    {
+                        best_dist = dist;
+                        best_x = slb_x;
+                        best_y = slb_y;
+                    }
+                }
+            }
+        }
+        pos->x.val = subtile_coord_center(slab_subtile_center(best_x));
+        pos->y.val = subtile_coord_center(slab_subtile_center(best_y));
+        pos->z.val = get_floor_height_at(pos);
+        return true;
+    }
+    *pos = dungeon->essential_pos;
+    return true;
+}
+
 void add_heart_health(PlayerNumber plyr_idx,HitPoints healthdelta,TbBool warn_on_damage)
 {
     struct Thing* heartng = get_player_soul_container(plyr_idx);

@@ -29,6 +29,8 @@ SAVE_STRUCT(ComponentVector, struct ComponentVector,
 
 SAVE_STRUCT(ComputerRulesConfig, struct ComputerRulesConfig,
     SAVE_FIELD(struct ComputerRulesConfig, disease_to_temple_pct, SV_U16),
+    SAVE_FIELD(struct ComputerRulesConfig, defend_against_diggers, SV_BOOL8),
+    SAVE_FIELD(struct ComputerRulesConfig, wake_creatures_to_defend, SV_BOOL8),
 );
 
 SAVE_STRUCT(Configs, struct Configs,
@@ -469,6 +471,9 @@ SAVE_STRUCT(GameRulesConfig, struct GameRulesConfig,
     SAVE_FIELD(struct GameRulesConfig, thing_minimum_illumination, SV_I32),
     SAVE_FIELD(struct GameRulesConfig, light_enabled, SV_BOOL8),
     SAVE_FIELD(struct GameRulesConfig, creatures_count, SV_U16),
+    SAVE_FIELD(struct GameRulesConfig, heart_required, SV_BOOL8),
+    SAVE_FIELD(struct GameRulesConfig, seek_enemy_heart, SV_BOOL8),
+    SAVE_FIELD(struct GameRulesConfig, diggers_drop_on_path, SV_BOOL8),
 );
 
 SAVE_STRUCT(HealthRulesConfig, struct HealthRulesConfig,

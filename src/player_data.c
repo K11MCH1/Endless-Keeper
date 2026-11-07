@@ -430,7 +430,7 @@ TbBool player_is_friendly_or_defeated(PlayerNumber check_plyr_idx, PlayerNumber 
     {
         if ( (!player_allied_with(win_player, check_plyr_idx)) || (!player_allied_with(player, origin_plyr_idx)) )
         {
-            if (player_has_heart(check_plyr_idx))
+            if (player_has_heart_or_needs_none(check_plyr_idx))
               return false;
         }
     }

@@ -517,8 +517,11 @@ void get_opponent(struct Computer2 *comp, struct THate hates[])
     }
     // Get position of a possible attack - select one of minimum distance to our heart
     struct Thing* heartng = get_player_soul_container(dungeon->owner);
-    MapSubtlCoord dnstl_x = heartng->mappos.x.stl.num;
-    MapSubtlCoord dnstl_y = heartng->mappos.y.stl.num;
+    struct Coord3d dnpos = heartng->mappos;
+    // A player who plays without a heart (HEARTREQUIRED off) and has none measures from its dungeon
+    get_heartless_home_pos(dungeon->owner, &dnpos);
+    MapSubtlCoord dnstl_x = dnpos.x.stl.num;
+    MapSubtlCoord dnstl_y = dnpos.y.stl.num;
     for (i=0; i < PLAYERS_COUNT; i++)
     {
         struct THate* hate = &hates[i];
@@ -823,7 +826,7 @@ long computer_check_for_place_trap(struct Computer2 *comp, struct ComputerCheck 
 {
     SYNCDBG(8,"Starting");
     struct Dungeon* dungeon = comp->dungeon;
-    if (dungeon_invalid(dungeon) || !player_has_heart(dungeon->owner)) {
+    if (dungeon_invalid(dungeon) || !player_has_heart_or_needs_none(dungeon->owner)) {
         SYNCDBG(7,"Computer players %d dungeon in invalid or has no heart",(int)dungeon->owner);
         return CTaskRet_Unk4;
     }
@@ -936,7 +939,7 @@ long computer_check_for_money(struct Computer2 *comp, struct ComputerCheck * che
     SYNCDBG(18,"Starting");
     long ret = CTaskRet_Unk4;
     struct Dungeon* dungeon = comp->dungeon;
-    if (dungeon_invalid(dungeon) || !player_has_heart(dungeon->owner)) {
+    if (dungeon_invalid(dungeon) || !player_has_heart_or_needs_none(dungeon->owner)) {
         SYNCDBG(7,"Computer players %d dungeon in invalid or has no heart",(int)dungeon->owner);
         return CTaskRet_Unk4;
     }
@@ -1068,12 +1071,14 @@ long count_creatures_for_defend_pickup(struct Computer2 *comp)
             if ( !cctrl->combat_flags )
             {
                 int crtr_state = get_creature_state_besides_move(i);
+                // WAKECREATURESTODEFEND: sleeping creatures may be woken up to defend
+                TbBool wake = game.conf.rules[dungeon->owner].computer.wake_creatures_to_defend;
                 if (( crtr_state != CrSt_CreatureCombatFlee ) &&
                     ( crtr_state != CrSt_ArriveAtAlarm ) &&
                     (!cctrl->called_to_arms ) &&
-                    ( crtr_state != CrSt_CreatureGoingHomeToSleep ) &&
+                    ( wake || (( crtr_state != CrSt_CreatureGoingHomeToSleep ) &&
                     ( crtr_state != CrSt_CreatureSleep ) &&
-                    ( crtr_state != CrSt_AtLairToSleep ) &&
+                    ( crtr_state != CrSt_AtLairToSleep ))) &&
                     ( crtr_state != CrSt_CreatureChooseRoomForLairSite ) &&
                     ( crtr_state != CrSt_CreatureAtNewLair ) &&
                     ( crtr_state != CrSt_CreatureWantsAHome ) &&

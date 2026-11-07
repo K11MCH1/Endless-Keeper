@@ -357,7 +357,7 @@ short get_chat_icon_sprite_idx_from_id(short id, char type)
                 return ((get_gameturn() >> 1) & 3)
                     + GPS_plyrsym_symbol_player_red_std_b;
 
-            return player_has_heart(id)
+            return player_has_heart_or_needs_none(id)
                 ? GPS_plyrsym_symbol_player_red_std_b
                 : GPS_plyrsym_symbol_player_red_dead;
 

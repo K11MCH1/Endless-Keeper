@@ -146,7 +146,9 @@ static LevelNumber stored_continue_level(const struct IntralevelData *ilvl)
 static LevelNumber resolve_continue_level(const struct IntralevelData *ilvl, const struct GameCampaign *campgn)
 {
     LevelNumber lvnum = stored_continue_level(ilvl);
-    if ((lvnum == SINGLEPLAYER_FINISHED) || (lvnum == SINGLEPLAYER_NOTSTARTED) || (campaign_singleplayer_level_index(campgn, lvnum) >= 0))
+    // A finished campaign is not returned as finished straight away: if levels were added to the campaign
+    // after it was finished, it continues at the first of them that is not completed yet (loop below).
+    if ((lvnum == SINGLEPLAYER_NOTSTARTED) || (campaign_singleplayer_level_index(campgn, lvnum) >= 0))
         return lvnum;
     for (int i = 0; i < CAMPAIGN_LEVELS_COUNT; i++)
     {

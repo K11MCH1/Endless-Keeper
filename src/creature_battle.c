@@ -141,6 +141,21 @@ TbBool can_add_ranged_combat_attacker(const struct Thing *victim)
     return (vicctrl->opponents_ranged_count < COMBAT_RANGED_OPPONENTS_LIMIT);
 }
 
+/**
+ * For a creature whose owner has no heart and plays without one (HEARTREQUIRED off): sets pos to its
+ * owner's dungeon, if the creature can get there.
+ */
+static TbBool creature_can_flee_to_heartless_home(struct Thing *creatng, struct Coord3d *pos)
+{
+    struct Coord3d homepos;
+    if (!get_heartless_home_pos(creatng->owner, &homepos))
+        return false;
+    if (!creature_can_navigate_to_with_storage(creatng, &homepos, NavRtF_Default))
+        return false;
+    *pos = homepos;
+    return true;
+}
+
 long get_flee_position(struct Thing *creatng, struct Coord3d *pos)
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
@@ -193,6 +208,10 @@ long get_flee_position(struct Thing *creatng, struct Coord3d *pos)
         pos->x.val = heartng->mappos.x.val;
         pos->y.val = heartng->mappos.y.val;
         pos->z.val = heartng->mappos.z.val;
+    } else
+    if (creature_can_flee_to_heartless_home(creatng, pos))
+    {
+        // A player who plays without a heart (HEARTREQUIRED off) and has none: flee to its dungeon
     } else
     {
         struct PlayerInfo* player = get_player(creatng->owner);

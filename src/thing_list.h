@@ -230,6 +230,7 @@ struct Thing *get_creature_near_and_owned_by(MapCoord pos_x, MapCoord pos_y, Pla
 struct Thing *get_creature_near(MapCoord pos_x, MapCoord pos_y);
 struct Thing *get_creature_in_range_and_owned_by_or_allied_with(MapCoord pos_x, MapCoord pos_y, MapSubtlDelta distance_stl, PlayerNumber plyr_idx);
 struct Thing *get_creature_in_range_who_is_enemy_of_able_to_attack_and_not_specdigger(MapCoord pos_x, MapCoord pos_y, long distance_stl, PlayerNumber plyr_idx);
+struct Thing *get_creature_in_range_who_is_enemy_of_able_to_attack(MapCoord pos_x, MapCoord pos_y, long distance_stl, PlayerNumber plyr_idx);
 struct Thing *get_creature_of_model_training_at_subtile_and_owned_by(MapSubtlCoord stl_x, MapSubtlCoord stl_y, long model_id, PlayerNumber plyr_idx, long skip_thing_id);
 struct Thing *get_object_at_subtile_of_model_and_owned_by(MapSubtlCoord stl_x, MapSubtlCoord stl_y, long tngmodel, PlayerNumber plyr_idx);
 struct Thing *get_cavein_at_subtile_owned_by(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx);

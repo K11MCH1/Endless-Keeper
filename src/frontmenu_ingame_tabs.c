@@ -2500,7 +2500,7 @@ void gui_area_player_creature_info(struct GuiButton *gbtn)
     struct Dungeon* dungeon = get_players_dungeon(player);
     if (!dungeon_invalid(dungeon)) {
         int32_t spr_idx = get_player_colored_icon_idx(GPS_plyrsym_symbol_player_red_dead, plyr_idx);
-        if (player_has_heart(plyr_idx) && (player->victory_state != VicS_LostLevel)) {
+        if (player_has_heart_or_needs_none(plyr_idx) && (player->victory_state != VicS_LostLevel)) {
             spr_idx = get_player_colored_icon_idx(GPS_plyrsym_symbol_player_red_std_a, plyr_idx);
         }
         if (((dungeon->num_active_creatrs < dungeon->max_creatures_attracted) && (!game.pool.is_empty))

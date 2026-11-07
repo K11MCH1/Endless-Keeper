@@ -1849,6 +1849,34 @@ short creature_try_going_to_healing_sleep(struct Thing *creatng)
     return false;
 }
 
+/**
+ * Sends the creature towards the nearest enemy Dungeon Heart it can reach (SEEKENEMYHEART rule).
+ * Once there it is idle again and attacks the heart as soon as it sees it.
+ */
+static TbBool creature_head_for_enemy_heart(struct Thing *creatng)
+{
+    struct Thing *best_heart = INVALID_THING;
+    MapCoordDelta best_dist = INT32_MAX;
+    for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_COUNT; plyr_idx++)
+    {
+        if ((plyr_idx == creatng->owner) || player_is_friendly_or_defeated(plyr_idx, creatng->owner))
+            continue;
+        struct Thing *heartng = get_player_soul_container(plyr_idx);
+        if (!thing_exists(heartng) || !creature_can_get_to_dungeon_heart(creatng, plyr_idx))
+            continue;
+        MapCoordDelta dist = get_2d_distance(&creatng->mappos, &heartng->mappos);
+        if (dist < best_dist)
+        {
+            best_dist = dist;
+            best_heart = heartng;
+        }
+    }
+    if (thing_is_invalid(best_heart) || !setup_person_move_to_coord(creatng, &best_heart->mappos, NavRtF_Default))
+        return false;
+    creatng->continue_state = CrSt_CreatureDoingNothing;
+    return true;
+}
+
 short creature_doing_nothing(struct Thing *creatng)
 {
     TRACE_THING(creatng);
@@ -1942,6 +1970,11 @@ short creature_doing_nothing(struct Thing *creatng)
     if (get_gameturn() - cctrl->wander_around_check_turn > 128)
     {
         cctrl->wander_around_check_turn = get_gameturn();
+        if (game.conf.rules[creatng->owner].gameplay.seek_enemy_heart && creature_head_for_enemy_heart(creatng))
+        {
+            SYNCDBG(8,"The %s index %d heads for an enemy heart",thing_model_name(creatng),(int)creatng->index);
+            return 1;
+        }
         struct Coord3d pos;
         if (get_random_position_in_dungeon_for_creature(creatng->owner, CrWaS_WithinDungeon, creatng, &pos))
         {

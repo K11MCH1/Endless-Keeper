@@ -599,7 +599,7 @@ TbBool is_trap_placeable(PlayerNumber plyr_idx, long tngmodel)
         return false;
     }
     // Player must have dungeon heart to place traps
-    if (!player_has_heart(plyr_idx)) {
+    if (!player_has_heart_or_needs_none(plyr_idx)) {
         return false;
     }
     if ((tngmodel <= 0) || (tngmodel >= game.conf.trapdoor_conf.trap_types_count)) {
@@ -625,7 +625,7 @@ TbBool is_trap_buildable(PlayerNumber plyr_idx, long tngmodel)
         return false;
     }
     // Player must have dungeon heart to build anything
-    if (!player_has_heart(plyr_idx)) {
+    if (!player_has_heart_or_needs_none(plyr_idx)) {
         return false;
     }
     if ((tngmodel <= 0) || (tngmodel >= game.conf.trapdoor_conf.trap_types_count)) {
@@ -671,7 +671,7 @@ TbBool is_door_placeable(PlayerNumber plyr_idx, long tngmodel)
         return false;
     }
     // Player must have dungeon heart to place doors
-    if (!player_has_heart(plyr_idx)) {
+    if (!player_has_heart_or_needs_none(plyr_idx)) {
         return false;
     }
     if ((tngmodel <= 0) || (tngmodel >= game.conf.trapdoor_conf.door_types_count)) {
@@ -697,7 +697,7 @@ TbBool is_door_buildable(PlayerNumber plyr_idx, long door_idx)
         return false;
     }
     // Player must have dungeon heart to build anything
-    if (!player_has_heart(plyr_idx)) {
+    if (!player_has_heart_or_needs_none(plyr_idx)) {
         return false;
     }
     if ((door_idx <= 0) || (door_idx >= game.conf.trapdoor_conf.door_types_count)) {
@@ -721,7 +721,7 @@ TbBool is_door_built(PlayerNumber plyr_idx, long door_idx)
         return false;
     }
     // Player must have dungeon heart to build anything
-    if (!player_has_heart(plyr_idx)) {
+    if (!player_has_heart_or_needs_none(plyr_idx)) {
         return false;
     }
     if ((door_idx <= 0) || (door_idx >= game.conf.trapdoor_conf.door_types_count)) {

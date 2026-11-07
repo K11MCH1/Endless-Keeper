@@ -574,7 +574,10 @@ EventIndex update_cannot_find_room_of_role_wth_spare_capacity_event(PlayerNumber
     {
         // We simply don't have the room of that kind. Asking for a lair the player cannot build only spams the
         // player, and the original game kept quiet then too.
-        if (rrole == RoRoF_GoldStorage || is_room_of_role_available(plyr_idx, rrole))
+        // A player who plays without a heart (HEARTREQUIRED off) and has none is only asked for a Treasure Room
+        // it can build, like the other rooms: its diggers may carry gold with no Treasure Room to bring it to.
+        TbBool always_ask = (rrole == RoRoF_GoldStorage) && (player_needs_heart(plyr_idx) || player_has_heart(plyr_idx));
+        if (always_ask || is_room_of_role_available(plyr_idx, rrole))
         {
             switch (rrole)
             {

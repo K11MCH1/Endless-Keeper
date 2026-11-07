@@ -654,6 +654,10 @@ TbBool good_can_move_to_dungeon_heart(struct Thing *creatng, PlayerNumber plyr_i
     TRACE_THING(heartng);
     if (!thing_exists(heartng))
     {
+        // A player who plays without a heart (HEARTREQUIRED off): its dungeon stands in for the heart
+        struct Coord3d homepos;
+        if (get_heartless_home_pos(plyr_idx, &homepos))
+            return creature_can_navigate_to(creatng, &homepos, NavRtF_Default);
         SYNCDBG(3,"The %s index %d cannot move to player %d which has no heart", thing_model_name(creatng),(int)creatng->index,(int)plyr_idx);
         return false;
     }
@@ -699,6 +703,15 @@ TbBool good_setup_wander_to_dungeon_heart(struct Thing *creatng, PlayerNumber pl
     TRACE_THING(heartng);
     if (!thing_exists(heartng))
     {
+        // A player who plays without a heart (HEARTREQUIRED off): wander to its dungeon instead
+        struct Coord3d homepos;
+        if (get_heartless_home_pos(plyr_idx, &homepos))
+        {
+            if (!setup_person_move_to_coord(creatng, &homepos, NavRtF_Default))
+                return false;
+            creatng->continue_state = CrSt_GoodWanderToObjectCombat;
+            return true;
+        }
         WARNLOG("The %s index %d tried to wander to player %d which has no heart", thing_model_name(creatng),(int)creatng->index,(int)plyr_idx);
         return false;
     }
@@ -745,6 +758,15 @@ TbBool good_setup_wander_to_own_heart(struct Thing* creatng)
     TRACE_THING(heartng);
     if (!thing_exists(heartng))
     {
+        // A player who plays without a heart (HEARTREQUIRED off): patrol its dungeon instead
+        struct Coord3d homepos;
+        if (get_heartless_home_pos(creatng->owner, &homepos))
+        {
+            if (!setup_person_move_to_coord(creatng, &homepos, NavRtF_Default))
+                return false;
+            creatng->continue_state = CrSt_PatrolHere;
+            return true;
+        }
         WARNLOG("The %s index %d tried to wander to player %d which has no heart", thing_model_name(creatng), (int)creatng->index, creatng->owner);
         return false;
     }
@@ -1107,8 +1129,11 @@ short good_returns_to_start(struct Thing *thing)
     }
     struct Thing* heartng = get_player_soul_container(thing->owner);
     TRACE_THING(heartng);
+    struct Coord3d startpos = heartng->mappos;
+    // A player who plays without a heart (HEARTREQUIRED off) and has none: go back to its dungeon
+    get_heartless_home_pos(thing->owner, &startpos);
     //TODO CREATURE_AI Heroes don't usually have hearts; maybe they should also go back to hero gates, or any room?
-    if (!setup_person_move_to_coord(thing, &heartng->mappos, NavRtF_Default))
+    if (!setup_person_move_to_coord(thing, &startpos, NavRtF_Default))
     {
         return 0;
     }
@@ -1263,7 +1288,9 @@ TbBool script_support_send_tunneller_to_dungeon(struct Thing *creatng, PlayerNum
     SYNCDBG(7,"Send %s to player %d",thing_model_name(creatng),(int)plyr_idx);
     struct Thing* heartng = get_player_soul_container(plyr_idx);
     TRACE_THING(heartng);
-    if (!thing_exists(heartng))
+    struct Coord3d heartpos = heartng->mappos;
+    // A player who plays without a heart (HEARTREQUIRED off): its dungeon stands in for the heart
+    if (!thing_exists(heartng) && !get_heartless_home_pos(plyr_idx, &heartpos))
     {
         WARNLOG("Tried to send %s to player %d which has no heart", thing_model_name(creatng), (int)plyr_idx);
         return false;
@@ -1271,7 +1298,7 @@ TbBool script_support_send_tunneller_to_dungeon(struct Thing *creatng, PlayerNum
     struct Coord3d pos;
     if (!get_random_position_in_dungeon_for_creature(plyr_idx, CrWaS_WithinDungeon, creatng, &pos)) {
         WARNLOG("Tried to send %s to player %d but can't find position", thing_model_name(creatng), (int)plyr_idx);
-        return send_tunneller_to_point_in_dungeon(creatng, plyr_idx, &heartng->mappos);
+        return send_tunneller_to_point_in_dungeon(creatng, plyr_idx, &heartpos);
     }
     if (!send_tunneller_to_point_in_dungeon(creatng, plyr_idx, &pos)) {
         WARNLOG("Tried to send %s to player %d but can't start the task", thing_model_name(creatng), (int)plyr_idx);
@@ -1286,15 +1313,17 @@ TbBool script_support_send_tunneller_to_dungeon_heart(struct Thing *creatng, Pla
     SYNCDBG(7,"Send %s to player %d",thing_model_name(creatng),(int)plyr_idx);
     struct Thing* heartng = get_player_soul_container(plyr_idx);
     TRACE_THING(heartng);
-    if (!thing_exists(heartng)) {
+    struct Coord3d heartpos = heartng->mappos;
+    // A player who plays without a heart (HEARTREQUIRED off): its dungeon stands in for the heart
+    if (!thing_exists(heartng) && !get_heartless_home_pos(plyr_idx, &heartpos)) {
         WARNLOG("Tried to send %s to player %d which has no heart", thing_model_name(creatng), (int)plyr_idx);
         return false;
     }
-    if (!send_tunneller_to_point_in_dungeon(creatng, plyr_idx, &heartng->mappos)) {
+    if (!send_tunneller_to_point_in_dungeon(creatng, plyr_idx, &heartpos)) {
         WARNLOG("Tried to send %s to player %d but can't start the task", thing_model_name(creatng), (int)plyr_idx);
         return false;
     }
-    SYNCDBG(17,"Moving %s to (%d,%d)",thing_model_name(creatng),(int)heartng->mappos.x.stl.num,(int)heartng->mappos.y.stl.num);
+    SYNCDBG(17,"Moving %s to (%d,%d)",thing_model_name(creatng),(int)heartpos.x.stl.num,(int)heartpos.y.stl.num);
     return true;
 }
 
@@ -1393,7 +1422,7 @@ short tunneller_doing_nothing(struct Thing *creatng)
       return 1;
     }
     struct PlayerInfo* player = get_player(plyr_idx);
-    if ( (player_exists(player)) && (player_has_heart(plyr_idx)) )
+    if ( (player_exists(player)) && (player_has_heart_or_needs_none(plyr_idx)) )
     {
         struct Dungeon* dungeon = get_dungeon(plyr_idx);
         struct Coord3d pos;
@@ -1404,7 +1433,10 @@ short tunneller_doing_nothing(struct Thing *creatng)
         } else
         {
             struct Thing* heartng = get_player_soul_container(plyr_idx);
-            if (creature_can_navigate_to_with_storage(creatng, &heartng->mappos, NavRtF_Default))
+            struct Coord3d heartpos = heartng->mappos;
+            // A player who plays without a heart (HEARTREQUIRED off): its dungeon stands in for the heart
+            get_heartless_home_pos(plyr_idx, &heartpos);
+            if (creature_can_navigate_to_with_storage(creatng, &heartpos, NavRtF_Default))
             {
                 good_setup_wander_to_dungeon_heart(creatng, plyr_idx);
             }

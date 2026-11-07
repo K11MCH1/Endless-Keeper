@@ -111,6 +111,9 @@ static const struct NamedField rules_game_named_fields[] = {
   {"GLOBALAMBIENTLIGHT",        0, field_t(struct RulesConfig, gameplay.global_ambient_light),        10,        0,           INT32_MAX,NULL,                           value_default, assign_default},
   {"THINGMINIMUMILLUMINATION",  0, field_t(struct RulesConfig, gameplay.thing_minimum_illumination),  32,        0,           INT32_MAX,NULL,                           value_default, assign_default},
   {"LIGHTENABLED",              0, field_t(struct RulesConfig, gameplay.light_enabled),                1,        0,                  1,NULL,                           value_default, assign_default},
+  {"HEARTREQUIRED",             0, field_t(struct RulesConfig, gameplay.heart_required),              1,        0,                  1,NULL,                           value_default, assign_default},
+  {"SEEKENEMYHEART",            0, field_t(struct RulesConfig, gameplay.seek_enemy_heart),            0,        0,                  1,NULL,                           value_default, assign_default},
+  {"DIGGERSDROPONPATH",         0, field_t(struct RulesConfig, gameplay.diggers_drop_on_path),        1,        0,                  1,NULL,                           value_default, assign_default},
   {"MAPCREATURELIMIT",          0, field_t(struct RulesConfig, gameplay.creatures_count),            255,        0,  CREATURES_COUNT-2,NULL,                           value_default, assign_MapCreatureLimit_script},
   {"PRESERVECLASSICBUGS",      -1, field_t(struct RulesConfig, gameplay.classic_bugs_flags),ClscBug_None,ClscBug_None, ClscBug_ListEnd,rules_game_classicbugs_commands,value_flagsfield, assign_default},
   {NULL},
@@ -120,6 +123,8 @@ static const struct NamedField rules_game_named_fields[] = {
 static const struct NamedField rules_computer_named_fields[] = {
     //name                    //param  //field                                           //default    //min     //max
   {"DISEASEHPTEMPLEPERCENTAGE",  0, field_t(struct RulesConfig, computer.disease_to_temple_pct),500,        0, USHRT_MAX,NULL,value_default,assign_default},
+  {"DEFENDAGAINSTDIGGERS",       0, field_t(struct RulesConfig, computer.defend_against_diggers),0,       0,         1,NULL,value_default,assign_default},
+  {"WAKECREATURESTODEFEND",      0, field_t(struct RulesConfig, computer.wake_creatures_to_defend),0,     0,         1,NULL,value_default,assign_default},
   {NULL},
 };
 

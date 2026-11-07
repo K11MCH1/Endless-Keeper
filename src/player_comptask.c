@@ -2975,7 +2975,8 @@ struct Thing *find_creature_for_defend_pickup(struct Computer2 *comp)
                 {
                     if (!creature_is_being_unconscious(thing) && !creature_under_spell_effect(thing, CSAfF_Chicken))
                     {
-                        if (!creature_is_doing_lair_activity(thing) && !creature_is_being_dropped(thing))
+                        if ((!creature_is_doing_lair_activity(thing) || game.conf.rules[dungeon->owner].computer.wake_creatures_to_defend)
+                            && !creature_is_being_dropped(thing))
                         {
                             if ((cctrl->dropped_turn + COMPUTER_REDROP_DELAY) < get_gameturn())
                             {

@@ -147,6 +147,7 @@ TbBool campaign_outro(void)
 {
     if (campaign.movie_outro_fname[0] == '\0') {
         SYNCDBG(0,"No outro movie defined");
+        frontend_set_state(FeSt_LEVEL_STATS);
         return 0;
     }
     char* fname = prepare_file_path(FGrp_CmpgMedia, campaign.movie_outro_fname);

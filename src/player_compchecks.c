@@ -366,7 +366,7 @@ long computer_check_sacrifice_diggers(struct Computer2 *comp, struct ComputerChe
 {
     SYNCDBG(8,"Starting");
     struct Dungeon* dungeon = comp->dungeon;
-    if (dungeon_invalid(dungeon) || !player_has_heart(dungeon->owner)) {
+    if (dungeon_invalid(dungeon) || !player_has_heart_or_needs_none(dungeon->owner)) {
         SYNCDBG(7,"Computer players %d dungeon in invalid or has no heart",(int)dungeon->owner);
         return CTaskRet_Unk4;
     }
@@ -394,7 +394,7 @@ long computer_check_sacrifice_diggers(struct Computer2 *comp, struct ComputerChe
 long computer_check_no_imps(struct Computer2 *comp, struct ComputerCheck * check)
 {
     struct Dungeon* dungeon = comp->dungeon;
-    if (dungeon_invalid(dungeon) || !player_has_heart(dungeon->owner)) {
+    if (dungeon_invalid(dungeon) || !player_has_heart_or_needs_none(dungeon->owner)) {
         SYNCDBG(7,"Computer players %d dungeon in invalid or has no heart",(int)dungeon->owner);
         return CTaskRet_Unk4;
     }
@@ -435,8 +435,11 @@ long computer_check_no_imps(struct Computer2 *comp, struct ComputerCheck * check
     if (able_to_use_power)
     {
         struct Thing* heartng = get_player_soul_container(dungeon->owner);
-        MapSubtlCoord stl_x = heartng->mappos.x.stl.num;
-        MapSubtlCoord stl_y = heartng->mappos.y.stl.num;
+        struct Coord3d heartpos = heartng->mappos;
+        // A player who plays without a heart (HEARTREQUIRED off) and has none casts it at its dungeon
+        get_heartless_home_pos(dungeon->owner, &heartpos);
+        MapSubtlCoord stl_x = heartpos.x.stl.num;
+        MapSubtlCoord stl_y = heartpos.y.stl.num;
         if (xy_walkable(stl_x, stl_y, dungeon->owner))
         {
             if ((game.computer_chat_flags & CChat_TasksScarce) != 0) {
@@ -1142,7 +1145,7 @@ long computer_check_neutral_places(struct Computer2 *comp, struct ComputerCheck 
 {
     SYNCDBG(8,"Starting");
     struct Dungeon* dungeon = comp->dungeon;
-    if (dungeon_invalid(dungeon) || !player_has_heart(dungeon->owner)) {
+    if (dungeon_invalid(dungeon) || !player_has_heart_or_needs_none(dungeon->owner)) {
         SYNCDBG(7,"Computer players %d dungeon in invalid or has no heart",(int)dungeon->owner);
         return CTaskRet_Unk4;
     }
@@ -1324,7 +1327,7 @@ long computer_check_for_expand_room(struct Computer2 *comp, struct ComputerCheck
 {
     SYNCDBG(8,"Starting");
     struct Dungeon* dungeon = comp->dungeon;
-    if (dungeon_invalid(dungeon) || !player_has_heart(dungeon->owner)) {
+    if (dungeon_invalid(dungeon) || !player_has_heart_or_needs_none(dungeon->owner)) {
         SYNCDBG(7,"Computer players %d dungeon in invalid or has no heart",(int)dungeon->owner);
         return CTaskRet_Unk4;
     }

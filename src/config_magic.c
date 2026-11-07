@@ -1534,7 +1534,7 @@ TbBool is_power_available(PlayerNumber plyr_idx, PowerKind pwkind)
             pwkind = powerst->parent_power;
     }
     // Player must have dungeon heart to cast spells, with no heart only floating spirit spell works
-    if (!player_has_heart(plyr_idx) && (pwkind != PwrK_POSSESS)) {
+    if (!player_has_heart_or_needs_none(plyr_idx) && (pwkind != PwrK_POSSESS)) {
         return false;
     }
     if (pwkind >= game.conf.magic_conf.power_types_count)
@@ -1565,7 +1565,7 @@ TbBool is_power_obtainable(PlayerNumber plyr_idx, PowerKind pwkind)
             pwkind = powerst->parent_power;
     }
     // Player must have dungeon heart to cast spells, with no heart only floating spirit spell works
-    if (!player_has_heart(plyr_idx) && (pwkind != PwrK_POSSESS)) {
+    if (!player_has_heart_or_needs_none(plyr_idx) && (pwkind != PwrK_POSSESS)) {
         return false;
     }
     if (pwkind >= game.conf.magic_conf.power_types_count) {

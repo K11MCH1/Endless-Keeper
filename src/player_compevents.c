@@ -172,7 +172,12 @@ long computer_event_battle(struct Computer2 *comp, struct ComputerEvent *cevent,
         return CTaskRet_Unk0;
     }
     // Check if there are any enemies in the vicinity - no enemies, don't drop creatures
-    struct Thing* enmtng = get_creature_in_range_who_is_enemy_of_able_to_attack_and_not_specdigger(pos.x.val, pos.y.val, 21, comp->dungeon->owner);
+    // Enemy diggers are ignored, unless the DEFENDAGAINSTDIGGERS computer rule is set for this player
+    struct Thing* enmtng;
+    if (game.conf.rules[comp->dungeon->owner].computer.defend_against_diggers)
+        enmtng = get_creature_in_range_who_is_enemy_of_able_to_attack(pos.x.val, pos.y.val, 21, comp->dungeon->owner);
+    else
+        enmtng = get_creature_in_range_who_is_enemy_of_able_to_attack_and_not_specdigger(pos.x.val, pos.y.val, 21, comp->dungeon->owner);
     if (thing_is_invalid(enmtng))
     {
         SYNCDBG(8,"No enemies near %s",cevent->name);
@@ -847,10 +852,13 @@ long computer_event_check_imps_in_danger(struct Computer2 *comp, struct Computer
                         }
                         // Move creature to heart, unless it already is near the heart
                         struct Thing* heartng = get_player_soul_container(dungeon->owner);
-                        if (get_2d_distance(&creatng->mappos, &heartng->mappos) > subtile_coord(16,0))
+                        struct Coord3d heartpos = heartng->mappos;
+                        // A player who plays without a heart (HEARTREQUIRED off) and has none moves it to its dungeon
+                        get_heartless_home_pos(dungeon->owner, &heartpos);
+                        if (get_2d_distance(&creatng->mappos, &heartpos) > subtile_coord(16,0))
                         {
                             if (!create_task_move_creature_to_subtile(comp, creatng,
-                                heartng->mappos.x.stl.num, heartng->mappos.y.stl.num, CrSt_ImpDoingNothing)) {
+                                heartpos.x.stl.num, heartpos.y.stl.num, CrSt_ImpDoingNothing)) {
                                 break;
                             }
                             result = CTaskRet_Unk1;

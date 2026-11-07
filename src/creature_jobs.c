@@ -381,6 +381,15 @@ TbBool attempt_anger_job_join_enemy(struct Thing *creatng)
                 change_creature_owner(creatng, n);
                 anger_set_creature_anger_all_types(creatng, 0);
             }
+        } else
+        {
+            // A player who plays without a heart (HEARTREQUIRED off) and has none: go over to it if its dungeon can be reached
+            struct Coord3d homepos;
+            if (!thing_exists(heartng) && get_heartless_home_pos(n, &homepos)
+                && creature_can_navigate_to(creatng, &homepos, NavRtF_Default)) {
+                change_creature_owner(creatng, n);
+                anger_set_creature_anger_all_types(creatng, 0);
+            }
         }
     }
     return false;

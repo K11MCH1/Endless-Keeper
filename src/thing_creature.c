@@ -2960,6 +2960,9 @@ void creature_rebirth_at_lair(struct Thing *thing)
         // If creature has no lair - treat dungeon heart as lair
         lairtng = get_player_soul_container(thing->owner);
     }
+    // A player who plays without a heart (HEARTREQUIRED off) and has none: creatures without a lair are reborn at its dungeon
+    struct Coord3d rebirth_pos;
+    TbBool at_home = !thing_exists(lairtng) && get_heartless_home_pos(thing->owner, &rebirth_pos);
     if (cctrl->exp_level > 0)
         set_creature_level(thing, cctrl->exp_level-1);
     thing->health = cctrl->max_health;
@@ -2973,13 +2976,17 @@ void creature_rebirth_at_lair(struct Thing *thing)
         set_start_state(thing);
         cctrl->active_timebomb_spell = 0;
     }
-    if (!thing_exists(lairtng))
-        return;
+    if (!at_home)
+    {
+        if (!thing_exists(lairtng))
+            return;
+        rebirth_pos = lairtng->mappos;
+    }
     create_effect(&thing->mappos, TngEff_HarmlessGas2, thing->owner);
-    move_thing_in_map(thing, &lairtng->mappos);
+    move_thing_in_map(thing, &rebirth_pos);
     reset_interpolation_of_thing(thing);
     lua_on_creature_rebirth(thing);
-    create_effect(&lairtng->mappos, TngEff_HarmlessGas2, thing->owner);
+    create_effect(&rebirth_pos, TngEff_HarmlessGas2, thing->owner);
 }
 
 void throw_out_gold(struct Thing* thing, long amount)
@@ -4766,7 +4773,10 @@ TbBool is_creature_droppable_on_path(const struct Thing *thing)
     if (!thing_is_creature(thing)) {
         return false;
     }
-    return any_flag_is_set(get_creature_model_flags(thing), (CMF_IsSpecDigger|CMF_DropOnPath));
+    if (flag_is_set(get_creature_model_flags(thing), CMF_DropOnPath))
+        return true;
+    // Special diggers may be dropped on unclaimed path too, unless the DIGGERSDROPONPATH rule is off for their owner
+    return flag_is_set(get_creature_model_flags(thing), CMF_IsSpecDigger) && game.conf.rules[thing->owner].gameplay.diggers_drop_on_path;
 }
 
 /** Returns if a thing is special digger creature.

@@ -1609,7 +1609,9 @@ int add_pretty_and_convert_to_imp_stack(struct Dungeon *dungeon, int max_tasks)
     struct Thing *heartng;
     heartng = get_player_soul_container(dungeon->owner);
     TRACE_THING(heartng);
-    if (!thing_exists(heartng)) {
+    struct Coord3d start_pos = heartng->mappos;
+    // A player who plays without a heart (HEARTREQUIRED off) and has none: start from its dungeon
+    if (!thing_exists(heartng) && !get_heartless_home_pos(dungeon->owner, &start_pos)) {
         WARNLOG("The player %d has no heart, no dungeon position available",(int)dungeon->owner);
         return 0;
     }
@@ -1620,7 +1622,7 @@ int add_pretty_and_convert_to_imp_stack(struct Dungeon *dungeon, int max_tasks)
     slbopt = big_scratch;
     slblist = (struct SlabCoord *)(big_scratch + game.map_tiles_x*game.map_tiles_y);
     add_pretty_and_convert_to_imp_stack_prepare(dungeon, slbopt);
-    add_pretty_and_convert_to_imp_stack_starting_from_pos(dungeon, slbopt, slblist, &heartng->mappos, &remain_num);
+    add_pretty_and_convert_to_imp_stack_starting_from_pos(dungeon, slbopt, slblist, &start_pos, &remain_num);
     SYNCDBG(8,"Done, added %d tasks",(int)(max_tasks-remain_num));
     return (max_tasks-remain_num);
 }

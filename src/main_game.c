@@ -304,6 +304,15 @@ static void post_init_level(void)
     lua_on_game_start();
     init_dungeons_research();
     init_dungeons_essential_position();
+    // The level script has set the game rules by now. A player who plays without a heart (HEARTREQUIRED off)
+    // and has none gets its starting camera moved from the missing heart to its dungeon.
+    for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_COUNT; plyr_idx++)
+    {
+        struct PlayerInfo* player = get_player(plyr_idx);
+        struct Coord3d pos;
+        if (player_exists(player) && get_heartless_home_pos(plyr_idx, &pos))
+            init_player_cameras(player);
+    }
     if (!is_map_pack())
     {
         create_transferred_creatures_on_level();

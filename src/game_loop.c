@@ -179,7 +179,15 @@ void process_dungeon_destroy(struct Thing* heartng)
     case 1:
         if (no_backup)
         {
-            initialise_devastate_dungeon_from_heart(plyr_idx);
+            // A player who plays without a heart (HEARTREQUIRED off) loses only the heart: the dungeon doesn't crumble
+            if (player_needs_heart(plyr_idx))
+            {
+                initialise_devastate_dungeon_from_heart(plyr_idx);
+            } else
+            if (dungeon->heart_destroy_turn == 0)
+            {
+                lua_on_dungeon_destroyed(plyr_idx);
+            }
         }
         else
         {
@@ -264,13 +272,14 @@ void process_dungeon_destroy(struct Thing* heartng)
         // Drop all held things, by keeper
         if ((dungeon->num_things_in_hand > 0) && ((game.conf.rules[plyr_idx].gameplay.classic_bugs_flags & ClscBug_NoHandPurgeOnDefeat) == 0))
         {
-            if (no_backup)
+            // A player who plays without a heart (HEARTREQUIRED off) keeps what is in its hand
+            if (no_backup && player_needs_heart(plyr_idx))
                 dump_all_held_things_on_map(plyr_idx, central_pos->x.stl.num, central_pos->y.stl.num);
         }
         // Drop all held things, by computer player
         struct Computer2* comp;
         comp = get_computer_player(plyr_idx);
-        if (no_backup)
+        if (no_backup && player_needs_heart(plyr_idx))
             computer_force_dump_held_things_on_map(comp, central_pos);
         // Now if players things are still in hand - they must be kept by enemies
         // Got to next phase
@@ -309,11 +318,14 @@ void process_dungeon_destroy(struct Thing* heartng)
                     process_objective(objective,dungeon->owner, game.heart_lost_message_target, 0, 0);
                 }
             }
-            // If this is the last heart the player had, finish him
-            setup_all_player_creatures_and_diggers_leave_or_die(plyr_idx);
-            player->allied_players = to_flag(player->id_number);
-            if (game.game_kind == GKind_MultiGame)
-                reveal_whole_map(player);
+            // If this is the last heart the player had, finish him - unless he plays without a heart (HEARTREQUIRED off)
+            if (player_needs_heart(plyr_idx))
+            {
+                setup_all_player_creatures_and_diggers_leave_or_die(plyr_idx);
+                player->allied_players = to_flag(player->id_number);
+                if (game.game_kind == GKind_MultiGame)
+                    reveal_whole_map(player);
+            }
         }
     }
     dungeon->heart_destroy_state = 0;
@@ -1096,6 +1108,12 @@ static TbBool user_skips_heart_zoom(NetUserId user)
     return (game.game_kind == GKind_LocalGame) && (host->prefs[UPref_SkipHeartZoom] != 0) && (ustate->prefs[UPref_SkipHeartZoom] != 0);
 }
 
+// The level opens with a zoom out of the player's Dungeon Heart, unless skipped or there is no heart (HEARTREQUIRED off)
+static TbBool user_has_heart_zoom(NetUserId user)
+{
+    return !user_skips_heart_zoom(user) && player_has_heart(get_net_user_player_number(user));
+}
+
 void game_loop(void)
 {
 #if (BFDEBUG_LEVEL > 0)
@@ -1122,11 +1140,11 @@ void game_loop(void)
               if (!user_present(user))
                   continue;
               struct PlayerInfo *player = get_user_player(user);
-              if (player_exists(player) && ((player->allocflags & PlaF_CompCtrl) == 0) && !user_skips_heart_zoom(user)) {
+              if (player_exists(player) && ((player->allocflags & PlaF_CompCtrl) == 0) && user_has_heart_zoom(user)) {
                   set_user_instance(user, PI_HeartZoom, 0);
               }
           }
-          if (user_skips_heart_zoom(get_my_user()) && !replay.load_enable) {
+          if (!user_has_heart_zoom(get_my_user()) && !replay.load_enable) {
               toggle_status_menu(1); // Required when skipping PI_HeartZoom
           }
       } else
@@ -1158,7 +1176,7 @@ void game_loop(void)
       GameT.Hours = 0;
       if (!TimerNoReset)
       {
-          if (user_skips_heart_zoom(get_my_user()))
+          if (!user_has_heart_zoom(get_my_user()))
           {
               timerstarttime = starttime;
           }

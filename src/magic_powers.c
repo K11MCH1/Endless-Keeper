@@ -1008,6 +1008,8 @@ static TbResult magic_use_power_armageddon(PowerKind power_kind, PlayerNumber pl
     game.armageddon_mappos.x.val = heartng->mappos.x.val;
     game.armageddon_mappos.y.val = heartng->mappos.y.val;
     game.armageddon_mappos.z.val = heartng->mappos.z.val;
+    // A player who plays without a heart (HEARTREQUIRED off) and has none gathers everyone at its dungeon
+    get_heartless_home_pos(plyr_idx, &game.armageddon_mappos);
 
     int i;
     int k;

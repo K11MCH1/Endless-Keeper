@@ -97,7 +97,7 @@ void message_draw(void)
                     }
                     else
                     {
-                        spr_idx = (player_has_heart(game.messages[i].plyr_idx)) ? GPS_plyrsym_symbol_player_red_std_b : GPS_plyrsym_symbol_player_red_dead;
+                        spr_idx = (player_has_heart_or_needs_none(game.messages[i].plyr_idx)) ? GPS_plyrsym_symbol_player_red_std_b : GPS_plyrsym_symbol_player_red_dead;
                     }
                     break;
                 }
