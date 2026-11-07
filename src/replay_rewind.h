@@ -56,6 +56,8 @@ void replay_rewind_step(void);
 TbBool replay_rewind_at_limit(void);
 size_t replay_rewind_buffer_used(void);
 void replay_rewind_deinit(void);
+/** The kfx_rewindable statics as one block (thin-client play streams them like `game`). */
+void replay_rewind_tracked_statics(unsigned char **start, size_t *len);
 /******************************************************************************/
 #ifdef __cplusplus
 }

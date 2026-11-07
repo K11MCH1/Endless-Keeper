@@ -61,6 +61,7 @@
 #include "timer.h"
 #include "packets.h"
 #include "net_game.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -289,7 +290,7 @@ GoldAmount take_money_from_room(struct Room *room, GoldAmount amount_take)
     GoldAmount amount = amount_take;
     // Remove gold from room border slabs
     unsigned long k = 0;
-    unsigned long slbnum = room->slabs_list;
+    SlabCodedCoords slbnum = room->slabs_list;
     while (slbnum > 0)
     {
         struct SlabMap* slb = get_slabmap_direct(slbnum);
@@ -314,7 +315,7 @@ GoldAmount take_money_from_room(struct Room *room, GoldAmount amount_take)
         // Per-slab code ends
         slbnum = get_next_slab_number_in_room(slbnum);
         k++;
-        if (k > game.map_tiles_x * game.map_tiles_y)
+        if (k > (int64_t)game.map_tiles_x * game.map_tiles_y)
         {
             ERRORLOG("Infinite loop detected when sweeping room slabs");
             break;
@@ -346,7 +347,7 @@ GoldAmount take_money_from_room(struct Room *room, GoldAmount amount_take)
         // Per-slab code ends
         slbnum = get_next_slab_number_in_room(slbnum);
         k++;
-        if (k > game.map_tiles_x * game.map_tiles_y)
+        if (k > (int64_t)game.map_tiles_x * game.map_tiles_y)
         {
             ERRORLOG("Infinite loop detected when sweeping room slabs");
             break;
@@ -524,10 +525,17 @@ void calculate_dungeon_area_scores(void)
             dungeon->room_manage_area = 0;
         }
     }
-    // Compute new values for dungeon areas
-    for (MapSlabCoord slb_y = 0; slb_y < game.map_tiles_y; slb_y++)
+    // Compute new values for dungeon areas (paged mode: only the loaded chunks' bounding box)
+    MapSlabCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_tiles_x - 1, loop_y2 = game.map_tiles_y - 1;
+    if (world_paged)
+        map_loop_slab_bounds(&loop_x1, &loop_y1, &loop_x2, &loop_y2);
+    int32_t spans[2 * MAP_ROW_SPANS_MAX];
+    for (MapSlabCoord slb_y = loop_y1; slb_y <= loop_y2; slb_y++)
     {
-        for (MapSlabCoord slb_x = 0; slb_x < game.map_tiles_x; slb_x++)
+      const int nspans = map_row_spans(slb_y, loop_x1, loop_x2, WP_CHUNK_SLABS, spans, MAP_ROW_SPANS_MAX);
+      for (int sp = 0; sp < nspans; sp++)
+      {
+        for (MapSlabCoord slb_x = spans[2 * sp]; slb_x <= spans[2 * sp + 1]; slb_x++)
         {
             SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
             struct SlabMap* slb = get_slabmap_direct(slb_num);
@@ -560,6 +568,7 @@ void calculate_dungeon_area_scores(void)
                 }
             }
         }
+      }
     }
 }
 
@@ -656,6 +665,160 @@ void fill_in_explored_area(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSubtlC
         { 1, 1},
         { 0, 0}
     };
+
+    if (world_paged)
+    {
+        /* Paged mode (world_pages.h): the same flood fill over a grid covering the loaded chunks' bounding box with a
+         * one-slab frame (local index (slb_y - y1 + 1) * grid_w + (slb_x - x1 + 1)); the frame and unloaded slabs are
+         * walls (flag 1) that are never explored (flag 4). */
+        MapSlabCoord bx1, by1, bx2, by2;
+        /* the flood can't leave the start's island of loaded chunks (unloaded slabs are walls), so the grid only
+           covers that island's box */
+        if (!wp_island_bounds(stl_x / STL_PER_SLB, stl_y / STL_PER_SLB, &bx1, &by1, &bx2, &by2))
+            map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
+        if ((bx1 > bx2) || (by1 > by2))
+            return;
+        const MapSlabCoord grid_w = bx2 - bx1 + 3;
+        const MapSlabCoord grid_h = by2 - by1 + 3;
+        const size_t expl_cells = (size_t)grid_w * grid_h;
+        const size_t expl_queue_offs = (expl_cells + 7) & ~(size_t)7;
+        if (expl_queue_offs + expl_cells * sizeof(struct XY) > 16u * 1024 * 1024)
+        {
+            WARNLOG("Loaded area of %dx%d slabs is too big to fill in the explored area", (int)(grid_w - 2), (int)(grid_h - 2));
+            return;
+        }
+        unsigned char *expl_grid = big_scratch;
+        struct XY *expl_queue = (struct XY *)(big_scratch + expl_queue_offs);
+        for (MapSlabCoord gy = 0; gy < grid_h; gy++)
+        {
+            for (MapSlabCoord gx = 0; gx < grid_w; gx++)
+            {
+                unsigned char *expl_cell = &expl_grid[(size_t)gy * grid_w + gx];
+                *expl_cell = 0;
+                if ((gx == 0) || (gy == 0) || (gx == grid_w - 1) || (gy == grid_h - 1)) {
+                    *expl_cell = 1|4;
+                    continue;
+                }
+                struct SlabMap *slb = get_slabmap_block(bx1 + gx - 1, by1 + gy - 1);
+                if (slabmap_block_invalid(slb)) {
+                    *expl_cell = 1|4;
+                    continue;
+                }
+                struct SlabConfigStats *slabst = get_slab_stats(slb);
+                block_flags = slabst->block_flags;
+                if ((block_flags & (SlbAtFlg_Filled|SlbAtFlg_Digable|SlbAtFlg_Valuable)) != 0 || ((block_flags & SlbAtFlg_IsDoor) != 0 && slabmap_owner(slb) != plyr_idx))
+                {
+                    *expl_cell = 1;
+                }
+            }
+        }
+        /* every loaded subtile is concealed first, as in normal mode */
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+        {
+            for (int k = 0; k < WP_CHUNK_STL_CELLS; k++)
+                conceal_map_block(&pg->map[k], plyr_idx);
+        }
+        // From here slb_x, slb_y are grid coordinates
+        slb_x = stl_x / 3 - bx1 + 1;
+        slb_y = stl_y / 3 - by1 + 1;
+        if ((slb_x >= 1) && (slb_x <= grid_w - 2) && (slb_y >= 1) && (slb_y <= grid_h - 2))
+        {
+            queue_read_index = 0;
+            queue_write_index = 0;
+            expl_grid[(size_t)slb_y * grid_w + slb_x] |= 2u;
+            do
+            {
+                direction_flags = 0;
+                unsigned char *expl_cell = &expl_grid[(size_t)slb_y * grid_w + slb_x];
+                if ((expl_cell[-1] & 1) != 0)
+                {
+                    direction_flags = 8;
+                    expl_cell[-1] |= 2;
+                }
+                else if ((expl_cell[-1] & 2) == 0)
+                {
+                    expl_cell[-1] |= 2;
+                    expl_queue[queue_write_index].x = slb_x - 1;
+                    expl_queue[queue_write_index].y = slb_y;
+                    queue_write_index++;
+                }
+                if ((expl_cell[1] & 1) != 0)
+                {
+                    direction_flags |= 2u;
+                    expl_cell[1] |= 2;
+                }
+                else if ((expl_cell[1] & 2) == 0)
+                {
+                    expl_cell[1] |= 2;
+                    expl_queue[queue_write_index].x = slb_x + 1;
+                    expl_queue[queue_write_index].y = slb_y;
+                    queue_write_index++;
+                }
+                if ((expl_cell[-grid_w] & 1) != 0)
+                {
+                    direction_flags |= 1u;
+                    expl_cell[-grid_w] |= 2;
+                }
+                else if ((expl_cell[-grid_w] & 2) == 0)
+                {
+                    expl_cell[-grid_w] |= 2;
+                    expl_queue[queue_write_index].x = slb_x;
+                    expl_queue[queue_write_index].y = slb_y - 1;
+                    queue_write_index++;
+                }
+                if ((expl_cell[grid_w] & 1) != 0)
+                {
+                    direction_flags |= 4u;
+                    expl_cell[grid_w] |= 2;
+                }
+                else if ((expl_cell[grid_w] & 2) == 0)
+                {
+                    expl_cell[grid_w] |= 2;
+                    expl_queue[queue_write_index].x = slb_x;
+                    expl_queue[queue_write_index].y = slb_y + 1;
+                    queue_write_index++;
+                }
+                for (i = &exploration_direction_lookup_table[5 * direction_flags]; *i; i = &exploration_direction_lookup_table[5 * direction_flags])
+                {
+                    if (direction_flags == 15)
+                    {
+                        direction_flags = 0;
+                        expl_cell[-grid_w - 1] |= 2u;
+                        expl_cell[grid_w + 1] |= 2u;
+                        expl_cell[grid_w - 1] |= 2u;
+                        expl_cell[-grid_w + 1] |= 2u;
+                    }
+                    else
+                    {
+                        // As in normal mode, where get_slab_number() turns the offsets' -1 into 0
+                        const struct XY *ofs = &exploration_direction_offsets[(int)*i];
+                        expl_grid[(size_t)(slb_y + max(ofs->y, 0)) * grid_w + (slb_x + max(ofs->x, 0))] |= 2u;
+                        direction_flags &= i[4];
+                    }
+                }
+                slb_x = expl_queue[queue_read_index].x;
+                slb_y = expl_queue[queue_read_index].y;
+                queue_read_index++;
+            } while (queue_write_index >= queue_read_index);
+        }
+        for (MapSlabCoord gy = 1; gy < grid_h - 1; gy++)
+        {
+            for (MapSlabCoord gx = 1; gx < grid_w - 1; gx++)
+            {
+                unsigned char expl_state = expl_grid[(size_t)gy * grid_w + gx];
+                if (((expl_state & 2) != 0) && ((expl_state & 4) == 0))
+                {
+                    clear_slab_dig(bx1 + gx - 1, by1 + gy - 1, plyr_idx);
+                    set_slab_explored(plyr_idx, bx1 + gx - 1, by1 + gy - 1);
+                }
+            }
+        }
+        /* the minimap of everything concealed above */
+        MapSlabCoord ax1, ay1, ax2, ay2;
+        map_loop_slab_bounds(&ax1, &ay1, &ax2, &ay2);
+        panel_map_update(ax1 * STL_PER_SLB, ay1 * STL_PER_SLB, (ax2 - ax1 + 1) * STL_PER_SLB, (ay2 - ay1 + 1) * STL_PER_SLB);
+        return;
+    }
 
     char *first_scratch = (char*) &big_scratch[game.map_tiles_x];
     struct XY *second_scratch = (struct XY *)big_scratch + game.map_tiles_x * (game.map_tiles_y + 1);
@@ -759,7 +922,7 @@ void fill_in_explored_area(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSubtlC
             }
             else
             {
-                scratch_slab_ptr = &first_scratch[get_slab_number(exploration_direction_offsets[*(int *)i].x,exploration_direction_offsets[*(int *)i].y) + game.map_tiles_x * slb_y];
+                scratch_slab_ptr = &first_scratch[get_slab_number(exploration_direction_offsets[*(int *)i].x,exploration_direction_offsets[*(int *)i].y) + (SlabCodedCoords)game.map_tiles_x * slb_y];
                 scratch_slab_ptr[slb_x] |= 2u;
                 direction_flags &= i[4];
             }
@@ -791,9 +954,25 @@ void init_keeper_map_exploration_by_terrain(struct PlayerInfo *player)
     if (thing_exists(heartng)) {
         fill_in_explored_area(player->id_number, heartng->mappos.x.stl.num, heartng->mappos.y.stl.num);
     }
-    for (MapSlabCoord slb_y = 0; slb_y < game.map_tiles_y; slb_y++)
+    if (world_paged)
     {
-        for (MapSlabCoord slb_x = 0; slb_x < game.map_tiles_x; slb_x++)
+        // Paged mode: the loaded slabs
+        struct WpSlabIter it;
+        MapSlabCoord slb_x, slb_y;
+        struct SlabMap *slb;
+        wp_slab_iter_init(&it);
+        while (wp_slab_iter_next(&it, &slb_x, &slb_y, &slb))
+        {
+            if (map_position_initially_explored_for_player(player->id_number, slb_x, slb_y)) {
+                set_slab_explored(player->id_number, slb_x, slb_y);
+            }
+        }
+        return;
+    }
+    MapSlabCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_tiles_x - 1, loop_y2 = game.map_tiles_y - 1;
+    for (MapSlabCoord slb_y = loop_y1; slb_y <= loop_y2; slb_y++)
+    {
+        for (MapSlabCoord slb_x = loop_x1; slb_x <= loop_x2; slb_x++)
         {
             if (map_position_initially_explored_for_player(player->id_number, slb_x, slb_y)) {
                 set_slab_explored(player->id_number, slb_x, slb_y);
@@ -933,7 +1112,7 @@ void init_player(struct PlayerInfo *player, short no_explore)
     }
     init_player_cameras(player);
     // By default, player is his own ally
-    player->allied_players = to_flag(player->id_number);
+    player->allied_players = pmask_of(player->id_number);
     player->slap_cooldown_until_turn = 0;
     if (player->generate_speed == 0)
       player->generate_speed = game.conf.rules[player->id_number].rooms.default_generate_speed;
@@ -949,9 +1128,12 @@ void init_player(struct PlayerInfo *player, short no_explore)
 int32_t user_get_visibility_bounds(NetUserId user, MapCoord *x, MapCoord *y)
 {
     const int32_t default_radius = 24 * COORD_PER_STL;
-    struct PlayerInfo *player = get_user_player(user);
     const struct UserState *ustate = get_user_state(user);
-    if (!player_exists(player) || user_state_invalid(ustate))
+    /* a user without a keeper (a dedicated server's host) sees nothing */
+    if (user_state_invalid(ustate) || (ustate->player_id < 0) || (ustate->player_id >= PLAYERS_COUNT))
+        return -1;
+    struct PlayerInfo *player = get_user_player(user);
+    if (!player_exists(player))
         return -1;
     // TODO: interpolate during an instance?
     const struct DungeonCamera dcam = ustate->dungeon_camera;
@@ -992,18 +1174,18 @@ void init_players(void)
     for (int i = 0; i < PLAYERS_COUNT; i++)
     {
         struct PlayerInfo* player = get_player(i);
-        if (flag_is_set(replay.head.players_exist, to_flag(i)))
+        if (pmask_has(replay.head.players_exist, i))
             player->allocflags |= PlaF_Allocated;
         else
             player->allocflags &= ~PlaF_Allocated;
         if (player_exists(player))
         {
             player->id_number = i;
-            if (flag_is_set(replay.head.players_comp, to_flag(i)))
+            if (pmask_has(replay.head.players_comp, i))
                 player->allocflags |= PlaF_CompCtrl;
             else
                 player->allocflags &= ~PlaF_CompCtrl;
-            set_flag_value(player->allocflags, PlaF_Seat, flag_is_set(replay.head.players_seat, to_flag(i)));
+            set_flag_value(player->allocflags, PlaF_Seat, pmask_has(replay.head.players_seat, i));
             if ((player->allocflags & PlaF_CompCtrl) == 0)
             {
               game.human_players_count++;
@@ -1123,13 +1305,39 @@ long wander_point_initialise(struct Wander *wandr, PlayerNumber plyr_idx, unsign
     wandr->plyr_idx = plyr_idx;
     wandr->point_insert_idx = 0;
     wandr->last_checked_slb_num = 0;
-    wandr->plyr_bit = to_flag(plyr_idx);
+    wandr->plyr_bit = ((plyr_idx >= 0) && (plyr_idx < 16)) ? (uint16_t)(1u << plyr_idx) : 0;
     wandr->num_check_per_run = 20;
     wandr->max_found_per_check = 4;
     wandr->search_limiting_enabled = 0;
 
     long stl_num_list_count = 0;
     SubtlCodedCoords* stl_num_list = (SubtlCodedCoords*)big_scratch;
+    if (world_paged)
+    {
+        // Paged mode: the loaded slabs in row-major order
+        struct WpSlabIter it;
+        MapSlabCoord slb_x, slb_y;
+        struct SlabMap *slb;
+        wp_slab_iter_init(&it);
+        MapSlabCoord first_x = 0, first_y = 0;
+        if (wp_rowmajor_slab(0, &first_x, &first_y))
+            wandr->last_checked_slb_num = get_slab_number(first_x, first_y);
+        while (wp_slab_iter_next(&it, &slb_x, &slb_y, &slb))
+        {
+            SubtlCodedCoords stl_num = get_subtile_number_at_slab_center(slb_x, slb_y);
+            if (wp_check_map_pos_valid(wandr, stl_num))
+            {
+                if (stl_num_list_count >= 0x10000/sizeof(SubtlCodedCoords)-1)
+                    break;
+                stl_num_list[stl_num_list_count] = stl_num;
+                stl_num_list_count++;
+            }
+        }
+        if (stl_num_list_count <= 0)
+            return 1;
+        store_wander_points_up_to(wandr, stl_num_list, stl_num_list_count, WANDER_POINTS_COUNT);
+        return 1;
+    }
     SlabCodedCoords slb_num = 0;
     while (1)
     {
@@ -1144,7 +1352,7 @@ long wander_point_initialise(struct Wander *wandr, PlayerNumber plyr_idx, unsign
             stl_num_list_count++;
         }
         slb_num++;
-        if (slb_num >= game.map_tiles_x*game.map_tiles_y) {
+        if (slb_num >= (SlabCodedCoords)game.map_tiles_x*game.map_tiles_y) {
             break;
         }
     }
@@ -1161,6 +1369,49 @@ long wander_point_update(struct Wander *wandr)
 {
     SubtlCodedCoords stl_num_list[LOCAL_LIST_SIZE];
     SYNCDBG(6,"Starting");
+    if (world_paged)
+    {
+        // Paged mode: walk the loaded slabs in row-major order, wrapping (every probe lands on loaded ground)
+        const int64_t box_cells = (int64_t)wp_cells_begin() * WP_CHUNK_SLAB_CELLS;
+        if (box_cells <= 0)
+            return 1;
+        MapSlabCoord slb_x = slb_num_decode_x(wandr->last_checked_slb_num);
+        MapSlabCoord slb_y = slb_num_decode_y(wandr->last_checked_slb_num);
+        // position among the loaded slabs (its chunk may have been frozen since the last run)
+        int64_t pos = wp_rowmajor_ordinal(slb_x, slb_y);
+        if (pos < 0)
+            pos = 0;
+        const int64_t start_pos = pos;
+        SubtlCodedCoords paged_stl_list[LOCAL_LIST_SIZE];
+        long paged_list_count = 0;
+        for (long i = 0; i < wandr->num_check_per_run; i++)
+        {
+            wp_rowmajor_slab(pos, &slb_x, &slb_y);
+            SubtlCodedCoords stl_num = get_subtile_number_at_slab_center(slb_x, slb_y);
+            if (wp_check_map_pos_valid(wandr, stl_num))
+            {
+                if (paged_list_count >= LOCAL_LIST_SIZE)
+                    break;
+                paged_stl_list[paged_list_count] = stl_num;
+                paged_list_count++;
+                if ((wandr->search_limiting_enabled != 0) && (paged_list_count == wandr->max_found_per_check))
+                {
+                    pos = (start_pos + wandr->num_check_per_run) % box_cells;
+                    break;
+                }
+            }
+            pos++;
+            if (pos >= box_cells) {
+                pos = 0;
+            }
+        }
+        if (wp_rowmajor_slab(pos, &slb_x, &slb_y))
+            wandr->last_checked_slb_num = get_slab_number(slb_x, slb_y);
+        if (paged_list_count <= 0)
+            return 1;
+        store_wander_points_up_to(wandr, paged_stl_list, paged_list_count, wandr->max_found_per_check);
+        return 1;
+    }
     // Find up to 20 numbers (starting where we ended last time) and store them in local array
     SlabCodedCoords slb_num = wandr->last_checked_slb_num;
     long stl_num_list_count = 0;
@@ -1177,12 +1428,12 @@ long wander_point_update(struct Wander *wandr)
             stl_num_list_count++;
             if ((wandr->search_limiting_enabled != 0) && (stl_num_list_count == wandr->max_found_per_check))
             {
-                slb_num = (wandr->num_check_per_run + wandr->last_checked_slb_num) % (game.map_tiles_x*game.map_tiles_y);
+                slb_num = (wandr->num_check_per_run + wandr->last_checked_slb_num) % ((SlabCodedCoords)game.map_tiles_x*game.map_tiles_y);
                 break;
             }
         }
         slb_num++;
-        if (slb_num >= game.map_tiles_x*game.map_tiles_y) {
+        if (slb_num >= (SlabCodedCoords)game.map_tiles_x*game.map_tiles_y) {
             slb_num = 0;
         }
     }
@@ -1419,9 +1670,13 @@ void set_player_colour(PlayerNumber plyr_idx, unsigned char colour_idx)
         {
             dungeon->color_idx = colour_idx;
             update_panel_color_player_color(plyr_idx,colour_idx);
-            for (MapSlabCoord slb_y=0; slb_y < game.map_tiles_y; slb_y++)
+            // Paged mode: only the loaded chunks' bounding box
+            MapSlabCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_tiles_x - 1, loop_y2 = game.map_tiles_y - 1;
+            if (world_paged)
+                map_loop_slab_bounds(&loop_x1, &loop_y1, &loop_x2, &loop_y2);
+            for (MapSlabCoord slb_y=loop_y1; slb_y <= loop_y2; slb_y++)
             {
-                for (MapSlabCoord slb_x=0; slb_x < game.map_tiles_x; slb_x++)
+                for (MapSlabCoord slb_x=loop_x1; slb_x <= loop_x2; slb_x++)
                 {
                     struct SlabMap* slb = get_slabmap_block(slb_x,slb_y);
                     if (slabmap_owner(slb) == plyr_idx)

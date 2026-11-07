@@ -41,8 +41,10 @@
 #include "local_possession.h"
 #include "creature_control.h"
 #include "bflib_datetm.h"
+#include "world_pages.h"
 
 #include <math.h>
+#include "net_state.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -309,8 +311,8 @@ static struct LocalCameraRotation take_local_camera_rotation(void)
 
 static void process_local_camera_controls(struct Camera* cam, const struct Packet* pckt)
 {
-    MapCoord x;
-    MapCoord y;
+    MapCoord x = cam->mappos.x.val; /* the reference for the paged world's wrapped packet positions */
+    MapCoord y = cam->mappos.y.val;
     const TbBool dungeon_view = (cam->view_mode == PVM_IsoWibbleView) || (cam->view_mode == PVM_IsoStraightView) || (cam->view_mode == PVM_FrontView);
     if (dungeon_view && packet_get_camera_position(pckt, &x, &y))
     {
@@ -381,6 +383,14 @@ static void update_local_first_person_camera(struct Thing *ctrltng)
     struct Thing *viewtng = get_local_possession_view(ctrltng);
     int eye_height = get_creature_eye_height(ctrltng);
     update_first_person_position(cam, viewtng, get_local_creature_control(ctrltng), eye_height);
+    if (netstate_is_client()) {
+        /* a thin client's turns come in bursts: the eye moves between turns exactly as the creature is drawn (from its
+           previous position), not from wherever the camera was a burst ago */
+        struct Camera *prev = &local_state.camera.previous[CamIV_FirstPerson];
+        prev->mappos.x.val = cam->mappos.x.val - (viewtng->mappos.x.val - viewtng->previous_mappos.x.val);
+        prev->mappos.y.val = cam->mappos.y.val - (viewtng->mappos.y.val - viewtng->previous_mappos.y.val);
+        prev->mappos.z.val = cam->mappos.z.val - (viewtng->mappos.z.val - viewtng->previous_mappos.z.val);
+    }
 
     // A replay shows the recorded look as the creature took it.
     if (replay.load_enable)
@@ -435,7 +445,8 @@ void update_local_cameras(void)
         observer_update_view();
     }
     struct Thing *ctrltng = thing_get(get_local_user_state()->controlled_thing_idx);
-    const struct Packet *pckt = get_history_packet(get_local_user(), get_gameturn());
+    /* a thin client keeps its packet history by input number, not by turn: its last input is this turn's */
+    const struct Packet *pckt = netstate_is_client() ? netstate_client_last_input() : get_history_packet(get_local_user(), get_gameturn());
     const int active_cam_idx = get_local_active_camera() - local_state.camera.current;
     const TbBool following_player = observer_is_active() && !is_observer_camera_active();
     const TbBool move_camera = camera_step_due || following_player;
@@ -610,6 +621,12 @@ void interpolate_local_cameras(void)
         const float zoom = LbLerp(prev->zoom, desired->zoom, camera_fraction);
         out->mappos.x.val = lroundf(mappos_x);
         out->mappos.y.val = lroundf(mappos_y);
+        if (world_paged)
+        {
+            /* the chunked world's positions are past float's 24 bits: interpolate the step, not the position */
+            out->mappos.x.val = prev->mappos.x.val + lroundf((float)(desired->mappos.x.val - prev->mappos.x.val) * camera_fraction);
+            out->mappos.y.val = prev->mappos.y.val + lroundf((float)(desired->mappos.y.val - prev->mappos.y.val) * camera_fraction);
+        }
         out->mappos.z.val = lroundf(mappos_z);
         out->rotation_angle_x = lroundf(angle_x) & ANGLE_MASK;
         out->rotation_angle_y = lroundf(angle_y) & ANGLE_MASK;

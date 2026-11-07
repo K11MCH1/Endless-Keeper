@@ -490,7 +490,7 @@ SAVE_STRUCT(InitLight, struct InitLight,
     SAVE_FIELD(struct InitLight, flags, SV_U8),
     SAVE_SUB(struct InitLight, mappos, Coord3d),
     SAVE_FIELD(struct InitLight, is_dynamic, SV_U8),
-    SAVE_FIELD(struct InitLight, attached_slb, SV_U32),
+    SAVE_FIELD(struct InitLight, attached_slb, SV_U64),
 );
 
 SAVE_STRUCT(InstanceInfo, struct InstanceInfo,

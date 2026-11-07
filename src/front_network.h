@@ -31,7 +31,9 @@ extern "C" {
 
 /******************************************************************************/
 #define NET_SERVICE_LEN 64
-#define NET_PLAYER_COLOUR_RANDOM MAX_NET_USERS
+/* the lobby's seats: users 0-3 take players 0-3 (colours), whatever MAX_NET_USERS is */
+#define LOBBY_SEATS STOCK_NET_USERS
+#define NET_PLAYER_COLOUR_RANDOM LOBBY_SEATS
 #define NET_TEAM_COUNT 4
 #define NET_TEAM_RANDOM NET_TEAM_COUNT
 #define NET_DEFAULT_NAME_NUMBER_RANGE 1000

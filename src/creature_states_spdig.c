@@ -56,6 +56,9 @@
 #include "keeperfx.hpp"
 #include "player_instances.h"
 #include "packets.h"
+#include "world_colours.h"
+#include "world_stream.h"
+#include "world_progress.h"
 #include "post_inc.h"
 #include "creature_states_lair.h"
 
@@ -508,7 +511,7 @@ static TbBool check_out_undug_drop_place(struct Thing *spdigtng)
     }
 
     cctrl->digger.task_idx = task_idx;
-    cctrl->digger.task_stl = stl_num;
+    cctrl->digger_task_stl = stl_num;
     struct Dungeon* dungeon = get_dungeon(spdigtng->owner);
     struct MapTask* mtask = get_dungeon_task_list_entry(dungeon, task_idx);
     if ( mtask->kind == SDDigTask_MineGold )
@@ -703,7 +706,7 @@ long check_out_unreinforced_drop_place(struct Thing *thing)
     MapSubtlCoord digger_stl_y;
     MapSlabCoord slb_x;
     MapSlabCoord slb_y;
-    long stl_num;
+    SubtlCodedCoords stl_num;
     MapSubtlCoord dest_stl_x;
     MapSubtlCoord dest_stl_y;
     long i;
@@ -725,7 +728,7 @@ long check_out_unreinforced_drop_place(struct Thing *thing)
                 {
 
                     thing->continue_state = CrSt_ImpArrivesAtReinforce;
-                    cctrl->digger.working_stl = stl_num;
+                    cctrl->digger_working_stl = stl_num;
                     cctrl->digger.consecutive_reinforcements = 0;
                     SYNCDBG(8,"Assigned reinforce at (%d,%d) to %s index %d",(int)dest_stl_x,(int)dest_stl_y,thing_model_name(thing),(int)thing->index);
                     return 1;
@@ -923,7 +926,7 @@ short imp_arrives_at_dig_or_mine(struct Thing *spdigtng)
     {
         struct CreatureControl* cctrl = creature_control_get_from_thing(spdigtng);
 
-        if (!move_imp_to_uncrowded_dig_mine_access_point(spdigtng, cctrl->digger.task_stl))
+        if (!move_imp_to_uncrowded_dig_mine_access_point(spdigtng, cctrl->digger_task_stl))
         {
             internal_set_thing_state(spdigtng, CrSt_ImpLastDidJob);
             return 1;
@@ -963,7 +966,7 @@ short imp_arrives_at_reinforce(struct Thing *spdigtng)
 
     if ( imp_already_reinforcing_at_excluding(spdigtng,spdigtng->mappos.x.stl.num,spdigtng->mappos.y.stl.num))
     {
-        if ( check_out_uncrowded_reinforce_position(spdigtng, cctrl->digger.working_stl, &stl_x, &stl_y) <= 0
+        if ( check_out_uncrowded_reinforce_position(spdigtng, cctrl->digger_working_stl, &stl_x, &stl_y) <= 0
             || !setup_person_move_to_position(spdigtng, stl_x, stl_y, 0) )
         {
             internal_set_thing_state(spdigtng, CrSt_ImpLastDidJob);
@@ -1003,7 +1006,7 @@ short imp_birth(struct Thing *thing)
     }
     long i = get_gameturn() - thing->creation_turn;
     if ((i % 2) == 0) {
-      create_effect_element(&thing->mappos, birth_effect_element[get_player_color_idx(thing->owner)], thing->owner);
+      create_effect_element(&thing->mappos, birth_effect_element[world_display_colour(thing->owner)], thing->owner);
     }
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
     thing->movement_flags &= ~TMvF_Flying;
@@ -1099,21 +1102,21 @@ short imp_digs_mines(struct Thing *spdigtng)
         cctrl->exp_points += digger_work_experience(spdigtng);
         check_experience_upgrade(spdigtng);
     }
-    int32_t task_idx = find_dig_from_task_list(spdigtng->owner, cctrl->digger.task_stl);
+    int32_t task_idx = find_dig_from_task_list(spdigtng->owner, cctrl->digger_task_stl);
     if (task_idx < 0) {
         clear_creature_instance(spdigtng);
         internal_set_thing_state(spdigtng, CrSt_ImpLastDidJob);
         return 1;
     }
     struct MapTask* mtask = get_task_list_entry(spdigtng->owner, task_idx);
-    MapSubtlCoord stl_x = stl_num_decode_x(cctrl->digger.task_stl);
-    MapSubtlCoord stl_y = stl_num_decode_y(cctrl->digger.task_stl);
+    MapSubtlCoord stl_x = stl_num_decode_x(cctrl->digger_task_stl);
+    MapSubtlCoord stl_y = stl_num_decode_y(cctrl->digger_task_stl);
     struct SlabMap* slb = get_slabmap_for_subtile(stl_x, stl_y);
 
     // Check if we've arrived at the destination
     MapSubtlDelta delta_x = abs(spdigtng->mappos.x.stl.num - (MapSubtlDelta)cctrl->moveto_pos.x.stl.num);
     MapSubtlDelta delta_y = abs(spdigtng->mappos.y.stl.num - (MapSubtlDelta)cctrl->moveto_pos.y.stl.num);
-    if ((mtask->coords != cctrl->digger.task_stl) || (delta_x > 0) || (delta_y > 0))
+    if ((mtask->coords != cctrl->digger_task_stl) || (delta_x > 0) || (delta_y > 0))
     {
         clear_creature_instance(spdigtng);
         internal_set_thing_state(spdigtng, CrSt_ImpLastDidJob);
@@ -1150,6 +1153,7 @@ short imp_digs_mines(struct Thing *spdigtng)
 
     if (mtask->kind == SDDigTask_MineGold)
     {
+        world_imp_mined_gold(spdigtng); /* endless worlds: a turn of mining teaches as a turn of training */
         struct CreatureModelConfig* crconf = creature_stats_get_from_thing(spdigtng);
         // If the creature holds more gold than its able
         if (spdigtng->creature.gold_carried > crconf->gold_hold)
@@ -1406,8 +1410,8 @@ short imp_reinforces(struct Thing *thing)
 {
     TRACE_THING(thing);
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
-    MapSubtlCoord stl_x = stl_num_decode_x(cctrl->digger.working_stl);
-    MapSubtlCoord stl_y = stl_num_decode_y(cctrl->digger.working_stl);
+    MapSubtlCoord stl_x = stl_num_decode_x(cctrl->digger_working_stl);
+    MapSubtlCoord stl_y = stl_num_decode_y(cctrl->digger_working_stl);
     struct Coord3d pos;
     pos.x.val = subtile_coord_center(stl_x);
     pos.y.val = subtile_coord_center(stl_y);
@@ -1427,7 +1431,7 @@ short imp_reinforces(struct Thing *thing)
         {
             cctrl->digger.task_repeats = 0;
             cctrl->digger.last_did_job = SDLstJob_DigOrMine;
-            cctrl->digger.task_stl = get_subtile_number_at_slab_center(subtile_slab(stl_x), subtile_slab(stl_y));
+            cctrl->digger_task_stl = get_subtile_number_at_slab_center(subtile_slab(stl_x), subtile_slab(stl_y));
         }
         clear_creature_instance(thing);
         internal_set_thing_state(thing, CrSt_ImpLastDidJob);
@@ -2040,6 +2044,7 @@ short creature_drops_spell_object_in_library(struct Thing *creatng)
     if (thing_is_special_box(spelltng))
     {
         spelltng->owner = creatng->owner;
+        world_progress_book_shelved(spelltng, room); /* endless worlds: a heroes' spellbook opens a research */
     }
     // The action of moving object is now finished
     set_start_state(creatng);

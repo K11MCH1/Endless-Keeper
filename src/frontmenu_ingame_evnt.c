@@ -56,6 +56,7 @@
 #include "vidmode.h"
 
 #include "keeperfx.hpp"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #define HIGHLIGHTED_TEXT_FADE_LEVEL 48
@@ -234,7 +235,7 @@ void draw_battle_head(struct Thing *thing, long scr_x, long scr_y, int units_per
     int curscr_x = scr_x - (spr->SWidth * ps_units_per_px / 16) / 2;
     int curscr_y = scr_y - (spr->SHeight * ps_units_per_px / 16) / 2;
     if ((thing->creature.health_bar_turns) && ((get_gameturn() % (2 * gui_blink_rate)) >= gui_blink_rate)) {
-        LbSpriteDrawResizedOneColour(curscr_x, curscr_y, ps_units_per_px, spr, player_flash_colours[get_player_color_idx(thing->owner)]);
+        LbSpriteDrawResizedOneColour(curscr_x, curscr_y, ps_units_per_px, spr, player_flash_colours[world_display_colour(thing->owner)]);
     } else {
         LbSpriteDrawResized(curscr_x, curscr_y, ps_units_per_px, spr);
     }
@@ -249,7 +250,7 @@ void draw_battle_head(struct Thing *thing, long scr_x, long scr_y, int units_per
     HitPoints max_health = cctrl->max_health;
     if (max_health < 1)
         max_health = 1;
-    LbDrawBox(curscr_x + 2*units_per_px/16, curscr_y + 2*units_per_px/16, ((12 * health)/max_health)*units_per_px/16, 2*units_per_px/16, player_room_colours[get_player_color_idx(thing->owner)]);
+    LbDrawBox(curscr_x + 2*units_per_px/16, curscr_y + 2*units_per_px/16, ((12 * health)/max_health)*units_per_px/16, 2*units_per_px/16, player_room_colours[world_display_colour(thing->owner)]);
     // Draw experience level
     spr = get_button_sprite(GBS_creature_flower_level_01);
     int bs_units_per_px = (17 * units_per_px + spr->SHeight / 2) / spr->SHeight;

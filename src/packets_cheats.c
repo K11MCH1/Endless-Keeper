@@ -49,6 +49,7 @@
 #include "frontmenu_ingame_tabs.h"
 #include "room_treasure.h"
 #include "net_game.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 extern void clear_input(struct Packet* packet);
@@ -993,7 +994,7 @@ TbBool process_user_dungeon_control_cheats_packet_action(NetUserId user, struct 
                     pos.y.val = subtile_coord_center(slab_subtile_center(subtile_slab(stl_y)));
                     pos.z.val = subtile_coord_center(1);
                     play_player_sample(player->id_number, snd_spell_stars);
-                    create_effect(&pos, imp_spangle_effects[get_player_color_idx(id)], id);
+                    create_effect(&pos, imp_spangle_effects[world_display_colour(id)], id);
                 }
                 else
                 {
@@ -1006,7 +1007,7 @@ TbBool process_user_dungeon_control_cheats_packet_action(NetUserId user, struct 
                         if (map_block_revealed(mapblk, id) && ((mapblk->flags & SlbAtFlg_Blocking) == 0))
                         {
                             pos.z.val = get_floor_height_at(&pos);
-                            create_effect(&pos, imp_spangle_effects[get_player_color_idx(id)], id);
+                            create_effect(&pos, imp_spangle_effects[world_display_colour(id)], id);
                         }
                     }
                 }
@@ -1035,7 +1036,7 @@ TbBool process_user_dungeon_control_cheats_packet_action(NetUserId user, struct 
                 if (pckt->actn_par2)
                 {
                     play_player_sample(player->id_number, snd_room_claim);
-                    create_effects_on_room_slabs(room, imp_spangle_effects[get_player_color_idx(pckt->actn_par1)], 0, pckt->actn_par1);
+                    create_effects_on_room_slabs(room, imp_spangle_effects[world_display_colour(pckt->actn_par1)], 0, pckt->actn_par1);
                 }
                 take_over_room(room, pckt->actn_par1);
             }

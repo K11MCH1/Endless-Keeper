@@ -20,7 +20,10 @@
 
 #include "bflib_enet.h"
 #include "keeperfx.hpp"
+#include "server_admin.h"
 #include "post_inc.h"
+
+_Static_assert(MAX_NET_USERS == PLAYERS_MAX - 3, "a network user for every human seat and the host");
 
 static struct TbNetworkUserInfo *local_user_info;
 
@@ -192,6 +195,9 @@ void OnDroppedUser(NetUserId id, enum NetDropReason reason)
         return;
     }
     netstate.users_timed_out[id] = (reason == NETDROP_TIMEOUT);
+    if ((netstate.my_id == SERVER_ID) && (id != SERVER_ID)) {
+        server_admin_user_left(id, (reason == NETDROP_TIMEOUT) ? 1 : ((reason == NETDROP_MANUAL) ? 2 : 0));
+    }
     if (reason == NETDROP_MANUAL) {
         NETMSG("Dropped user %i %s", id, netstate.users[id].name);
     } else {

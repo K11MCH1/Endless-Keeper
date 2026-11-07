@@ -79,6 +79,8 @@
 #include "kjm_input.h"
 #include "custom_sprites.h"
 #include "sprites.h"
+#include "world_colours.h"
+#include "world_stream.h"
 #include "post_inc.h"
 #include "room_workshop.h"
 
@@ -148,7 +150,7 @@ static PlayerNumber info_panel_pos_to_player_number(int idx)
     idx += info_page * 3;
     for (size_t i = 0; i < PLAYERS_COUNT; i++)
     {
-        if(i == my_player_number || player_is_roaming(i))
+        if(i == my_player_number || player_is_roaming(i) || !world_player_listed(i))
             continue;
 
         struct PlayerInfo* player = get_player(i);
@@ -2273,7 +2275,7 @@ static unsigned char count_current_players_count()
     for (size_t i = 0; i < PLAYERS_COUNT; i++)
     {
         struct PlayerInfo* player = get_player(i);
-        if ((player_exists(player) || player_is_seat(player)) && player_is_keeper(i)) {
+        if ((player_exists(player) || player_is_seat(player)) && player_is_keeper(i) && world_player_listed(i)) {
             current_players_count++;
         }
     }
@@ -2500,7 +2502,13 @@ void gui_area_player_creature_info(struct GuiButton *gbtn)
     struct Dungeon* dungeon = get_players_dungeon(player);
     if (!dungeon_invalid(dungeon)) {
         int32_t spr_idx = get_player_colored_icon_idx(GPS_plyrsym_symbol_player_red_dead, plyr_idx);
-        if (player_has_heart_or_needs_none(plyr_idx) && (player->victory_state != VicS_LostLevel)) {
+        TbBool alive = player_has_heart_or_needs_none(plyr_idx) && (player->victory_state != VicS_LostLevel);
+        if (world_mode_active()) {
+            /* endless: a skull until met (grey), then the face; a skull in its colour once defeated (another keeper's
+               heart is often not on this machine: a thin client has only what is near, a frozen base none) */
+            alive = (player->victory_state != VicS_LostLevel) && world_player_met(plyr_idx);
+        }
+        if (alive) {
             spr_idx = get_player_colored_icon_idx(GPS_plyrsym_symbol_player_red_std_a, plyr_idx);
         }
         if (((dungeon->num_active_creatrs < dungeon->max_creatures_attracted) && (!game.pool.is_empty))

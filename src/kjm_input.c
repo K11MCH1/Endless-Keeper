@@ -42,6 +42,8 @@
 #include "frontmenu_ingame_map.h"
 #include "game_legacy.h"
 #include "player_data.h"
+#include "server_admin.h"
+#include "net_state.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -307,6 +309,8 @@ void update_controller_inputs()
 
 TbBool poll_inputs(void)
 {
+    if (netstate_dedicated())
+        server_admin_poll(); /* keeperserver.exe */
     TbBool user_not_quit = LbPollInputs();
     update_controller_inputs();
 

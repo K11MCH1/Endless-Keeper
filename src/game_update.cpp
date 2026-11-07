@@ -64,6 +64,12 @@
 #include <cstdint>
 
 #include "kfx/profiling/KfxProfiling.h"
+#include "world_stream.h"
+#include "world_pages.h"
+#include "net_state.h"
+#include "roomspace_input.h"
+#include "net_spectator.h"
+#include "creature_graphics.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -155,6 +161,17 @@ static void process_dungeon_devastation_effects(void)
         dungeon->devastation_turn++;
         if (dungeon->devastation_turn >= max(game.map_tiles_x,game.map_tiles_y))
             continue;
+        if (world_paged)
+        {
+            // Paged mode: the ring stops once it's past every side of the loaded chunks' bounding box
+            MapSlabCoord bx1, by1, bx2, by2;
+            map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
+            const MapSlabCoord cslb_x = subtile_slab(dungeon->devastation_centr_x);
+            const MapSlabCoord cslb_y = subtile_slab(dungeon->devastation_centr_y);
+            const MapSlabCoord reach = max(max(cslb_x - bx1, bx2 - cslb_x), max(cslb_y - by1, by2 - cslb_y));
+            if ((bx1 > bx2) || (by1 > by2) || (reach < 0) || (dungeon->devastation_turn > (GameTurn)reach))
+                continue;
+        }
         MapSlabCoord slb_x;
         MapSlabCoord slb_y;
         int i;
@@ -478,7 +495,8 @@ void update(void)
     KFX_ZONE_COLOR("update", KFX_COLOR_SIMULATION);
     SYNCDBG(4,"Starting for turn %ld",(long)get_gameturn());
 
-    process_packets();
+    const int64_t world_prof_turn = world_prof_now();
+    WORLD_PROF(WPS_Packets, process_packets());
     update_local_cameras();
     api_update_server();
 
@@ -503,20 +521,103 @@ void update(void)
         }
         clear_active_dungeons_stats();
         update_creature_pool_state();
-        update_things();
-        process_rooms();
-        process_dungeons();
-        update_research();
-        update_manufacturing();
-        event_process_events();
-        update_all_events();
-        process_level_script();
-        process_fx_lines();
-        lua_on_game_tick();
+        WORLD_PROF(WPS_Things, update_things());
+        WORLD_PROF(WPS_Rooms, process_rooms());
+        WORLD_PROF(WPS_Dungeons, process_dungeons());
+        WORLD_PROF(WPS_Research, update_research(); update_manufacturing());
+        WORLD_PROF(WPS_Events, event_process_events(); update_all_events());
+        WORLD_PROF(WPS_Script, process_level_script(); process_fx_lines(); lua_on_game_tick());
         if ((game.view_mode_flags & GNFldD_ComputerPlayerProcessing) != 0)
-            process_computer_players2();
-        process_players();
+            WORLD_PROF(WPS_Computers, process_computer_players2());
+        WORLD_PROF(WPS_Players, process_players());
         process_action_points();
+        netstate_events_suppress(true);
+        if ((get_user_view_type(get_my_user()) == PVT_CreatureContrl) || (get_user_view_type(get_my_user()) == PVT_CreaturePasngr))
+        {
+            struct Thing *thing = thing_get(get_user_state(get_displayed_user())->controlled_thing_idx);
+            update_first_person_object_ambience(thing);
+        }
+        update_footsteps_nearest_camera(get_local_active_camera());
+        netstate_events_suppress(false);
+        PaletteFadePlayer(get_displayed_player());
+        process_armageddon();
+        WORLD_PROF(WPS_Lighting, update_global_lighting());
+        WORLD_PROF(WPS_World, world_process_turn());
+#if (BFDEBUG_LEVEL > 9)
+        lights_stats_debug_dump();
+        things_stats_debug_dump();
+        creature_stats_debug_dump();
+#endif
+        world_prof_add(WPS_Turn, world_prof_turn);
+        game.play_gameturn++;
+        world_after_turn();
+        if (replay.turns_packetoff == game.play_gameturn)
+            exit_keeper = 1;
+    }
+    netstate_events_suppress(true); /* this machine's own predicted sounds: not sent to thin clients */
+    update_local_possession();
+    update_local_first_person_view();
+    netstate_events_suppress(false);
+
+    message_update();
+    update_camera_shake();
+    netstate_events_suppress(true);
+    update_player_sounds();
+    netstate_events_suppress(false);
+    SYNCDBG(6,"Finished");
+}
+
+
+
+/** A thin client: creatures as this machine's player sees them. The server's rendering flags are its own player's
+ *  view (update_creature_rendering_flags is per viewer): here the creature this player possesses is hidden from it,
+ *  the host's isn't, and invisible creatures show faint to their owner only. */
+static void thin_client_creature_rendering(void)
+{
+    const struct StructureList *slist = get_list_for_thing_class(TCls_Creature);
+    for (ThingIndex i = slist->index; i > 0;)
+    {
+        struct Thing *thing = thing_get(i);
+        if (thing_is_invalid(thing))
+            break;
+        i = thing->next_of_class;
+        const unsigned char keep = thing->rendering_flags & TRF_AnimateOnce;
+        const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        const TbBool entering = !creature_control_invalid(cctrl) && (thing->active_state == CrSt_CreatureHeroEntering) && (cctrl->countdown >= 0);
+        update_creature_rendering_flags(thing);
+        thing->rendering_flags |= keep;
+        if (entering)
+            thing->rendering_flags |= TRF_Invisible; /* still coming down from the ceiling */
+    }
+}
+
+/** A thin client's turn (network play in an endless world): no simulation. The server's state for the turn comes
+ *  in (several turns while behind), then only this machine's presentation runs: effects, sounds, the camera,
+ *  messages. */
+void update_thin_client(void)
+{
+    KFX_ZONE_COLOR("update_thin_client", KFX_COLOR_SIMULATION);
+    const int queued = netstate_client_queued();
+    int turns = (queued > 3) ? min(queued - 2, 50) : 1;
+    while ((turns-- > 0) && netstate_client_apply_next()) {
+    }
+    thin_client_creature_rendering();
+    update_local_cameras();
+    update_dig_prediction_cursor_preview();
+    network_spectator_thin_notice();
+    if (quit_game || exit_keeper) {
+        return;
+    }
+    if (!flag_is_set(game.operation_flags, GOF_Paused))
+    {
+        if (local_state.lightning_palette_active)
+        {
+            PaletteSetUserPalette(get_local_user(), engine_palette);
+            local_state.lightning_palette_active = false;
+        }
+        /* effects come with the state (the server makes them round every player's view); the ambient sounds near
+           this camera play here */
+        update_things_sounds_in_list(&game.thing_lists[TngList_AmbientSnds]);
         if ((get_user_view_type(get_my_user()) == PVT_CreatureContrl) || (get_user_view_type(get_my_user()) == PVT_CreaturePasngr))
         {
             struct Thing *thing = thing_get(get_user_state(get_displayed_user())->controlled_thing_idx);
@@ -524,27 +625,16 @@ void update(void)
         }
         update_footsteps_nearest_camera(get_local_active_camera());
         PaletteFadePlayer(get_displayed_player());
-        process_armageddon();
-        update_global_lighting();
-#if (BFDEBUG_LEVEL > 9)
-        lights_stats_debug_dump();
-        things_stats_debug_dump();
-        creature_stats_debug_dump();
-#endif
-        game.play_gameturn++;
-        if (replay.turns_packetoff == game.play_gameturn)
-            exit_keeper = 1;
+        world_client_turn();
     }
+    netstate_events_suppress(true); /* this machine's own predicted sounds: not sent to thin clients */
     update_local_possession();
     update_local_first_person_view();
-
+    netstate_events_suppress(false);
     message_update();
     update_camera_shake();
     update_player_sounds();
-    SYNCDBG(6,"Finished");
 }
-
-
 
 /******************************************************************************/
 #ifdef __cplusplus

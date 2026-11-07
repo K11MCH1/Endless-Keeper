@@ -57,6 +57,9 @@
 #include "thing_navigate.h"
 #include "thing_physics.h"
 
+#include "world_stream.h"
+#include "slab_data.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -85,6 +88,27 @@ const struct NamedCommand player_desc[] = {
   {"PLAYER4",          PLAYER4},
   {"PLAYER5",          PLAYER5},
   {"PLAYER6",          PLAYER6},
+  {"PLAYER7",          PLAYER7},
+  {"PLAYER8",          PLAYER8},
+  {"PLAYER9",          PLAYER9},
+  {"PLAYER10",         PLAYER10},
+  {"PLAYER11",         PLAYER11},
+  {"PLAYER12",         PLAYER12},
+  {"PLAYER13", 16}, {"PLAYER14", 17}, {"PLAYER15", 18}, {"PLAYER16", 19}, {"PLAYER17", 20}, {"PLAYER18", 21},
+  {"PLAYER19", 22}, {"PLAYER20", 23}, {"PLAYER21", 24}, {"PLAYER22", 25}, {"PLAYER23", 26}, {"PLAYER24", 27},
+  {"PLAYER25", 28}, {"PLAYER26", 29}, {"PLAYER27", 30}, {"PLAYER28", 31}, {"PLAYER29", 32}, {"PLAYER30", 33},
+  {"PLAYER31", 34}, {"PLAYER32", 35}, {"PLAYER33", 36}, {"PLAYER34", 37}, {"PLAYER35", 38}, {"PLAYER36", 39},
+  {"PLAYER37", 40}, {"PLAYER38", 41}, {"PLAYER39", 42}, {"PLAYER40", 43}, {"PLAYER41", 44}, {"PLAYER42", 45},
+  {"PLAYER43", 46}, {"PLAYER44", 47}, {"PLAYER45", 48}, {"PLAYER46", 49}, {"PLAYER47", 50}, {"PLAYER48", 51},
+  {"PLAYER49", 52}, {"PLAYER50", 53}, {"PLAYER51", 54}, {"PLAYER52", 55}, {"PLAYER53", 56}, {"PLAYER54", 57},
+  {"PLAYER55", 58}, {"PLAYER56", 59}, {"PLAYER57", 60}, {"PLAYER58", 61}, {"PLAYER59", 62}, {"PLAYER60", 63},
+  {"PLAYER61", 64}, {"PLAYER62", 65}, {"PLAYER63", 66}, {"PLAYER64", 67}, {"PLAYER65", 68}, {"PLAYER66", 69},
+  {"PLAYER67", 70}, {"PLAYER68", 71}, {"PLAYER69", 72}, {"PLAYER70", 73}, {"PLAYER71", 74}, {"PLAYER72", 75},
+  {"PLAYER73", 76}, {"PLAYER74", 77}, {"PLAYER75", 78}, {"PLAYER76", 79}, {"PLAYER77", 80}, {"PLAYER78", 81},
+  {"PLAYER79", 82}, {"PLAYER80", 83}, {"PLAYER81", 84}, {"PLAYER82", 85}, {"PLAYER83", 86}, {"PLAYER84", 87},
+  {"PLAYER85", 88}, {"PLAYER86", 89}, {"PLAYER87", 90}, {"PLAYER88", 91}, {"PLAYER89", 92}, {"PLAYER90", 93},
+  {"PLAYER91", 94}, {"PLAYER92", 95}, {"PLAYER93", 96}, {"PLAYER94", 97}, {"PLAYER95", 98}, {"PLAYER96", 99},
+  {"PLAYER97", 100}, {"PLAYER98", 101}, {"PLAYER99", 102}, {"PLAYER100", 103},
   {NULL,               0},
 };
 
@@ -1363,10 +1387,11 @@ static void tag_map_rect_check(const struct ScriptLine* scline)
         DEALLOCATE_SCRIPT_VALUE
             return;
     }
-    value->shorts[1] = start_x;
-    value->shorts[2] = end_x;
-    value->shorts[3] = start_y;
-    value->shorts[4] = end_y;
+    /* shorts, as before: the script value is saved as raw bytes, and script slab coordinates fit */
+    value->shorts[1] = (short)start_x;
+    value->shorts[2] = (short)end_x;
+    value->shorts[3] = (short)start_y;
+    value->shorts[4] = (short)end_y;
 
     PROCESS_SCRIPT_VALUE(scline->command);
 }
@@ -1378,9 +1403,9 @@ static void tag_map_rect_process(struct ScriptContext* context)
     MapSlabCoord start_y = context->value->shorts[3];
     MapSlabCoord end_y = context->value->shorts[4];
 
-    for (short x = start_x; x < end_x; x++)
+    for (MapSlabCoord x = start_x; x < end_x; x++)
     {
-        for (short y = start_y; y < end_y; y++)
+        for (MapSlabCoord y = start_y; y < end_y; y++)
         {
             MapSubtlCoord stl_x = slab_subtile_center(x);
             MapSubtlCoord stl_y = slab_subtile_center(y);
@@ -1400,9 +1425,9 @@ static void untag_map_rect_process(struct ScriptContext* context)
     MapSlabCoord start_y = context->value->shorts[3];
     MapSlabCoord end_y = context->value->shorts[4];
 
-    for (short x = start_x; x < end_x; x++)
+    for (MapSlabCoord x = start_x; x < end_x; x++)
     {
-        for (short y = start_y; y < end_y; y++)
+        for (MapSlabCoord y = start_y; y < end_y; y++)
         {
             MapSubtlCoord stl_x = slab_subtile_center(x);
             MapSubtlCoord stl_y = slab_subtile_center(y);
@@ -6189,8 +6214,8 @@ static void change_slab_texture_process(struct ScriptContext* context)
     else
     {
         SlabCodedCoords slb_num = get_slab_number(context->value->shorts[0], context->value->shorts[1]);
-        game.slab_ext_data[slb_num] = context->value->bytes[4];
-        game.slab_ext_data_initial[slb_num] = context->value->bytes[4];
+        (*slab_ext_ptr(slb_num)) = context->value->bytes[4];
+        (*slab_ext_initial_ptr(slb_num)) = context->value->bytes[4];
     }
 }
 
@@ -6875,6 +6900,21 @@ static void run_lua_code_process(struct ScriptContext* context)
     execute_lua_code_from_script(code);
 }
 
+/** ENDLESS_WORLD(<seed>): the level is played as a window sliding over the generated world of the seed. */
+static void endless_world_check(const struct ScriptLine* scline)
+{
+    if (!world_request(scline->tp[0]))
+    {
+        SCRPTERRLOG("Invalid world seed \"%s\"", scline->tp[0]);
+    }
+}
+
+/** ENDLESS_PROGRESSION(<mode>): research-book progression in the endless world (1 choose, 2 automatic). */
+static void endless_progression_check(const struct ScriptLine* scline)
+{
+    world_progress_request((int)scline->np[0]);
+}
+
 static void set_generate_speed_check(const struct ScriptLine* scline)
 {
     ALLOCATE_SCRIPT_VALUE(scline->command, 0);
@@ -7038,6 +7078,8 @@ const struct CommandDesc command_desc[] = {
   {"RESEARCH",                          "PAAN    ", Cmd_RESEARCH, NULL, NULL},
   {"RESEARCH_ORDER",                    "PAAN    ", Cmd_RESEARCH_ORDER, NULL, NULL},
   {"COMPUTER_PLAYER",                   "PA      ", Cmd_COMPUTER_PLAYER, &computer_player_check, &computer_player_process},
+  {"ENDLESS_WORLD",                     "A       ", Cmd_ENDLESS_WORLD, &endless_world_check, NULL},
+  {"ENDLESS_PROGRESSION",               "N       ", Cmd_ENDLESS_PROGRESSION, &endless_progression_check, NULL},
   {"SET_TIMER",                         "PA      ", Cmd_SET_TIMER, NULL, NULL},
   {"ADD_TUNNELLER_TO_LEVEL",            "PAANNN  ", Cmd_ADD_TUNNELLER_TO_LEVEL, NULL, NULL},
   {"WIN_GAME",                          "        ", Cmd_WIN_GAME, NULL, NULL},

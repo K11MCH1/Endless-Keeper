@@ -862,8 +862,8 @@ void process_user_instance(NetUserId user)
     if (user_state_invalid(ustate) || ustate->instance_num <= 0) {
         return;
     }
-    if (!player_exists(get_user_player(user))) {
-        return;
+    if (!user_present(user) || !player_exists(get_user_player(user))) {
+        return; /* a user with no player (a dedicated server) logged an error a turn */
     }
     SYNCDBG(16,"Starting for instance %d",(int)ustate->instance_num);
     if (ustate->instance_remain_turns > 0)

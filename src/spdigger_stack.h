@@ -74,8 +74,8 @@ struct Thing;
 
 struct SlabCoord {
 
-    unsigned char x;
-    unsigned char y;
+    MapSlabCoord x;
+    MapSlabCoord y;
 };
 
 struct ExtraSquares {

@@ -30,6 +30,7 @@
 #include "value_util.h"
 
 #include <toml.h>
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -143,11 +144,16 @@ static unsigned short get_player_colored_idx(unsigned short base_icon_idx,unsign
 
 short get_player_colored_icon_idx(short base_icon_idx,PlayerNumber plyr_idx)
 {
-    return get_player_colored_idx(base_icon_idx,get_player_color_idx(plyr_idx) + 1,gui_panel_sprites_eq);
+    unsigned char colour = world_display_colour(plyr_idx);
+    /* endless worlds: a keeper not met yet is shown as nobody's; the panel has no neutral icons (the skull's neutral
+       entry is a big portrait, the room's none): white, the grey look */
+    if ((plyr_idx != PLAYER_NEUTRAL) && (colour == get_player_color_idx(PLAYER_NEUTRAL)) && !world_player_met(plyr_idx))
+        colour = 4; /* white */
+    return get_player_colored_idx(base_icon_idx,colour + 1,gui_panel_sprites_eq);
 }
 short get_player_colored_pointer_icon_idx(short base_icon_idx,PlayerNumber plyr_idx)
 {
-    return get_player_colored_idx(base_icon_idx,get_player_color_idx(plyr_idx) + 1,pointer_sprites_eq);
+    return get_player_colored_idx(base_icon_idx,world_display_colour(plyr_idx) + 1,pointer_sprites_eq);
 }
 
 short get_player_colored_button_sprite_idx(const short base_icon_idx,const PlayerNumber plyr_idx)
@@ -159,10 +165,15 @@ short get_player_colored_button_sprite_idx(const short base_icon_idx,const Playe
     }
     else
     {
-        color_idx = get_player_color_idx(plyr_idx);
+        color_idx = world_display_colour(plyr_idx);
     }
 
     return get_player_colored_idx(base_icon_idx,color_idx + 1,button_sprite_eq);
+}
+
+ThingModel get_coloured_object_model_for_colour(ThingModel base_model_idx, unsigned char colour_idx)
+{
+    return get_player_colored_idx(base_model_idx, colour_idx + 1, objects_eq);
 }
 
 ThingModel get_player_colored_object_model(ThingModel base_model_idx,PlayerNumber plyr_idx)

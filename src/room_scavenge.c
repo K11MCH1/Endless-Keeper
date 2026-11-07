@@ -26,6 +26,7 @@
 #include "dungeon_data.h"
 #include "thing_data.h"
 #include "thing_effects.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -37,7 +38,7 @@ long const scavenge_effect[] = {TngEff_BallPuffRed, TngEff_BallPuffBlue, TngEff_
 /******************************************************************************/
 long get_scavenge_effect(PlayerNumber owner)
 {
-  return scavenge_effect[get_player_color_idx(owner % PLAYERS_COUNT)];
+  return scavenge_effect[world_display_colour(owner % PLAYERS_COUNT)];
 }
 /******************************************************************************/
 #ifdef __cplusplus

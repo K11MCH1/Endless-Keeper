@@ -216,6 +216,8 @@ TbBool add_transfered_creature(PlayerNumber plyr_idx, ThingModel model, CrtrExpL
         return false;
     }
 
+    if (plyr_idx >= STOCK_PLAYERS_COUNT)
+        return false; /* players 10-15 (endless worlds) carry nothing to a next level */
     short i = dungeon->creatures_transferred; //makes sure it fits 255 units
 
     intralvl.transferred_creatures[plyr_idx][i].model = model;
@@ -226,7 +228,7 @@ TbBool add_transfered_creature(PlayerNumber plyr_idx, ThingModel model, CrtrExpL
 
 void clear_transfered_creatures(void)
 {
-    for (int p = 0; p < PLAYERS_COUNT; p++)
+    for (int p = 0; p < STOCK_PLAYERS_COUNT; p++)
     {
         for (int i = 0; i < TRANSFER_CREATURE_STORAGE_COUNT; i++)
         {

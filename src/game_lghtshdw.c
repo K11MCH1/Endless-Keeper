@@ -24,11 +24,46 @@
 
 #include "map_data.h"
 #include "game_legacy.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 /******************************************************************************/
+/** A subtile's static light / lightness cell, by packed number: game.lish's arrays, or its chunk page in paged
+ *  mode (a chunk that isn't loaded gives a scratch cell holding 0). */
+unsigned short *stat_light_cell(SubtlCodedCoords stl_num)
+{
+    if (world_paged)
+    {
+        static unsigned short scratch;
+        MapSubtlCoord x = stl_num_decode_x(stl_num), y = stl_num_decode_y(stl_num);
+        struct WorldPage *pg = wp_page_of_subtile(x, y);
+        if (pg != NULL)
+            return &pg->stat_light[wp_stl_index(x, y)];
+        scratch = 0;
+        return &scratch;
+    }
+    return &game.lish.stat_light_map[stl_num];
+}
+
+unsigned short *lightness_cell(SubtlCodedCoords stl_num)
+{
+    if (world_paged)
+    {
+        static unsigned short scratch;
+        MapSubtlCoord x = stl_num_decode_x(stl_num), y = stl_num_decode_y(stl_num);
+        struct WorldPage *pg = wp_page_of_subtile(x, y);
+        if (pg != NULL)
+            return &pg->lightness[wp_stl_index(x, y)];
+        scratch = 0;
+        return &scratch;
+    }
+    return &game.lish.subtile_lightness[stl_num];
+}
+
 long get_subtile_lightness(const struct LightsShadows * lish, MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
+    if (world_paged)
+        return *lightness_cell(get_subtile_number(stl_x, stl_y));
     if (stl_x > game.map_subtiles_x) stl_x = game.map_subtiles_x;
     if (stl_y > game.map_subtiles_y) stl_y = game.map_subtiles_y;
     if (stl_x < 0)  stl_x = 0;
@@ -39,6 +74,13 @@ long get_subtile_lightness(const struct LightsShadows * lish, MapSubtlCoord stl_
 #define MINIMUM_LIGHTNESS 8192;
 void clear_subtiles_lightness(struct LightsShadows * lish)
 {
+    if (world_paged)
+    {
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+            for (int i = 0; i < WP_CHUNK_STL_CELLS; i++)
+                pg->lightness[i] = MINIMUM_LIGHTNESS;
+        return;
+    }
     for (MapSubtlCoord y = 0; y < (game.map_subtiles_y + 1); y++)
     {
         for (MapSubtlCoord x = 0; x < (game.map_subtiles_x + 1); x++)

@@ -88,6 +88,8 @@
 #include "keeperfx.hpp"
 
 #include <math.h>
+#include "world_stream.h"
+#include "net_state.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -461,7 +463,10 @@ static short get_players_message_inputs(void)
             if (network_is_active()) {
                 send_network_chat_message_at(get_local_user(), text, cursor_x, cursor_y);
             }
-            if (!observer_is_active()) {
+            if (netstate_is_client()) {
+                if (text[0] != cmd_char)
+                    process_gameplay_chat_message(get_local_user(), text, cursor_x, cursor_y);
+            } else if (!observer_is_active()) {
                 queue_gameplay_chat_message(get_local_user(), text, cursor_x, cursor_y);
             }
         }
@@ -1102,9 +1107,15 @@ static TbBool get_level_lost_inputs(void)
         } else
         if ( left_button_released )
         {
+            MapSubtlCoord stl_x;
+            MapSubtlCoord stl_y;
+            if (world_mode_active() && parchment_point_to_subtile(mouse_x / pixel_size, mouse_y / pixel_size, &stl_x, &stl_y)) {
+                set_players_packet_action(player, PckA_ZoomFromMap, stl_x, stl_y, 0, 0);
+                left_button_released = 0;
+            } else
             if  ( map_valid ) {
-                MapSubtlCoord stl_x = coord_subtile(map_x);
-                MapSubtlCoord stl_y = coord_subtile(map_y);
+                stl_x = coord_subtile(map_x);
+                stl_y = coord_subtile(map_y);
                 set_players_packet_action(player, PckA_ZoomFromMap, stl_x, stl_y, 0, 0);
                 left_button_released = 0;
             }
@@ -2154,10 +2165,13 @@ static short get_map_action_inputs(void)
     int32_t map_x;
     int32_t map_y;
     TbBool map_valid = point_to_overhead_map(camera, mouse_x / pixel_size, mouse_y / pixel_size, &map_x, &map_y);
-    if  (map_valid)
+    MapSubtlCoord world_stl_x = 0;
+    MapSubtlCoord world_stl_y = 0;
+    const TbBool world_valid = world_mode_active() && parchment_point_to_subtile(mouse_x / pixel_size, mouse_y / pixel_size, &world_stl_x, &world_stl_y);
+    if  (map_valid || world_valid)
     {
-        MapSubtlCoord stl_x = coord_subtile(map_x);
-        MapSubtlCoord stl_y = coord_subtile(map_y);
+        MapSubtlCoord stl_x = world_valid ? world_stl_x : coord_subtile(map_x);
+        MapSubtlCoord stl_y = world_valid ? world_stl_y : coord_subtile(map_y);
         if (left_button_clicked) {
             left_button_clicked = 0;
         }
@@ -2353,6 +2367,21 @@ static void get_overhead_view_nonaction_inputs(void)
     int rotate_pressed = is_game_key_pressed(Gkey_RotateMod, false, true);
     int speed_pressed = is_game_key_pressed(Gkey_SpeedMod, false, true);
     local_state.camera_speedup_pressed = false;
+    if (world_mode_active() && !rotate_pressed && ((get_local_user_state()->init_flags & UsrIF_KeyboardInputDisabled) == 0))
+    {
+        // Endless world: the move keys scroll the full-screen map, the heart key brings it back home
+        const int step = speed_pressed ? 6 : 2;
+        int dx = 0;
+        int dy = 0;
+        if (is_game_key_pressed(Gkey_MoveLeft, false, true)) dx -= step;
+        if (is_game_key_pressed(Gkey_MoveRight, false, true)) dx += step;
+        if (is_game_key_pressed(Gkey_MoveUp, false, true)) dy -= step;
+        if (is_game_key_pressed(Gkey_MoveDown, false, true)) dy += step;
+        if ((dx != 0) || (dy != 0))
+            world_parchment_scroll(dx, dy);
+        if (is_game_key_pressed(Gkey_ZoomRoomHeart, false, true))
+            world_parchment_home();
+    }
     if ((get_local_user_state()->init_flags & UsrIF_KeyboardInputDisabled) == 0)
     {
         local_state.camera_speedup_pressed = (speed_pressed != 0);

@@ -27,6 +27,7 @@
 #include "player_instances.h"
 #include "gui_soundmsgs.h"
 #include "bflib_joyst.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -79,7 +80,7 @@ TbBool dungeon_invalid(const struct Dungeon *dungeon)
 void clear_dungeons(void)
 {
   SYNCDBG(6,"Starting");
-  for (int i = 0; i < DUNGEONS_COUNT; i++)
+  for (int i = 0; i < DUNGEONS_MAX; i++)
   {
       memset(&game.dungeon[i], 0, sizeof(struct Dungeon));
       game.dungeon[i].owner = PLAYERS_COUNT;
@@ -253,9 +254,55 @@ TbBool get_heartless_home_pos(PlayerNumber plyr_idx, struct Coord3d *pos)
             return true;
         }
     }
-    long sum_x = 0;
-    long sum_y = 0;
+    // 64-bit sums: in paged mode slab coordinates are around 2^20
+    int64_t sum_x = 0;
+    int64_t sum_y = 0;
     long count = 0;
+    if (world_paged)
+    {
+        // Paged mode: the loaded slabs, in the same row-major order as the loops below
+        struct WpSlabIter it;
+        MapSlabCoord slb_x, slb_y;
+        struct SlabMap *slb;
+        wp_slab_iter_init(&it);
+        while (wp_slab_iter_next(&it, &slb_x, &slb_y, &slb))
+        {
+            if ((slb->kind == SlbT_CLAIMED) && (slabmap_owner(slb) == plyr_idx))
+            {
+                sum_x += slb_x;
+                sum_y += slb_y;
+                count++;
+            }
+        }
+        if (count > 0)
+        {
+            MapSlabCoord mid_x = sum_x / count;
+            MapSlabCoord mid_y = sum_y / count;
+            MapSlabCoord best_x = mid_x;
+            MapSlabCoord best_y = mid_y;
+            long best_dist = INT32_MAX;
+            wp_slab_iter_init(&it);
+            while (wp_slab_iter_next(&it, &slb_x, &slb_y, &slb))
+            {
+                if ((slb->kind == SlbT_CLAIMED) && (slabmap_owner(slb) == plyr_idx))
+                {
+                    long dist = abs(slb_x - mid_x) + abs(slb_y - mid_y);
+                    if (dist < best_dist)
+                    {
+                        best_dist = dist;
+                        best_x = slb_x;
+                        best_y = slb_y;
+                    }
+                }
+            }
+            pos->x.val = subtile_coord_center(slab_subtile_center(best_x));
+            pos->y.val = subtile_coord_center(slab_subtile_center(best_y));
+            pos->z.val = get_floor_height_at(pos);
+            return true;
+        }
+        *pos = dungeon->essential_pos;
+        return true;
+    }
     for (MapSlabCoord slb_y = 0; slb_y < game.map_tiles_y; slb_y++)
     {
         for (MapSlabCoord slb_x = 0; slb_x < game.map_tiles_x; slb_x++)
@@ -633,6 +680,12 @@ const struct Coord3d *dungeon_get_essential_pos(PlayerNumber plyr_idx)
 void init_dungeons(void)
 {
     for (int i = 0; i < DUNGEONS_COUNT; i++)
+        init_dungeon(i);
+}
+
+/** A dungeon at the level start (or players 10-15 turned on). */
+void init_dungeon(int i)
+{
     {
         struct Dungeon* dungeon = get_dungeon(i);
         dungeon->num_active_diggers = 0;
@@ -654,6 +707,12 @@ void init_dungeons(void)
         dungeon->modifier.scavenging_cost = 100;
         dungeon->modifier.loyalty = 100;
         dungeon->color_idx = i;
+        if (i >= COLOURS_COUNT)
+        {
+            /* players 10-15 (endless worlds): a keeper colour; every viewer sees its own colours there anyway */
+            static const unsigned char extra_colours[] = {PLAYER_NEUTRAL, 1, 2, 3, 6, 7, 8};
+            dungeon->color_idx = extra_colours[(i - COLOURS_COUNT) % (int)sizeof(extra_colours)];
+        }
         memset(dungeon->creature_models_joined, 0, CREATURE_TYPES_MAX);
     }
 }

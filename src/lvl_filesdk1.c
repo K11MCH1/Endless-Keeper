@@ -729,7 +729,7 @@ TbBool load_map_data_file(LevelNumber lv_num)
             *wptr = 32;
             mapblk->mapwho = 0;
             mapblk->filled_subtiles = 0;
-            mapblk->revealed = 0;
+            mapblk->revealed = pmask_none();
         }
     }
     return true;

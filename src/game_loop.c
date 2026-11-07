@@ -33,6 +33,7 @@
 #include "replay.h"
 #include "replay_rewind.h"
 #include "game_loop.h"
+#include "test_highmem.h"
 #include "lua_triggers.h"
 
 
@@ -67,6 +68,8 @@
 #include "timer.h"
 
 #include "kfx/save/SaveManager.h"
+#include "world_stream.h"
+#include "net_state.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -322,7 +325,7 @@ void process_dungeon_destroy(struct Thing* heartng)
             if (player_needs_heart(plyr_idx))
             {
                 setup_all_player_creatures_and_diggers_leave_or_die(plyr_idx);
-                player->allied_players = to_flag(player->id_number);
+                player->allied_players = pmask_of(player->id_number);
                 if (game.game_kind == GKind_MultiGame)
                     reveal_whole_map(player);
             }
@@ -433,7 +436,7 @@ static short display_should_be_updated_this_turn(void)
 
 static long double get_turn_start()
 {
-    if (game.input_lag_turns > 0 || ! network_is_active())
+    if (game.input_lag_turns > 0 || ! network_is_active() || netstate_thin_mode())
         return 1.0;
 
     // Aim to exchange network packets before the turn ends.  If drawing
@@ -446,6 +449,14 @@ static long double get_turn_start()
 static void update_multiplayer_clock_adjust(void)
 {
     multiplayer_clock_adjust = 1.0;
+    if (netstate_is_client()) {
+        /* thin client: play the server's turns faster while they pile up */
+        const int queued = netstate_client_queued();
+        if (queued > 2) {
+            multiplayer_clock_adjust = min(10.0L, 1.0L + (queued - 2) * 0.5L);
+        }
+        return;
+    }
     if (network_is_active() && network_user_is_spectator(netstate.my_id)) {
         if (network_spectator_is_catching_up()) {
             multiplayer_clock_adjust = 10.0;
@@ -490,6 +501,16 @@ void gameplay_loop_draw()
 
     if ((local_state.process_turn_time > 1.0 || local_state.fast_forward >= GAME_FAST_FORWARD_MAX) && time_since_last_draw < 1.0)
         do_draw = false;
+    if (netstate_dedicated() && network_is_active())
+    {
+        /* a dedicated server draws once a second: it is watched now and then, not played */
+        static TbClockMSec last_drawn = 0;
+        const TbClockMSec now = LbTimerClock();
+        if (now - last_drawn < 1000)
+            do_draw = false;
+        else if (do_draw)
+            last_drawn = now;
+    }
 
     const TbBool renderer_busy = do_draw && !RendererCanPresent();
     if ((fps_limit_current > 0 && process_frame_time < 1.0) || renderer_busy) {
@@ -515,6 +536,7 @@ void gameplay_loop_draw()
             process_frame_time = min(1.L, process_frame_time - 1.L);
         }
         // Update lights
+        const int64_t world_prof_frame = world_prof_now();
         update_light_render_area();
         if (frametime_enabled())
             framerate_measurement_capture(Framerate_Draw);
@@ -522,6 +544,7 @@ void gameplay_loop_draw()
         time_since_last_draw = 0;
         interpolate_time = min(max(local_state.process_turn_time, 0.L), 1.L);
         keeper_screen_redraw();
+        world_prof_add(WPS_Frame, world_prof_frame);
     }
     keeper_wait_for_screen_focus();
     // Direct information/error messages
@@ -559,6 +582,7 @@ void network_yield_waiting_gameplay_packets()
 
 static void gameplay_loop_logic()
 {
+    test_hooks_turn();
     if(flag_is_set(start_params.debug_flags, DFlg_PauseAtGameTurn))
     {
         static GameTurn previous_gameturn = 0;
@@ -618,7 +642,37 @@ static void gameplay_loop_logic()
     }
     input_eastegg();
     input();
-    if (exchange_packets() == PExR_Wait) {
+    if (netstate_is_client()) {
+        /* thin client: inputs go to the server once a turn's time; a turn is played when the server's has come */
+        network_update(game.packets, sizeof(struct Packet));
+        if (network_thin_client_server_gone())
+            return;
+        world_client_test_input(); /* test hook KFX_WORLD_CLIENTTEST: a dig drag's mouse */
+        {
+            static int logged = 0;
+            if (logged++ == 0)
+                SYNCLOG("Thin client: playing the server's turns (user %d, player %d)", (int)netstate.my_id, (int)my_player_number);
+        }
+        static TbClockMSec last_input_sent = 0;
+        const TbClockMSec now = LbTimerClock();
+        if ((last_input_sent == 0) || (now - last_input_sent >= (TbClockMSec)(1000 / max(turns_per_second, 1)))) {
+            last_input_sent = now;
+            prepare_local_packet_for_send();
+            const unsigned char action = get_local_packet()->action;
+            netstate_client_send_input();
+            memset(get_local_packet(), 0, sizeof(struct Packet));
+            if ((action == PckA_QuitToMainMenu) || (action == PckA_ForceApplicationClose)) {
+                network_thin_client_leave(action == PckA_ForceApplicationClose);
+                return;
+            }
+        }
+        if (netstate_client_queued() == 0) {
+            netstate_client_note_stall();
+            if (local_state.process_turn_time > 0.95)
+                local_state.process_turn_time = 0.95;
+            return;
+        }
+    } else if (exchange_packets() == PExR_Wait) {
         return;
     }
     frametime_start_measurement(Frametime_Logic);
@@ -672,7 +726,16 @@ static void gameplay_loop_logic()
     }
     local_state.process_turn_time -= 1.0;
 
-    update();
+    if (netstate_is_client())
+        update_thin_client();
+    else if (netstate_is_server())
+    {
+        const int64_t sim_t0 = get_time_tick_ns();
+        update();
+        netstate_server_sim_time(get_time_tick_ns() - sim_t0);
+    } else
+        update();
+    netstate_server_after_turn();
 
     frametime_end_measurement(Frametime_Logic);
 
@@ -799,6 +862,9 @@ static TbBool should_use_delta_time_on_menu()
         case FeSt_LAND_VIEW:
         case FeSt_NETLAND_VIEW:
         case FeSt_TORTURE:
+        case FeSt_ENDLESS_MENU: /**< Endless Mode menus: at the screen's rate, as the stock menus */
+        case FeSt_ENDLESS_LOAD:
+        case FeSt_WORLD_LIST:
             return true;
         default:
             return false;
@@ -1076,6 +1142,7 @@ static TbBool wait_at_frontend(void)
           }
           level_load_time_phase(LevelLoadTime_GameSetup);
           game.save_game_slot = flgmem;
+          network_after_save_loaded(); /* a world saved while it served plays on in single player */
           break;
     case FeSt_PACKET_DEMO:
           game.mode_flags |= MFlg_IsDemoMode;
@@ -1120,6 +1187,7 @@ void game_loop(void)
     unsigned long playtime = 0;
 #endif
     SYNCDBG(0,"Entering gameplay loop.");
+    test_highmem_report();
 
     while ( !exit_keeper )
     {
@@ -1156,6 +1224,12 @@ void game_loop(void)
       // The main considerations are:
       // 1. SKIP_HEART_ZOOM: the mouse icon position will be reset to the top-left corner (0, 0), but the actual mouse position remains unchanged.
       // 2. PI_HeartZoom: the mouse will be moved to the center of the screen.
+      if ((mspos_x_bak == 0) && (mspos_y_bak == 0) && world_mode_active())
+      {
+          // A level started straight from the command line: the pointer was never moved, and at the corner it
+          // would scroll the view away. It starts in the middle instead (the host cursor isn't moved).
+          LbMouseSetPositionInitial(RendererPhysicalWidth()/2, lbDisplay.PhysicalScreenHeight/2);
+      } else
       LbMouseSetPosition(mspos_x_bak, mspos_y_bak);
 
       unsigned long starttime;

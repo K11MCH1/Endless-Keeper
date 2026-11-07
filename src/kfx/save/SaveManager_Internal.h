@@ -122,6 +122,7 @@ struct ReadResult {
     uint8_t *nams_data; uint32_t nams_len;
     uint8_t *conf_data; uint32_t conf_len;
     char *lua_data; uint32_t lua_len;
+    uint8_t *world_data; uint32_t world_len;
 };
 
 /** Encodes a full KFXS buffer (META + SCHM + NAMS + CONF + GAME + ILVL + LUA). baseline may be NULL (no
@@ -152,6 +153,10 @@ enum SaveCheckResult Classify(enum SaveResult result);
  *  which can be so even for a save that can't be loaded. detail (may be NULL) gets the reason in plain text. */
 enum SaveCheckResult CheckFile(IFileSystem &filesystem, const char *fname, CatalogueEntry *centry, int *title_ok,
     char *detail, size_t detail_len);
+
+/** Whether the endless world in a save, if it has one, is one this build can restore. Reads the file and the
+ *  world without loading anything; detail (may be NULL) gets the reason in plain text. */
+enum SaveCheckResult CheckWorld(IFileSystem &filesystem, const char *fname, char *detail, size_t detail_len);
 
 /** Slot number of a file named fx1gNNNN.sav, or -1. */
 int SlotFromFilename(const char *fname);

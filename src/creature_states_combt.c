@@ -627,7 +627,7 @@ TbBool cleanup_battle(BattleIndex battle_id)
 
 void update_battle_events(BattleIndex battle_id)
 {
-    unsigned short owner_flags = 0;
+    PlayerBitFlags owner_flags = pmask_none();
     MapCoord map_x = -1;
     MapCoord map_y = -1;
     MapCoord map_z = -1;
@@ -647,7 +647,7 @@ void update_battle_events(BattleIndex battle_id)
         struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
         i = cctrl->battle_prev_creatr;
         // Per thing code starts
-        set_flag(owner_flags, to_flag(thing->owner));
+        pmask_add(&owner_flags, thing->owner);
         map_x = thing->mappos.x.val;
         map_y = thing->mappos.y.val;
         map_z = thing->mappos.z.val;
@@ -663,13 +663,13 @@ void update_battle_events(BattleIndex battle_id)
     {
         if (!player_is_keeper(i))
             continue;
-        if (flag_is_set(owner_flags, to_flag(i)))
+        if (pmask_has(owner_flags, i))
         {
             dungeon = get_dungeon(i);
             dungeon->last_combat_location.x.val = map_x;
             dungeon->last_combat_location.y.val = map_y;
             dungeon->last_combat_location.z.val = map_z;
-            if (owner_flags == to_flag(i)) { // if the current player (i) is the only player in the fight
+            if (pmask_equal(owner_flags, pmask_of(i))) { // if the current player (i) is the only player in the fight
                 event_create_event_or_update_old_event(map_x, map_y, EvKind_FriendlyFight, i, battle_id);
             } else {
                 event_create_event_or_update_old_event(map_x, map_y, EvKind_EnemyFight, i, battle_id);

@@ -95,6 +95,10 @@
 #include "sprites.h"
 #include "moonphase.h"
 #include "config_keeperfx.h"
+#include "world_menu.h"
+#include "net_state.h"
+#include "server_admin.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -113,7 +117,7 @@ struct GuiButtonInit frontend_main_menu_buttons[] = {
   { LbBtnT_NormalBtn,  BID_MENU_TITLE, 0, 0, NULL,               NULL,        NULL,                 0, 999,  26, 999,  26, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {1},            0, NULL },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_start_new_game,NULL,frontend_over_button,     3, 999,  92, 999,  92, 371, 46, frontend_draw_campaign_menu_button,  0, GUIStr_Empty,  0,       {2},            0, frontend_campaign_menu_button_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_load_continue_game,NULL,frontend_over_button, 0, 999, 138, 999, 138, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {8},            0, frontend_continue_game_maintain },
-  { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_load_mappacks,NULL,frontend_over_button,     34, 999, 184, 999, 184, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,     {106},            0, frontend_mappacks_maintain },
+  { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_change_state,NULL,frontend_over_button,FeSt_ENDLESS_MENU,999,184,999,184,371,46, world_menu_draw_endless_button,  0, GUIStr_Empty,  0,     {106},            0, world_menu_endless_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_change_state,NULL, frontend_over_button,    2, 999, 230,   999, 230, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {3},            0, frontend_main_menu_load_game_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_netservice_change_state,NULL, frontend_over_button,4,999,276,999,276,371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {4},            0, frontend_main_menu_netservice_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_change_state,NULL, frontend_over_button,   27, 999, 322,   999, 322, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,      {97},            0, NULL },
@@ -211,6 +215,9 @@ struct GuiMenu *menu_list[] = {
     &room_menu2,
     &trap_menu2,
     &frontend_skirmish_lobby_menu,
+    &world_endless_menu,//50
+    &world_endless_load_menu,
+    &world_list_menu,
     NULL,
 };
 
@@ -458,8 +465,8 @@ unsigned long playing_bad_descriptive_speech;
 unsigned long playing_good_descriptive_speech;
 long scrolling_index;
 float scrolling_offset;
-long packet_left_button_double_clicked[6];
-long packet_left_button_click_space_count[6];
+long packet_left_button_double_clicked[FRONTEND_CLICK_USERS];
+long packet_left_button_click_space_count[FRONTEND_CLICK_USERS];
 char frontend_alliances;
 char busy_doing_gui;
 long gui_last_left_button_pressed_id;
@@ -824,6 +831,15 @@ TbBool get_button_area_input(struct GuiButton *gbtn, int modifiers)
     }
     clear_key_pressed(key);
     return true;
+}
+
+/** Save: also while this machine serves an endless world (it holds the world). */
+void maintain_save(struct GuiButton *gbtn)
+{
+    if (!network_is_active() || netstate_is_server())
+        gbtn->flags |= LbBtnF_Enabled;
+    else
+        gbtn->flags &= ~LbBtnF_Enabled;
 }
 
 void maintain_loadsave(struct GuiButton *gbtn)
@@ -1449,6 +1465,8 @@ void frontend_toggle_computer_players(struct GuiButton *gbtn)
 void set_packet_start(struct GuiButton *gbtn)
 {
     struct ScreenPacket *nspck;
+    if (world_menu_lobby_start())
+        return; /* Endless Mode: Host Network Game */
     nspck = &net_screen_packet[my_player_number];
     if (screen_packet_action(nspck) == NetAct_None)
         screen_packet_set_action(nspck, NetAct_OpenLandView);
@@ -2099,6 +2117,9 @@ short is_toggleable_menu(short mnu_idx)
   case GMnu_FECAMPAIGN_SELECT:
   case GMnu_FEERROR_BOX:
   case GMnu_SKIRMISH_LOBBY:
+  case GMnu_FEENDLESS:
+  case GMnu_FEENDLESS_LOAD:
+  case GMnu_FEWORLD_LIST:
       return false;
   default:
       return true;
@@ -2774,6 +2795,16 @@ void frontend_shutdown_state(FrontendMenuState pstate)
     case FeSt_SKIRMISH_LOBBY:
         turn_off_menu(GMnu_SKIRMISH_LOBBY);
         break;
+    case FeSt_ENDLESS_MENU:
+        turn_off_menu(GMnu_FEENDLESS);
+        break;
+    case FeSt_ENDLESS_LOAD:
+        turn_off_menu(GMnu_FEENDLESS_LOAD);
+        break;
+    case FeSt_WORLD_LIST:
+        turn_off_menu(GMnu_FEWORLD_LIST);
+        world_list_menu_close();
+        break;
     case FeSt_START_KPRLEVEL:
     case FeSt_START_MPLEVEL:
     case FeSt_QUIT_GAME:
@@ -2813,6 +2844,7 @@ FrontendMenuState frontend_setup_state(FrontendMenuState nstate)
           set_pointer_graphic_none();
           break;
       case FeSt_MAIN_MENU:
+          world_menu_mp_host = false;
           stop_music(true);
           continue_game_option_available = SaveManager_ContinueAvailable();
           if (!is_campaign_loaded()) {
@@ -2945,6 +2977,22 @@ FrontendMenuState frontend_setup_state(FrontendMenuState nstate)
         net_lobby_apply_settings();
         set_pointer_graphic_menu();
         break;
+    case FeSt_ENDLESS_MENU:
+        stop_music(true);
+        world_menu_setup();
+        turn_on_menu(GMnu_FEENDLESS);
+        set_pointer_graphic_menu();
+        break;
+    case FeSt_ENDLESS_LOAD:
+        world_menu_load_setup();
+        turn_on_menu(GMnu_FEENDLESS_LOAD);
+        set_pointer_graphic_menu();
+        break;
+    case FeSt_WORLD_LIST:
+        world_list_menu_setup();
+        turn_on_menu(GMnu_FEWORLD_LIST);
+        set_pointer_graphic_menu();
+        break;
   #if (BFDEBUG_LEVEL > 0)
     case FeSt_FONT_TEST:
         fade_palette_in = 0;
@@ -2998,6 +3046,9 @@ static const char * menu_state_str(FrontendMenuState state)
         case FeSt_CAMPAIGN_INTRO: return "FeSt_CAMPAIGN_INTRO";
         case FeSt_MAPPACK_SELECT: return "FeSt_MAPPACK_SELECT";
         case FeSt_SKIRMISH_LOBBY: return "FeSt_SKIRMISH_LOBBY";
+        case FeSt_ENDLESS_MENU: return "FeSt_ENDLESS_MENU";
+        case FeSt_ENDLESS_LOAD: return "FeSt_ENDLESS_LOAD";
+        case FeSt_WORLD_LIST: return "FeSt_WORLD_LIST";
         case FeSt_FONT_TEST: return "FeSt_FONT_TEST";
     }
     return "unknown";
@@ -3514,6 +3565,9 @@ short frontend_draw(void)
     case FeSt_MAPPACK_SELECT:
     case FeSt_CAMPAIGN_SELECT:
     case FeSt_SKIRMISH_LOBBY:
+    case FeSt_ENDLESS_MENU:
+    case FeSt_ENDLESS_LOAD:
+    case FeSt_WORLD_LIST:
         frontend_copy_background();
         draw_gui();
         break;
@@ -3764,6 +3818,9 @@ void frontend_update(short *finish_menu)
  */
 FrontendMenuState get_menu_state_based_on_last_level(LevelNumber lvnum)
 {
+    // Endless Mode runs return to the Endless Mode menu
+    if (world_menu_endless_campaign_loaded())
+        return FeSt_ENDLESS_MENU;
     if (is_singleplayer_level(lvnum) || is_bonus_level(lvnum) || is_extra_level(lvnum))
     {
         return FeSt_LAND_VIEW;
@@ -3803,6 +3860,9 @@ FrontendMenuState get_menu_state_when_back_from_substate(FrontendMenuState subst
         return FeSt_NET_SERVICE;
     case FeSt_LEVEL_SELECT:
          return FeSt_MAPPACK_SELECT;
+    case FeSt_ENDLESS_LOAD:
+    case FeSt_WORLD_LIST:
+         return FeSt_ENDLESS_MENU;
     case FeSt_NET_SESSION:
     case FeSt_NETLAND_VIEW:
         return FeSt_NET_SERVICE;
@@ -3852,6 +3912,38 @@ FrontendMenuState get_startup_menu_state(void)
       load_game_failed = false;
       SYNCLOG("Failed load; back to the menu it started from");
       return load_game_menu_state;
+  }
+  if (world_menu_take_return_to_list())
+  {
+      SYNCLOG("Endless world left; back to the World List");
+      return FeSt_WORLD_LIST;
+  }
+  {
+      /* -loadslot: a save to start from (a dedicated server resuming its world) */
+      int slot = netstate_take_startup_load_slot();
+      if (netstate_dedicated())
+          world_menu_write_index(); /* keeperserver.exe's world list */
+      if (slot == -2)
+          slot = world_menu_newest_endless_slot();
+      if (slot == -3)
+      {
+          /* -loadseed: that seed's newest autosave, or a new world with the seed */
+          slot = world_menu_slot_for_seed(world_next_seed_text());
+          if (slot < 0)
+          {
+              SYNCLOG("Startup: seed %s has no save; a new world with it", world_next_seed_text());
+              server_admin_log("world", "Seed %s has no save yet: making a new world", world_next_seed_text());
+              return (FrontendMenuState)world_menu_new_world_state();
+          }
+          server_admin_log("world", "Seed %s: loading its save in slot %d", world_next_seed_text(), slot);
+          world_set_next_seed(NULL);
+      }
+      if (slot >= 0)
+      {
+          SYNCLOG("Startup: loading save slot %d", slot);
+          game.save_game_slot = slot;
+          return FeSt_LOAD_GAME;
+      }
   }
   if (game_flags2 & GF2_Server)
   {
@@ -4029,6 +4121,7 @@ void queue_frontend_error_box(const char *text)
 
 void create_frontend_error_box(const char *text)
 {
+    SYNCLOG("Frontend: error box \"%s\"", (text != NULL) ? text : "");
     if (game_is_busy_doing_gui_string_input()) {
         kill_button_area_input();
     }

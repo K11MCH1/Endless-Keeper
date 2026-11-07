@@ -331,13 +331,13 @@ long get_condition_value(PlayerNumber plyr_idx, unsigned char valtype, short val
         return count_player_available_creatures_of_model(plyr_idx, CREATURE_ANY);
     case SVar_SLAB_OWNER: //IF_SLAB_OWNER
     {
-        long varib_id = get_slab_number((unsigned char)plyr_idx, validx);
+        SlabCodedCoords varib_id = get_slab_number((unsigned char)plyr_idx, validx);
         struct SlabMap* slb = get_slabmap_direct(varib_id);
         return slabmap_owner(slb);
     }
     case SVar_SLAB_TYPE: //IF_SLAB_TYPE
     {
-        long varib_id = get_slab_number((unsigned char)plyr_idx, validx);
+        SlabCodedCoords varib_id = get_slab_number((unsigned char)plyr_idx, validx);
         struct SlabMap* slb = get_slabmap_direct(varib_id);
         return slb->kind;
     }
@@ -373,6 +373,8 @@ long get_condition_value(PlayerNumber plyr_idx, unsigned char valtype, short val
         dungeon = get_dungeon(plyr_idx);
         return count_creatures_in_dungeon_controlled_and_of_model_flags(dungeon, CMF_IsEvil, CMF_IsSpectator|CMF_IsSpecDigger);
     case SVar_CAMPAIGN_FLAG:
+        if (game.players_extended && (plyr_idx >= PLAYERS_FOR_CAMPAIGN_FLAGS))
+            return 0; /* rows 0-4 only */
         return intralvl.campaign_flags[plyr_idx][validx];
     case SVar_BOX_ACTIVATED:
         dungeon = get_dungeon(plyr_idx);

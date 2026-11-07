@@ -70,6 +70,7 @@
   #include "ftests/ftest.h"
 #endif
 
+#include "world_stream.h"
 #include "post_inc.h"
 
 extern TbBool force_player_num;
@@ -113,9 +114,36 @@ void reset_script_timers_and_flags(void)
     }
 }
 
+static void init_player_type(PlayerNumber plr_idx);
+
 static void init_player_types()
 {
     for (size_t plr_idx = 0; plr_idx < PLAYERS_COUNT; plr_idx++)
+        init_player_type((PlayerNumber)plr_idx);
+}
+
+/** Players 10 to count-1 (and 9, never used) in use from now: set up as the level start set up the others (it cleared
+ *  them with the others). Only an endless world, while its level loads, before the script's commands run. 16 is kept
+ *  as 1 (what worlds from before more players stored). */
+void players_extend(int count)
+{
+    if (game.players_extended)
+        return;
+    if (count > PLAYERS_MAX)
+        count = PLAYERS_MAX;
+    if (count <= STOCK_PLAYERS_COUNT)
+        return;
+    game.players_extended = (count == 16) ? 1 : (unsigned char)count;
+    for (PlayerNumber p = STOCK_PLAYERS_COUNT; p < count; p++)
+    {
+        init_player_type(p);
+        init_dungeon(p);
+    }
+    SYNCLOG("Players 10-%d are in use (player 9 stays ALL_PLAYERS)", count - 1);
+}
+
+static void init_player_type(PlayerNumber plr_idx)
+{
     {
         struct PlayerInfo *player;
         player = get_player(plr_idx);
@@ -231,6 +259,7 @@ static TbBool init_level(void)
     // Load the actual level files
     int level = get_selected_level_number();
     level_load_time_phase(LevelLoadTime_Data);
+    world_level_end();
     TbBool script_preloaded = preload_script(level);
     if (!load_map_file(level)) {
         create_frontend_error_box("Map content is missing or incompatible.");
@@ -242,6 +271,7 @@ static TbBool init_level(void)
         show_onscreen_msg(200,"%s: No Script %d", get_string(GUIStr_Error), level);
         JUSTMSG("Unable to load script level %d from %s", level, campaign.name);
     }
+    world_level_start();
     level_load_time_phase(LevelLoadTime_Navigation);
     init_navigation();
     level_load_time_phase(LevelLoadTime_GameSetup);
@@ -342,6 +372,9 @@ TbBool startup_saved_packet_game(void)
         ERRORLOG("Unable to load campaign associated with packet file");
     }
     set_selected_level_number(replay.head.level_num);
+    /* an endless world plays the seed the replay was recorded with (a New Run's random seed) */
+    replay.head.world_seed[sizeof(replay.head.world_seed) - 1] = '\0';
+    world_set_next_seed((replay.head.world_seed[0] != '\0') ? replay.head.world_seed : NULL);
     RendererSetDrawColour(colours[15][15][15]);
     replay.pckt_gameturn = 0;
 #if (BFDEBUG_LEVEL > 0)
@@ -371,8 +404,8 @@ TbBool startup_saved_packet_game(void)
             view_plyr = replay.head.user_players[rec_user];
         if (view_plyr < 0)
             view_plyr = game.local_plyr_idx;
-        if (!flag_is_set(replay.head.players_exist, to_flag(view_plyr))
-            || flag_is_set(replay.head.players_comp, to_flag(view_plyr)))
+        if (!pmask_has(replay.head.players_exist, view_plyr)
+            || pmask_has(replay.head.players_comp, view_plyr))
             my_player_number = 0;
         else
             my_player_number = view_plyr;
@@ -421,7 +454,7 @@ void startup_network_game(CoroutineLoop *context, TbBool local)
         game.local_plyr_idx = default_loc_player;
         my_player_number = default_loc_player;
     }
-    net_lobby_empty_seats = 0;
+    net_lobby_empty_seats = pmask_none();
     if (!init_level()) {
         coroutine_clear(context, true);
         return;

@@ -49,6 +49,9 @@ enum NetJoinRejection {
     NetJoin_SpectatorDesynced = 9,
     NetJoin_MapMismatch = 10,
     NetJoin_FxdataMismatch = 11,
+    NetJoin_Kicked = 12,     /* a dedicated server's admin: "You were kicked." */
+    NetJoin_Banned = 13,     /* "You were banned from this server." */
+    NetJoin_BannedJoin = 14, /* a banned player joining again */
     NetJoin_Count,
 };
 

@@ -45,6 +45,7 @@ struct Packet;
 
 void initialize_packet_history(void);
 void store_packet_history(NetUserId user, const struct Packet *packet);
+void clear_user_packet_history(NetUserId user);
 const struct Packet *get_history_packet(NetUserId user, GameTurn turn);
 const struct Packet *get_latest_history_packet(NetUserId user);
 TbBool read_repair_packet_history(NetUserId source, const char *buffer, size_t buffer_size);

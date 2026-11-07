@@ -47,6 +47,7 @@
 #include "thing_navigate.h"
 #include "thing_traps.h"
 
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1574,6 +1575,9 @@ void process_computer_players2(void)
         struct PlayerInfo* player = get_player(i);
         struct Dungeon* dungeon = get_players_dungeon(player);
         if (!player_exists(player) || dungeon_invalid(dungeon))
+            continue;
+        // Endless world: a keeper sleeps until the player comes within its threat radius
+        if (world_keeper_is_passive(i))
             continue;
         if (((player->allocflags & PlaF_CompCtrl) != 0) || ((dungeon->computer_enabled & 0x01) != 0))
         {

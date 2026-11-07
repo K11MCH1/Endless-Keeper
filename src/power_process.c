@@ -49,13 +49,15 @@
 #include "observer.h"
 
 #include "keeperfx.hpp"
+#include "world_pages.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 /******************************************************************************/
-static unsigned char backup_explored[PLAYERS_COUNT][2*MAX_SOE_RADIUS][2*MAX_SOE_RADIUS];
+static unsigned char backup_explored[PLAYERS_MAX][2*MAX_SOE_RADIUS][2*MAX_SOE_RADIUS];
 /******************************************************************************/
 #ifdef __cplusplus
 }
@@ -158,7 +160,7 @@ void teleport_armageddon_influenced_creature(struct Thing* creatng)
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     cctrl->armageddon_teleport_turn = 0;
-    create_effect(&creatng->mappos, imp_spangle_effects[get_player_color_idx(creatng->owner)], creatng->owner);
+    create_effect(&creatng->mappos, imp_spangle_effects[world_display_colour(creatng->owner)], creatng->owner);
     move_thing_in_map(creatng, &game.armageddon_mappos);
     cleanup_current_thing_state(creatng);
     reset_interpolation_of_thing(creatng);
@@ -457,7 +459,7 @@ void store_backup_explored_flags_for_power_sight(struct PlayerInfo *player, stru
                 struct Map* mapblk = get_map_block_at(stl_x, stl_y);
                 if (!map_block_invalid(mapblk))
                 {
-                    if (map_block_revealed_to_players(mapblk, to_flag(player->id_number)))
+                    if (pmask_has(mapblk->revealed, player->id_number))
                         backup_explored[player->id_number][soe_y][soe_x] |= 0x01;
                     if ((mapblk->flags & SlbAtFlg_Unexplored) != 0)
                         backup_explored[player->id_number][soe_y][soe_x] |= 0x02;
@@ -515,6 +517,8 @@ void update_vertical_explored_flags_for_power_sight(struct PlayerInfo *player, s
                         for (i=0; i < delta; i++)
                         {
                             struct Map* mapblk = get_map_block_at(stl_x + i, stl_y);
+                            if (world_paged && map_block_invalid(mapblk))
+                                continue; // paged mode: a chunk that isn't loaded (the shared invalid block)
                             reveal_map_block(mapblk, player->id_number);
                             long slb_x = subtile_slab(stl_x + i);
                             struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
@@ -564,10 +568,18 @@ TbBool player_uses_power_hold_audience(PlayerNumber plyr_idx)
 void update_horizonal_explored_flags_for_power_sight(struct PlayerInfo *player, struct Coord3d *soe_pos)
 {
     struct Dungeon* dungeon = get_players_dungeon(player);
+    // The columns to go through: 0..255 (the original fixed map width in subtiles; kept as it is for normal maps),
+    // in paged mode the loaded chunks' subtiles
+    MapSubtlCoord col_x1 = 0, col_x2 = 255;
+    if (world_paged)
+    {
+        MapSubtlCoord by1, by2;
+        map_loop_subtile_bounds(&col_x1, &by1, &col_x2, &by2);
+    }
     long stl_x = (long)soe_pos->x.stl.num - MAX_SOE_RADIUS;
     for (long soe_x = 0; soe_x < 2 * MAX_SOE_RADIUS; soe_x++, stl_x++)
     {
-        if ( (stl_x >= 0) && (stl_x <= 255) )
+        if ( (stl_x >= col_x1) && (stl_x <= col_x2) )
         {
             long stl_y = (long)soe_pos->y.stl.num - MAX_SOE_RADIUS;
             for (long soe_y = 0; soe_y <= MAX_SOE_RADIUS; soe_y++, stl_y++)
@@ -608,6 +620,8 @@ void update_horizonal_explored_flags_for_power_sight(struct PlayerInfo *player, 
                       {
                           long slb_y = subtile_slab(stl_y + i);
                           struct Map* mapblk = get_map_block_at(stl_x, stl_y + i);
+                          if (world_paged && map_block_invalid(mapblk))
+                              continue; // paged mode: a chunk that isn't loaded (the shared invalid block)
                           reveal_map_block(mapblk, player->id_number);
                           struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
                           struct SlabConfigStats* slabst = get_slab_stats(slb);

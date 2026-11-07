@@ -30,6 +30,7 @@
 #include "game_legacy.h"
 #include "front_simple.h"
 #include "config_terrain.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -87,27 +88,56 @@ long smaller_gold_vein_lookup_idx(long higher_gold_slabs, long higher_gem_slabs)
     return gold_idx;
 }
 
-void check_treasure_map(unsigned char *treasure_map, unsigned short *vein_list, int32_t *gold_next_idx, MapSlabCoord veinslb_x, MapSlabCoord veinslb_y)
+/* Paged mode (world_pages.h): the virtual map is far too big for a treasure map indexed by slab number, so the
+ * treasure map has a cell per loaded slab (wp_cells_begin, wp_slab_cell) and the vein list holds cells; every slab of
+ * a chunk that isn't loaded shares one extra cell at index treasure_cells, marked as already done. */
+static SlabCodedCoords treasure_cells = 0;
+
+/** Index of a slab in the treasure map: the slab number normally, its cell in paged mode. */
+static SlabCodedCoords treasure_map_index(MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    if (!world_paged)
+        return get_slab_number(slb_x, slb_y);
+    const int32_t cell = wp_slab_cell(slb_x, slb_y);
+    return (cell < 0) ? treasure_cells : (SlabCodedCoords)cell;
+}
+
+/** Slab coordinates of a treasure map index (as slb_num_decode_x/y normally). */
+static MapSlabCoord treasure_map_decode_x(SlabCodedCoords tmap_idx)
+{
+    if (!world_paged)
+        return slb_num_decode_x(tmap_idx);
+    return wp_cell_slab_x((int32_t)tmap_idx);
+}
+
+static MapSlabCoord treasure_map_decode_y(SlabCodedCoords tmap_idx)
+{
+    if (!world_paged)
+        return slb_num_decode_y(tmap_idx);
+    return wp_cell_slab_y((int32_t)tmap_idx);
+}
+
+void check_treasure_map(unsigned char *treasure_map, SlabCodedCoords *vein_list, int32_t *gold_next_idx, MapSlabCoord veinslb_x, MapSlabCoord veinslb_y)
 {
     long gold_idx;
     // First, find a vein
     long vein_total = 0;
     MapSlabCoord slb_x = veinslb_x;
     MapSlabCoord slb_y = veinslb_y;
-    long accumulated_x_coordinate = 0;
-    long accumulated_y_coordinate = 0;
+    int64_t accumulated_x_coordinate = 0; // 64 bits: chunked-world slab coordinates are about 2^20
+    int64_t accumulated_y_coordinate = 0;
     long coordinate_sample_count = 0;
     long gem_slabs = 0;
     long gold_slabs = 0;
-    SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
+    SlabCodedCoords slb_num = treasure_map_index(slb_x, slb_y);
     treasure_map[slb_num] |= 0x02;
     for (long vein_idx = 0; vein_idx <= vein_total; vein_idx++)
     {
         accumulated_x_coordinate += slb_x;
         accumulated_y_coordinate += slb_y;
         coordinate_sample_count++;
-        SlabCodedCoords slb_around = get_slab_number(slb_x, slb_y);
-        struct SlabMap* slb = get_slabmap_direct(slb_around);
+        SlabCodedCoords slb_around = treasure_map_index(slb_x, slb_y);
+        struct SlabMap* slb = world_paged ? get_slabmap_block(slb_x, slb_y) : get_slabmap_direct(slb_around);
         if (slb->kind == SlbT_GEMS)
         {
             gem_slabs++;
@@ -133,28 +163,28 @@ void check_treasure_map(unsigned char *treasure_map, unsigned short *vein_list, 
             {
                 gold_slabs++;
             }
-            slb_around = get_slab_number(slb_x-1, slb_y);
+            slb_around = treasure_map_index(slb_x-1, slb_y);
             if ((treasure_map[slb_around] & 0x03) == 0)
             {
                 treasure_map[slb_around] |= 0x02;
                 vein_list[vein_total] = slb_around;
                 vein_total++;
             }
-            slb_around = get_slab_number(slb_x+1, slb_y);
+            slb_around = treasure_map_index(slb_x+1, slb_y);
             if ((treasure_map[slb_around] & 0x03) == 0)
             {
                 treasure_map[slb_around] |= 0x02;
                 vein_list[vein_total] = slb_around;
                 vein_total++;
             }
-            slb_around = get_slab_number(slb_x, slb_y-1);
+            slb_around = treasure_map_index(slb_x, slb_y-1);
             if ((treasure_map[slb_around] & 0x03) == 0)
             {
                 treasure_map[slb_around] |= 0x02;
                 vein_list[vein_total] = slb_around;
                 vein_total++;
             }
-            slb_around = get_slab_number(slb_x, slb_y+1);
+            slb_around = treasure_map_index(slb_x, slb_y+1);
             if ((treasure_map[slb_around] & 0x03) == 0)
             {
                 treasure_map[slb_around] |= 0x02;
@@ -163,8 +193,8 @@ void check_treasure_map(unsigned char *treasure_map, unsigned short *vein_list, 
             }
         }
         // Move to next slab in list
-        slb_x = slb_num_decode_x(vein_list[vein_idx]);
-        slb_y = slb_num_decode_y(vein_list[vein_idx]);
+        slb_x = treasure_map_decode_x(vein_list[vein_idx]);
+        slb_y = treasure_map_decode_y(vein_list[vein_idx]);
     }
     // Now get a GoldLookup struct to put the vein into
     if (*gold_next_idx < GOLD_LOOKUP_COUNT)
@@ -184,7 +214,7 @@ void check_treasure_map(unsigned char *treasure_map, unsigned short *vein_list, 
 
         MapSlabCoord centerslb_x = accumulated_x_coordinate / coordinate_sample_count;
         MapSlabCoord centerslb_y = accumulated_y_coordinate / coordinate_sample_count;
-        SlabCodedCoords center_slb = get_slab_number(centerslb_x, centerslb_y);
+        SlabCodedCoords center_slb = treasure_map_index(centerslb_x, centerslb_y);
 
         MapSubtlCoord stl_x = slab_subtile_center(centerslb_x);
         MapSubtlCoord stl_y = slab_subtile_center(centerslb_y);
@@ -197,8 +227,8 @@ void check_treasure_map(unsigned char *treasure_map, unsigned short *vein_list, 
             // entries past those are left over from an earlier vein.
             for (long i = vein_total - 1; i >= 0; i--)
             {
-                MapSlabCoord vein_x = slb_num_decode_x(vein_list[i]);
-                MapSlabCoord vein_y = slb_num_decode_y(vein_list[i]);
+                MapSlabCoord vein_x = treasure_map_decode_x(vein_list[i]);
+                MapSlabCoord vein_y = treasure_map_decode_y(vein_list[i]);
 
                 long dx = vein_x - centerslb_x;
                 long dy = vein_y - centerslb_y;
@@ -237,7 +267,68 @@ void check_map_for_gold(void)
     }
     // Make a map with treasure areas marked
     unsigned char* treasure_map = (unsigned char*)big_scratch;
-    unsigned short* vein_list = (unsigned short*)&big_scratch[game.map_tiles_x * game.map_tiles_y];
+    if (world_paged)
+    {
+        // Paged mode: the treasure map has a cell per loaded slab, plus the outside cell
+        const int npages = wp_cells_begin();
+        if (npages > 0)
+        {
+            size_t cells = (size_t)npages * WP_CHUNK_SLAB_CELLS;
+            size_t list_offs = (cells + 1 + 7) & ~(size_t)7;
+            if (list_offs + cells * sizeof(SlabCodedCoords) <= 16u * 1024 * 1024)
+            {
+                treasure_cells = (SlabCodedCoords)cells;
+                SlabCodedCoords* paged_vein_list = (SlabCodedCoords*)&big_scratch[list_offs];
+                for (int n = 0; n < npages; n++)
+                {
+                    struct WorldPage *pg = wp_cells_page(n);
+                    for (int i = 0; i < WP_CHUNK_SLAB_CELLS; i++)
+                    {
+                        slb_num = (SlabCodedCoords)n * WP_CHUNK_SLAB_CELLS + i;
+                        treasure_map[slb_num] = 0;
+                        const struct SlabConfigStats* slabst = get_slab_stats(&pg->slab[i]);
+                        // Mark areas which are not valuable
+                        if ((slabst->block_flags & (SlbAtFlg_Valuable)) == 0) {
+                            treasure_map[slb_num] |= 0x01;
+                        }
+                    }
+                }
+                treasure_map[cells] = 0x03;
+                /* the loaded slabs in row-major order (pages sorted by chunk row, then column), as the stock loop */
+                int32_t paged_gold_next_idx = 0;
+                for (int g = 0; g < npages; )
+                {
+                    int e = g + 1;
+                    while ((e < npages) && (wp_cells_page(e)->cy == wp_cells_page(g)->cy))
+                        e++;
+                    for (int y = 0; y < WP_CHUNK_SLABS; y++)
+                    {
+                        for (int k = g; k < e; k++)
+                        {
+                            struct WorldPage *pg = wp_cells_page(k);
+                            for (int x = 0; x < WP_CHUNK_SLABS; x++)
+                            {
+                                slb_num = (SlabCodedCoords)k * WP_CHUNK_SLAB_CELLS + y * WP_CHUNK_SLABS + x;
+                                if ( ((treasure_map[slb_num] & 0x01) == 0) && ((treasure_map[slb_num] & 0x02) == 0) )
+                                {
+                                    check_treasure_map(treasure_map, paged_vein_list, &paged_gold_next_idx,
+                                        pg->cx * WP_CHUNK_SLABS + x, pg->cy * WP_CHUNK_SLABS + y);
+                                }
+                            }
+                        }
+                    }
+                    g = e;
+                }
+                SYNCDBG(8,"Found %d possible digging locations",paged_gold_next_idx);
+            } else
+            {
+                WARNLOG("%d loaded chunks are too many for the gold search", npages);
+            }
+        }
+        game.turn_last_checked_for_gold = get_gameturn();
+        return;
+    }
+    SlabCodedCoords* vein_list = (SlabCodedCoords*)&big_scratch[game.map_tiles_x * game.map_tiles_y];
     for (slb_y = 0; slb_y < game.map_tiles_y; slb_y++)
     {
         for (slb_x = 0; slb_x < game.map_tiles_x; slb_x++)

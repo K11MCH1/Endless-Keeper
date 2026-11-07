@@ -323,6 +323,8 @@ void Player_register(lua_State *L) {
 
     for (PlayerNumber i = 0; i < PLAYERS_COUNT; i++)
     {
+        if (i == ALL_PLAYERS)
+            continue; /* not a player (players 10-15 in use) */
         lua_pushPlayer(L,i);
         lua_setglobal(L, get_conf_parameter_text(player_desc,i));
     }

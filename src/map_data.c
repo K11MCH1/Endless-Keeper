@@ -29,6 +29,7 @@
 #include "map_blocks.h"
 #include "map_utils.h"
 #include "room_util.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -67,6 +68,11 @@ TbBool subtile_coords_invalid(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 
 struct Map *get_map_block_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
+  if (world_paged)
+  {
+      struct WorldPage *pg = wp_page_of_subtile(stl_x, stl_y);
+      return (pg != NULL) ? &pg->map[wp_stl_index(stl_x, stl_y)] : INVALID_MAP_BLOCK;
+  }
   if ((stl_x < 0) || (stl_x > game.map_subtiles_x))
       return INVALID_MAP_BLOCK;
   if ((stl_y < 0) || (stl_y > game.map_subtiles_y))
@@ -76,6 +82,8 @@ struct Map *get_map_block_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 
 struct Map *get_map_block_at_pos(SubtlCodedCoords stl_num)
 {
+  if (world_paged)
+      return get_map_block_at(stl_num_decode_x(stl_num), stl_num_decode_y(stl_num));
   if ((stl_num < 0) || (stl_num > get_subtile_number(game.map_subtiles_x,game.map_subtiles_y)))
       return INVALID_MAP_BLOCK;
   return &game.map[stl_num];
@@ -87,12 +95,16 @@ TbBool map_block_invalid(const struct Map *map)
     return true;
   if (map == INVALID_MAP_BLOCK)
     return true;
+  if (world_paged)
+    return false; /* page blocks can be anywhere in memory */
   return (map < &game.map[0]);
 }
 
 long get_ceiling_height(const struct Coord3d *pos)
 {
-    long i = get_subtile_number(pos->x.stl.num, pos->y.stl.num);
+    if (world_paged)
+        return get_map_block_at(pos->x.stl.num, pos->y.stl.num)->filled_subtiles * COORD_PER_STL;
+    SubtlCodedCoords i = get_subtile_number(pos->x.stl.num, pos->y.stl.num);
     return game.map[i].filled_subtiles * COORD_PER_STL;
 }
 
@@ -181,12 +193,12 @@ TbBool subtile_revealed_directly(MapSubtlCoord stl_x, MapSubtlCoord stl_y, Playe
 
 void reveal_map_block(struct Map *mapblk, PlayerNumber plyr_idx)
 {
-    set_flag(mapblk->revealed, to_flag(plyr_idx));
+    pmask_add(&mapblk->revealed, plyr_idx);
 }
 
 void conceal_map_block(struct Map *mapblk, PlayerNumber plyr_idx)
 {
-    clear_flag(mapblk->revealed, to_flag(plyr_idx));
+    pmask_del(&mapblk->revealed, plyr_idx);
 }
 
 TbBool slabs_reveal_slab_and_corners(MapSlabCoord slab_x, MapSlabCoord slab_y, MaxCoordFilterParam param)
@@ -287,8 +299,8 @@ TbBool slabs_change_texture(MapSlabCoord slb_x, MapSlabCoord slb_y, MaxCoordFilt
     if (slabs_iter_will_change(orig_slab_kind, current_kind, fill_type))
     {
         SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
-        game.slab_ext_data[slb_num] = target_slab_texture;
-        game.slab_ext_data_initial[slb_num] = target_slab_texture;
+        (*slab_ext_ptr(slb_num)) = target_slab_texture;
+        (*slab_ext_initial_ptr(slb_num)) = target_slab_texture;
         return true;
     }
     return false;
@@ -296,11 +308,11 @@ TbBool slabs_change_texture(MapSlabCoord slb_x, MapSlabCoord slb_y, MaxCoordFilt
 
 PlayerBitFlags get_player_vision_mask(PlayerNumber plyr_idx)
 {
-    PlayerBitFlags players = to_flag(plyr_idx);
+    PlayerBitFlags players = pmask_of(plyr_idx);
     if (game.conf.rules[plyr_idx].gameplay.allies_share_vision) {
         for (PlayerNumber i = 0; i < PLAYERS_COUNT; i++) {
             if (players_are_mutual_allies(plyr_idx, i)) {
-                set_flag(players, to_flag(i));
+                pmask_add(&players, i);
             }
         }
     }
@@ -324,7 +336,7 @@ TbBool map_block_revealed_to_players(const struct Map *mapblk, PlayerBitFlags pl
     if (map_block_invalid(mapblk)) {
         return false;
     }
-    return (mapblk->revealed & players) != 0;
+    return pmask_intersects(mapblk->revealed, players);
 }
 
 TbBool map_block_revealed_directly(const struct Map* mapblk, PlayerNumber plyr_idx)
@@ -332,7 +344,7 @@ TbBool map_block_revealed_directly(const struct Map* mapblk, PlayerNumber plyr_i
     if (local_observer_rendering) {
         return map_block_revealed_to_players(mapblk, local_observer_player.allied_players);
     }
-    return map_block_revealed_to_players(mapblk, to_flag(plyr_idx));
+    return pmask_has(mapblk->revealed, plyr_idx);
 }
 
 
@@ -487,7 +499,7 @@ SubtlCodedCoords get_subtile_number(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
       stl_x = 0;
   if (stl_y < 0)
       stl_y = 0;
-  return stl_y*(game.map_subtiles_x+1) + stl_x;
+  return (SubtlCodedCoords)stl_y*(game.map_subtiles_x+1) + stl_x;
 }
 
 /**
@@ -495,7 +507,9 @@ SubtlCodedCoords get_subtile_number(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
  */
 MapSubtlCoord stl_num_decode_x(SubtlCodedCoords stl_num)
 {
-  return stl_num % (game.map_subtiles_x+1);
+  if (world_paged)
+      return (MapSubtlCoord)(stl_num & ((1LL << WP_STL_ROW_BITS) - 1));
+  return (MapSubtlCoord)(stl_num % (game.map_subtiles_x+1));
 }
 
 /**
@@ -503,7 +517,9 @@ MapSubtlCoord stl_num_decode_x(SubtlCodedCoords stl_num)
  */
 MapSubtlCoord stl_num_decode_y(SubtlCodedCoords stl_num)
 {
-  return (stl_num/(game.map_subtiles_x+1))%game.map_subtiles_y;
+  if (world_paged)
+      return (MapSubtlCoord)(stl_num >> WP_STL_ROW_BITS);
+  return (MapSubtlCoord)((stl_num/(game.map_subtiles_x+1))%game.map_subtiles_y);
 }
 
 /**
@@ -542,6 +558,13 @@ MapSubtlCoord stl_slab_ending_subtile(MapSubtlCoord stl_v)
 
 void clear_mapwho(void)
 {
+    if (world_paged)
+    {
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+            for (int i = 0; i < WP_CHUNK_STL_CELLS; i++)
+                pg->map[i].mapwho = 0;
+        return;
+    }
     for (MapSubtlCoord y = 0; y < (game.map_subtiles_y + 1); y++)
     {
         for (MapSubtlCoord x = 0; x < (game.map_subtiles_x + 1); x++)
@@ -554,6 +577,16 @@ void clear_mapwho(void)
 
 void clear_mapmap(void)
 {
+    if (world_paged)
+    {
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+        {
+            memset(pg->map, 0, sizeof(pg->map));
+            memset(pg->nav, 0, sizeof(pg->nav));
+            memset(pg->lightness, 0, sizeof(pg->lightness));
+        }
+        return;
+    }
     for (unsigned long y = 0; y < (game.map_subtiles_y + 1); y++)
     {
         for (unsigned long x = 0; x < (game.map_subtiles_x + 1); x++)
@@ -840,6 +873,12 @@ void set_map_size(MapSlabCoord x,MapSlabCoord y)
 {
     game.map_subtiles_x = x * STL_PER_SLB;
     game.map_subtiles_y = y * STL_PER_SLB;
+    if ((x == WP_PAGED_TILES) && (y == WP_PAGED_TILES))
+    {
+        /* the chunked endless world (world_pages.h): rows of 2^23 subtiles, so packed numbers decode by shifts */
+        game.map_subtiles_x = WP_PAGED_SUBTILES;
+        game.map_subtiles_y = WP_PAGED_SUBTILES;
+    }
     game.map_tiles_x = x;
     game.map_tiles_y = y;
 

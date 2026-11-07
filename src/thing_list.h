@@ -32,9 +32,18 @@ extern "C" {
 
 /******************************************************************************/
 #define THING_CLASSES_COUNT    14
-#define SYNCED_THINGS_COUNT    8192
-#define UNSYNCED_THINGS_COUNT  4096
-#define THINGS_COUNT           SYNCED_THINGS_COUNT+UNSYNCED_THINGS_COUNT
+/* Thing slots: synced things 1-8191 and unsynced things (effects, sounds) 8192-12287 as in stock, then synced things
+   again from 12288 (used once the first range is full: endless worlds with many dungeons). Free slots are taken lowest
+   first, so a level that never fills the first range numbers its things as before. */
+#define SYNCED_THINGS_LOW        8192
+#define UNSYNCED_THINGS_COUNT    4096
+#define SYNCED_THINGS_HIGH       20479 /* THINGS_COUNT 32767: thing indices are kept in signed 16-bit fields in places */
+#define SYNCED_THINGS_HIGH_FIRST (SYNCED_THINGS_LOW + UNSYNCED_THINGS_COUNT)
+#define SYNCED_THINGS_COUNT      (SYNCED_THINGS_LOW + SYNCED_THINGS_HIGH)
+#define THINGS_COUNT             (SYNCED_THINGS_HIGH_FIRST + SYNCED_THINGS_HIGH)
+/** Is a thing slot one of the synced ranges (index 8192, the first unsynced slot, goes back to the synced free list
+ *  when freed, as it always did)? */
+#define thing_index_synced(idx)  (((idx) < SYNCED_THINGS_LOW) || ((idx) >= SYNCED_THINGS_HIGH_FIRST))
 
 enum ThingClassIndex {
     TCls_Empty        =  0,

@@ -387,7 +387,7 @@ void set_hugging_pos_using_blocked_flags(struct Coord3d *dstpos, struct Thing *c
  * @param slab_flags Contains slab attribute flags (SlabAttrFlags) passed to this function; flagging the attributes that we want the creature to collide with.
  * @param crt_owner_flags Contains player bitflags (type PlayerBitFlags) passed to this function; this variable is used to check a dungeon wall's owner (if crt_owner_flags is 0, the ownership check is nullified).
 */
-static long get_map_index_of_first_block_thing_colliding_with_at(struct Thing *creatng, struct Coord3d *pos, long slab_flags, PlayerBitFlags crt_owner_flags)
+static SubtlCodedCoords get_map_index_of_first_block_thing_colliding_with_at(struct Thing *creatng, struct Coord3d *pos, long slab_flags, PlayerBitFlags crt_owner_flags)
 {
 
     MapCoordDelta nav_radius = thing_nav_sizexy(creatng) / 2;
@@ -1637,7 +1637,7 @@ long get_next_position_and_angle_required_to_tunnel_creature_to(struct Thing *cr
         cctrl->creature_state_flags = 0;
         cctrl->combat_flags = 0;
     }
-    set_flag(crt_owner_flags, to_flag(creatng->owner));
+    pmask_add(&crt_owner_flags, creatng->owner);
     MapSubtlCoord stl_x;
     MapSubtlCoord stl_y;
     SubtlCodedCoords stl_num;
@@ -1675,11 +1675,11 @@ long get_next_position_and_angle_required_to_tunnel_creature_to(struct Thing *cr
                 stl_num = get_map_index_of_first_block_thing_colliding_with_travelling_to(creatng, &creatng->mappos, &navi->pos_next, SlbAtFlg_Filled|SlbAtFlg_Digable, IGNORE_SLAB_OWNER_CHECK);
                 slb = get_slabmap_for_subtile(stl_num_decode_x(stl_num), stl_num_decode_y(stl_num));
                 PlayerBitFlags ownflag;
-                ownflag = 0;
+                ownflag = pmask_none();
                 if (!slabmap_block_invalid(slb)) {
-                    ownflag = to_flag(slabmap_owner(slb));
+                    ownflag = pmask_of(slabmap_owner(slb));
                 }
-                navi->owner_flags[0] = ownflag;
+                navi->owner_flags[0] = (uint16_t)pmask_low32(ownflag);
 
                 if (get_starting_angle_and_side_of_hug(creatng, &navi->pos_next, &navi->angle, &navi->side, SlbAtFlg_Filled|SlbAtFlg_Valuable, crt_owner_flags))
                 {

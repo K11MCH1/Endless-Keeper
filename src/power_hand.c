@@ -67,6 +67,7 @@
 #include "keeperfx.hpp"
 #include "local_camera.h"
 #include "observer.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1212,7 +1213,7 @@ void draw_mini_things_in_hand(long x, long y)
         if (!thing_exists(thing)) {
             continue;
         }
-        flash_color = get_player_color_idx(thing->owner);
+        flash_color = world_display_colour(thing->owner);
         int scrpos_x;
         int scrpos_y;
         int shift_y;

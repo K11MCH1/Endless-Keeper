@@ -221,7 +221,7 @@ void count_bodies_in_room(struct Room *room)
         room->used_capacity = 0;
         //room->capacity_used_for_storage = 0;
         unsigned long k = 0;
-        unsigned long i = room->slabs_list;
+        SlabCodedCoords i = room->slabs_list;
         while (i > 0)
         {
             MapSlabCoord slb_x = slb_num_decode_x(i);

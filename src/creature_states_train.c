@@ -183,7 +183,7 @@ void setup_move_to_new_training_position(struct Thing *thing, struct Room *room,
     if (find_random_valid_position_for_thing_in_room(thing, room, &pos))
     {
         SYNCDBG(8,"Going to train at (%d,%d)",(int)pos.x.stl.num,(int)pos.y.stl.num);
-        long i = get_subtile_number(pos.x.stl.num, pos.y.stl.num);
+        SubtlCodedCoords i = get_subtile_number(pos.x.stl.num, pos.y.stl.num);
         setup_training_move(thing, i);
     } else {
         SYNCDBG(8,"No new position found, staying at (%d,%d)",(int)cctrl->moveto_pos.x.stl.num,(int)cctrl->moveto_pos.x.stl.num);
@@ -211,7 +211,7 @@ void setup_training_search_for_post(struct Thing *creatng)
     struct Thing* traintng = INVALID_THING;
     long start_slab = THING_RANDOM(creatng, room->slabs_count);
     long k = start_slab;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i != 0)
     {
         slb_x = slb_num_decode_x(i);

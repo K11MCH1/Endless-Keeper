@@ -17,9 +17,11 @@ extern "C" {
 struct RoomSpace;
 
 void reset_dig_prediction(void);
+int dig_prediction_count(void);
 void update_dig_tag_input(void);
 void update_dig_prediction_cursor_preview(void);
 unsigned char get_dig_prediction_render_flags(MapSubtlCoord stl_x, MapSubtlCoord stl_y, unsigned char base_map_flags);
+unsigned char dig_marks_display_flags(MapSubtlCoord stl_x, MapSubtlCoord stl_y, unsigned char map_flags);
 TbBool local_cursor_is_locked(void);
 /******************************************************************************/
 #ifdef __cplusplus

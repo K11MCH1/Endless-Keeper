@@ -211,6 +211,8 @@ enum TbScriptCommands {
     Cmd_SET_LEVEL_ENSIGN                   = 198,
     Cmd_DISPLAY_VARIABLE_WITH_LABEL        = 199,
     Cmd_CHANGE_CREATURES_ANNOYANCE         = 200,
+    Cmd_ENDLESS_WORLD                      = 230,
+    Cmd_ENDLESS_PROGRESSION                = 231,
 };
 
 struct ScriptLine {

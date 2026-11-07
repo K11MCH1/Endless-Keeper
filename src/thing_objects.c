@@ -58,6 +58,8 @@
 #include "thing_stats.h"
 
 #include "net_game.h"
+#include "world_colours.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -113,8 +115,12 @@ unsigned short food_grow_objects[] = {ObjMdl_ChickenStb, ObjMdl_ChickenWob, ObjM
 struct CallToArmsGraphics call_to_arms_graphics[10];
 
 /******************************************************************************/
+/** Objects made since the start (a key of the cached list of hearts, thing_list.c). */
+unsigned long objects_made = 0;
+
 struct Thing *create_object(const struct Coord3d *pos, ThingModel model, unsigned short owner, long parent_idx)
 {
+    objects_made++;
     char start_frame;
 
     if (!i_can_allocate_free_thing_structure(TCls_Object))
@@ -621,7 +627,7 @@ TbBool creature_remove_lair_totem_from_room(struct Thing *creatng, struct Room *
     {
         struct Thing* lairtng = thing_get(cctrl->lairtng_idx);
         TRACE_THING(lairtng);
-        create_effect(&lairtng->mappos, imp_spangle_effects[get_player_color_idx(creatng->owner)], creatng->owner);
+        create_effect(&lairtng->mappos, imp_spangle_effects[world_display_colour(creatng->owner)], creatng->owner);
         delete_lair_totem(lairtng);
     }
     return result;
@@ -1219,6 +1225,7 @@ static TngUpdateRet object_update_dungeon_heart(struct Thing *heartng)
     {
         if (dungeon->heart_destroy_state == 0)
         {
+            world_heart_destroyed(heartng); /* endless worlds: XP for who destroyed it */
             dungeon->heart_destroy_turn = 0;
             dungeon->heart_destroy_state = 1;
             dungeon->essential_pos.x.val = heartng->mappos.x.val;
@@ -1242,6 +1249,7 @@ static TngUpdateRet object_update_dungeon_heart(struct Thing *heartng)
             {
                 dungeon->backup_heart_idx = 0;
             }
+            world_heart_destroyed(heartng); /* endless worlds: XP for who destroyed it */
             destroy_dungeon_heart_room(heartng->owner, heartng);
             if (!thing_is_invalid(heartng))
             {
@@ -1590,7 +1598,7 @@ static TngUpdateRet object_update_power_sight(struct Thing *objtng)
                 pos.x.val = objtng->mappos.x.val + ((radius * LbSinL(angle)) / 8192);
                 pos.y.val = objtng->mappos.y.val + ((radius * LbCosL(angle)) / 8192);
                 pos.z.val = 1408;
-                create_effect_element(&pos, twinkle_eff_elements[get_player_color_idx(objtng->owner)], objtng->owner);
+                create_effect_element(&pos, twinkle_eff_elements[world_display_colour(objtng->owner)], objtng->owner);
             }
             return TUFRet_Modified;
         }
@@ -1612,7 +1620,7 @@ static TngUpdateRet object_update_power_sight(struct Thing *objtng)
             pos.x.val = pos_x;
             pos.y.val = pos_y;
             pos.z.val = 1408;
-            create_effect_element(&pos, twinkle_eff_elements[get_player_color_idx(objtng->owner)], objtng->owner);
+            create_effect_element(&pos, twinkle_eff_elements[world_display_colour(objtng->owner)], objtng->owner);
             if ( pos_x >= 0 && pos_x < game.map_subtiles_x * COORD_PER_STL && pos_y >= 0 && pos_y < game.map_subtiles_y * COORD_PER_STL ) {
                 const int shift_x = pos.x.stl.num - objtng->mappos.x.stl.num + MAX_SOE_RADIUS;
                 const int shift_y = pos.y.stl.num - objtng->mappos.y.stl.num + MAX_SOE_RADIUS;
@@ -1640,7 +1648,7 @@ static TngUpdateRet object_update_power_lightning(struct Thing *objtng)
             if ((mapblk->flags & SlbAtFlg_Blocking) == 0)
             {
                 pos.z.val = get_floor_height_at(&pos) + 128;
-                create_effect_element(&pos, lightning_spangles[get_player_color_idx(objtng->owner)], objtng->owner);
+                create_effect_element(&pos, lightning_spangles[world_display_colour(objtng->owner)], objtng->owner);
             }
         }
         variation++;

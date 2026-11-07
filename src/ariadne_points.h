@@ -22,7 +22,7 @@
 #include "bflib_basics.h"
 #include "globals.h"
 
-#define POINTS_COUNT 30000
+#define POINTS_COUNT 120000 /* 30000 before: the loaded ground of many dungeons */
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,10 +33,13 @@ extern "C" {
 
 typedef long AridPointId;
 
-struct Point { // sizeof = 4
-  short x;
-  short y;
+struct Point { // sizeof = 8
+  int32_t x;
+  int32_t y;
 };
+
+/** y of a point that is not in use (the 16-bit points used 0x8000, a real coordinate on a big map). */
+#define NAV_POINT_FREE INT32_MIN
 
 /******************************************************************************/
 extern struct Point ari_Points[];

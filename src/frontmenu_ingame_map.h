@@ -36,6 +36,14 @@ extern unsigned char grabbed_small_map;
 extern long clicked_on_small_map;
 /******************************************************************************/
 void panel_map_update(long x, long y, long w, long h);
+unsigned short panel_map_code_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+/** What a panel colour code (panel_map_update_subtile) shows; the full-screen map draws remembered parts of
+ *  an endless world from these codes. */
+enum PanelCodeClass {
+    PCC_None = 0, PCC_Wall, PCC_Rock, PCC_Gold, PCC_Gems, PCC_Lava, PCC_Water, PCC_Purple, PCC_RockFloor,
+    PCC_Abyss, PCC_Room, PCC_Door, PCC_DoorLocked, PCC_Path,
+};
+int panel_code_class(unsigned short code, PlayerNumber *owner);
 void panel_map_draw_slabs(long x, long y, long units_per_px, long zoom);
 void panel_map_draw_overlay_things(int32_t units_per_px, int32_t zoom, int32_t basic_zoom);
 void panel_map_submit_to_renderer(void);

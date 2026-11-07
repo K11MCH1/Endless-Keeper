@@ -121,7 +121,7 @@ struct Configs {
     struct EffectsConfig effects_conf;
     struct CreatureConfig crtr_conf;
     struct ObjectsConfig object_conf;
-    struct RulesConfig rules[PLAYERS_COUNT];
+    struct RulesConfig rules[PLAYERS_MAX];
     struct PlayerStateConfig plyr_conf;
     struct ColumnConfig column_conf;
     struct LuaFuncsConf lua;
@@ -214,8 +214,8 @@ struct LogDetailedSnapshot {
     int user_count;
     struct LogRoomDesyncInfo rooms[ROOMS_COUNT];
     int room_count;
-    struct MapTask dig_tasks[DUNGEONS_COUNT][MAPTASKS_COUNT];
-    unsigned short dig_task_counts[DUNGEONS_COUNT];
+    struct MapTask dig_tasks[DUNGEONS_MAX][MAPTASKS_COUNT];
+    unsigned short dig_task_counts[DUNGEONS_MAX];
 };
 
 struct Game {
@@ -232,7 +232,7 @@ struct Game {
     char music_fname[DISKPATH_SIZE]; // custom music file to resume after load
     int8_t save_game_slot;
     LevelNumber selected_level_number;
-    struct PlayerInfo players[PLAYERS_COUNT];
+    struct PlayerInfo players[PLAYERS_MAX];
     struct UserState user_states[MAX_NET_USERS];
     struct Column columns_data[COLUMNS_COUNT];
     unsigned short slabset_num;
@@ -247,10 +247,10 @@ struct Game {
     NavColour navigation_map[MAX_SUBTILES_X*MAX_SUBTILES_Y];
     struct Map map[MAX_SUBTILES_X*MAX_SUBTILES_Y];
     struct ComputerTask computer_task[COMPUTER_TASKS_COUNT];
-    struct Computer2 computer[PLAYERS_COUNT];
+    struct Computer2 computer[PLAYERS_MAX];
     struct SlabMap slabmap[MAX_TILES_X*MAX_TILES_Y];
     struct Room rooms[ROOMS_COUNT];
-    struct Dungeon dungeon[DUNGEONS_COUNT];
+    struct Dungeon dungeon[DUNGEONS_MAX];
     struct StructureList thing_lists[13];
     ColumnIndex unrevealed_column_idx;
     PlayerNumber local_plyr_idx;
@@ -307,10 +307,10 @@ struct Game {
     struct CreaturePool pool;
     TbBool frame_step;
     TbBool paused_at_gameturn;
-    GameTurnDelta pay_day_progress[PLAYERS_COUNT];
+    GameTurnDelta pay_day_progress[PLAYERS_MAX];
     struct SoundSettings sound_settings;
     struct CreatureBattle battles[BATTLES_COUNT];
-    char evntbox_text_objective[PLAYERS_COUNT][MESSAGE_TEXT_LEN];
+    char evntbox_text_objective[PLAYERS_MAX][MESSAGE_TEXT_LEN];
     char evntbox_text_buffer[MESSAGE_TEXT_LEN];
     struct TextScrollWindow evntbox_scroll_window;
     int32_t flash_button_index; /**< GUI Button Designation ID of a button which is supposed to flash, as part of tutorial. */
@@ -372,12 +372,14 @@ struct Game {
     MapSlabCoord map_tiles_y;
     int32_t navigation_map_size_x;
     int32_t navigation_map_size_y;
-    short around_map[AROUND_MAP_LENGTH];
-    short around_slab[AROUND_SLAB_LENGTH];
-    short around_slab_eight[AROUND_SLAB_EIGHT_LENGTH];
-    short small_around_slab[SMALL_AROUND_SLAB_LENGTH];
+    int32_t around_map[AROUND_MAP_LENGTH];
+    int32_t around_slab[AROUND_SLAB_LENGTH];
+    int32_t around_slab_eight[AROUND_SLAB_EIGHT_LENGTH];
+    int32_t small_around_slab[SMALL_AROUND_SLAB_LENGTH];
 
     unsigned short skip_initial_input_turns;
+    /** Players 9-15 are in use (an endless world that needed them): PLAYERS_COUNT is PLAYERS_MAX. */
+    unsigned char players_extended;
 
     struct DesyncChecksums host_checksums;
     struct LogDetailedSnapshot log_snapshot;

@@ -43,6 +43,8 @@
 #include "thing_physics.h"
 #include "config_spritecolors.h"
 #include "lua_triggers.h"
+#include "world_pages.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -174,7 +176,7 @@ TbBool tag_blocks_for_digging_in_area(MapSubtlCoord stl_x, MapSubtlCoord stl_y, 
     slb = get_slabmap_for_subtile(x+1, y+1);
     struct SlabConfigStats *slabst;
     slabst = get_slab_stats(slb);
-    long i;
+    SubtlCodedCoords i;
     i = get_subtile_number(x+1,y+1);
     if ((find_from_task_list(plyr_idx, i) == -1)
       && (slabst->is_diggable || !map_block_revealed(mapblk, plyr_idx))
@@ -234,7 +236,7 @@ TbBool untag_blocks_for_digging_in_area(MapSubtlCoord stl_x, MapSubtlCoord stl_y
     MapSubtlCoord y;
     long num_untagged;
     long task_idx;
-    long i;
+    SubtlCodedCoords i;
     x = STL_PER_SLB * (stl_x/STL_PER_SLB);
     y = STL_PER_SLB * (stl_y/STL_PER_SLB);
     if ( (x < 0) || (x > game.map_subtiles_x) || (y < 0) || (y > game.map_subtiles_y) ) {
@@ -314,10 +316,10 @@ void set_slab_explored_flags(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabC
 {
     MapSubtlCoord stl_y = STL_PER_SLB * slb_y;
     MapSubtlCoord stl_x = STL_PER_SLB * slb_x;
-    PlayerBitFlags flag = to_flag(plyr_idx);
+    PlayerBitFlags flag = pmask_of(plyr_idx);
     struct Map *mapblk = get_map_block_at(stl_x, stl_y);
 
-    if (mapblk->revealed != flag)
+    if (!pmask_equal(mapblk->revealed, flag))
     {
         get_map_block_at(stl_x,     stl_y    )->revealed = flag;
         get_map_block_at(stl_x + 1, stl_y    )->revealed = flag;
@@ -609,7 +611,7 @@ static void delete_attached_things_on_slab(long slb_x, long slb_y)
                 do
                 {
                     next_thing = thing_get(thing->next_on_mapblk);
-                    if (thing->parent_idx == get_slab_number(slb_x,slb_y))
+                    if (thing->parent_idx == slab_parent_key(get_slab_number(slb_x,slb_y)))
                     {
                         char class_id = thing->class_id;
                         if (class_id == TCls_Object || class_id == TCls_EffectGen)
@@ -929,8 +931,11 @@ void place_slab_object(SlabCodedCoords slb_num, MapSubtlCoord stl_x,MapSubtlCoor
                         if ( !needs_object )
                             continue;
                     }
+                    // chunked world: a wall's torch can hang over the chunk's edge; not on ground that isn't loaded
+                    if (world_paged && map_block_invalid(get_map_block_at(pos.x.stl.num, pos.y.stl.num)))
+                        continue;
                     struct Thing *objtng;
-                    objtng = create_object(&pos, tngmodel, plyr_idx, slb_num);
+                    objtng = create_object(&pos, tngmodel, plyr_idx, slab_parent_key(slb_num));
                     if (thing_is_invalid(objtng))
                     {
                         ERRORLOG("Cannot create object type %d", tngmodel);
@@ -957,8 +962,10 @@ void place_slab_object(SlabCodedCoords slb_num, MapSubtlCoord stl_x,MapSubtlCoor
                 } else
                 if (sobj->class_id == TCls_EffectGen)
                 {
+                    if (world_paged && map_block_invalid(get_map_block_at(pos.x.stl.num, pos.y.stl.num)))
+                        continue;
                     struct Thing *effgentng;
-                    effgentng = create_effect_generator(&pos, sobj->model, (sobj->range * COORD_PER_STL), plyr_idx, slb_num);
+                    effgentng = create_effect_generator(&pos, sobj->model, (sobj->range * COORD_PER_STL), plyr_idx, slab_parent_key(slb_num));
                     if (thing_is_invalid(effgentng)) {
                         ERRORLOG("Cannot create effect generator, type %d", sobj->model);
                         continue;
@@ -977,6 +984,8 @@ void place_slab_objects(MapSlabCoord slb_x, MapSlabCoord slb_y, const short * sl
 {
     SlabCodedCoords place_slbnum;
     place_slbnum = get_slab_number(slb_x, slb_y);
+    if (world_paged && slabmap_block_invalid(get_slabmap_block(slb_x, slb_y)))
+        return; // chunked world: a slab that isn't loaded has no objects
     int i;
     i = 0;
     MapSubtlDelta dx;
@@ -1393,7 +1402,7 @@ static void shuffle_unattached_things_on_slab(MapSlabCoord slb_x, MapSlabCoord s
             while (!thing_is_invalid(thing))
             {
                 next_thing = thing_get(thing->next_on_mapblk);
-                if (thing->parent_idx != get_slab_number(slb_x,slb_y))
+                if (thing->parent_idx != slab_parent_key(get_slab_number(slb_x,slb_y)))
                 {
                     TbBool delete_thing = true;
                     if (thing_is_object(thing))
@@ -2454,12 +2463,12 @@ long element_top_face_texture(struct Map *mapblk)
         }
         if ( (col->bitfields & CLF_CEILING_MASK) != 0 )
         {
-            cubed = get_cube_model_stats(col->cubes[COLUMN_STACK_HEIGHT-get_column_ceiling_filled_subtiles(col)-1]);
+            cubed = get_display_cube_stats(col->cubes[COLUMN_STACK_HEIGHT-get_column_ceiling_filled_subtiles(col)-1]);
             return cubed->texture_id[4];
         }
         else if ((col->bitfields & CLF_FLOOR_MASK) != 0)
         {
-            cubed = get_cube_model_stats(col->cubes[get_column_floor_filled_subtiles(col) - 1]);
+            cubed = get_display_cube_stats(col->cubes[get_column_floor_filled_subtiles(col) - 1]);
             return cubed->texture_id[4];
         }
         else
@@ -2675,8 +2684,8 @@ void place_and_process_pretty_wall_slab(struct Thing *creatng, MapSlabCoord slb_
     do_slab_efficiency_alteration(slb_x, slb_y);
     MapSubtlCoord wrkstl_x;
     MapSubtlCoord wrkstl_y;
-    wrkstl_x = stl_num_decode_x(cctrl->digger.working_stl);
-    wrkstl_y = stl_num_decode_y(cctrl->digger.working_stl);
+    wrkstl_x = stl_num_decode_x(cctrl->digger_working_stl);
+    wrkstl_y = stl_num_decode_y(cctrl->digger_working_stl);
     remove_task_from_all_other_players_digger_stacks(creatng->owner, wrkstl_x, wrkstl_y);
     fill_in_reinforced_corners(creatng->owner, slb_x, slb_y);
 }

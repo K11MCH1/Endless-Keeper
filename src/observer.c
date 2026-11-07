@@ -152,11 +152,11 @@ void observer_store_packets(const struct Packet *packets)
 
 static PlayerBitFlags get_observer_starting_players(void)
 {
-    PlayerBitFlags players = 0;
+    PlayerBitFlags players = pmask_none();
     for (PlayerNumber i = 0; i < PLAYERS_COUNT; i++) {
         const struct PlayerInfo *player = get_player(i);
         if (is_active_keeper(player) && !flag_is_set(player->allocflags, PlaF_CompCtrl) && player->victory_state != VicS_LostLevel) {
-            set_flag(players, to_flag(i));
+            pmask_add(&players, i);
         }
     }
     return players;
@@ -164,18 +164,18 @@ static PlayerBitFlags get_observer_starting_players(void)
 
 void observer_update_vision(void)
 {
-    PlayerBitFlags players = 0;
+    PlayerBitFlags players = pmask_none();
     if (is_observer_camera_active()) {
         for (PlayerNumber i = 0; i < PLAYERS_COUNT; i++) {
             const struct PlayerInfo *player = get_player(i);
             if (player_exists(player) && player_is_seat(player)) {
-                set_flag(players, to_flag(i));
+                pmask_add(&players, i);
             }
         }
     } else {
         players = get_player_vision_mask(my_player_number);
     }
-    if (local_observer_player.allied_players != players) {
+    if (!pmask_equal(local_observer_player.allied_players, players)) {
         local_observer_player.allied_players = players;
         panel_map_update(0, 0, game.map_subtiles_x + 1, game.map_subtiles_y + 1);
     }
@@ -183,10 +183,10 @@ void observer_update_vision(void)
 
 static PlayerNumber position_observer_camera_at_starting_dungeon(PlayerNumber fallback_player, PlayerBitFlags players)
 {
-    PlayerNumber candidates[PLAYERS_COUNT];
+    PlayerNumber candidates[PLAYERS_MAX];
     uint32_t candidate_count = 0;
     for (PlayerNumber i = 0; i < PLAYERS_COUNT; i++) {
-        if (flag_is_set(players, to_flag(i)) && !dungeon_invalid(get_dungeon(i))) {
+        if (pmask_has(players, i) && !dungeon_invalid(get_dungeon(i))) {
             candidates[candidate_count++] = i;
         }
     }
@@ -576,7 +576,7 @@ void observer_init(PlayerNumber camera_player_number)
     PlayerNumber watched_player = my_player_number;
     if (watched_player == PLAYER_NEUTRAL) {
         for (PlayerNumber i = 0; i < PLAYERS_COUNT; i++) {
-            if (flag_is_set(starting_players, to_flag(i))) {
+            if (pmask_has(starting_players, i)) {
                 watched_player = i;
                 break;
             }
@@ -609,8 +609,8 @@ void observer_cycle_user(int step)
             continue;
         }
         if (replay.load_enable) {
-            if (!flag_is_set(replay.head.players_exist, to_flag(plyr_idx))
-             || flag_is_set(replay.head.players_comp, to_flag(plyr_idx))) {
+            if (!pmask_has(replay.head.players_exist, plyr_idx)
+             || pmask_has(replay.head.players_comp, plyr_idx)) {
                 continue;
             }
         } else {

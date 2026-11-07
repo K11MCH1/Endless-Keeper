@@ -37,6 +37,7 @@
 #include "replay_rewind.h"
 #include "value_util.h"
 
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -693,12 +694,18 @@ void clear_stat_light_map(void)
 {
     game.lish.global_ambient_light = 32;
     game.lish.light_enabled = 0;
+    if (world_paged)
+    {
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+            memset(pg->stat_light, 0, sizeof(pg->stat_light));
+        return;
+    }
     for (unsigned long y = 0; y < (game.map_subtiles_y + 1); y++)
     {
         for (unsigned long x = 0; x < (game.map_subtiles_x + 1); x++)
         {
-            unsigned long i = get_subtile_number(x, y);
-            game.lish.stat_light_map[i] = 0;
+            SubtlCodedCoords i = get_subtile_number(x, y);
+            (*stat_light_cell(i)) = 0;
         }
     }
 }
@@ -1484,7 +1491,7 @@ static void light_stat_light_map_clear_area(MapSubtlCoord start_stl_x, MapSubtlC
         }
         for (stl_x = start_stl_x; stl_x <= end_stl_x; stl_x++)
         {
-          light_map = &game.lish.stat_light_map[get_subtile_number(stl_x,stl_y)];
+          light_map = stat_light_cell(get_subtile_number(stl_x,stl_y));
           stl_x_min_1 = stl_x - 1;
           if ( stl_x_min_1 < 0 )
           {
@@ -1509,9 +1516,32 @@ static void light_stat_light_map_clear_area(MapSubtlCoord start_stl_x, MapSubtlC
 }
 
 void light_stat_refresh() {
+    if (world_paged)
+    {
+        MapSubtlCoord x1, y1, x2, y2;
+        map_loop_subtile_bounds(&x1, &y1, &x2, &y2);
+        if (x1 <= x2)
+        {
+            light_stat_light_map_clear_area(x1, y1, x2, y2);
+            light_signal_stat_light_update_in_area(x1, y1, x2, y2);
+        }
+        return;
+    }
     // Enable lights on all but bounding subtiles
     light_stat_light_map_clear_area(0, 0, game.map_subtiles_x, game.map_subtiles_y);
     light_signal_stat_light_update_in_area(1, 1, game.map_subtiles_x, game.map_subtiles_y);
+}
+
+/** The static light map of an area (inclusive subtiles) back to ambient, and the static lights reaching it
+ *  drawn again: for a chunk that was loaded or freed in paged mode. */
+void light_stat_refresh_area(MapSubtlCoord x1, MapSubtlCoord y1, MapSubtlCoord x2, MapSubtlCoord y2)
+{
+    x1 = max(x1, 0); y1 = max(y1, 0);
+    x2 = min(x2, game.map_subtiles_x); y2 = min(y2, game.map_subtiles_y);
+    if ((x2 < x1) || (y2 < y1))
+        return;
+    light_stat_light_map_clear_area(x1, y1, x2, y2);
+    light_signal_stat_light_update_in_area(x1, y1, x2, y2);
 }
 
 /** Rebuilds what a save doesn't carry: the lighting tables, the shadow cache slots the saved lights use, and the
@@ -1649,7 +1679,7 @@ static char light_render_light_dynamic_uncached(struct Light *lgt, int radius, i
         int diagonal_length = LbDiagonalLength(light_position_x, light_position_y);
         short lightness = intensity * (radius - diagonal_length) / radius;
         SubtlCodedCoords light_stl_num = get_subtile_number(lgt->mappos.x.stl.num,lgt->mappos.y.stl.num);
-        unsigned short *stl_lightness_ptr = &game.lish.subtile_lightness[light_stl_num];
+        unsigned short *stl_lightness_ptr = lightness_cell(light_stl_num);
         if ( *stl_lightness_ptr < lightness )
             *stl_lightness_ptr = lightness;
         struct LightingTable *lighting_table_pointer = &game.lish.lighting_tables[0];
@@ -1738,7 +1768,7 @@ static char light_render_light_dynamic_uncached(struct Light *lgt, int radius, i
                                 lighting_tables_idx = intensity * max(0, radius - diagonal_length2) / radius;
                                 if ( lighting_tables_idx <= game.lish.global_ambient_light )
                                     return lighting_tables_idx;
-                                unsigned short *stl_lightness_ptr2 = &game.lish.subtile_lightness[get_subtile_number(stl_x,stl_y)];
+                                unsigned short *stl_lightness_ptr2 = lightness_cell(get_subtile_number(stl_x,stl_y));
                                 if ( *stl_lightness_ptr2 < lighting_tables_idx )
                                     *stl_lightness_ptr2 = lighting_tables_idx;
                             }
@@ -1768,9 +1798,9 @@ static char light_render_light_dynamic(struct Light *lgt, int radius, int render
         shadow_cache->lighting_bitmask[lighting_tables_idx] |= 1 << (31 - lighting_tables_idx);
         int diagonal_length = LbDiagonalLength(lgt->mappos.x.stl.pos, lgt->mappos.y.stl.pos);
         int intensity = render_intensity * (radius - diagonal_length) / radius;
-        if (lish->subtile_lightness[stl_num] < intensity)
+        if ((*lightness_cell(stl_num)) < intensity)
         {
-            lish->subtile_lightness[stl_num] = intensity;
+            (*lightness_cell(stl_num)) = intensity;
         }
         struct LightingTable *lighting_table = &lish->lighting_tables[0];
         stl_num = get_subtile_number(lish->lighting_tables_count, stl_num_decode_y(stl_num));
@@ -1873,13 +1903,13 @@ static char light_render_light_dynamic(struct Light *lgt, int radius, int render
                             stl_num = render_intensity * (radius - length) / radius;
                             if (stl_num <= lish->global_ambient_light)
                             {
-                                return stl_num;
+                                return (char)stl_num;
                             }
                             shadow_cache->lighting_bitmask[lighting_tables_idx + lighting_table->delta_y] |= 1 << (31 - lighting_table->delta_x - (char)lighting_tables_idx);
                             SubtlCodedCoords next_stl = get_subtile_number(stl_x, stl_y);
-                            if (lish->subtile_lightness[next_stl] < stl_num)
+                            if ((*lightness_cell(next_stl)) < stl_num)
                             {
-                                lish->subtile_lightness[next_stl] = stl_num;
+                                (*lightness_cell(next_stl)) = (unsigned short)stl_num;
                             }
                         }
                     }
@@ -1889,7 +1919,7 @@ static char light_render_light_dynamic(struct Light *lgt, int radius, int render
             } while (&lish->lighting_tables[lish->lighting_tables_count] > lighting_table);
         }
     }
-    return stl_num;
+    return (char)stl_num;
 }
 
 static int light_render_light_static(struct Light *lgt, int radius, int intensity, SubtlCodedCoords stl_num)
@@ -1904,10 +1934,10 @@ static int light_render_light_static(struct Light *lgt, int radius, int intensit
         signed int y = lgt->mappos.y.stl.pos;
         int diagonal_length = LbDiagonalLength(x, y);
         unsigned short lightness = intensity * (radius - diagonal_length) / radius;
-        unsigned int light_map_idx = get_subtile_number(lgt->mappos.x.stl.num,lgt->mappos.y.stl.num);
-        if (lish->stat_light_map[light_map_idx] < lightness)
+        SubtlCodedCoords light_map_idx = get_subtile_number(lgt->mappos.x.stl.num,lgt->mappos.y.stl.num);
+        if ((*stat_light_cell(light_map_idx)) < lightness)
         {
-            lish->stat_light_map[light_map_idx] = lightness;
+            (*stat_light_cell(light_map_idx)) = lightness;
         }
         unsigned int lighting_table_idx = 0;
         for (floor_filled_stls = lish->lighting_tables_count;
@@ -1990,8 +2020,8 @@ static int light_render_light_static(struct Light *lgt, int radius, int intensit
                         if (floor_filled_stls <= lish->global_ambient_light)
                             return floor_filled_stls;
                         SubtlCodedCoords next_stl = get_subtile_number(stl_x,stl_y);
-                        if (lish->stat_light_map[next_stl] < floor_filled_stls)
-                            lish->stat_light_map[next_stl] = floor_filled_stls;
+                        if ((*stat_light_cell(next_stl)) < floor_filled_stls)
+                            (*stat_light_cell(next_stl)) = floor_filled_stls;
                     }
                 }
             }
@@ -2010,8 +2040,8 @@ static char light_render_light(struct Light* lgt)
       lgt->reset_interpolation = false;
       lgt->previous_mappos = lgt->mappos;
   }
-  lgt->mappos.x.val = interpolate_synced(lgt->previous_mappos.x.val, lgt->mappos.x.val);
-  lgt->mappos.y.val = interpolate_synced(lgt->previous_mappos.y.val, lgt->mappos.y.val);
+  lgt->mappos.x.val = interpolate_coord_synced(lgt->previous_mappos.x.val, lgt->mappos.x.val);
+  lgt->mappos.y.val = interpolate_coord_synced(lgt->previous_mappos.y.val, lgt->mappos.y.val);
 
   TbBool is_dynamic = (lgt->flags & LgtF_Dynamic) != 0;
   int intensity;
@@ -2116,9 +2146,42 @@ static char light_render_light(struct Light* lgt)
         int cache_x = stl_x + lighting_tables_idx - lgt->mappos.x.stl.num;
         int cache_y = stl_y + lighting_tables_idx - lgt->mappos.y.stl.num;
         int row_offset = stl_x - coord_subtile(x_end) + game.map_subtiles_x;
-        unsigned short* lightness = &game.lish.subtile_lightness[get_subtile_number(stl_x, stl_y)];
+        unsigned short* lightness = world_paged ? NULL : &game.lish.subtile_lightness[get_subtile_number(stl_x, stl_y)];
         struct ShadowCache *shdc = &game.lish.shadow_cache[lgt->shadow_index];
         lighting_tables_idx = shdc->lighting_bitmask[cache_y];
+        if (world_paged && ( y_end >= y_start ))
+        {
+          /* paged mode: the same walk, a cell lookup per subtile */
+          uint32_t * shadow_cache_pointer = &shdc->lighting_bitmask[cache_y];
+          MapCoord y = y_start;
+          MapSubtlCoord sy = stl_y;
+          do
+          {
+            MapCoord x = x_start;
+            MapSubtlCoord sx = stl_x;
+            for (int i = cache_x; x <= x_end; i++)
+            {
+              if ( (light_bitmask[i] & lighting_tables_idx) != 0 )
+              {
+                struct Coord3d pos;
+                pos.x.val = x;
+                pos.y.val = y;
+                MapCoordDelta dist = get_2d_distance(&lgt->mappos, &pos);
+                short new_lightness = render_intensity * (radius - dist) / radius;
+                unsigned short *cell = lightness_cell(get_subtile_number(sx, sy));
+                if ( *cell < new_lightness )
+                  *cell = new_lightness;
+              }
+              x += COORD_PER_STL;
+              sx++;
+            }
+            y += COORD_PER_STL;
+            sy++;
+            lighting_tables_idx = shadow_cache_pointer[1];
+            shadow_cache_pointer++;
+          }
+          while ( y_end >= y );
+        } else
         if ( y_end >= y_start )
         {
           uint32_t * shadow_cache_pointer = &shdc->lighting_bitmask[cache_y];
@@ -2204,6 +2267,19 @@ static void light_render_area(MapSubtlCoord startx, MapSubtlCoord starty, MapSub
   SubtlCodedCoords start_num = get_subtile_number(startx, starty);
 
 
+  if (world_paged && ( starty <= endy ))
+  {
+    /* paged mode: page by page, a row slice at a time ([startx, endx) x [starty, endy], as below) */
+    for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+    {
+      MapSubtlCoord px = pg->cx * WP_CHUNK_STL, py = pg->cy * WP_CHUNK_STL;
+      MapSubtlCoord x1 = max(startx, px), x2 = min(endx, px + WP_CHUNK_STL);
+      MapSubtlCoord y1 = max(starty, py), y2 = min(endy, py + WP_CHUNK_STL - 1);
+      for (MapSubtlCoord yy = y1; (x1 < x2) && (yy <= y2); yy++)
+        memcpy(&pg->lightness[(yy - py) * WP_CHUNK_STL + (x1 - px)], &pg->stat_light[(yy - py) * WP_CHUNK_STL + (x1 - px)],
+            sizeof(unsigned short) * (x2 - x1));
+    }
+  } else
   if ( starty <= endy )
   {
     unsigned short *stl_lightness = &game.lish.subtile_lightness[start_num];

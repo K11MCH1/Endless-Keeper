@@ -234,7 +234,7 @@ void setup_workshop_search_for_post(struct Thing *creatng)
     struct Room* room = get_room_thing_is_on(creatng);
     // Find a random slab in the room to be used as our starting point
     long i = THING_RANDOM(creatng, room->slabs_count);
-    unsigned long n = room->slabs_list;
+    SlabCodedCoords n = room->slabs_list;
     while (i > 0)
     {
         n = get_next_slab_number_in_room(n);

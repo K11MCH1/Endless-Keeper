@@ -44,7 +44,7 @@ struct Navigation {
   int32_t angle;
   SubtlCodedCoords first_colliding_block;
   SubtlCodedCoords second_colliding_block;
-  PlayerBitFlags owner_flags[2];
+  uint16_t owner_flags[2]; /* written, never read (players 0-15 as bits) */
   struct Coord3d pos_next;
   struct Coord3d pos_final;
 };
@@ -68,8 +68,8 @@ short get_hug_side_options(MapSubtlCoord stl1_x, MapSubtlCoord stl1_y, MapSubtlC
     MapSubtlCoord *ostla_x, MapSubtlCoord *ostla_y, MapSubtlCoord *ostlb_x, MapSubtlCoord *ostlb_y);
 void initialise_wallhugging_path_from_to(struct Navigation *navi, struct Coord3d *mvstart, struct Coord3d *mvend);
 /******************************************************************************/
-#define CHECK_SLAB_OWNER (flag_is_set(crt_owner_flags, to_flag(slabmap_owner(slb)))) // return TRUE if the slab's owner is stored in crt_owner_flags
-#define IGNORE_SLAB_OWNER_CHECK 0 // crt_owner_flags can be set to 0 to nullify the check for the slab's owner
+#define CHECK_SLAB_OWNER (pmask_has(crt_owner_flags, slabmap_owner(slb))) // return TRUE if the slab's owner is stored in crt_owner_flags
+#define IGNORE_SLAB_OWNER_CHECK pmask_none() // crt_owner_flags can be set to 0 to nullify the check for the slab's owner
 /******************************************************************************/
 #ifdef __cplusplus
 }

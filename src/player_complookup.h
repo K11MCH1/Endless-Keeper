@@ -36,7 +36,7 @@ extern "C" {
 struct GoldLookup { // sizeof = 28
     unsigned char flags;
     /* Informs whether players are interested in that gold vein. */
-    unsigned char player_interested[PLAYERS_COUNT];
+    unsigned char player_interested[PLAYERS_MAX];
 MapSubtlCoord stl_x;
 MapSubtlCoord stl_y;
 unsigned short num_gold_slabs;

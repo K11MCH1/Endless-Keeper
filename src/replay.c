@@ -47,6 +47,8 @@
 #include "net_resync.h"
 #include "local_camera.h"
 #include "replay_rewind.h"
+#include "world_pages.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1020,7 +1022,7 @@ void restore_users_from_packet_save(void)
         if (plyr_idx < 0)
             continue;
         if ((plyr_idx >= PLAYERS_COUNT)
-         || !flag_is_set(replay.head.players_exist, to_flag(plyr_idx)))
+         || !pmask_has(replay.head.players_exist, plyr_idx))
         {
             WARNLOG("Packet file maps user %d to player %d, which the file says does not exist",
                 (int)user, (int)plyr_idx);
@@ -1067,6 +1069,18 @@ TbBigChecksum compute_replay_integrity(void)
             }
         }
     }
+    if (world_paged)
+    {
+        /* paged mode: the loaded pages' slabs (an unloaded slab adds 0; the sum doesn't depend on the order) */
+        for (const struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+        {
+            for (int i = 0; i < WP_CHUNK_SLAB_CELLS; i++)
+            {
+                const struct SlabMap* slb = &pg->slab[i];
+                sum += (ulong)slb->kind + (ulong)slb->owner + (ulong)slb->health;
+            }
+        }
+    } else
     for (MapSlabCoord slb_y = 0; slb_y < game.map_tiles_y; slb_y++)
     {
         for (MapSlabCoord slb_x = 0; slb_x < game.map_tiles_x; slb_x++)
@@ -1301,7 +1315,10 @@ short save_packets(void)
     NetUserId users[MAX_NET_USERS];
     const int nusers = packet_saved_users(users);
     SYNCDBG(6,"Starting");
-    const TbBigChecksum chksum = replay.checksum_verify ? compute_replay_integrity() : 0;
+    TbBigChecksum chksum = 0;
+    if (replay.checksum_verify)
+        WORLD_PROF(WPS_PkChecksum, chksum = compute_replay_integrity());
+    const int64_t prof_write = world_prof_now();
     replay_crashlog_turn = get_gameturn();
     LbFileSeek(replay.fp, 0, Lb_FILE_SEEK_END);
     for (int i = 0; i < nusers; i++)
@@ -1328,6 +1345,7 @@ short save_packets(void)
         ERRORLOG("Unable to flush PacketSave File");
         return false;
     }
+    world_prof_add(WPS_PkWrite, prof_write);
     return true;
 }
 
@@ -1537,9 +1555,9 @@ TbBool open_new_packet_file_for_save(void)
     replay.head.game_ver_release = VER_RELEASE;
     replay.head.game_ver_build = VER_BUILD;
     replay.head.level_num = get_loaded_level_number();
-    replay.head.players_exist = 0;
-    replay.head.players_comp = 0;
-    replay.head.players_seat = 0;
+    replay.head.players_exist = pmask_none();
+    replay.head.players_comp = pmask_none();
+    replay.head.players_seat = pmask_none();
     replay_long_turn_open = false;
     reset_packet_codec();
     if (packet_wire_size == 0)
@@ -1552,6 +1570,14 @@ TbBool open_new_packet_file_for_save(void)
         set_flag(replay.head.flags, PSHF_Checksum);
     if (game.game_kind == GKind_MultiGame)
         set_flag(replay.head.flags, PSHF_MultiGame);
+    if (world_is_chunked())
+        set_flag(replay.head.flags, PSHF_ChunkedWorld);
+    if (game.players_extended)
+        set_flag(replay.head.flags, PSHF_Players16);
+    replay.head.players_in_use = (game.players_extended > 1) ? (uint8_t)players_in_use() : 0;
+    memset(replay.head.world_seed, 0, sizeof(replay.head.world_seed));
+    if (world_mode_active())
+        snprintf(replay.head.world_seed, sizeof(replay.head.world_seed), "%s", world_seed_text());
     replay.head.action_seed = initial_replay_seed;
     replay.head.timestamp = game.timestamp;
     replay.head.timestamp_tz = game.timestamp_tz;
@@ -1577,11 +1603,11 @@ TbBool open_new_packet_file_for_save(void)
         struct PlayerInfo* player = get_player(i);
         if (player_exists(player))
         {
-            set_flag(replay.head.players_exist, to_flag(i));
+            pmask_add(&replay.head.players_exist, i);
             if ((player->allocflags & PlaF_CompCtrl) != 0)
-              set_flag(replay.head.players_comp, to_flag(i));
+              pmask_add(&replay.head.players_comp, i);
             if (player_is_seat(player))
-              set_flag(replay.head.players_seat, to_flag(i));
+              pmask_add(&replay.head.players_seat, i);
         }
     }
     set_replay_crashlog(1, get_gameturn());

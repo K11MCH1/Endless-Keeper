@@ -1,0 +1,111 @@
+/******************************************************************************/
+// Free implementation of Bullfrog's Dungeon Keeper strategy game.
+/******************************************************************************/
+/** @file world_progress.h
+ *     Endless world: progression by research books.
+ * @par Purpose:
+ *     A human keeper starts with the Treasury, Lair and Hatchery, Summon Imp and Possession (the engine adds Hand and
+ *     Slap). Everything else is learnt from research books found in reward caves and hero fortresses, dropped by
+ *     destroyed keepers and carried by raid parties. A book's grade (1-5) follows how far from the start it was found.
+ *     Clicking a book on your own ground offers up to three lore books, each naming one thing to learn; click one.
+ *     The first book always teaches the Library. When nothing is left that a book can teach, it gives a boon.
+ * @par Turned on by:
+ *     ENDLESS_PROGRESSION(1) in the level script (2: books teach their first option at once), for new runs. A save
+ *     without the progression section plays as before.
+ */
+/******************************************************************************/
+#ifndef DK_WORLD_PROGRESS_H
+#define DK_WORLD_PROGRESS_H
+
+#include "bflib_basics.h"
+#include "globals.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+struct Thing;
+struct PlayerInfo;
+struct WgStructRef;
+
+#define WORLD_BOOK_KIND_FIRST 136   /* 128 + 8 * grade + biome: grades 1-5, biomes 0-7 */
+#define WORLD_LORE_KIND_FIRST 200   /* 200 + item */
+#define WORLD_OUTPOST_BOOK_KIND 180 /* a heroes' spellbook, from an outpost's heart */
+
+/** ENDLESS_PROGRESSION(mode): mode 1 draft (choose 1 of 3), 2 automatic. For the level being loaded. */
+void world_progress_request(int mode);
+void world_progress_level_start(void);
+void world_progress_level_end(void);
+TbBool world_progress_active(void);
+/** The first world turn of a new run: every human keeper gets the starting kit; book tooltips. */
+void world_progress_first_turn(void);
+/** A player joined the running world: the starting kit, unless that seat had it. */
+void world_progress_new_player(PlayerNumber plyr_idx);
+/** Each world turn (server or single player): test hooks. */
+void world_progress_turn(void);
+/** A thin client's turn: its test hook (reading books goes through packets). */
+void world_progress_client_turn(void);
+
+/** Placement in a fresh chunk: how many books a structure holds (0-2) and their kind. Seeded by the world seed and
+ *  the structure, so a seed always places the same books. `guaranteed`: one of the two reward caves nearest the
+ *  start (always a grade-1 book). */
+int world_progress_books_of(const struct WgStructRef *ref, uint64_t world_seed, TbBool guaranteed, uint8_t *box_kind);
+/** The object model of a research book (0 when the map pack doesn't have it). */
+ThingModel world_progress_book_model(void);
+/** A research book's kind for a grade and biome. */
+uint8_t world_progress_book_kind(int grade, int biome);
+/** The grade of a book found that far from the start. */
+int world_progress_grade_at(double slabs_from_start);
+
+/** A special box was clicked: reads it when it is a research or lore book (true: handled). */
+TbBool world_progress_activate(struct Thing *thing, struct PlayerInfo *player);
+/** Books dropped on the map (a destroyed keeper's grimoires). */
+void world_progress_drop_books(MapSubtlCoord stl_x, MapSubtlCoord stl_y, int grade, int biome, int count);
+/** A heroes outpost's heart fell: its spellbook lies there. */
+void world_progress_drop_outpost_book(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+struct Room;
+/** An imp put a special box into its keeper's Library: a heroes' spellbook opens a research there. */
+void world_progress_book_shelved(struct Thing *thing, struct Room *room);
+/** A day raid came for a player: the first raid of a day from day 2 carries a book one time in two. */
+void world_progress_raid(PlayerNumber plyr_idx, long day, int raid_idx, uint64_t world_seed);
+/** A creature died: a raid hero drops its party's book. */
+void world_progress_creature_died(struct Thing *creatng);
+
+/** The progression's state for the world save ("PRG1" section): size, write, read. */
+size_t world_progress_save_size(void);
+void world_progress_save(uint8_t *buf);
+TbBool world_progress_load(const uint8_t *buf, size_t len);
+
+/* Player levels (endless worlds): 1000 XP for every keeper or heroes heart a player destroys; level 10 at most. */
+#define WORLD_PLAYER_LEVEL_MAX 10
+/** A heart took damage from a player (shots, explosions): who hit it last gets it when it goes. */
+void world_heart_hit(const struct Thing *heartng, PlayerNumber by);
+/** A heart is destroyed: who hit it last gets the XP. */
+void world_heart_destroyed(const struct Thing *heartng);
+uint32_t world_player_xp(PlayerNumber plyr_idx);
+void world_set_player_xp(PlayerNumber plyr_idx, uint32_t xp);
+int world_player_level(PlayerNumber plyr_idx);
+/** Every machine's turn (presentation): level-ups and creatures unlocked are announced. */
+void world_progress_present(void);
+/** A human keeper owns a portal in this biome (every portal update): its creatures come to that keeper, for good. */
+void world_progress_portal_owned(PlayerNumber plyr_idx, int biome);
+/** A new world, a load, the end: no XP, nothing seen yet. */
+void world_levels_reset(void);
+/** A player's record kept with the world (save section PST1) for a dedicated server's console. */
+struct WorldPlayerStats {
+    uint32_t hearts;     /* keeper hearts destroyed */
+    uint32_t outposts;   /* heroes outposts destroyed */
+    uint32_t portals;    /* portals captured */
+    uint32_t play_turns; /* game turns played while connected */
+};
+const struct WorldPlayerStats *world_player_stats(PlayerNumber plyr_idx);
+void world_set_player_stats(PlayerNumber plyr_idx, const struct WorldPlayerStats *st);
+void world_player_played_turn(PlayerNumber plyr_idx);
+/** XP from the server's admin (give <name> XP <amount>): levels follow. */
+void world_add_player_xp(PlayerNumber plyr_idx, uint32_t xp);
+void world_player_portal_captured(PlayerNumber plyr_idx, int biome);
+
+#ifdef __cplusplus
+}
+#endif
+#endif

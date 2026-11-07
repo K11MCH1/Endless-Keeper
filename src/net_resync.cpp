@@ -41,6 +41,7 @@
 #include "keeperfx.hpp"
 #include "kjm_input.h"
 #include "kfx/save/core/save_resync.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -402,7 +403,9 @@ TbBool LbNetwork_Resync(void * data_buffer, size_t buffer_length)
     return true;
 }
 
-// The full resync data: [u32 game_len][game bytes][u32 lua_len][lua bytes]
+// The full resync data: [u32 game_len][game bytes][u32 lua_len][lua bytes][navigation]
+// and, in an endless level, [world blob][u32 world_len]["WRSY"]
+#define RESYNC_WORLD_MARKER 0x59535257u
 char *build_resync_game_data(size_t *full_resync_len)
 {
     // Light system state lives outside Game; the same as for a savegame
@@ -435,13 +438,32 @@ char *build_resync_game_data(size_t *full_resync_len)
         return NULL;
     }
 
-    *full_resync_len = lua_data_offset + lua_data_len + navigation_size;
+    // the endless world (chunk pages, store, keepers), after the navigation data
+    unsigned char *world_data = NULL;
+    uint32_t world_len = 0;
+    if (world_mode_active() && !world_save_blob(&world_data, &world_len)) {
+        ERRORLOG("Resync world encode failed");
+        save_buf_free(&game_buf);
+        free(lua_data);
+        return NULL;
+    }
+    const size_t world_part = (world_data != NULL) ? (size_t)world_len + 2 * sizeof(uint32_t) : 0;
+    *full_resync_len = lua_data_offset + lua_data_len + navigation_size + world_part;
     char * full_resync_data = (char *) malloc(*full_resync_len);
     if (full_resync_data == NULL) {
         ERRORLOG("Failed to allocate full resync buffer");
         save_buf_free(&game_buf);
         free(lua_data);
+        free(world_data);
         return NULL;
+    }
+    if (world_data != NULL) {
+        char *wpos = full_resync_data + lua_data_offset + lua_data_len + navigation_size;
+        const uint32_t marker = RESYNC_WORLD_MARKER;
+        memcpy(wpos, world_data, world_len);
+        memcpy(wpos + world_len, &world_len, sizeof(world_len));
+        memcpy(wpos + world_len + sizeof(world_len), &marker, sizeof(marker));
+        free(world_data);
     }
 
     uint32_t game_len32 = (uint32_t)game_buf.len;
@@ -478,6 +500,21 @@ static TbBool apply_resync_game_data(const char * full_resync_data, size_t full_
         ERRORLOG("Received lua data with wrong size: %u != %u", lua_data_len, (uint32_t)(full_resync_len - lua_data_offset));
         return false;
     }
+    // an endless world at the end (marker, then its length before it)
+    const char *world_data = NULL;
+    uint32_t world_len = 0;
+    if (full_resync_len >= lua_data_offset + lua_data_len + 2 * sizeof(uint32_t)) {
+        uint32_t marker = 0;
+        memcpy(&marker, full_resync_data + full_resync_len - sizeof(uint32_t), sizeof(marker));
+        memcpy(&world_len, full_resync_data + full_resync_len - 2 * sizeof(uint32_t), sizeof(world_len));
+        if ((marker == RESYNC_WORLD_MARKER) &&
+            (world_len <= full_resync_len - lua_data_offset - lua_data_len - 2 * sizeof(uint32_t))) {
+            world_data = full_resync_data + full_resync_len - 2 * sizeof(uint32_t) - world_len;
+            full_resync_len -= (size_t)world_len + 2 * sizeof(uint32_t);
+        } else {
+            world_len = 0;
+        }
+    }
     size_t navigation_size = full_resync_len - lua_data_offset - lua_data_len;
     if (navigation_size != 0 && navigation_size != transfer_navigation_state(NULL, NavigationState_Store)) {
         ERRORLOG("Received navigation data with wrong size: %u", (uint32_t)navigation_size);
@@ -498,10 +535,18 @@ static TbBool apply_resync_game_data(const char * full_resync_data, size_t full_
         ERRORLOG("Resync game decode failed: %s", save_err.message);
         return false;
     }
+    // the host's world goes in before its navigation mesh (the mesh belongs to that map)
+    if ((world_data != NULL) && !world_load_blob_for_resync((const unsigned char *)world_data, world_len)) {
+        ERRORLOG("Resync world decode failed");
+        return false;
+    }
     if (navigation_size != 0) {
         transfer_navigation_state((char *)full_resync_data + lua_data_offset + lua_data_len, NavigationState_Restore);
     } else {
         init_navigation();
+    }
+    if (world_data != NULL) {
+        world_after_resync();
     }
     return true;
 }

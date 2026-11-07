@@ -491,7 +491,7 @@ TbBool find_combat_target_passing_by_slab_but_having_unrelated_job(const struct 
 TbBool find_combat_target_passing_by_room_but_having_unrelated_job(const struct Thing *creatng, CreatureJob job_kind, const struct Room *room, uint32_t *found_dist, struct Thing **found_thing)
 {
     unsigned long k = 0;
-    unsigned long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         MapSubtlCoord slb_x = slb_num_decode_x(i);

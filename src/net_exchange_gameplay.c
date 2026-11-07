@@ -41,6 +41,7 @@
 #include "lua_triggers.h"
 #include "keeperfx.hpp"
 #include <zlib.h>
+#include "net_state.h"
 #include "post_inc.h"
 
 extern void network_yield_waiting_gameplay_packets(void);
@@ -152,7 +153,7 @@ TbError process_network_unpause_message(NetUserId source, size_t buffer_size)
         WARNLOG("Invalid unpause message from peer %d", source);
         return Lb_OK;
     }
-    if (network_user_is_spectator(netstate.my_id)) {
+    if (network_user_is_spectator(netstate.my_id) || netstate_is_client()) {
         return Lb_OK;
     }
     if ((game.operation_flags & GOF_Paused) == 0) {
@@ -361,6 +362,12 @@ TbBool read_repair_packet_history(NetUserId source, const char *buffer, size_t b
     return true;
 }
 
+void clear_user_packet_history(NetUserId user)
+{
+    if ((user >= 0) && (user < MAX_NET_USERS))
+        memset(&packet_history[user], 0, sizeof(packet_history[user]));
+}
+
 void initialize_packet_history(void)
 {
     gameplay_chat_queue_count = 0;
@@ -478,7 +485,7 @@ static void send_user_repair_history(NetUserId user)
         return;
     }
     MULTIPLAYER_LOG("Sending unreliable compressed gameplay repair history for user=%d to clients (%u -> %u bytes)", (int32_t)user, (uint32_t)packet_history_size, (uint32_t)compressed_size);
-    send_to_active_peers(1, NetSend_Unsequenced, netstate.msg_buffer, message_size, ALL_NET_USERS_MASK & ~(1 << user));
+    send_to_active_peers(1, NetSend_Unsequenced, netstate.msg_buffer, message_size, numask_andnot(ALL_NET_USERS_MASK, numask_of(user)));
 }
 
 static void send_repair_history_if_due(int32_t resend_interval)
@@ -589,7 +596,8 @@ TbError LbNetwork_ExchangeGameplay(void *send_buf, void *server_buf, size_t fram
     send_repair_history_if_due(repair_interval);
     network_update(server_buf, frame_size);
     update_turn_speed_adjustment();
-    if (game.skip_initial_input_turns <= 0 && !netstate.resync_pending && netstate.pending_spectator_id == INVALID_USER_ID) {
+    if (game.skip_initial_input_turns <= 0 && !netstate.resync_pending && netstate.pending_spectator_id == INVALID_USER_ID
+        && !netstate_thin_mode()) {
         struct PlayerInfo *my_player = get_my_player();
         if (player_exists(my_player)) {
             NetUserId local_user = netstate.my_id;

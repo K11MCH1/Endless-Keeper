@@ -203,7 +203,7 @@ void delete_thing_structure_f(struct Thing *thing, TbBool deleting_everything, c
     remove_thing_from_mapwho(thing);
     remove_thing_as_dungeon_heart(thing);
     if (thing->index > 0) {
-        if (thing->index <= SYNCED_THINGS_COUNT) {
+        if ((thing->index <= SYNCED_THINGS_LOW) || (thing->index >= SYNCED_THINGS_HIGH_FIRST)) {
             push_free_thing_index(game.synced_free_things, &game.synced_free_things_count, SYNCED_THINGS_COUNT, thing->index);
         } else {
             push_free_thing_index(game.unsynced_free_things, &game.unsynced_free_things_count, UNSYNCED_THINGS_COUNT, thing->index);

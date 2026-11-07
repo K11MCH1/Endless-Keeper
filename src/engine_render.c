@@ -71,7 +71,9 @@
 #include "thing_traps.h"
 #include "vidfade.h"
 #include "vidmode.h"
+#include "world_pages.h"
 
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -210,6 +212,10 @@ Offset hori_offset[3];
 Offset high_offset[3];
 long x_init_off;
 long y_init_off;
+/** Subtile the screen-to-floor maths is relative to: 0 on normal maps (stock), the camera's subtile in the
+ * endless world's paged map, whose absolute coordinates are too large for the projection's precision. */
+MapSubtlCoord render_base_stl_x;
+MapSubtlCoord render_base_stl_y;
 long floor_pointed_at_x;
 long floor_pointed_at_y;
 
@@ -337,6 +343,18 @@ float interpolate_synced(float previous, float current)
     return interpolate(previous, current);
 }
 
+/** interpolate_synced for an x or y map position. The chunked world's positions (about 4e8) are far past float's
+ *  24 bits, where a float steps by 32: there the step is interpolated instead of the position. Normal maps keep
+ *  the stock float maths. */
+MapCoord interpolate_coord_synced(MapCoord previous, MapCoord current)
+{
+    if (!world_paged)
+        return (MapCoord)interpolate_synced(previous, current);
+    if (flag_is_set(game.operation_flags, GOF_Paused) || !is_feature_on(Ft_DeltaTime))
+        return current;
+    return previous + (MapCoord)((float)(current - previous) * interpolate_time);
+}
+
 struct ThingInterpolateResult interpolate_thing(struct Thing *thing)
 {
     struct ThingInterpolateResult result;
@@ -349,8 +367,8 @@ struct ThingInterpolateResult interpolate_thing(struct Thing *thing)
     }
 
     // Interpolate position every frame
-    result.mappos.x.val = interpolate_synced(thing->previous_mappos.x.val, thing->mappos.x.val);
-    result.mappos.y.val = interpolate_synced(thing->previous_mappos.y.val, thing->mappos.y.val);
+    result.mappos.x.val = interpolate_coord_synced(thing->previous_mappos.x.val, thing->mappos.x.val);
+    result.mappos.y.val = interpolate_coord_synced(thing->previous_mappos.y.val, thing->mappos.y.val);
     result.mappos.z.val = interpolate_synced(thing->previous_mappos.z.val, thing->mappos.z.val);
     result.floor_height = interpolate_synced(thing->previous_floor_height, thing->floor_height);
 
@@ -411,8 +429,8 @@ static void get_floor_pointed_at(long x, long y, int32_t *floor_x, int32_t *floo
         *floor_y = 0;
         return;
     }
-    *floor_y = ((sor_vp - sor_vn) / div_v) >> 2;
-    *floor_x = ((sor_hp - sor_hn) / div_h) >> 2;
+    *floor_y = render_base_stl_x + (((sor_vp - sor_vn) / div_v) >> 2);
+    *floor_x = render_base_stl_y + (((sor_hp - sor_hn) / div_h) >> 2);
 }
 
 static long compute_cells_away(void) // For overhead view, not for 1st person view
@@ -550,11 +568,13 @@ static void rotpers_parallel_3(struct EngineCoord *epos, struct M33 *matx, long 
     inp_x = epos->x;
     inp_y = epos->y;
     inp_z = epos->z;
-    out_x = ((long long)(inp_z * matx->r[0].v[2]) + ((long long)(inp_y + matx->r[0].v[0]) * (long long)(inp_x + matx->r[0].v[1])) - (long long)matx->r[0].v[3] - (long long)(inp_x * inp_y)) >> 14;
+    /* All products in 64 bits: the camera position comes in as absolute map coordinates, which overflow a 32-bit
+     * product past about 512 subtiles (the endless world's virtual map is much larger). Same results otherwise. */
+    out_x = ((long long)inp_z * matx->r[0].v[2] + ((long long)inp_y + matx->r[0].v[0]) * ((long long)inp_x + matx->r[0].v[1]) - (long long)matx->r[0].v[3] - (long long)inp_x * inp_y) >> 14;
     epos->x = out_x;
-    out_y = ((long long)(inp_z * matx->r[1].v[2]) + ((long long)(inp_y + matx->r[1].v[0]) * (long long)(inp_x + matx->r[1].v[1])) - (long long)matx->r[1].v[3] - (long long)(inp_x * inp_y)) >> 14;
+    out_y = ((long long)inp_z * matx->r[1].v[2] + ((long long)inp_y + matx->r[1].v[0]) * ((long long)inp_x + matx->r[1].v[1]) - (long long)matx->r[1].v[3] - (long long)inp_x * inp_y) >> 14;
     epos->y = out_y;
-    epos->z = ((long long)(inp_z * matx->r[2].v[2]) + ((long long)(inp_y + matx->r[2].v[0]) * (long long)(inp_x + matx->r[2].v[1])) - (long long)matx->r[2].v[3] - (long long)(inp_x * inp_y)) >> 14;
+    epos->z = ((long long)inp_z * matx->r[2].v[2] + ((long long)inp_y + matx->r[2].v[0]) * ((long long)inp_x + matx->r[2].v[1]) - (long long)matx->r[2].v[3] - (long long)inp_x * inp_y) >> 14;
     factor_w = (long)view_width_over_2 + (zoom * out_x >> 16);
     epos->view_width = factor_w;
     factor_h = (long)view_height_over_2 - (zoom * out_y >> 16);
@@ -1519,9 +1539,11 @@ static void do_perspective_rotation(long x, long y, long z)
     zoom = camera_zoom / pixel_size;
     engine_w = local_state.engine_window_width/pixel_size;
     engine_h = local_state.engine_window_height/pixel_size;
-    epos.x = -x;
+    render_base_stl_x = world_paged ? (MapSubtlCoord)(x >> 8) : 0;
+    render_base_stl_y = world_paged ? (MapSubtlCoord)(y >> 8) : 0;
+    epos.x = -(x - (long)render_base_stl_x * COORD_PER_STL);
     epos.y = 0;
-    epos.z = y;
+    epos.z = y - (long)render_base_stl_y * COORD_PER_STL;
     rotpers_parallel_3(&epos, &camera_matrix, zoom);
     x_init_off = epos.view_width;
     y_init_off = epos.view_height;
@@ -3793,7 +3815,7 @@ static void create_shadows(struct Thing *thing, struct EngineCoord *ecor, struct
     struct EngineCoord ecor3;
     struct EngineCoord ecor4;
 
-    animation_sprite = get_render_animation_sprite(thing->anim_sprite);
+    animation_sprite = get_render_animation_sprite(world_display_thing_sprite(thing));
     current_frame = thing->current_frame;
     struct KeeperSprite *spr = keepersprite_array(animation_sprite);
     if (spr == NULL) {
@@ -3939,7 +3961,7 @@ unsigned short engine_remap_texture_blocks(long stl_x, long stl_y, unsigned shor
     texture_scroll = (struct Coord2d){0};
     long slb_x = subtile_slab(stl_x);
     long slb_y = subtile_slab(stl_y);
-    return tex_id + (game.slab_ext_data[get_slab_number(slb_x,slb_y)] & 0x1F) * TEXTURE_BLOCKS_COUNT;
+    return tex_id + ((*slab_ext_ptr(get_slab_number(slb_x,slb_y))) & 0x1F) * TEXTURE_BLOCKS_COUNT;
 }
 
 static int32_t get_abyss_liquid_scroll(const struct CubeConfigStats *texturing)
@@ -3956,7 +3978,7 @@ static int32_t get_abyss_liquid_scroll(const struct CubeConfigStats *texturing)
 
 static unsigned short engine_remap_top_texture_blocks(MapSubtlCoord stl_x, MapSubtlCoord stl_y, unsigned short texture)
 {
-    const struct CubeConfigStats *texturing = get_cube_model_stats(game.top_cube[texture]);
+    const struct CubeConfigStats *texturing = get_display_cube_stats(game.top_cube[texture]);
     texture = engine_remap_texture_blocks(stl_x, stl_y, texture);
     int32_t offset = get_abyss_liquid_scroll(texturing);
     if (offset == 0) {
@@ -3993,7 +4015,7 @@ static unsigned short engine_remap_top_texture_blocks(MapSubtlCoord stl_x, MapSu
 
 static unsigned short engine_remap_abyss_wall_texture_blocks(MapSubtlCoord stl_x, MapSubtlCoord stl_y, int32_t cube, int32_t side)
 {
-    const struct CubeConfigStats *texturing = get_cube_model_stats(cube);
+    const struct CubeConfigStats *texturing = get_display_cube_stats(cube);
     unsigned short texture = floor_to_ceiling_map[0];
     if (any_flag_is_set(texturing->properties_flags, CPF_IsLava | CPF_IsWater)) {
         texture = texturing->texture_id[side];
@@ -4037,7 +4059,7 @@ static void do_a_plane_of_engine_columns_perspective(long stl_x, long stl_y, lon
     bec = &back_ec[clip_start + MINMAX_ALMOST_HALF];
     fec = &front_ec[clip_start + MINMAX_ALMOST_HALF];
     blank_colmn = get_column(game.unrevealed_column_idx);
-    center_block_idx = clip_start + stl_x + (stl_y * (game.map_subtiles_x+1));
+    center_block_idx = clip_start + stl_x + ((SubtlCodedCoords)stl_y * (game.map_subtiles_x+1));
     MapSubtlCoord center_x = clip_start + stl_x;
     for (i = clip_end-clip_start; i > 0; i--)
     {
@@ -4087,7 +4109,7 @@ static void do_a_plane_of_engine_columns_perspective(long stl_x, long stl_y, lon
         height_bit = 1;
         while (height_bit <= solidmsk_center)
         {
-            texturing = get_cube_model_stats(*cubenum_ptr);
+            texturing = get_display_cube_stats(*cubenum_ptr);
             if ((solidmsk_center & height_bit) != 0)
             {
               if ((solidmsk_top & height_bit) == 0)
@@ -4127,7 +4149,7 @@ static void do_a_plane_of_engine_columns_perspective(long stl_x, long stl_y, lon
         if (ecpos > 0)
         {
             cubenum_ptr = &colmn->cubes[ecpos-1];
-            texturing = get_cube_model_stats(*cubenum_ptr);
+            texturing = get_display_cube_stats(*cubenum_ptr);
             textr_idx = engine_remap_top_texture_blocks(center_x, stl_y, texturing->texture_id[4]);
             do_a_trig_gourad_tr(&bec[0].cors[ecpos], &bec[1].cors[ecpos], &fec[1].cors[ecpos], textr_idx, -1);
             do_a_trig_gourad_bl(&fec[1].cors[ecpos], &fec[0].cors[ecpos], &bec[0].cors[ecpos], textr_idx, -1);
@@ -4141,7 +4163,7 @@ static void do_a_plane_of_engine_columns_perspective(long stl_x, long stl_y, lon
         if (ecpos > 0)
         {
             cubenum_ptr = &colmn->cubes[ecpos-1];
-            texturing = get_cube_model_stats(*cubenum_ptr);
+            texturing = get_display_cube_stats(*cubenum_ptr);
             textr_idx = engine_remap_top_texture_blocks(center_x, stl_y, texturing->texture_id[4]);
             do_a_trig_gourad_tr(&bec[0].cors[ecpos], &bec[1].cors[ecpos], &fec[1].cors[ecpos], textr_idx, -1);
             do_a_trig_gourad_bl(&fec[1].cors[ecpos], &fec[0].cors[ecpos], &bec[0].cors[ecpos], textr_idx, -1);
@@ -4539,7 +4561,7 @@ static void do_a_plane_of_engine_columns_cluedo(long stl_x, long stl_y, long pla
         {
             unsigned short textr_id;
             struct CubeConfigStats *cubed;
-            cubed = get_cube_model_stats(cur_colmn->cubes[ncor]);
+            cubed = get_display_cube_stats(cur_colmn->cubes[ncor]);
             if ((mask & solidmsk_cur) == 0)
             {
                 continue;
@@ -4591,7 +4613,7 @@ static void do_a_plane_of_engine_columns_cluedo(long stl_x, long stl_y, long pla
              {
                 if ((ncor_raw > 0) && (ncor_raw <= COLUMN_STACK_HEIGHT))
                 {
-                    struct CubeConfigStats * cubed = get_cube_model_stats(cur_colmn->cubes[ncor_raw-1]);
+                    struct CubeConfigStats * cubed = get_display_cube_stats(cur_colmn->cubes[ncor_raw-1]);
                     unsigned short textr_id = engine_remap_top_texture_blocks(stl_x + xaval + xidx, stl_y, cubed->texture_id[4]);
                     // Top surface in cluedo mode
                     do_a_gpoly_gourad_tr(&bec[0].cors[ncor], &bec[1].cors[ncor], &fec[1].cors[ncor], textr_id, -1);
@@ -4613,7 +4635,7 @@ static void do_a_plane_of_engine_columns_cluedo(long stl_x, long stl_y, long pla
         if ((ncor > 0) && (ncor <= COLUMN_STACK_HEIGHT))
         {
             struct CubeConfigStats * cubed;
-            cubed = get_cube_model_stats(cur_colmn->cubes[ncor-1]);
+            cubed = get_display_cube_stats(cur_colmn->cubes[ncor-1]);
             unsigned short textr_id = engine_remap_top_texture_blocks(stl_x + xaval + xidx, stl_y, cubed->texture_id[4]);
             do_a_gpoly_gourad_tr(&bec[0].cors[ncor], &bec[1].cors[ncor], &fec[1].cors[ncor], textr_id, -1);
             do_a_gpoly_gourad_bl(&fec[1].cors[ncor], &fec[0].cors[ncor], &bec[0].cors[ncor], textr_id, -1);
@@ -4727,7 +4749,7 @@ static void do_a_plane_of_engine_columns_isometric(long stl_x, long stl_y, long 
         {
             unsigned short textr_id;
             struct CubeConfigStats *cubed;
-            cubed = get_cube_model_stats(cur_colmn->cubes[ncor]);
+            cubed = get_display_cube_stats(cur_colmn->cubes[ncor]);
             if ((mask & solidmsk_cur) == 0)
             {
                 continue;
@@ -4771,7 +4793,7 @@ static void do_a_plane_of_engine_columns_isometric(long stl_x, long stl_y, long 
             else if ((render_map_flags & (SlbAtFlg_TaggedValuable|SlbAtFlg_Unexplored)) == 0)
             {
                 struct CubeConfigStats * cubed;
-                cubed = get_cube_model_stats(*(short *)((char *)&cur_colmn->floor_texture + 2 * ncor + 1));
+                cubed = get_display_cube_stats(*(short *)((char *)&cur_colmn->floor_texture + 2 * ncor + 1));
                 unsigned short textr_id = engine_remap_top_texture_blocks(stl_x + xaval + xidx, stl_y, cubed->texture_id[4]);
                 // Top surface on full iso mode
                 do_a_gpoly_gourad_tr(&bec[0].cors[ncor], &bec[1].cors[ncor], &fec[1].cors[ncor], textr_id, -1);
@@ -4798,7 +4820,7 @@ static void do_a_plane_of_engine_columns_isometric(long stl_x, long stl_y, long 
         if (ncor > 0)
         {
             struct CubeConfigStats * cubed;
-            cubed = get_cube_model_stats(*(short *)((char *)&cur_colmn->floor_texture + 2 * ncor + 1));
+            cubed = get_display_cube_stats(*(short *)((char *)&cur_colmn->floor_texture + 2 * ncor + 1));
             unsigned short textr_id = engine_remap_top_texture_blocks(stl_x + xaval + xidx, stl_y, cubed->texture_id[4]);
             do_a_gpoly_gourad_tr(&bec[0].cors[ncor], &bec[1].cors[ncor], &fec[1].cors[ncor], textr_id, -1);
             do_a_gpoly_gourad_bl(&fec[1].cors[ncor], &fec[0].cors[ncor], &bec[0].cors[ncor], textr_id, -1);
@@ -4877,7 +4899,7 @@ static void process_keeper_flame_on_sprite(struct BucketKindJontySprite* jspr, l
         EngineSpriteDrawUsingAlpha = 1;
         RendererAddDrawFlags(Lb_SPRITE_ALPHA_ADDITIVE);
     }
-    animation_sprite = get_render_animation_sprite(thing->anim_sprite);
+    animation_sprite = get_render_animation_sprite(world_display_thing_sprite(thing));
     current_frame = thing->current_frame;
     process_keeper_sprite(jspr->scr_x, jspr->scr_y, animation_sprite, angle, current_frame, base_sprite_size);
 
@@ -4919,7 +4941,7 @@ void draw_fastview_mapwho(struct Camera *cam, struct BucketKindJontySprite *jspr
     RendererBeginWorldSpriteCapture((int32_t)jspr->bucket_idx);
     flg_mem = RendererGetDrawFlags();
     alpha_mem = EngineSpriteDrawUsingAlpha;
-    animation_sprite = get_render_animation_sprite(thing->anim_sprite);
+    animation_sprite = get_render_animation_sprite(world_display_thing_sprite(thing));
     current_frame = thing->current_frame;
     if (keepersprite_rotable(animation_sprite))
     {
@@ -5374,7 +5396,7 @@ void draw_status_sprites(long scrpos_x, long scrpos_y, struct Thing *thing)
 
     if ((thing->lair.spr_size > 0) && (health_spridx > 0) && ((get_gameturn() % (2 * gui_blink_rate)) >= gui_blink_rate))
     {
-        int flash_color = get_player_color_idx(thing->owner);
+        int flash_color = world_display_colour(thing->owner);
         if (flash_color == PLAYER_NEUTRAL)
         {
             flash_color = (get_gameturn() % (4 * neutral_flash_rate)) / neutral_flash_rate;
@@ -7258,6 +7280,7 @@ static void prepare_lightness_intensity_array(long stl_x, long stl_y, int32_t *a
 
 static void draw_element(struct Map *map, long lightness, long stl_x, long stl_y, long pos_x, long pos_y, long zoom, unsigned char qdrant, int32_t *ymax)
 {
+    const unsigned char mark_flags = dig_marks_display_flags(stl_x, stl_y, map->flags); /* a thin client's own dig marks */
     struct PlayerInfo *myplyr;
     TbBool sibrevealed[3][3];
     struct CubeConfigStats *cube_config_stats;
@@ -7315,7 +7338,7 @@ static void draw_element(struct Map *map, long lightness, long stl_x, long stl_y
 
     if (!abyss && (*ymax > pos_y) && (col->floor_texture != 0) && (col->cubes[0] == 0)) {
         *ymax = pos_y;
-        if ((map->flags & SlbAtFlg_Unexplored) != 0) {
+        if ((mark_flags & SlbAtFlg_Unexplored) != 0) {
             add_textruredquad_to_polypool(pos_x, pos_y, engine_remap_texture_blocks(stl_x, stl_y, col->floor_texture), zoom, 0,
                 TO_FIXED(32), 0, bckt_idx);
         } else {
@@ -7363,7 +7386,7 @@ static void draw_element(struct Map *map, long lightness, long stl_x, long stl_y
       if (col->cubes[tc] == 0)
         break;
       y -= delta_y;
-      cube_config_stats = get_cube_model_stats(col->cubes[tc]);
+      cube_config_stats = get_display_cube_stats(col->cubes[tc]);
       if (*ymax > y)
       {
         *ymax = y;
@@ -7379,11 +7402,11 @@ static void draw_element(struct Map *map, long lightness, long stl_x, long stl_y
       if (*ymax > i)
       {
         *ymax = i;
-        if ((map->flags & SlbAtFlg_TaggedValuable) != 0)
+        if ((mark_flags & SlbAtFlg_TaggedValuable) != 0)
         {
           add_textruredquad_to_polypool(pos_x, i, engine_remap_texture_blocks(stl_x, stl_y, cube_config_stats->texture_id[4]), zoom, qdrant, TO_FIXED(32), 1, bckt_top);
         } else
-        if ((map->flags & SlbAtFlg_Unexplored) != 0)
+        if ((mark_flags & SlbAtFlg_Unexplored) != 0)
         {
           add_textruredquad_to_polypool(pos_x, i, engine_remap_texture_blocks(stl_x, stl_y, cube_config_stats->texture_id[4]), zoom, qdrant, TO_FIXED(32), 0, bckt_top);
         } else
@@ -7411,7 +7434,7 @@ static void draw_element(struct Map *map, long lightness, long stl_x, long stl_y
             if (col->cubes[tc] == 0)
               break;
             y -= delta_y;
-            cube_config_stats = get_cube_model_stats(col->cubes[tc]);
+            cube_config_stats = get_display_cube_stats(col->cubes[tc]);
             if (*ymax > y)
             {
               textr_idx = engine_remap_texture_blocks(stl_x, stl_y, cube_config_stats->texture_id[cube_itm]);
@@ -8018,7 +8041,7 @@ void draw_jonty_mapwho(struct BucketKindJontySprite *jspr)
     RendererBeginWorldSpriteCapture((int32_t)jspr->bucket_idx);
     flg_mem = RendererGetDrawFlags();
     alpha_mem = EngineSpriteDrawUsingAlpha;
-    animation_sprite = get_render_animation_sprite(thing->anim_sprite);
+    animation_sprite = get_render_animation_sprite(world_display_thing_sprite(thing));
     current_frame = thing->current_frame;
     if (keepersprite_rotable(animation_sprite))
     {
@@ -8816,7 +8839,7 @@ static void do_map_who_for_thing(struct Thing *thing)
             int count;
             int i;
 
-            unsigned short animation_sprite = get_render_animation_sprite(thing->anim_sprite);
+            unsigned short animation_sprite = get_render_animation_sprite(world_display_thing_sprite(thing));
             struct KeeperSprite *spr = keepersprite_array(animation_sprite);
             if ((spr != NULL) && ((spr->frame_flags & FFL_NoShadows) == 0))
             {

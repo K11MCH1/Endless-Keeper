@@ -57,6 +57,7 @@
 #include "thing_list.h"
 #include <stddef.h>
 #include <SDL3/SDL.h>
+#include "world_menu.h"
 #include "post_inc.h"
 
 #include <string.h>
@@ -73,13 +74,13 @@ extern int autostart_multiplayer_users_expected;
 
 /******************************************************************************/
 const struct ConfigInfo default_net_config_info = {
-    .max_players = MAX_NET_USERS,
+    .max_players = LOBBY_SEATS,
     .spectators_enabled = 1,
     .spectator_chat = 1,
 };
 
 const struct ConfigInfo default_skirmish_config_info = {
-    .max_players = MAX_NET_USERS,
+    .max_players = LOBBY_SEATS,
 };
 
 int fe_network_active;
@@ -124,7 +125,7 @@ static TbBool check_frontend_version_mismatch(void);
 
 static NetUserId net_user_with_value(const int8_t values[MAX_NET_USERS], int8_t value)
 {
-    for (NetUserId user = 0; user < MAX_NET_USERS; user++) {
+    for (NetUserId user = 0; user < LOBBY_SEATS; user++) {
         if (values[user] == value) {
             return user;
         }
@@ -134,17 +135,17 @@ static NetUserId net_user_with_value(const int8_t values[MAX_NET_USERS], int8_t 
 
 static int8_t first_unused_value(const int8_t values[MAX_NET_USERS])
 {
-    for (int8_t value = 0; value < MAX_NET_USERS; value++) {
+    for (int8_t value = 0; value < LOBBY_SEATS; value++) {
         if (net_user_with_value(values, value) < 0) {
             return value;
         }
     }
-    return MAX_NET_USERS;
+    return LOBBY_SEATS;
 }
 
 TbBool net_player_colours_conflict(void)
 {
-    for (NetUserId user = 0; user < MAX_NET_USERS; user++) {
+    for (NetUserId user = 0; user < LOBBY_SEATS; user++) {
         PlayerNumber colour = net_player_colour[user];
         if (colour >= 0 && colour < NET_PLAYER_COLOUR_RANDOM && net_user_with_value(net_player_colour, colour) != user) {
             return true;
@@ -184,8 +185,8 @@ static void shuffle_values(int8_t values[MAX_NET_USERS], int32_t count)
 static char alliances_from_teams(const int8_t teams[MAX_NET_USERS])
 {
     char alliances = 0;
-    for (NetUserId user1 = 0; user1 < MAX_NET_USERS; user1++) {
-        for (NetUserId user2 = user1 + 1; user2 < MAX_NET_USERS; user2++) {
+    for (NetUserId user1 = 0; user1 < LOBBY_SEATS; user1++) {
+        for (NetUserId user2 = user1 + 1; user2 < LOBBY_SEATS; user2++) {
             if (teams[user1] >= 0 && teams[user1] < NET_TEAM_RANDOM && teams[user1] == teams[user2]) {
                 alliances |= alliance_grid[user1][user2];
             }
@@ -202,7 +203,7 @@ static void resolve_random_teams(int8_t teams[MAX_NET_USERS])
     int32_t random_count = 0;
     int32_t candidates_count = 0;
     memset(team_sizes, 0, sizeof(team_sizes));
-    for (PlayerNumber slot = 0; slot < MAX_NET_USERS; slot++) {
+    for (PlayerNumber slot = 0; slot < LOBBY_SEATS; slot++) {
         if (teams[slot] == NET_TEAM_RANDOM) {
             random_slots[random_count] = slot;
             random_count++;
@@ -234,7 +235,7 @@ static void resolve_random_teams(int8_t teams[MAX_NET_USERS])
 
 static void reserve_lobby_seats(TbBool (*occupies_seat)(NetUserId), const TbBool seat_available[MAX_NET_USERS], PlayerNumber *seats_left, int8_t player_colours[MAX_NET_USERS])
 {
-    for (NetUserId user = 0; user < MAX_NET_USERS && *seats_left > 0; user++) {
+    for (NetUserId user = 0; user < LOBBY_SEATS && *seats_left > 0; user++) {
         if (!occupies_seat(user)) {
             continue;
         }
@@ -252,11 +253,11 @@ void net_resolve_player_colours(int8_t player_colours[MAX_NET_USERS], char *alli
     PlayerNumber level_seats = 0;
     struct LevelInformation *level = get_level_info(get_loaded_level_number());
     if (level) {
-        level_seats = min(max(level->players, 2), MAX_NET_USERS);
+        level_seats = min(max(level->players, 2), LOBBY_SEATS);
     }
     TbBool seat_available[MAX_NET_USERS];
     PlayerNumber seats_left = 0;
-    for (PlayerNumber colour = 0; colour < MAX_NET_USERS; colour++) {
+    for (PlayerNumber colour = 0; colour < LOBBY_SEATS; colour++) {
         seat_available[colour] = colour < level_seats || thing_exists(find_players_dungeon_heart(colour));
         seats_left += seat_available[colour];
     }
@@ -265,7 +266,7 @@ void net_resolve_player_colours(int8_t player_colours[MAX_NET_USERS], char *alli
     reserve_lobby_seats(net_lobby_computer_player, seat_available, &seats_left, player_colours);
     PlayerNumber free_colours[MAX_NET_USERS];
     PlayerNumber free_count = 0;
-    for (PlayerNumber colour = 0; colour < MAX_NET_USERS; colour++) {
+    for (PlayerNumber colour = 0; colour < LOBBY_SEATS; colour++) {
         if (seat_available[colour] && net_user_with_value(player_colours, colour) < 0) {
             free_colours[free_count] = colour;
             free_count++;
@@ -273,7 +274,7 @@ void net_resolve_player_colours(int8_t player_colours[MAX_NET_USERS], char *alli
     }
     shuffle_values(free_colours, free_count);
     PlayerNumber next_free = 0;
-    for (NetUserId user = 0; user < MAX_NET_USERS; user++) {
+    for (NetUserId user = 0; user < LOBBY_SEATS; user++) {
         if (player_colours[user] == NET_PLAYER_COLOUR_RANDOM) {
             player_colours[user] = free_colours[next_free];
             next_free++;
@@ -281,7 +282,7 @@ void net_resolve_player_colours(int8_t player_colours[MAX_NET_USERS], char *alli
     }
     int8_t slot_teams[MAX_NET_USERS];
     memset(slot_teams, -1, sizeof(slot_teams));
-    for (NetUserId user = 0; user < MAX_NET_USERS; user++) {
+    for (NetUserId user = 0; user < LOBBY_SEATS; user++) {
         if (player_colours[user] >= 0) {
             slot_teams[player_colours[user]] = net_player_team[user];
         }
@@ -292,10 +293,10 @@ void net_resolve_player_colours(int8_t player_colours[MAX_NET_USERS], char *alli
 
 void net_store_lobby_empty_seats(const int8_t player_slots[MAX_NET_USERS])
 {
-    net_lobby_empty_seats = 0;
-    for (PlayerNumber plyr_idx = 0; plyr_idx < MAX_NET_USERS; plyr_idx++) {
+    net_lobby_empty_seats = pmask_none();
+    for (PlayerNumber plyr_idx = 0; plyr_idx < LOBBY_SEATS; plyr_idx++) {
         if (net_user_with_value(player_slots, plyr_idx) < 0) {
-            set_flag(net_lobby_empty_seats, to_flag(plyr_idx));
+            pmask_add(&net_lobby_empty_seats, plyr_idx);
         }
     }
 }
@@ -307,7 +308,7 @@ TbBool net_lobby_computer_player(NetUserId user)
 
 static void clear_unoccupied_users(void)
 {
-    for (NetUserId user = 0; user < MAX_NET_USERS; user++) {
+    for (NetUserId user = 0; user < LOBBY_SEATS; user++) {
         if (!network_user_active(user) && !net_lobby_computer_player(user)) {
             net_player_colour[user] = -1;
             net_player_team[user] = -1;
@@ -318,7 +319,7 @@ static void clear_unoccupied_users(void)
 static void host_update_players(void)
 {
     clear_unoccupied_users();
-    for (NetUserId user = 0; user < MAX_NET_USERS; user++) {
+    for (NetUserId user = 0; user < LOBBY_SEATS; user++) {
         if (!network_user_active(user) && !net_lobby_computer_player(user)) {
             continue;
         }
@@ -493,11 +494,11 @@ void draw_out_of_sync_box(long a1, long a2, long box_width)
 
 void setup_alliances(void)
 {
-    for (int i = 0; i < MAX_NET_USERS; i++) {
+    for (int i = 0; i < LOBBY_SEATS; i++) {
         if (!player_exists(get_player(i))) {
             continue;
         }
-        for (int k = i + 1; k < MAX_NET_USERS; k++) {
+        for (int k = i + 1; k < LOBBY_SEATS; k++) {
             if (!player_exists(get_player(k))) {
                 continue;
             }
@@ -511,6 +512,7 @@ void setup_alliances(void)
 
 void frontnet_service_update(void)
 {
+    world_menu_test_tick();
     if (net_number_of_services < 1)
     {
         net_service_scroll_offset = 0;
@@ -797,7 +799,7 @@ static void process_frontend_packets(void)
         setting->values[my_player_number] = setting->requested;
       }
     }
-    if (host_packet->max_players >= MIN_NET_USERS && host_packet->max_players <= MAX_NET_USERS) {
+    if (host_packet->max_players >= MIN_NET_USERS && host_packet->max_players <= LOBBY_SEATS) {
       net_lobby_max_players = host_packet->max_players;
     }
     clear_unoccupied_users();
@@ -873,6 +875,7 @@ void handle_autostart_multiplayer_messaging(void)
 
 void frontnet_start_update(void)
 {
+    world_menu_test_tick();
     static TbClockMSec player_last_time = 0;
     SYNCDBG(18,"Starting");
     if (LbTimerClock() >= player_last_time+200)
@@ -976,11 +979,11 @@ void frontnet_start_setup(void)
     }
     memset(net_screen_packet, 0, sizeof(net_screen_packet));
     last_sent_screen_packet_time = 0;
-    net_lobby_max_players = MAX_NET_USERS;
+    net_lobby_max_players = LOBBY_SEATS;
     if (network_is_host()) {
         net_lobby_max_players = netstate.max_users;
     } else if (net_session_index_active >= 0 && net_session_index_active < net_number_of_sessions && net_session[net_session_index_active]->max_players >= MIN_NET_USERS) {
-        net_lobby_max_players = min(net_session[net_session_index_active]->max_players, MAX_NET_USERS);
+        net_lobby_max_players = min(net_session[net_session_index_active]->max_players, LOBBY_SEATS);
     }
     frontend_alliances = -1;
     net_number_of_messages = 0;

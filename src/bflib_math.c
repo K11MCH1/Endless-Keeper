@@ -801,8 +801,13 @@ long LbMathOperation(unsigned char opkind, long first_operand, long second_opera
   }
 }
 
+/* desync hunting: called for every draw when set (KFX_WORLD_RNGTRACE, world_stream.c) */
+void (*lb_random_trace)(const uint32_t *seed, unsigned long range, const char *func_name, unsigned long place) = NULL;
+
 unsigned long LbRandomSeries(unsigned long range, uint32_t *seed, const char *func_name, unsigned long place)
 {
+  if (lb_random_trace != NULL)
+    lb_random_trace(seed, range, func_name, place);
   if (range == 0)
     return 0;
   unsigned long i = 9377 * (*seed) + 9439;

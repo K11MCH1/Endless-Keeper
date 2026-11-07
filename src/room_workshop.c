@@ -38,6 +38,7 @@
 #include "creature_states.h"
 #include "keeperfx.hpp"
 #include "api.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -484,7 +485,7 @@ TbBool remove_workshop_object_from_player(PlayerNumber owner, ThingModel objmode
     } else {
         WARNLOG("Crate thing index %d isn't placed existing room; removing anyway",(int)cratetng->index);
     }
-    create_effect(&cratetng->mappos, imp_spangle_effects[get_player_color_idx(cratetng->owner)], cratetng->owner);
+    create_effect(&cratetng->mappos, imp_spangle_effects[world_display_colour(cratetng->owner)], cratetng->owner);
     destroy_object(cratetng);
     return true;
 }
@@ -898,7 +899,7 @@ void count_crates_in_room(struct Room *room)
         room->used_capacity = 0;
         room->capacity_used_for_storage = 0;
         unsigned long k = 0;
-        unsigned long i = room->slabs_list;
+        SlabCodedCoords i = room->slabs_list;
         while (i > 0)
         {
             MapSubtlCoord slb_x = slb_num_decode_x(i);

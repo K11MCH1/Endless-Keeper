@@ -67,6 +67,8 @@ struct LightsShadows {
 
 #pragma pack()
 /******************************************************************************/
+unsigned short *stat_light_cell(SubtlCodedCoords stl_num);
+unsigned short *lightness_cell(SubtlCodedCoords stl_num);
 long get_subtile_lightness(const struct LightsShadows * lish, MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 void clear_subtiles_lightness(struct LightsShadows * lish);
 

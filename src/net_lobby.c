@@ -36,6 +36,8 @@
 #include "player_data.h"
 #include "config_settings.h"
 #include <SDL3/SDL.h>
+#include "net_state.h"
+#include "server_admin.h"
 #include "post_inc.h"
 /******************************************************************************/
 
@@ -181,6 +183,8 @@ int32_t net_lobby_spectator_count(void)
     return count;
 }
 
+#define THIN_WATCHERS_MAX 8
+
 enum NetJoinRejection net_lobby_spectator_rejection(NetUserId reservation)
 {
     if (netstate.phase != NetPhase_InGame) {
@@ -191,7 +195,7 @@ enum NetJoinRejection net_lobby_spectator_rejection(NetUserId reservation)
     if (reserved) {
         returning = &netstate.users[reservation];
     }
-    if (!net_config_info.spectators_enabled && !network_spectator_seat_open(returning)) {
+    if (!net_config_info.spectators_enabled && !network_spectator_seat_open(returning) && !netstate_is_server()) {
         return NetJoin_SpectatorsDisabled;
     }
     int32_t count = net_lobby_spectator_count();
@@ -199,6 +203,11 @@ enum NetJoinRejection net_lobby_spectator_rejection(NetUserId reservation)
         count--;
     }
     if (count >= MAX_NET_SPECTATORS) {
+        return NetJoin_SpectatorsFull;
+    }
+    /* a thin-client server (an endless world): joiners come in as spectators and take a seat; with every seat taken,
+       a few may stay and watch (each is sent the whole world every turn) */
+    if (netstate_is_server() && !network_spectator_seat_open(returning) && (count >= THIN_WATCHERS_MAX)) {
         return NetJoin_SpectatorsFull;
     }
     return NetJoin_Accepted;
@@ -305,6 +314,18 @@ TbError process_login_message(NetUserId source, char *read_pos, const char *end_
     if (end_pos - read_pos >= 1 + sizeof(user->reconnect_token)) {
         memcpy(&user->reconnect_token, read_pos + 1, sizeof(user->reconnect_token));
     }
+    if (netstate_dedicated() && (source != SERVER_ID)) {
+        /* a dedicated server's bans (save/server_bans.txt): the login's token, its name or its address */
+        char ip[64] = "";
+        enet_user_address(source, ip, sizeof(ip));
+        if (server_admin_banned(user->reconnect_token, user->name, ip)) {
+            NETMSG("User %d (%s, %s) is banned", (int)source, user->name, ip);
+            server_admin_log("banned", "%s (%s) tried to join: banned", user->name, (ip[0] != '\0') ? ip : "?");
+            netstate.sp->drop_user(source, NetJoin_BannedJoin);
+            return Lb_OK;
+        }
+        server_admin_log("connect", "%s is connecting from %s", user->name, (ip[0] != '\0') ? ip : "?");
+    }
     enum NetJoinRejection reason = net_lobby_join_rejection();
     if (network_user_is_spectator(source)) {
         reason = net_lobby_spectator_rejection(source);
@@ -371,6 +392,12 @@ TbError process_user_update_message(NetUserId source, char *read_pos, const char
     return Lb_OK;
 }
 
+/** Forgets the addresses given before (a join from the World List starts from its own). */
+void LbNetwork_ClearCmdLineSessions(void)
+{
+    memset(sessions, 0, sizeof(sessions));
+}
+
 void LbNetwork_InitSessionsFromCmdLine(const char *str)
 {
     NETMSG("Initializing sessions from command line: %s", str);
@@ -386,6 +413,8 @@ void LbNetwork_InitSessionsFromCmdLine(const char *str)
     AddSessionSegment(start, end);
 }
 
+uint64_t net_local_reconnect_token(void);
+
 static uint64_t local_reconnect_token(void)
 {
     if (settings.reconnect_token == 0) {
@@ -393,6 +422,12 @@ static uint64_t local_reconnect_token(void)
         save_settings();
     }
     return settings.reconnect_token;
+}
+
+/** This machine's reconnect token (made and saved the first time). Endless worlds: the host's own seat's owner. */
+uint64_t net_local_reconnect_token(void)
+{
+    return local_reconnect_token();
 }
 
 TbError LbNetwork_ExchangeLogin(char *player_name)

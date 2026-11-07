@@ -39,10 +39,22 @@
 #include "post_inc.h"
 
 /******************************************************************************/
+/** game.players_extended: 0 nine players (stock), 1 sixteen (endless worlds before more), else the count. */
+int players_in_use(void)
+{
+    const int n = game.players_extended;
+    if (n == 0)
+        return STOCK_PLAYERS_COUNT;
+    if (n == 1)
+        return (PLAYERS_MAX < 16) ? PLAYERS_MAX : 16;
+    return (n > PLAYERS_MAX) ? PLAYERS_MAX : n;
+}
+
+/******************************************************************************/
 TbPixel player_path_colours[]  =     {131, 90, 163, 181,  20,   4, 106,  52,  42};
 TbPixel player_room_colours[]  =     {132, 92, 164, 183,  21, 132, 108,  54,  44};
 TbPixel player_flash_colours[] =     {133, 94, 167, 142,  31,  15, 110,  54,  46};
-TbPixel player_highlight_colours[] = {31,  31,  31,  31,  31,  31,  31,  31,  31};
+TbPixel player_highlight_colours[PLAYERS_MAX] = {[0 ... PLAYERS_MAX - 1] = 31}; /* indexed by owner */
 TbPixel possession_hit_colours[] =   {133, 89, 167, 141,  31,  31, 110,  54,  46};
 
 unsigned short const player_cubes[] = {0x00C0, 0x00C1, 0x00C2, 0x00C3, 0x00C7, 0x00C6 };
@@ -354,7 +366,7 @@ TbBool players_are_enemies(PlayerNumber origin_plyr_idx, PlayerNumber check_plyr
     if (!player_exists(check_player) && (!player_is_roaming(check_plyr_idx)))
         return false;
     // And if they're valid, living players - get result from alliances table
-    return !flag_is_set(origin_player->allied_players, to_flag(check_plyr_idx));
+    return !pmask_has(origin_player->allied_players, check_plyr_idx);
 }
 
 /**
@@ -379,7 +391,7 @@ TbBool players_are_mutual_allies(PlayerNumber plyr1_idx, PlayerNumber plyr2_idx)
         return false;
     if (!player_exists(player2))
         return false;
-    return (flag_is_set(player1->allied_players, to_flag(plyr2_idx)) && flag_is_set(player2->allied_players, to_flag(plyr1_idx)));
+    return (pmask_has(player1->allied_players, plyr2_idx) && pmask_has(player2->allied_players, plyr1_idx));
 }
 
 /**
@@ -400,7 +412,7 @@ TbBool players_creatures_tolerate_each_other(PlayerNumber plyr1_idx, PlayerNumbe
     struct PlayerInfo* player1 = get_player(plyr1_idx);
     struct PlayerInfo* player2 = get_player(plyr2_idx);
     // Check if we're allied
-    return (flag_is_set(player1->allied_players, to_flag(plyr2_idx)) && flag_is_set(player2->allied_players, to_flag(plyr1_idx)));
+    return (pmask_has(player1->allied_players, plyr2_idx) && pmask_has(player2->allied_players, plyr1_idx));
 }
 
 TbBool player_allied_with(const struct PlayerInfo *player, PlayerNumber ally_idx)
@@ -410,7 +422,7 @@ TbBool player_allied_with(const struct PlayerInfo *player, PlayerNumber ally_idx
         WARNLOG("Tried to get non-existing player!");
         return false;
     }
-    return flag_is_set(player->allied_players, to_flag(ally_idx));
+    return pmask_has(player->allied_players, ally_idx);
 }
 
 /**
@@ -440,7 +452,8 @@ TbBool player_is_friendly_or_defeated(PlayerNumber check_plyr_idx, PlayerNumber 
 void clear_players(void)
 {
     observer_reset();
-    for (int i = 0; i < PLAYERS_COUNT; i++)
+    game.players_extended = 0; /* a level uses nine players until an endless world turns the rest on */
+    for (int i = 0; i < PLAYERS_MAX; i++)
     {
         struct PlayerInfo* player = &game.players[i];
         memset(player, 0, sizeof(struct PlayerInfo));
@@ -484,7 +497,7 @@ void toggle_ally_with_player(PlayerNumber plyr_idx, PlayerNumber ally_idx)
     struct PlayerInfo* player = get_player(plyr_idx);
     if (player_invalid(player))
         return;
-    toggle_flag(player->allied_players, to_flag(ally_idx)); // toggle player ally_idx in player plyridx's allies list
+    pmask_put(&player->allied_players, ally_idx, !pmask_has(player->allied_players, ally_idx)); // toggle player ally_idx in player plyridx's allies list
 }
 
 TbBool set_ally_with_player(PlayerNumber plyr_idx, PlayerNumber ally_idx, TbBool make_ally)
@@ -495,9 +508,9 @@ TbBool set_ally_with_player(PlayerNumber plyr_idx, PlayerNumber ally_idx, TbBool
     if ((ally_idx < 0) || (ally_idx >= PLAYERS_COUNT))
         return false;
     if (make_ally)
-        set_flag(player->allied_players, to_flag(ally_idx)); // add player ally_idx to player plyridx's allies list
+        pmask_add(&player->allied_players, ally_idx); // add player ally_idx to player plyridx's allies list
     else // enemy
-        clear_flag(player->allied_players, to_flag(ally_idx)); // remove player ally_idx from player plyridx's allies list
+        pmask_del(&player->allied_players, ally_idx); // remove player ally_idx from player plyridx's allies list
 
     return true;
 }
@@ -511,7 +524,7 @@ TbBool is_player_ally_locked(PlayerNumber plyr_idx, PlayerNumber ally_idx)
     if ((ally_idx < 0) || (ally_idx >= PLAYERS_COUNT))
         return false;
 
-    return flag_is_set(player->players_with_locked_ally_status, to_flag(ally_idx)); // returns true if player ally_idx's ally status is locked for player plyridx
+    return pmask_has(player->players_with_locked_ally_status, ally_idx); // returns true if player ally_idx's ally status is locked for player plyridx
 }
 
 void set_player_ally_locked(PlayerNumber plyr_idx, PlayerNumber ally_idx, TbBool lock_alliance)
@@ -524,9 +537,9 @@ void set_player_ally_locked(PlayerNumber plyr_idx, PlayerNumber ally_idx, TbBool
         return;
 
     if (lock_alliance)
-        set_flag(player->players_with_locked_ally_status, to_flag(ally_idx)); // lock ally player's ally status with player plyridx
+        pmask_add(&player->players_with_locked_ally_status, ally_idx); // lock ally player's ally status with player plyridx
     else
-        clear_flag(player->players_with_locked_ally_status, to_flag(ally_idx)); // unlock ally player's ally status with player plyridx
+        pmask_del(&player->players_with_locked_ally_status, ally_idx); // unlock ally player's ally status with player plyridx
 }
 
 void set_user_work_state_kind(struct UserState *ustate, int32_t chosen_kind)

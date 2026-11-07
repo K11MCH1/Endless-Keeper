@@ -96,7 +96,7 @@ static const struct luaL_Reg slab_methods[] = {
 
     if (strcmp(key, "revealed") == 0) {
         struct Map* mapblk = get_map_block_at(slb_x * STL_PER_SLB, slb_y * STL_PER_SLB);
-        mapblk->revealed = lua_toboolean(L, 3);
+        mapblk->revealed = pmask_from_u32(lua_toboolean(L, 3) ? 1u : 0u);
     } else if (strcmp(key, "owner") == 0) {
         set_slab_owner(slb_x, slb_y, luaL_checkPlayerSingle(L, 3));
     } else if (strcmp(key, "kind") == 0) {
@@ -104,7 +104,7 @@ static const struct luaL_Reg slab_methods[] = {
         place_slab_type_on_map(luaL_checkNamedCommand(L, 3, slab_desc), slab_subtile_center(slb_x), slab_subtile_center(slb_y), slabmap_owner(slb), 0);
     } else if (strcmp(key, "style") == 0) {
         SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
-        game.slab_ext_data[slb_num] = luaL_checkNamedCommand(L, 3, texture_pack_desc);
+        (*slab_ext_ptr(slb_num)) = luaL_checkNamedCommand(L, 3, texture_pack_desc);
     }
     return 0;
  }
@@ -124,7 +124,7 @@ static const struct luaL_Reg slab_methods[] = {
 
     if (strcmp(key, "revealed") == 0) {
         const struct Map* mapblk = get_map_block_at(slb_x * STL_PER_SLB, slb_y * STL_PER_SLB);
-       lua_pushboolean(L, mapblk->revealed);
+       lua_pushboolean(L, pmask_any(mapblk->revealed));
     } else if (strcmp(key, "owner") == 0) {
         struct SlabMap *slb = get_slabmap_block(slb_x, slb_y);
         lua_pushPlayer(L, slabmap_owner(slb));
@@ -133,7 +133,7 @@ static const struct luaL_Reg slab_methods[] = {
         lua_pushstring(L, get_conf_parameter_text(slab_desc,slb->kind));
     } else if (strcmp(key, "style") == 0) {
         SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
-        lua_pushstring(L, get_conf_parameter_text(texture_pack_desc,game.slab_ext_data[slb_num]));
+        lua_pushstring(L, get_conf_parameter_text(texture_pack_desc,(*slab_ext_ptr(slb_num))));
     } else if (strcmp(key, "centerpos") == 0) {
         struct Coord3d centerpos;
         centerpos.x.val = subtile_coord_center(slab_subtile_center(slb_x));

@@ -44,6 +44,7 @@
 #include "game_legacy.h"
 
 #include "keeperfx.hpp"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -289,7 +290,7 @@ CrStateRet creature_add_lair_to_room(struct Thing *creatng, struct Room *room)
     }
 
     thing_play_sample(creatng, 158, NORMAL_PITCH, 0, 3, 1, 2, FULL_LOUDNESS);
-    create_effect(&creatng->mappos, imp_spangle_effects[get_player_color_idx(creatng->owner)], creatng->owner);
+    create_effect(&creatng->mappos, imp_spangle_effects[world_display_colour(creatng->owner)], creatng->owner);
     remove_thing_from_mapwho(creatng);
     place_thing_in_mapwho(creatng);
     return CrStRet_ResetOk;
@@ -502,13 +503,13 @@ short creature_going_home_to_sleep(struct Thing *thing)
 long room_has_slab_adjacent(const struct Room *room, long slbkind)
 {
     unsigned long k = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         // Per room tile code
         for (long n = 0; n < AROUND_SLAB_LENGTH; n++)
         {
-            long slab_num = i + game.around_slab[n];
+            SlabCodedCoords slab_num = i + game.around_slab[n];
             struct SlabMap* slb = get_slabmap_direct(slab_num);
             if (!slabmap_block_invalid(slb))
             {

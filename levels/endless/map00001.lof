@@ -1,0 +1,8 @@
+; KeeperFX Level Overview File (LOF)
+MAP_FORMAT_VERSION = 1.06
+NAME_TEXT = Endless Mode
+KIND = FREE
+AUTHOR = Endless Keeper
+DESCRIPTION = Endless Mode: a new generated world for every run
+MAPSIZE = 162 162
+PLAYERS = 4

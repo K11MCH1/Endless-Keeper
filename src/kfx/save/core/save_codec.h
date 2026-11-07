@@ -15,7 +15,10 @@ extern "C" {
 #endif
 /******************************************************************************/
 #define SAVE_FORMAT_MAJOR 1
-#define SAVE_FORMAT_MINOR 9
+#define SAVE_FORMAT_MINOR 16 /* 10: user_states has 8 entries (was 4); 11: 13, and players 10-15; 12: player masks are
+                                 sets of 32-bit words (word 0 keeps the old name); 13: players 16-31, user_states 29,
+                                 packets 32; 14: players 32-103 (sets of 4 words), user_states 101, packets 104;
+                                 15: things 32767 (synced again from 12288), creature controls 4096; 16: rooms 4095 */
 #define SAVE_MIN_READABLE_MAJOR 1
 #define SAVE_MAGIC_SIZE 8
 #define SAVE_HEADER_SIZE 20
@@ -41,6 +44,8 @@ enum SaveChunkId {
     SCID_Level   = SAVE_FOURCC('I','L','V','L'),
     /** The serialised Lua state. */
     SCID_Lua     = SAVE_FOURCC('L','U','A',' '),
+    /** Endless world (world_stream.c): chunk store and map memory. Not required: other builds skip it. */
+    SCID_World   = SAVE_FOURCC('W','R','L','D'),
     /** A count-prefixed run of same-typed records, concatenated with no per-record framing (decode
      *  advances by each record's own decoded byte count). Used by the smaller files that hold an
      *  array of one struct type, such as the high scores. */

@@ -575,7 +575,7 @@ struct Room *get_opponent_room(struct Computer2 *comp, PlayerNumber plyr_idx)
 struct Room *get_hated_room_for_quick_attack(struct Computer2 *comp)
 {
     SYNCDBG(8,"Starting for player %d",(int)comp->dungeon->owner);
-    struct THate hates[PLAYERS_COUNT];
+    struct THate hates[PLAYERS_MAX];
     get_opponent(comp, hates);
     // note that 'i' is not player index, player index is inside THate struct
     for (long i = 0; i < PLAYERS_COUNT; i++)
@@ -1233,7 +1233,7 @@ TbBool computer_check_for_expand_specific_room(struct Computer2 *comp, struct Co
         return false;
     }
     unsigned long k = 0;
-    unsigned long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         struct SlabMap* slb = get_slabmap_direct(i);

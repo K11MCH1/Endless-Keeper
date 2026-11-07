@@ -22,7 +22,7 @@
 #include "bflib_basics.h"
 #include "globals.h"
 
-#define TRIANLGLES_COUNT 100000
+#define TRIANLGLES_COUNT 400000 /* 100000 before */
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,14 +34,14 @@ extern "C" {
 struct Point;
 
 struct Triangle {
-  short points[3];
+  int32_t points[3]; /* point numbers (16 bits before: at most 32767 points) */
   int tags[3]; // Id of each triangle neighbour of this one
   NavColour tree_alt; // NAV_COL_UNSET is a special value here
   unsigned char navigation_flags;
   unsigned short region_and_edgelen;
 };
 
-#define NAV_COL_UNSET USHRT_MAX
+#define NAV_COL_UNSET UINT32_MAX
 
 /******************************************************************************/
 extern struct Triangle Triangles[TRIANLGLES_COUNT];

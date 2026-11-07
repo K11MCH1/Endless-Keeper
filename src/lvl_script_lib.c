@@ -284,6 +284,8 @@ void set_variable(int player_idx, long var_type, long var_idx, long new_val)
         set_script_flag(player_idx, var_idx, new_val);
         break;
     case SVar_CAMPAIGN_FLAG:
+        if (game.players_extended && (player_idx >= PLAYERS_FOR_CAMPAIGN_FLAGS))
+            break; /* rows 0-4 only */
         intralvl.campaign_flags[player_idx][var_idx] = new_val;
         break;
     case SVar_BOX_ACTIVATED:

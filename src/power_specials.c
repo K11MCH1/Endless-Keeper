@@ -46,6 +46,8 @@
 #include "lua_triggers.h"
 
 #include "keeperfx.hpp"
+#include "world_pages.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -331,11 +333,88 @@ TbBool steal_hero(struct PlayerInfo *player, struct Coord3d *pos)
     return true;
 }
 
+/* Paged mode (world_pages.h): the virtual map is far too big for an area map indexed by slab number, so make_safe()'s
+ * area map covers the loaded chunks' bounding box (local index (y - y1) * w + (x - x1)) and its slab list holds local
+ * indexes; every slab outside the box shares one extra cell at index w * h, marked as done (as are unloaded slabs). */
+static MapSlabCoord safe_box_x1 = 0, safe_box_y1 = 0, safe_box_w = 0, safe_box_h = 0;
+
+/** Index of a slab in make_safe()'s area map: the slab number normally, the local index in paged mode. */
+static SlabCodedCoords safe_area_index(MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    if (!world_paged)
+        return get_slab_number(slb_x, slb_y);
+    if ((slb_x < safe_box_x1) || (slb_x >= safe_box_x1 + safe_box_w)
+     || (slb_y < safe_box_y1) || (slb_y >= safe_box_y1 + safe_box_h))
+        return (SlabCodedCoords)safe_box_w * safe_box_h;
+    return (SlabCodedCoords)(slb_y - safe_box_y1) * safe_box_w + (slb_x - safe_box_x1);
+}
+
+/** Slab coordinates of an area map index (as slb_num_decode_x/y normally). */
+static MapSlabCoord safe_area_decode_x(SlabCodedCoords area_idx)
+{
+    if (!world_paged)
+        return slb_num_decode_x(area_idx);
+    return safe_box_x1 + (MapSlabCoord)(area_idx % (SlabCodedCoords)safe_box_w);
+}
+
+static MapSlabCoord safe_area_decode_y(SlabCodedCoords area_idx)
+{
+    if (!world_paged)
+        return slb_num_decode_y(area_idx);
+    return safe_box_y1 + (MapSlabCoord)(area_idx / (SlabCodedCoords)safe_box_w);
+}
+
+/** The slab of an area map index (get_slabmap_direct() normally). */
+static struct SlabMap *safe_area_slabmap(SlabCodedCoords area_idx, MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    if (!world_paged)
+        return get_slabmap_direct(area_idx);
+    return get_slabmap_block(slb_x, slb_y);
+}
+
 void make_safe(struct PlayerInfo *player)
 {
     unsigned char* areamap = (unsigned char*)big_scratch;
     MapSlabCoord slb_x;
     MapSlabCoord slb_y;
+    SlabCodedCoords* slblist;
+    if (world_paged)
+    {
+        // Paged mode: the area map covers the loaded chunks' bounding box, plus the outside cell
+        MapSlabCoord bx1, by1, bx2, by2;
+        map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
+        if ((bx1 > bx2) || (by1 > by2))
+            return;
+        safe_box_x1 = bx1;
+        safe_box_y1 = by1;
+        safe_box_w = bx2 - bx1 + 1;
+        safe_box_h = by2 - by1 + 1;
+        size_t cells = (size_t)safe_box_w * safe_box_h;
+        size_t list_offs = (cells + 1 + 7) & ~(size_t)7;
+        if (list_offs + cells * sizeof(SlabCodedCoords) > 16u * 1024 * 1024) {
+            WARNLOG("Loaded area of %dx%d slabs is too big to make safe",(int)safe_box_w,(int)safe_box_h);
+            return;
+        }
+        for (slb_y=0; slb_y < safe_box_h; slb_y++)
+        {
+            for (slb_x=0; slb_x < safe_box_w; slb_x++)
+            {
+                SlabCodedCoords slb_num = (SlabCodedCoords)slb_y * safe_box_w + slb_x;
+                struct SlabMap* slb = get_slabmap_block(safe_box_x1 + slb_x, safe_box_y1 + slb_y);
+                struct SlabConfigStats* slabst = get_slab_stats(slb);
+                if (slabmap_block_invalid(slb))
+                    areamap[slb_num] = 0x02;
+                else
+                if ((slabst->block_flags & (SlbAtFlg_Filled|SlbAtFlg_Digable|SlbAtFlg_Valuable)) != 0)
+                    areamap[slb_num] = 0x01;
+                else
+                    areamap[slb_num] = 0x00;
+            }
+        }
+        areamap[cells] = 0x02;
+        slblist = (SlabCodedCoords*)(big_scratch + list_offs);
+    } else
+    {
     // Prepare the array to remember which slabs were already taken care of
     for (slb_y=0; slb_y < game.map_tiles_y; slb_y++)
     {
@@ -350,16 +429,17 @@ void make_safe(struct PlayerInfo *player)
                 areamap[slb_num] = 0x00;
         }
     }
+    slblist = (SlabCodedCoords*)(big_scratch + game.map_tiles_x * game.map_tiles_y);
+    }
     {
         const struct Coord3d* center_pos = dungeon_get_essential_pos(player->id_number);
         slb_x = subtile_slab(center_pos->x.stl.num);
         slb_y = subtile_slab(center_pos->y.stl.num);
-        SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
+        SlabCodedCoords slb_num = safe_area_index(slb_x, slb_y);
         areamap[slb_num] |= 0x02;
     }
 
     PlayerNumber plyr_idx = player->id_number;
-    SlabCodedCoords* slblist = (SlabCodedCoords*)(big_scratch + game.map_tiles_x * game.map_tiles_y);
     unsigned int list_len = 0;
     unsigned int list_cur = 0;
     struct Room* room_list[ROOMS_COUNT + 1];
@@ -371,11 +451,11 @@ void make_safe(struct PlayerInfo *player)
 
         if (slb_x > 0)
         {
-            slb_num = get_slab_number(slb_x-1, slb_y);
+            slb_num = safe_area_index(slb_x-1, slb_y);
             if ((areamap[slb_num] & 0x01) != 0)
             {
                 areamap[slb_num] |= 0x02;
-                struct SlabMap* slb = get_slabmap_direct(slb_num);
+                struct SlabMap* slb = safe_area_slabmap(slb_num, slb_x-1, slb_y);
                 struct SlabConfigStats* slabst = get_slab_stats(slb);
                 if ((slabst->category == SlbAtCtg_FriableDirt) && slab_by_players_land(plyr_idx, slb_x-1, slb_y))
                 {
@@ -394,11 +474,11 @@ void make_safe(struct PlayerInfo *player)
         }
         if (slb_x < game.map_tiles_x-1)
         {
-            slb_num = get_slab_number(slb_x+1, slb_y);
+            slb_num = safe_area_index(slb_x+1, slb_y);
             if ((areamap[slb_num] & 0x01) != 0)
             {
                 areamap[slb_num] |= 0x02;
-                struct SlabMap* slb = get_slabmap_direct(slb_num);
+                struct SlabMap* slb = safe_area_slabmap(slb_num, slb_x+1, slb_y);
                 struct SlabConfigStats* slabst = get_slab_stats(slb);
                 if ((slabst->category == SlbAtCtg_FriableDirt) &&  slab_by_players_land(plyr_idx, slb_x+1, slb_y))
                 {
@@ -417,11 +497,11 @@ void make_safe(struct PlayerInfo *player)
         }
         if (slb_y > 0)
         {
-            slb_num = get_slab_number(slb_x, slb_y-1);
+            slb_num = safe_area_index(slb_x, slb_y-1);
             if ((areamap[slb_num] & 0x01) != 0)
             {
                 areamap[slb_num] |= 0x02;
-                struct SlabMap* slb = get_slabmap_direct(slb_num);
+                struct SlabMap* slb = safe_area_slabmap(slb_num, slb_x, slb_y-1);
                 struct SlabConfigStats* slabst = get_slab_stats(slb);
                 if ((slabst->category == SlbAtCtg_FriableDirt) && slab_by_players_land(plyr_idx, slb_x, slb_y-1))
                 {
@@ -440,11 +520,11 @@ void make_safe(struct PlayerInfo *player)
         }
         if (slb_y < game.map_tiles_y-1)
         {
-            slb_num = get_slab_number(slb_x, slb_y+1);
+            slb_num = safe_area_index(slb_x, slb_y+1);
             if ((areamap[slb_num] & 0x01) != 0)
             {
                 areamap[slb_num] |= 0x02;
-                struct SlabMap* slb = get_slabmap_direct(slb_num);
+                struct SlabMap* slb = safe_area_slabmap(slb_num, slb_x, slb_y+1);
                 struct SlabConfigStats* slabst = get_slab_stats(slb);
                 if ((slabst->category == SlbAtCtg_FriableDirt) && slab_by_players_land(plyr_idx, slb_x, slb_y+1))
                 {
@@ -462,8 +542,8 @@ void make_safe(struct PlayerInfo *player)
             }
         }
 
-        slb_x = slb_num_decode_x(slblist[list_cur]);
-        slb_y = slb_num_decode_y(slblist[list_cur]);
+        slb_x = safe_area_decode_x(slblist[list_cur]);
+        slb_y = safe_area_decode_y(slblist[list_cur]);
         list_cur++;
     }
     recalculate_rooms_in_list(room_list, sizeof(room_list)/sizeof(room_list[0]));
@@ -483,9 +563,13 @@ void make_unsafe(PlayerNumber plyr_idx)
     struct Room* room_list[ROOMS_COUNT + 1];
     memset(room_list, 0, sizeof(room_list));
 
-    for (slb_y = 0; slb_y < game.map_tiles_y; slb_y++)
+    // Paged mode: only the loaded chunks' bounding box
+    MapSlabCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_tiles_x - 1, loop_y2 = game.map_tiles_y - 1;
+    if (world_paged)
+        map_loop_slab_bounds(&loop_x1, &loop_y1, &loop_x2, &loop_y2);
+    for (slb_y = loop_y1; slb_y <= loop_y2; slb_y++)
     {
-        for (slb_x = 0; slb_x < game.map_tiles_x; slb_x++)
+        for (slb_x = loop_x1; slb_x <= loop_x2; slb_x++)
         {
             slb_num = get_slab_number(slb_x, slb_y);
             slb = get_slabmap_direct(slb_num);
@@ -515,6 +599,8 @@ void make_unsafe(PlayerNumber plyr_idx)
 void activate_dungeon_special(struct Thing *cratetng, struct PlayerInfo *player)
 {
     SYNCDBG(6,"Starting");
+    if (world_progress_activate(cratetng, player))
+        return; /* endless worlds: a research or lore book */
     struct Coord3d pos;
 
     lua_on_special_box_activate(player->id_number,cratetng);
@@ -767,7 +853,7 @@ long create_transferred_creatures_on_level(void)
     struct CreatureControl* cctrl;
     long creature_created = 0;
     PlayerNumber plyr_idx;
-    for (int p = 0; p < PLAYERS_COUNT; p++)
+    for (int p = 0; p < STOCK_PLAYERS_COUNT; p++)
     {
         plyr_idx = game.neutral_player_num;
         for (int i = 0; i < TRANSFER_CREATURE_STORAGE_COUNT; i++)

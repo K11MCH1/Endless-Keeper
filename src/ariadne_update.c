@@ -28,6 +28,7 @@
 #include "kfx/profiling/KfxProfilingC.h"
 
 
+#include "world_pages.h"
 #include "post_inc.h"
 
 
@@ -37,7 +38,19 @@ extern "C" {
 #endif
 
 /******************************************************************************/
-#define navmap_tile_number(stl_x,stl_y) ((stl_y)*game.navigation_map_size_x+(stl_x))
+/* The navigation map as the triangulation reads it: a frame with an origin and a row length. Normal levels:
+ * origin 0,0 and the navigation map's row length (exactly the old indexing). Paged mode (chunked endless world):
+ * the frame is a dense copy of the area being triangulated (nav_triangulate_paged). */
+static long nav_frame_x0 = 0;
+static long nav_frame_y0 = 0;
+static long nav_frame_stride = 0; /* 0: game.navigation_map_size_x */
+#define nav_stride() (nav_frame_stride ? nav_frame_stride : (long)game.navigation_map_size_x)
+#define navmap_tile_number(stl_x,stl_y) ((int64_t)((stl_y) - nav_frame_y0)*nav_stride()+((stl_x) - nav_frame_x0))
+#define FRINGE_Y(x) fringe_y[(x) - nav_frame_x0]
+/** The colour of anything that can't be walked: blocking blocks, and chunks that aren't loaded. */
+#define NAV_COL_BLOCKED ((NavColour)(NAVMAP_FLOORHEIGHT_MAX << NAVMAP_FLOORHEIGHT_BIT))
+/** Paged triangulation works in tiles of at most this many subtiles (fringe_y holds MAX_SUBTILES_Y). */
+#define NAV_PAGED_TILE (8 * WP_CHUNK_STL)
 
 
 static TbBool tri_initialised;
@@ -569,13 +582,13 @@ static long fringe_scan(int32_t *outfri_x, int32_t *outfri_y, int32_t *outlen_x,
     dist_x = 0;
     for (loc_x = fringe_x1; loc_x < fringe_x2; )
     {
-        if (fringe_y[loc_x] < sub_y)
+        if (FRINGE_Y(loc_x) < sub_y)
         {
-          sub_y = fringe_y[loc_x];
+          sub_y = FRINGE_Y(loc_x);
           sub_x = loc_x;
           for (loc_x++; loc_x < fringe_x2; loc_x++)
           {
-              if (sub_y != fringe_y[loc_x])
+              if (sub_y != FRINGE_Y(loc_x))
                 break;
           }
           dist_x = loc_x - sub_x;
@@ -607,7 +620,7 @@ static long fringe_get_rectangle(int32_t *outfri_x1, int32_t *outfri_y1, int32_t
         return 0;
     }
     NavColour *fri_map;
-    fri_map = &fringe_map[get_subtile_number(fri_x,fri_y)];
+    fri_map = &fringe_map[navmap_tile_number(fri_x,fri_y)];
     // Find dx and dy
     long dx;
     long dy;
@@ -620,13 +633,13 @@ static long fringe_get_rectangle(int32_t *outfri_x1, int32_t *outfri_y1, int32_t
     for (dy = 1; dy < len_y; dy++)
     {
         // Our data is 0-terminated, so we can use string functions to compare
-        if (memcmp(&fri_map[(game.map_subtiles_x + 1) * dy], &fri_map[0], dx*sizeof(NavColour)) != 0) {
+        if (memcmp(&fri_map[nav_stride() * dy], &fri_map[0], dx*sizeof(NavColour)) != 0) {
             break;
         }
     }
     long i;
     for (i = 0; i < dx; i++) {
-        fringe_y[fri_x+i] = fri_y+dy;
+        FRINGE_Y(fri_x+i) = fri_y+dy;
     }
     *oval = fri_map[0];
     *outfri_x1 = fri_x;
@@ -1155,7 +1168,7 @@ static TbBool border_clip_vertical(const NavColour *imap, long start_x, long end
     return clipping_successful;
 }
 
-static long triangle_area1(long tri_idx)
+static long long triangle_area1(long tri_idx)
 {
     int ptidx0;
     int ptidx1;
@@ -1165,8 +1178,9 @@ static long triangle_area1(long tri_idx)
     ptidx2 = Triangles[tri_idx].points[2];
     long long area1;
     long long area2;
-    area1 = (ari_Points[ptidx2].x - (int)ari_Points[ptidx0].x) * (ari_Points[ptidx0].y - (int)ari_Points[ptidx1].y);
-    area2 = (ari_Points[ptidx1].x - (int)ari_Points[ptidx0].x) * (ari_Points[ptidx2].y - (int)ari_Points[ptidx0].y);
+    /* in 64 bits: with 32-bit points a triangle over an endless map can be millions of subtiles wide */
+    area1 = (long long)(ari_Points[ptidx2].x - ari_Points[ptidx0].x) * (long long)(ari_Points[ptidx0].y - ari_Points[ptidx1].y);
+    area2 = (long long)(ari_Points[ptidx1].x - ari_Points[ptidx0].x) * (long long)(ari_Points[ptidx2].y - ari_Points[ptidx0].y);
     return llabs(area1+area2);
 }
 
@@ -1214,7 +1228,7 @@ static void brute_fill_rectangle(long start_x, long start_y, long end_x, long en
                 {
                     tri->tree_alt = ntree_alt;
                     area += triangle_area1(tri_idx);
-                    if (2 * (end_x - start_x) * (end_y - start_y) == area) {
+                    if (2 * (long long)(end_x - start_x) * (end_y - start_y) == area) {
                         break;
                     }
                 }
@@ -1234,9 +1248,9 @@ static void fill_rectangle_f(long start_x, long start_y, long end_x, long end_y,
     int32_t tri_k2;
     int32_t tri_n3;
     int32_t tri_k3;
-    long tri_area;
-    long req_area;
-    req_area = 2 * (end_x - start_x) * (end_y - start_y);
+    long long tri_area;
+    long long req_area;
+    req_area = 2 * (long long)(end_x - start_x) * (end_y - start_y);
     if (!edge_find(start_x, start_y, start_x, end_y, &tri_n0, &tri_k0))
     {
         ERRORMSG("%s: edge from (%d,%d) to (%d,%d) not found",func_name,(int)start_x, (int)start_y, (int)start_x, (int)end_y);
@@ -1582,7 +1596,7 @@ static TbBool triangulate_area(NavColour *imap, long start_x, long start_y, long
         fringe_y2 = end_y;
         for (i = start_x; i < end_x; i++)
         {
-            fringe_y[i] = start_y;
+            FRINGE_Y(i) = start_y;
         }
         while ( fringe_get_rectangle(&rect_sx, &rect_sy, &rect_ex, &rect_ey, &ccolour) )
         {
@@ -1606,10 +1620,50 @@ static TbBool triangulate_area(NavColour *imap, long start_x, long start_y, long
     return triangulation_successful;
 }
 
+/** The owner sets of the triangulation (NAVMAP_OWNERSET_EXT): index 0 is unused. */
+static PlayerBitFlags nav_owner_sets[NAVMAP_OWNER_SETS_MAX];
+static uint32_t nav_owner_set_count = 1;
+
+NavColour navmap_owner_bits(PlayerBitFlags players)
+{
+    PlayerBitFlags high = players;
+    high.w[0] &= ~0xFFFFu;
+    if (!pmask_any(high))
+        return (NavColour)((pmask_low32(players) & 0xFFFFu) << NAVMAP_OWNERSELECT_BIT);
+    for (uint32_t i = 1; i < nav_owner_set_count; i++)
+    {
+        if (pmask_equal(nav_owner_sets[i], players))
+            return NAVMAP_OWNERSET_EXT | (NavColour)(i << NAVMAP_OWNERSELECT_BIT);
+    }
+    if (nav_owner_set_count >= NAVMAP_OWNER_SETS_MAX)
+    {
+        static TbBool told = false;
+        if (!told)
+            ERRORLOG("Navigation: more than %d different sets of players blocked by doors; the rest block nobody", NAVMAP_OWNER_SETS_MAX);
+        told = true;
+        return 0;
+    }
+    nav_owner_sets[nav_owner_set_count] = players;
+    return NAVMAP_OWNERSET_EXT | (NavColour)((nav_owner_set_count++) << NAVMAP_OWNERSELECT_BIT);
+}
+
+TbBool navmap_owner_blocks(NavColour colour, PlayerNumber plyr_idx)
+{
+    if ((colour & NAVMAP_OWNERSET_EXT) != 0)
+    {
+        uint32_t i = (colour & NAVMAP_OWNERSELECT_MASK) >> NAVMAP_OWNERSELECT_BIT;
+        return (i < nav_owner_set_count) && pmask_has(nav_owner_sets[i], plyr_idx);
+    }
+    if ((plyr_idx < 0) || (plyr_idx >= 16))
+        return false;
+    return ((colour >> (NAVMAP_OWNERSELECT_BIT + plyr_idx)) & 1) != 0;
+}
+
 static NavColour get_navigation_colour_for_door(long stl_x, long stl_y)
 {
     struct Thing *doortng;
     NavColour colour = (1 << NAVMAP_FLOORHEIGHT_BIT);
+    PlayerBitFlags blocked = pmask_none();
 
     doortng = get_door_for_position(stl_x, stl_y);
     if (thing_is_invalid(doortng))
@@ -1623,10 +1677,10 @@ static NavColour get_navigation_colour_for_door(long stl_x, long stl_y)
         if ((players_are_mutual_allies(plyr_idx,doortng->owner) && doortng->door.is_locked) ||
             door_is_hidden_to_player(doortng,plyr_idx))
         {
-            colour |= 1 << (NAVMAP_OWNERSELECT_BIT + plyr_idx);
+            pmask_add(&blocked, plyr_idx);
         }
     }
-    return colour;
+    return colour | navmap_owner_bits(blocked);
 
 }
 
@@ -1658,8 +1712,69 @@ static NavColour get_navigation_colour(long stl_x, long stl_y)
     return get_navigation_colour_for_cube(stl_x, stl_y);
 }
 
+/** A subtile's stored navigation colour: game.navigation_map, or its chunk page in paged mode (a chunk that isn't
+ *  loaded gives a scratch cell holding the blocked colour). */
+static NavColour *navmap_cell(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+{
+    if (world_paged)
+    {
+        static NavColour scratch;
+        struct WorldPage *pg = wp_page_of_subtile(stl_x, stl_y);
+        if (pg != NULL)
+            return &pg->nav[wp_stl_index(stl_x, stl_y)];
+        scratch = NAV_COL_BLOCKED;
+        return &scratch;
+    }
+    return &game.navigation_map[(int64_t)stl_y * game.navigation_map_size_x + stl_x];
+}
+
+NavColour navmap_colour_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+{
+    return *navmap_cell(stl_x, stl_y);
+}
+
+/** Paged mode: triangulates an area (end exclusive, as triangulate_area) from a dense copy of its colours with
+ *  a 2-subtile margin, in tiles of at most NAV_PAGED_TILE subtiles. */
+static TbBool nav_triangulate_paged(long start_x, long start_y, long end_x, long end_y)
+{
+    TbBool ok = true;
+    for (long ty = start_y; ty < end_y; ty += NAV_PAGED_TILE)
+    {
+        for (long tx = start_x; tx < end_x; tx += NAV_PAGED_TILE)
+        {
+            long sx = tx, sy = ty, ex = min(tx + NAV_PAGED_TILE, end_x), ey = min(ty + NAV_PAGED_TILE, end_y);
+            long bx0 = sx - 2, by0 = sy - 2, w = (ex + 2) - bx0 + 1, h = (ey + 2) - by0 + 1;
+            NavColour *buf = (NavColour *)malloc(sizeof(NavColour) * w * h);
+            if (buf == NULL)
+                return false;
+            for (long y = 0; y < h; y++)
+                for (long x = 0; x < w; x++)
+                    buf[y * w + x] = *navmap_cell(bx0 + x, by0 + y);
+            nav_frame_x0 = bx0;
+            nav_frame_y0 = by0;
+            nav_frame_stride = w;
+            ok &= triangulate_area(buf, sx, sy, ex, ey);
+            nav_frame_x0 = 0;
+            nav_frame_y0 = 0;
+            nav_frame_stride = 0;
+            LastTriangulatedMap = NULL; /* the copy is gone; paged reads go through navmap_colour_at */
+            free(buf);
+        }
+    }
+    return ok;
+}
+
 static void init_navigation_map(void)
 {
+    if (world_paged)
+    {
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+            for (int ly = 0; ly < WP_CHUNK_STL; ly++)
+                for (int lx = 0; lx < WP_CHUNK_STL; lx++)
+                    pg->nav[ly * WP_CHUNK_STL + lx] = get_navigation_colour(pg->cx * WP_CHUNK_STL + lx, pg->cy * WP_CHUNK_STL + ly);
+        nav_map_initialised = 1;
+        return;
+    }
     MapSubtlCoord stl_x;
     MapSubtlCoord stl_y;
     memset(game.navigation_map, 0, sizeof(NavColour)*game.navigation_map_size_x*game.navigation_map_size_y);
@@ -1677,6 +1792,22 @@ void rebuild_navigation(void)
 {
     ix_Border = 0;
     navitree_reset();
+    if (world_paged)
+    {
+        /* the whole virtual map starts blocked (unloaded chunks); the loaded area is clipped into it */
+        long size_x = game.map_subtiles_x + 1, size_y = game.map_subtiles_y + 1;
+        /* a margin of 2^20 subtiles: the mesh stays below 2^23 subtiles across (map units fit 32 bits) */
+        triangulation_initxy(-(1L << 20), -(1L << 20), size_x + (1L << 20), size_y + (1L << 20));
+        tri_set_rectangle(0, 0, size_x, size_y, NAV_COL_BLOCKED);
+        MapSubtlCoord x1, y1, x2, y2;
+        map_loop_subtile_bounds(&x1, &y1, &x2, &y2);
+        if (x1 <= x2)
+            nav_triangulate_paged(x1, y1, x2 + 1, y2 + 1);
+        nav_map_initialised = 1;
+        set_nav_rule_default();
+        game.map_changed_for_navigation = 1;
+        return;
+    }
     triangulate_area(game.navigation_map, 0, 0, game.navigation_map_size_x, game.navigation_map_size_y);
     nav_map_initialised = 1;
     set_nav_rule_default();
@@ -1703,6 +1834,8 @@ size_t transfer_navigation_state(void *buffer, enum NavigationStateOperation ope
         {game.navigation_map, sizeof(game.navigation_map)},
         {&ix_Border, sizeof(ix_Border)},
         {Border, sizeof(Border)},
+        {nav_owner_sets, sizeof(nav_owner_sets)},
+        {&nav_owner_set_count, sizeof(nav_owner_set_count)},
     };
     size_t offset = 0;
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
@@ -1719,8 +1852,15 @@ size_t transfer_navigation_state(void *buffer, enum NavigationStateOperation ope
     return offset;
 }
 
+void navigation_colours_refresh(void)
+{
+    init_navigation_map();
+}
+
 int32_t init_navigation(void)
 {
+    /* a new triangulation: no colour refers to an owner set any more */
+    nav_owner_set_count = 1;
     init_navigation_map();
     rebuild_navigation();
     return 1;
@@ -1761,19 +1901,43 @@ long update_navigation_triangulation(long start_x, long start_y, long end_x, lon
         for (x = sx; x <= ex; x++)
         {
             NavColour color = get_navigation_colour(x, y);
-            if (game.navigation_map[navmap_tile_number(x,y)] != color) {
-                game.navigation_map[navmap_tile_number(x,y)] = color;
+            if (*navmap_cell(x, y) != color) {
+                *navmap_cell(x, y) = color;
                 changed = true;
             }
         }
     }
     if (changed) {
         game.map_changed_for_navigation = 1;
-        triangulate_area(game.navigation_map, sx, sy, ex, ey);
+        if (world_paged)
+            nav_triangulate_paged(sx, sy, ex, ey);
+        else
+            triangulate_area(game.navigation_map, sx, sy, ex, ey);
     }
 
     KFX_C_ZONE_END(ctx_update_nav);
     return true;
+}
+
+/** Paged mode: a chunk was loaded or freed in this area (inclusive subtiles). The loaded subtiles' colours are
+ *  recomputed and the area is triangulated again, changed or not: a freed chunk's cells read as blocked, but
+ *  its triangles are still in the mesh. */
+void nav_refresh_area(MapSubtlCoord x1, MapSubtlCoord y1, MapSubtlCoord x2, MapSubtlCoord y2)
+{
+    if (!world_paged)
+        return;
+    if (!nav_map_initialised)
+        init_navigation_map();
+    x1 = max(x1, 2); y1 = max(y1, 2);
+    x2 = min(x2, game.map_subtiles_x - 2); y2 = min(y2, game.map_subtiles_y - 2);
+    if ((x2 < x1) || (y2 < y1))
+        return;
+    for (MapSubtlCoord y = y1; y <= y2; y++)
+        for (MapSubtlCoord x = x1; x <= x2; x++)
+            if (wp_page_of_subtile(x, y) != NULL)
+                *navmap_cell(x, y) = get_navigation_colour(x, y);
+    game.map_changed_for_navigation = 1;
+    nav_triangulate_paged(x1, y1, x2 + 1, y2 + 1); /* end exclusive, as in rebuild_navigation */
 }
 
 /******************************************************************************/

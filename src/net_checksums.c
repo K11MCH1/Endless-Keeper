@@ -100,8 +100,8 @@ TbBigChecksum get_thing_checksum(const struct Thing* thing) {
         CHECKSUM_ADD(checksum, cctrl->pickup_creature_id);
         CHECKSUM_ADD(checksum, cctrl->move_flags);
         CHECKSUM_ADD(checksum, cctrl->digger.stack_update_turn);
-        CHECKSUM_ADD(checksum, cctrl->digger.working_stl);
-        CHECKSUM_ADD(checksum, cctrl->digger.task_stl);
+        CHECKSUM_ADD(checksum, cctrl->digger_working_stl);
+        CHECKSUM_ADD(checksum, cctrl->digger_task_stl);
         CHECKSUM_ADD(checksum, cctrl->digger.consecutive_reinforcements);
         CHECKSUM_ADD(checksum, cctrl->digger.last_did_job);
         CHECKSUM_ADD(checksum, cctrl->digger.task_stack_pos);
@@ -282,9 +282,9 @@ void update_turn_checksums(void) {
     snapshot_info->room_count = 0;
     memset(snapshot_info->dig_task_counts, 0, sizeof(snapshot_info->dig_task_counts));
     if (network_is_active()) {
-        for (int i = 1; i < SYNCED_THINGS_COUNT; i++) {
+        for (int i = 1; i < THINGS_COUNT; i++) {
             struct Thing* thing = thing_get(i);
-            if (!thing_exists(thing) || is_non_synchronized_thing_class(thing->class_id)) {
+            if (!thing_index_synced(i) || !thing_exists(thing) || is_non_synchronized_thing_class(thing->class_id)) {
                 continue;
             }
             struct LogThingDesyncInfo* thing_snapshot = &snapshot_info->things[snapshot_info->thing_count++];
@@ -322,8 +322,8 @@ void update_turn_checksums(void) {
                 thing_snapshot->digger_pickup_creature_id = cctrl->pickup_creature_id;
                 thing_snapshot->digger_move_flags = cctrl->move_flags;
                 thing_snapshot->digger_stack_update_turn = cctrl->digger.stack_update_turn;
-                thing_snapshot->digger_working_stl = cctrl->digger.working_stl;
-                thing_snapshot->digger_task_stl = cctrl->digger.task_stl;
+                thing_snapshot->digger_working_stl = cctrl->digger_working_stl;
+                thing_snapshot->digger_task_stl = cctrl->digger_task_stl;
                 thing_snapshot->digger_task_idx = cctrl->digger.task_idx;
                 thing_snapshot->digger_consecutive_reinforcements = cctrl->digger.consecutive_reinforcements;
                 thing_snapshot->digger_last_did_job = cctrl->digger.last_did_job;
@@ -494,22 +494,22 @@ static void log_thing_differences(struct LogDetailedSnapshot* client, const char
                 (long)client_thing->veloc_push_add.x.val, (long)client_thing->veloc_push_add.y.val, (long)client_thing->veloc_push_add.z.val);
             if (client_thing->is_special_digger) {
                 if (host_thing != NULL) {
-                    ERRORLOG("    [Host]   digger moveto=(%ld,%ld,%ld) dragtng=%d arming=%d pickup_obj=%d pickup_cr=%d move_flags=%u stack_update_turn=%ld working_stl=%u task_stl=%u task_idx=%u consecutive_reinforcements=%u last_did_job=%u task_stack_pos=%u task_repeats=%u",
+                    ERRORLOG("    [Host]   digger moveto=(%ld,%ld,%ld) dragtng=%d arming=%d pickup_obj=%d pickup_cr=%d move_flags=%u stack_update_turn=%ld working_stl=%lld task_stl=%lld task_idx=%u consecutive_reinforcements=%u last_did_job=%u task_stack_pos=%u task_repeats=%u",
                         (long)host_thing->digger_moveto_pos.x.val, (long)host_thing->digger_moveto_pos.y.val, (long)host_thing->digger_moveto_pos.z.val,
                         (int)host_thing->digger_dragtng_idx, (int)host_thing->digger_arming_thing_id,
                         (int)host_thing->digger_pickup_object_id, (int)host_thing->digger_pickup_creature_id,
                         (unsigned)host_thing->digger_move_flags, (long)host_thing->digger_stack_update_turn,
-                        (unsigned)host_thing->digger_working_stl, (unsigned)host_thing->digger_task_stl,
+                        (long long)host_thing->digger_working_stl, (long long)host_thing->digger_task_stl,
                         (unsigned)host_thing->digger_task_idx, (unsigned)host_thing->digger_consecutive_reinforcements,
                         (unsigned)host_thing->digger_last_did_job,
                         (unsigned)host_thing->digger_task_stack_pos, (unsigned)host_thing->digger_task_repeats);
                 }
-                ERRORLOG("    [Client] digger moveto=(%ld,%ld,%ld) dragtng=%d arming=%d pickup_obj=%d pickup_cr=%d move_flags=%u stack_update_turn=%ld working_stl=%u task_stl=%u task_idx=%u consecutive_reinforcements=%u last_did_job=%u task_stack_pos=%u task_repeats=%u",
+                ERRORLOG("    [Client] digger moveto=(%ld,%ld,%ld) dragtng=%d arming=%d pickup_obj=%d pickup_cr=%d move_flags=%u stack_update_turn=%ld working_stl=%lld task_stl=%lld task_idx=%u consecutive_reinforcements=%u last_did_job=%u task_stack_pos=%u task_repeats=%u",
                     (long)client_thing->digger_moveto_pos.x.val, (long)client_thing->digger_moveto_pos.y.val, (long)client_thing->digger_moveto_pos.z.val,
                     (int)client_thing->digger_dragtng_idx, (int)client_thing->digger_arming_thing_id,
                     (int)client_thing->digger_pickup_object_id, (int)client_thing->digger_pickup_creature_id,
                     (unsigned)client_thing->digger_move_flags, (long)client_thing->digger_stack_update_turn,
-                    (unsigned)client_thing->digger_working_stl, (unsigned)client_thing->digger_task_stl,
+                    (long long)client_thing->digger_working_stl, (long long)client_thing->digger_task_stl,
                     (unsigned)client_thing->digger_task_idx, (unsigned)client_thing->digger_consecutive_reinforcements,
                     (unsigned)client_thing->digger_last_did_job,
                     (unsigned)client_thing->digger_task_stack_pos, (unsigned)client_thing->digger_task_repeats);

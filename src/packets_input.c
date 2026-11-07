@@ -49,6 +49,7 @@
 #include "engine_render.h"
 #include "config_settings.h"
 #include "keeperfx.hpp"
+#include "world_pages.h"
 #include "post_inc.h"
 
 extern TbBool process_dungeon_control_packet_spell_overcharge(NetUserId user);
@@ -283,6 +284,13 @@ TbBool process_dungeon_control_packet_dungeon_control(NetUserId user)
             if (apply_roomspace_tag) {
                 MapSlabCoord previous_slb_x = (uint16_t)pckt->actn_par3 & 0xFF;
                 MapSlabCoord previous_slb_y = (uint16_t)pckt->actn_par3 >> 8;
+                if (world_paged)
+                {
+                    /* chunked world: the packet carries the low 8 bits of each; the previous slab is the nearest
+                       one to the cursor with those bits (the cursor moves far less than 128 slabs a turn) */
+                    previous_slb_x = subtile_slab(stl_x) + (int8_t)(uint8_t)(previous_slb_x - subtile_slab(stl_x));
+                    previous_slb_y = subtile_slab(stl_y) + (int8_t)(uint8_t)(previous_slb_y - subtile_slab(stl_y));
+                }
                 apply_roomspace_dig_tag_selection(plyr_idx, &ustate->render_roomspace, previous_slb_x, previous_slb_y, ustate->roomspace_highlight_mode, NULL);
             }
         }

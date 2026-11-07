@@ -75,6 +75,7 @@ int LbCtz64(uint64_t x);
 int32_t LbArcTanAngle(int32_t x,int32_t y);
 long LbMathOperation(unsigned char opkind, long first_operand, long second_operand);
 unsigned long LbRandomSeries(unsigned long range, uint32_t *seed, const char *func_name, unsigned long place);
+extern void (*lb_random_trace)(const uint32_t *seed, unsigned long range, const char *func_name, unsigned long place);
 TbBool LbNumberSignsSame(long num_a, long num_b);
 char LbCompareMultiplications(long mul1a, long mul1b, long mul2a, long mul2b);
 long LbDiagonalLength(long a, long b);

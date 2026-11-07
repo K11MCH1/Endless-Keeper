@@ -48,6 +48,7 @@
 #include "gui_topmsg.h"
 #include "game_legacy.h"
 #include "map_locations.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1110,7 +1111,7 @@ short good_leave_through_exit_door(struct Thing *thing)
         creature_drop_dragged_object(thing, dragtng);
         destroy_object(dragtng);
     }
-    create_effect(&thing->mappos, ball_puff_effects[get_player_color_idx(thing->owner)], thing->owner);
+    create_effect(&thing->mappos, ball_puff_effects[world_display_colour(thing->owner)], thing->owner);
     place_thing_in_creature_controlled_limbo(thing);
     internal_set_thing_state(thing, CrSt_GoodWaitInExitDoor);
     return 1;
@@ -1461,7 +1462,7 @@ long creature_tunnel_to(struct Thing *creatng, struct Coord3d *pos, short speed)
         creature_set_speed(creatng, 0);
         return 1;
     }
-    long i = cctrl->party.tunnel_steps_counter;
+    SubtlCodedCoords i = cctrl->party.tunnel_steps_counter;
     if ((i > 0) && (i < INT32_MAX))
     {
         cctrl->party.tunnel_steps_counter++;
@@ -1473,7 +1474,7 @@ long creature_tunnel_to(struct Thing *creatng, struct Coord3d *pos, short speed)
         pos->z.val = get_thing_height_at(creatng, pos);
         initialise_wallhugging_path_from_to(&cctrl->navi, &creatng->mappos, pos);
     }
-    long tnlret = get_next_position_and_angle_required_to_tunnel_creature_to(creatng, pos, cctrl->party.tunnel_dig_direction);
+    long tnlret = get_next_position_and_angle_required_to_tunnel_creature_to(creatng, pos, pmask_from_u32((uint16_t)cctrl->party.tunnel_dig_direction));
     if (tnlret == 2)
     {
         i = cctrl->navi.first_colliding_block;

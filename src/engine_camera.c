@@ -37,6 +37,7 @@
 #include "player_instances.h"
 #include "frontmenu_ingame_map.h"
 #include "local_camera.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -101,6 +102,15 @@ MapCoordDelta get_2d_distance(const struct Coord3d *pos1, const struct Coord3d *
 
 MapCoordDelta get_2d_distance_squared(const struct Coord3d *pos1, const struct Coord3d *pos2)
 {
+    if (world_mode_active())
+    {
+        /* endless levels: the square passes 32 bits from about 60 slabs apart (raid tunnellers head for a heart
+           100 slabs away), so it is worked out in 64 bits and saturates instead of wrapping */
+        const int64_t dx = (int64_t)pos1->x.val - (int64_t)pos2->x.val;
+        const int64_t dy = (int64_t)pos1->y.val - (int64_t)pos2->y.val;
+        const int64_t d = dx * dx + dy * dy;
+        return (d > INT32_MAX) ? INT32_MAX : (MapCoordDelta)d;
+    }
     long dist_x = (long)pos1->x.val - (long)pos2->x.val;
     long dist_y = (long)pos1->y.val - (long)pos2->y.val;
     return dist_x * dist_x + dist_y * dist_y;

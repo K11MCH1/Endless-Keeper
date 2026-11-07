@@ -109,7 +109,14 @@
 #include "lua_triggers.h"
 
 #include "keeperfx.hpp"
+#include "world_stream.h"
+#include "world_menu.h"
+#include "world_pages.h"
+#include "net_state.h"
 #include "post_inc.h"
+
+/* the double-click arrays (frontend.h) are indexed by user: one for every packet */
+_Static_assert(FRONTEND_CLICK_USERS >= PACKETS_COUNT, "packet_left_button_* need an entry for every user");
 
 #ifdef __cplusplus
 extern "C" {
@@ -333,6 +340,8 @@ void process_pause_packet(long curr_pause, long new_pause)
   TbBool can = true;
   for (NetUserId user = 0; user < MAX_NET_USERS; user++)
   {
+    if (!user_present(user))
+        continue; /* an empty user slot has no player (it logged an error for each) */
     player = get_user_player(user);
     if (is_active_keeper(player) && (player->allocflags & PlaF_CompCtrl) == 0)
     {
@@ -441,10 +450,33 @@ static int camera_position_shift(void)
     return shift;
 }
 
+/* The paged world's map coordinates don't fit 16 bits: there the fields carry them modulo PAGED_CAM_PERIOD, in
+ * 2-unit steps, and the reader takes the value nearest the camera it updates. */
+#define PAGED_CAM_PERIOD 0xFFFF
+
+static uint16_t wrap_paged_camera_coord(MapCoord v)
+{
+    return (uint16_t)((((uint32_t)max(v, 0)) >> 1) % PAGED_CAM_PERIOD + 1);
+}
+
+static MapCoord unwrap_paged_camera_coord(uint16_t v, MapCoord ref)
+{
+    const int64_t low = (int64_t)v - 1;
+    const int64_t num = ((int64_t)max(ref, 0) >> 1) - low + PAGED_CAM_PERIOD / 2;
+    const int64_t k = (num >= 0) ? (num / PAGED_CAM_PERIOD) : -((-num + PAGED_CAM_PERIOD - 1) / PAGED_CAM_PERIOD);
+    return (MapCoord)(((low + k * PAGED_CAM_PERIOD) << 1) + 1);
+}
+
 void packet_set_camera_position(struct Packet *pckt, MapCoord x, MapCoord y)
 {
     if (!packet_action_has_camera_position(pckt->action))
         return;
+    if (world_paged)
+    {
+        pckt->cam_x = wrap_paged_camera_coord(x);
+        pckt->cam_y = wrap_paged_camera_coord(y);
+        return;
+    }
     const int shift = camera_position_shift();
     pckt->cam_x = (uint16_t)((max(x, 0) >> shift) + 1);
     pckt->cam_y = (uint16_t)((max(y, 0) >> shift) + 1);
@@ -464,6 +496,12 @@ TbBool packet_get_camera_position(const struct Packet *pckt, MapCoord *x, MapCoo
         return false;
     if (pckt->cam_x == 0 || pckt->cam_y == 0)
         return false;
+    if (world_paged)
+    {
+        *x = unwrap_paged_camera_coord(pckt->cam_x, *x);
+        *y = unwrap_paged_camera_coord(pckt->cam_y, *y);
+        return true;
+    }
     const int shift = camera_position_shift();
     const MapCoord half = (1 << shift) >> 1;
     *x = (((MapCoord)pckt->cam_x - 1) << shift) + half;
@@ -573,8 +611,8 @@ static void process_dungeon_camera_controls(NetUserId user, const struct Packet 
     struct DungeonCamera *dcam = &ustate->dungeon_camera;
     const unsigned char view_mode = get_dungeon_view_mode(ustate);
     const TbBool front_view = ustate->prefs[UPref_FrontView] != 0;
-    MapCoord x;
-    MapCoord y;
+    MapCoord x = dcam->x; /* the reference for the paged world's wrapped packet positions */
+    MapCoord y = dcam->y;
     // Iso and front share a position; any other camera's position isn't the dungeon camera's.
     if (is_dungeon_camera_index(packet_camera_context(pckt)) && is_dungeon_camera_index(get_user_active_camera_index(user))
      && !player_instance_controls_camera(ustate->instance_num) && packet_get_camera_position(pckt, &x, &y))
@@ -801,12 +839,18 @@ TbBool process_user_global_packet_action(NetUserId user)
       return 1;
   }
 
+  // Endless world: a click on the full-screen map outside the loaded window moves the window there first
+  if (pckt->action == PckA_ZoomFromMap)
+      world_zoom_from_map(user, &pckt->actn_par1, &pckt->actn_par2);
   process_dungeon_camera_action(user, pckt);
+  if (pckt->action == PckA_ZoomFromMap)
+      world_after_zoom_from_map(user);
 
   switch (pckt->action) {
   case PckA_QuitToMainMenu:
       if ((user == get_local_user()) && !replay.load_enable)
       {
+        world_autosave("quit"); // Endless Mode: the run's autosave slot
         turn_off_all_menus();
         frontend_save_continue_game(true);
         free_swipe_graphic();
@@ -818,6 +862,7 @@ TbBool process_user_global_packet_action(NetUserId user)
       {
         if ((user == get_local_user()) && !replay.load_enable)
         {
+          world_autosave("close"); // Endless Mode: the run's autosave slot
           turn_off_all_menus();
           frontend_save_continue_game(true);
           free_swipe_graphic();
@@ -1480,6 +1525,14 @@ static void load_old_packets(void)
     MULTIPLAYER_LOG("load_input_lag_packets: current_turn=%lu historical_turn=%lu", (unsigned long)get_gameturn(), (unsigned long)historical_turn);
 
     for (int i = 0; i < PACKETS_COUNT; i++) {
+        if (netstate_is_server() && (i != SERVER_ID)) {
+            /* thin-client play: the client's next input, whenever it came */
+            if (user_present(i))
+                netstate_server_take_input(i, &game.packets[i]);
+            else
+                memset(&game.packets[i], 0, sizeof(struct Packet));
+            continue;
+        }
         const char* player_name = (i == 0) ? "Host" : "Client";
         const struct Packet *packet = get_history_packet(i, historical_turn);
         if (packet != NULL) {
@@ -1498,7 +1551,21 @@ static void load_old_packets(void)
             MULTIPLAYER_LOG("load_input_lag_packets: cleared packet[%s] (no stored packet)", player_name);
         }
     }
-    input_lag_observe_host_packet(&game.packets[SERVER_ID]);
+    if (!netstate_is_server())
+        input_lag_observe_host_packet(&game.packets[SERVER_ID]);
+}
+
+/** Thin-client play: fills the local packet as exchange_packets does before sending it (camera, possession,
+ *  cursor, dig tags, timestamps). */
+void prepare_local_packet_for_send(void)
+{
+    update_dig_tag_input();
+    if (!replay.load_enable) {
+        set_pending_timestamp_packet_action(get_local_packet());
+        camera_packet_set_state(get_local_packet());
+        set_packet_possession_target(get_local_packet());
+        observer_set_packet_cursor(get_local_packet());
+    }
 }
 
 void set_local_packet_turn(void) {
@@ -1529,8 +1596,10 @@ enum PacketExchangeResult exchange_packets(void)
             return PExR_Advance;
         }
     }
+    if (netstate_is_server())
+        game.input_lag_turns = 0; /* thin-client play: inputs are taken as they come */
     if (!replay.load_enable) {
-        if (!spectator) {
+        if (!spectator && !netstate_is_server()) {
             input_lag_update(my_packet);
         }
         set_local_packet_turn();
@@ -1579,7 +1648,7 @@ enum PacketExchangeResult exchange_packets(void)
             return result;
         }
     }
-    if (input_lag_skips_processing()) {
+    if (!netstate_is_server() && input_lag_skips_processing()) {
         clear_packets();
     } else {
         if (network_is_active()) {
@@ -1588,7 +1657,7 @@ enum PacketExchangeResult exchange_packets(void)
         }
         if (netstate.resync_pending) {
             MULTIPLAYER_LOG("process_packets: Skipping checksums, resync data is pending");
-        } else if (network_is_active() && checksums_different()) {
+        } else if (network_is_active() && !netstate_thin_mode() && checksums_different()) {
             set_flag(local_system_flags, GSF_NetGameNoSync);
             clear_flag(local_system_flags, GSF_NetSeedNoSync);
         } else {
@@ -1644,7 +1713,7 @@ void process_packets(void)
         }
         struct PlayerInfo* packet_player = get_player(plyr_idx);
         if (player_exists(packet_player) && ((packet_player->allocflags & PlaF_CompCtrl) == 0)) {
-            process_user_packet(user);
+            WORLD_PROF(WPS_PkUsers, process_user_packet(user));
         }
     }
     update_dig_prediction_cursor_preview();
@@ -1658,7 +1727,7 @@ void process_packets(void)
     if (quit_game || exit_keeper) {
         return;
     }
-    if (network_is_active() && !network_user_is_spectator(netstate.my_id) && (netstate.resync_pending || (local_system_flags & (GSF_NetGameNoSync | GSF_NetSeedNoSync)) != 0)) {
+    if (network_is_active() && !netstate_thin_mode() && !network_user_is_spectator(netstate.my_id) && (netstate.resync_pending || (local_system_flags & (GSF_NetGameNoSync | GSF_NetSeedNoSync)) != 0)) {
         if (netstate.resync_pending || (network_is_host() && resync_game_allowed())) {
             SYNCDBG(0,"Resyncing");
             resync_game();

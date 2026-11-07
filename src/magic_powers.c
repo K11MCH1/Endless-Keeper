@@ -62,6 +62,7 @@
 #include "creature_instances.h"
 #include "map_locations.h"
 #include "lua_triggers.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1164,7 +1165,7 @@ static TbResult magic_use_power_hold_audience(PowerKind power_kind, PlayerNumber
         // Thing list loop body
         if (!thing_is_picked_up(thing) && !creature_is_kept_in_custody(thing) && !creature_is_being_unconscious(thing) && !creature_is_leaving_and_cannot_be_stopped(thing))
         {
-            create_effect(&thing->mappos, imp_spangle_effects[get_player_color_idx(thing->owner)], thing->owner);
+            create_effect(&thing->mappos, imp_spangle_effects[world_display_colour(thing->owner)], thing->owner);
             const struct Coord3d *pos;
             pos = dungeon_get_essential_pos(thing->owner);
             move_thing_in_map(thing, pos);

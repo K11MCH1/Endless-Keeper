@@ -36,6 +36,8 @@ long update_navigation_triangulation(long start_x, long start_y, long end_x, lon
 int32_t init_navigation(void);
 void rebuild_navigation(void);
 size_t transfer_navigation_state(void *buffer, enum NavigationStateOperation operation);
+/** Recomputes the navigation colours from the map, leaving the mesh as it is (after a network resync). */
+void navigation_colours_refresh(void);
 
 /******************************************************************************/
 #ifdef __cplusplus

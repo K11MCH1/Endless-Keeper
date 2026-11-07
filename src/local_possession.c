@@ -35,6 +35,7 @@
 #include "thing_creature.h"
 #include "thing_data.h"
 #include "thing_physics.h"
+#include "net_state.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -300,7 +301,10 @@ static void play_predicted_sounds(struct Thing *thing)
 void update_local_possession(void)
 {
     struct Thing *thing = thing_get(get_local_user_state()->controlled_thing_idx);
-    if (!network_is_active() || observer_is_active() || (get_user_view_type(get_my_user()) != PVT_CreatureContrl) || !thing_is_creature(thing)
+    /* a thin client (endless worlds) predicts nothing: the server takes its input at once and sends every turn. The
+       prediction would step the creature with no input (its packet history is keyed by input number, not turn), and
+       the correction taken from that pulled the view behind the creature */
+    if (!network_is_active() || netstate_is_client() || observer_is_active() || (get_user_view_type(get_my_user()) != PVT_CreatureContrl) || !thing_is_creature(thing)
      || !flag_is_set(thing->alloc_flags, TAlF_IsControlled)) {
         prediction.valid = false;
         possession_pause_pending = false;

@@ -28,7 +28,7 @@
 extern "C" {
 #endif
 
-#define PACKETS_COUNT           9
+#define PACKETS_COUNT           PLAYERS_MAX /* one per user: at least MAX_NET_USERS */
 #define NET_LEAVE_TIMED_OUT     1
 
 /******************************************************************************/
@@ -56,8 +56,14 @@ TbBool network_human_contenders_remain(void);
 void resolve_placeholders(void);
 void hand_waiting_placeholders_to_ai(void);
 void seat_network_user(NetUserId user, PlayerNumber plyr_idx, const UserPreferences seat_prefs);
+/** Thin-client play: opens this running single-player endless world to the network (Open to LAN). */
+TbBool network_open_running_game(void);
+/** An endless save was loaded outside a network game: a world saved while it served plays on in single player. */
+void network_after_save_loaded(void);
 void process_user_leave_game_packet(NetUserId user);
 void process_disconnected_network_players(void);
+TbBool network_thin_client_server_gone(void);
+void network_thin_client_leave(TbBool close_app);
 TbBool user_present(NetUserId user);
 void host_spoof_dropped_user_packets(void);
 void sync_initial_network_seed(void);

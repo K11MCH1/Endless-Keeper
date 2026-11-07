@@ -29,6 +29,10 @@
 #include "keeperfx.hpp"
 #include <stddef.h>
 #include <SDL3/SDL.h>
+#include "net_state.h"
+#include "world_stream.h"
+#include "bflib_enet.h"
+#include "server_admin.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -49,7 +53,6 @@ struct SpectatorTurn {
 #define SPECTATOR_TURN_BUFFER_SIZE 256
 #define SPECTATOR_CONVERSION_REPLY_SIZE 2
 #define SPECTATOR_SEAT_REPLY_SIZE 3
-#define ALL_NET_CONNECTIONS_MASK ((UINT64_C(1) << MAX_NET_CONNECTIONS) - 1)
 
 enum SpectatorNotice {
     SpectatorNotice_Left,
@@ -78,7 +81,7 @@ static size_t spectator_resync_size;
 static struct SpectatorTurn spectator_resync_turns[SPECTATOR_TURN_BUFFER_SIZE];
 static int32_t spectator_resync_turn_count;
 TbBool network_spectator_desynced;
-static uint64_t network_spectators;
+static NetUserMask network_spectators;
 TbBool network_spectator_resync_pending;
 TbBool network_spectator_resync_requested;
 TbBool network_spectator_chat_visible;
@@ -158,7 +161,7 @@ TbError process_network_spectator_notice(NetUserId source, const char *buffer, s
     return Lb_OK;
 }
 
-static void send_spectator_notice(NetUserId user, enum SpectatorNotice notice, uint64_t recipients)
+static void send_spectator_notice(NetUserId user, enum SpectatorNotice notice, NetUserMask recipients)
 {
     char *write_pos = begin_net_message(NETMSG_SPECTATOR_NOTICE);
     *write_pos++ = notice;
@@ -174,15 +177,18 @@ void network_spectator_notify(NetUserId user, TbBool joined)
     if (!network_is_host() || !network_user_is_spectator(user) || netstate.phase != NetPhase_InGame) {
         return;
     }
+    if (joined && netstate_thin_mode() && !netstate.users[user].spectator_conversion_requested) {
+        return; /* an endless world: told when it is seated ("has joined the game"), or when no seat is free */
+    }
     enum SpectatorNotice notice = SpectatorNotice_Left;
     if (joined && netstate.users[user].spectator_conversion_requested) {
         notice = SpectatorNotice_BecameSpectator;
     } else if (joined) {
         notice = SpectatorNotice_Joined;
     }
-    uint64_t recipients = ALL_NET_CONNECTIONS_MASK;
+    NetUserMask recipients = ALL_NET_CONNECTIONS_MASK;
     if (!joined) {
-        recipients &= ~(UINT64_C(1) << user);
+        numask_del(&recipients, user);
     }
     send_spectator_notice(user, notice, recipients);
 }
@@ -208,9 +214,9 @@ TbError process_network_spectator_chat(NetUserId source, const char *buffer, siz
         }
         icon = netstate.users[source].spectator_icon;
         netstate.msg_buffer[2] = icon;
-        uint64_t recipients = ALL_NET_CONNECTIONS_MASK & ~ALL_NET_USERS_MASK;
+        NetUserMask recipients = numask_andnot(ALL_NET_CONNECTIONS_MASK, ALL_NET_USERS_MASK);
         if (net_config_info.spectator_chat) {
-            recipients |= ALL_NET_USERS_MASK;
+            recipients = numask_or(recipients, ALL_NET_USERS_MASK);
         }
         send_to_active_peers(1, NetSend_Reliable, netstate.msg_buffer, size + 1, recipients);
     } else if (source != SERVER_ID) {
@@ -227,10 +233,10 @@ TbError process_network_spectator_chat(NetUserId source, const char *buffer, siz
 
 void network_spectator_update_roles(void)
 {
-    network_spectators = 0;
+    network_spectators = numask_none();
     for (NetUserId id = MAX_NET_USERS; id < MAX_NET_CONNECTIONS; id++) {
         if (IsUserActive(id) && netstate.users[id].spectator_state == NetSpectator_Streaming) {
-            network_spectators |= UINT64_C(1) << id;
+            numask_add(&network_spectators, id);
         }
     }
 }
@@ -240,7 +246,7 @@ void network_spectator_clear_roles(void)
     if (network_user_is_spectator(netstate.my_id)) {
         return_to_player_camera();
     }
-    network_spectators = 0;
+    network_spectators = numask_none();
     spectator_send_turn_pending = 0;
 }
 
@@ -355,13 +361,218 @@ static void seat_spectator(NetUserId spectator_id, NetUserId player_id)
     SendNewUserUpdates(player_id);
     UpdateLocalPlayerInfo(player_id);
     seat_network_user(player_id, plyr_idx, player->seat_prefs);
-    netstate.resync_pending = true;
+    if (!netstate_thin_mode())
+        netstate.resync_pending = true;
+}
+
+/** Thin-client play (a server people join and leave): a joiner that has loaded the level becomes a player. A
+ *  returning player (the same name as a departed seat's keeper) gets that seat; a new one a free seat with a new start
+ *  dungeon. With no free seat or user slot the joiner stays a spectator. */
+static void reset_local_spectator(void);
+static void start_spectating(PlayerNumber camera_player_number);
+
+/** Dedicated server: the host plays no keeper. It watches as an observer, and its keeper (the world's first start)
+ *  becomes a free seat for the first player who joins. */
+void network_host_become_observer(void)
+{
+    const PlayerNumber camera = my_player_number;
+    struct PlayerInfo *player = get_player(camera);
+    set_net_user_player_number(SERVER_ID, PLAYER_NONE);
+    player->allocflags |= PlaF_Placeholder;
+    /* a new world: the first start is anyone's; a resumed world: its keeper waits for its player (by name) */
+    if (game.play_gameturn < 100)
+        player->player_name[0] = 0;
+    reset_local_spectator();
+    start_spectating(camera);
+    SYNCLOG("Server: dedicated, the host watches; player %d is free for the first to join", (int)camera);
+}
+
+/* a seated player's connection quiet this long: a joiner with its name is that player coming back */
+#define THIN_RECONNECT_QUIET_MS 10000
+
+/** Another joiner already has this name (a second window on the same PC shares its settings): a name of its own. */
+static void thin_unique_name(NetUserId id)
+{
+    char base[NET_USER_NAME_SIZE];
+    snprintf(base, sizeof(base), "%s", netstate.users[id].name);
+    for (int k = 2; k < 100; k++) {
+        char suffix[8];
+        snprintf(suffix, sizeof(suffix), " (%d)", k);
+        char candidate[NET_USER_NAME_SIZE];
+        const int keep = (int)(sizeof(candidate) - 1 - strlen(suffix));
+        snprintf(candidate, sizeof(candidate), "%.*s%s", keep, base, suffix);
+        TbBool used = false;
+        for (NetUserId u = 0; (u < MAX_NET_CONNECTIONS) && !used; u++) {
+            used = (u != id) && IsUserActive(u) && (strcmp(netstate.users[u].name, candidate) == 0);
+        }
+        if (!used) {
+            SYNCLOG("Server: %s is already here; the new one is %s", base, candidate);
+            snprintf(netstate.users[id].name, sizeof(netstate.users[id].name), "%s", candidate);
+            return;
+        }
+    }
+}
+
+/** A token's k-th variant: a second window with the same settings (one PC) is a player of its own. */
+static uint64_t thin_token_variant(uint64_t token, int k)
+{
+    return (k <= 1) ? token : (token ^ (UINT64_C(0x9E3779B97F4A7C15) * (uint64_t)k));
+}
+
+/** The connected user playing the seat with this token, or INVALID_USER_ID. */
+static NetUserId thin_token_holder(uint64_t token)
+{
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++) { /* the players this world has */
+        if (world_seat_token(p) != token) {
+            continue;
+        }
+        const NetUserId u = get_player_primary_user(get_player(p));
+        if ((u >= 0) && (u < MAX_NET_USERS) && IsUserActive(u)) {
+            return u;
+        }
+    }
+    return INVALID_USER_ID;
+}
+
+static void thin_drop_stale(NetUserId u, const char *name, int quiet_ms)
+{
+    NETLOG("User %d (%s) reconnected; dropping the old connection (quiet for %d ms)", u, name, quiet_ms);
+    SYNCLOG("Server: %s reconnected; the old connection goes", name);
+    netstate.sp->drop_user(u, NetJoin_Accepted);
+    netstate.users_timed_out[u] = true;
+}
+
+static void thin_seat_joiners(void)
+{
+    static NetUserMask full_noted;
+    if ((game.play_gameturn % 100) == 0) {
+        full_noted = numask_none(); /* seats free up: try again */
+    }
+    for (NetUserId spectator_id = MAX_NET_USERS; spectator_id < MAX_NET_CONNECTIONS; spectator_id++) {
+        struct NetUser *spectator = &netstate.users[spectator_id];
+        if (!IsUserActive(spectator_id)) {
+            numask_del(&full_noted, spectator_id);
+            continue;
+        }
+        if ((spectator->spectator_state != NetSpectator_Streaming) || spectator->seat_requested || numask_has(full_noted, spectator_id)) {
+            continue;
+        }
+        /* who this is: its reconnect token (the login's, kept in its settings.toml), whatever its name is now. The token
+           on a seat whose connection has gone quiet is this joiner's old connection (gone but not yet timed out), and
+           goes; on a live one (the host, or another window on the same PC with the same settings) the next variant */
+        const uint64_t base_token = spectator->reconnect_token;
+        uint64_t token = 0;
+        TbBool stale = false;
+        if (base_token != 0) {
+            for (int k = 1; (k < 64) && (token == 0) && !stale; k++) {
+                const uint64_t candidate = thin_token_variant(base_token, k);
+                const NetUserId holder = thin_token_holder(candidate);
+                if (holder == INVALID_USER_ID) {
+                    token = candidate;
+                    break;
+                }
+                const int quiet_ms = (holder == SERVER_ID) ? 0 : enet_user_ms_since_receive(holder);
+                if ((holder != SERVER_ID) && ((quiet_ms < 0) || (quiet_ms >= THIN_RECONNECT_QUIET_MS))) {
+                    thin_drop_stale(holder, spectator->name, quiet_ms);
+                    stale = true;
+                }
+            }
+        } else {
+            /* no token (an older game): the name, as before */
+            for (NetUserId u = SERVER_ID + 1; u < MAX_NET_USERS; u++) {
+                if (!IsUserActive(u) || (strcmp(netstate.users[u].name, spectator->name) != 0)) {
+                    continue;
+                }
+                const int quiet_ms = enet_user_ms_since_receive(u);
+                if ((quiet_ms < 0) || (quiet_ms >= THIN_RECONNECT_QUIET_MS)) {
+                    thin_drop_stale(u, spectator->name, quiet_ms);
+                    stale = true;
+                }
+            }
+        }
+        if (stale) {
+            continue; /* seated once the old connection has left the game */
+        }
+        /* a name another live user has (another window on the same PC): one of its own, for everyone to tell apart */
+        for (NetUserId u = SERVER_ID; u < MAX_NET_CONNECTIONS; u++) {
+            if ((u != spectator_id) && IsUserActive(u) && (strcmp(netstate.users[u].name, spectator->name) == 0)) {
+                thin_unique_name(spectator_id);
+                break;
+            }
+        }
+        PlayerNumber seat = PLAYER_NONE;
+        TbBool returning = false;
+        const PlayerNumber *seats = NULL;
+        const int seat_count = world_seat_players(&seats);
+        for (int s = 0; (s < seat_count) && (seat == PLAYER_NONE); s++) {
+            const PlayerNumber p = seats[s];
+            struct PlayerInfo *player = get_player(p);
+            /* its own seat: by its token; a seat from before the tokens, by the name */
+            const TbBool mine = ((token != 0) && (world_seat_token(p) == token))
+                || ((world_seat_token(p) == 0) && (strcmp(player->player_name, spectator->name) == 0));
+            if (player_exists(player) && player_is_placeholder(player) && (player->victory_state == VicS_Undecided)
+             && (get_player_primary_user(player) < 0) && mine) {
+                seat = p;
+                returning = true;
+            }
+        }
+        for (int s = 0; (s < seat_count) && (seat == PLAYER_NONE); s++) {
+            const PlayerNumber p = seats[s];
+            struct PlayerInfo *player = get_player(p);
+            if ((get_player_primary_user(player) < 0) && (player->player_name[0] == 0) && (world_seat_token(p) == 0)
+             && (player->victory_state == VicS_Undecided) && !world_player_is_keeper(p)) {
+                seat = p;
+            }
+        }
+        NetUserId user = INVALID_USER_ID;
+        for (NetUserId u = SERVER_ID + 1; (u < (NetUserId)min((unsigned)MAX_NET_USERS, netstate.max_users)) && (user == INVALID_USER_ID); u++) {
+            if ((netstate.users[u].progress == USER_UNUSED) && (get_user_state(u)->player_id == PLAYER_NONE)) {
+                user = u;
+            }
+        }
+        if ((seat == PLAYER_NONE) || (user == INVALID_USER_ID)) {
+            static NetUserMask told;
+            if (!numask_has(told, spectator_id)) {
+                SYNCLOG("Server: %s watches for now (no free seat)", spectator->name);
+                server_admin_log("warn", "%s waits: no free seat", spectator->name);
+                send_spectator_notice(spectator_id, SpectatorNotice_Joined, ALL_NET_CONNECTIONS_MASK); /* as a spectator */
+                numask_add(&told, spectator_id);
+            }
+            numask_add(&full_noted, spectator_id);
+            continue;
+        }
+        SYNCLOG("Server: %s %s as player %d (user %d)", spectator->name, returning ? "comes back" : "joins", (int)seat, (int)user);
+        get_user_state(user)->reconnect_player_id = seat;
+        netstate_server_user_reset(user);
+        if (!returning) {
+            /* an unused seat is a non-existing keeper: it becomes a human seat */
+            struct PlayerInfo *player = get_player(seat);
+            player->id_number = seat;
+            player->allocflags |= PlaF_Allocated | PlaF_Seat;
+            player->allocflags &= ~(PlaF_CompCtrl | PlaF_Placeholder);
+            player->victory_state = VicS_Undecided;
+        }
+        world_set_seat_token(seat, token);
+        seat_spectator(spectator_id, user);
+        {
+            char ip[64] = "";
+            enet_user_address(user, ip, sizeof(ip));
+            server_admin_log("join", "%s %s (seat %d%s%s)", netstate.users[user].name,
+                returning ? "came back to the world" : "joined the world", (int)seat, (ip[0] != '\0') ? ", " : "", ip);
+        }
+        if (!returning) {
+            world_seat_joined(seat);
+        }
+    }
 }
 
 void network_spectator_seat_users(void)
 {
     if (!network_is_host()) {
         return;
+    }
+    if (netstate_is_server()) {
+        thin_seat_joiners();
     }
     for (NetUserId spectator_id = MAX_NET_USERS; spectator_id < MAX_NET_CONNECTIONS; spectator_id++) {
         struct NetUser *spectator = &netstate.users[spectator_id];
@@ -384,6 +595,9 @@ void network_spectator_seat_users(void)
     net_lobby_refresh_rejoin_open();
 }
 
+/* thin-client play: a joiner spectates only until its seat comes (a second or two); 'spectating' is said when none came */
+static TbClockMSec thin_spectate_notice_at = 0;
+
 static void join_seat(NetUserId player_id, PlayerNumber plyr_idx, uint8_t input_lag_turns)
 {
     NETLOG("Joining the game as user %d, player %d", player_id, plyr_idx);
@@ -405,7 +619,10 @@ static void join_seat(NetUserId player_id, PlayerNumber plyr_idx, uint8_t input_
     UserPreferences prefs;
     build_local_user_preferences(prefs);
     seat_network_user(player_id, plyr_idx, prefs);
-    netstate.resync_pending = true;
+    if (!netstate_thin_mode())
+        netstate.resync_pending = true;
+    else
+        netstate_client_await_keyframe(); /* the seat comes with a keyframe; no inputs before it */
 }
 
 TbError process_network_spectator_seat(NetUserId source, const char *buffer, size_t size)
@@ -416,7 +633,7 @@ TbError process_network_spectator_seat(NetUserId source, const char *buffer, siz
     NetUserId player_id = (uint8_t)buffer[0];
     PlayerNumber plyr_idx = (PlayerNumber)buffer[1];
     uint8_t input_lag_turns = (uint8_t)buffer[2];
-    if (player_id <= SERVER_ID || player_id >= MAX_NET_USERS || plyr_idx < 0 || plyr_idx >= PLAYERS_COUNT || input_lag_turns > MAXIMUM_INPUT_LAG_TURNS) {
+    if (player_id <= SERVER_ID || player_id >= MAX_NET_USERS || plyr_idx < 0 || plyr_idx >= PLAYERS_MAX || input_lag_turns > MAXIMUM_INPUT_LAG_TURNS) {
         return Lb_OK;
     }
     join_seat(player_id, plyr_idx, input_lag_turns);
@@ -430,18 +647,33 @@ void network_spectator_finish_seat(void)
     }
     seat_camera_pending = false;
     game.input_lag_turns = seat_input_lag_turns;
-    init_local_cameras(get_my_player());
+    /* the player's cameras, now as a player: a spectator who had no one to watch (the first to join a dedicated
+       server) was in the free observer camera, which join_seat's return entered again while it still spectated */
+    return_to_player_camera();
     local_state.show_gui = true;
     local_state.show_panel = true;
     reinit_all_menus();
+    if (netstate_thin_mode())
+    {
+        thin_spectate_notice_at = 0;
+        show_onscreen_msg(3 * turns_per_second, "You have joined the world"); /* "Joining the world..." was up */
+    }
 }
 
 TbError process_network_spectator_ready(NetUserId source, const char *buffer, size_t size)
 {
+    /* thin-client play: a client that has loaded the level (a spectator, or a player taking a seat back) starts from
+       the whole state */
+    if ((netstate.my_id == SERVER_ID) && IsUserActive(source) && netstate_is_server()) {
+        netstate_server_request_keyframe(source);
+    }
     if (netstate.my_id != SERVER_ID || !network_user_is_spectator(source) || !IsUserActive(source) || size != sizeof(UserPreferences)) {
         return Lb_OK;
     }
     struct NetUser *user = &netstate.users[source];
+    if ((user->spectator_state == NetSpectator_Streaming) && netstate_is_server()) {
+        return Lb_OK; /* thin-client play: its keyframe is on the way */
+    }
     if (user->spectator_state == NetSpectator_Streaming) {
         if (user->spectator_resync_requested_at != 0 && LbTimerClock() - user->spectator_resync_requested_at < RESYNC_COOLDOWN_MS) {
             NETLOG("Spectator %d desynced again within the resync cooldown, dropping", source);
@@ -460,7 +692,7 @@ TbError process_network_spectator_ready(NetUserId source, const char *buffer, si
         user->spectator_state = NetSpectator_SnapshotPending;
         memcpy(user->seat_prefs, buffer, sizeof(user->seat_prefs));
         assign_spectator_icon(source);
-        user->seat_user = find_reconnecting_user(user);
+        user->seat_user = netstate_thin_mode() ? INVALID_USER_ID : find_reconnecting_user(user);
         user->seat_requested = user->seat_user != INVALID_USER_ID;
     }
     return Lb_OK;
@@ -525,7 +757,23 @@ static void reset_local_spectator(void)
 static void start_spectating(PlayerNumber camera_player_number)
 {
     observer_init(camera_player_number);
+    if (netstate_thin_mode())
+    {
+        show_onscreen_msg(5 * turns_per_second, "Joining the world...");
+        thin_spectate_notice_at = LbTimerClock() + 8000;
+        return;
+    }
     show_onscreen_msg(10 * turns_per_second, "%s", get_string(GUIStr_NetYouAreSpectating));
+}
+
+/** Each thin client turn: a joiner still without a seat after 8 s is told it spectates (every seat is taken). */
+void network_spectator_thin_notice(void)
+{
+    if ((thin_spectate_notice_at == 0) || (LbTimerClock() < thin_spectate_notice_at))
+        return;
+    thin_spectate_notice_at = 0;
+    if (network_user_is_spectator(netstate.my_id))
+        show_onscreen_msg(10 * turns_per_second, "%s", get_string(GUIStr_NetYouAreSpectating));
 }
 
 TbBool network_spectator_start(void)
@@ -737,7 +985,7 @@ enum PacketExchangeResult network_spectator_load_turn(TbBigChecksum checksum)
     return PExR_Advance;
 }
 
-static void send_spectator_turn(const struct SpectatorTurn *snapshot, uint64_t recipients)
+static void send_spectator_turn(const struct SpectatorTurn *snapshot, NetUserMask recipients)
 {
     char *write_pos = begin_net_message(NETMSG_SPECTATOR_TURN);
     size_t snapshot_size = offsetof(struct SpectatorTurn, chat) + snapshot->chat_count * sizeof(snapshot->chat[0]);
@@ -763,7 +1011,8 @@ void network_spectator_send_pending_turn(const struct QueuedGameplayChat *messag
 
 void network_spectator_prepare_turn(TbBigChecksum checksum)
 {
-    if (netstate.my_id != SERVER_ID || (network_spectators == 0 && spectator_resync_thread == NULL)) {
+    /* thin-client play: spectators get the state stream, not turns to simulate */
+    if (netstate.my_id != SERVER_ID || netstate_is_server() || (!numask_any(network_spectators) && spectator_resync_thread == NULL)) {
         return;
     }
     struct SpectatorTurn *snapshot = &spectator_send_turn;
@@ -782,14 +1031,34 @@ void network_spectator_send_snapshots(void)
     if (netstate.my_id != SERVER_ID || SDL_GetThreadState(spectator_resync_thread) == SDL_THREAD_ALIVE) {
         return;
     }
-    uint64_t recipients = 0;
+    if (netstate_is_server()) {
+        /* thin-client play: a spectator gets the state stream and a keyframe, not a lockstep snapshot */
+        TbBool changed = false;
+        for (NetUserId id = MAX_NET_USERS; id < MAX_NET_CONNECTIONS; id++) {
+            struct NetUser *spec = &netstate.users[id];
+            if (!IsUserActive(id) || spec->seat_requested) {
+                continue;
+            }
+            spec->spectator_resync_requested = false;
+            if (spec->spectator_state == NetSpectator_SnapshotPending) {
+                spec->spectator_state = NetSpectator_Streaming;
+                network_spectator_notify(id, true);
+                changed = true;
+            }
+        }
+        if (changed) {
+            network_spectator_update_roles();
+        }
+        return;
+    }
+    NetUserMask recipients = numask_none();
     for (NetUserId id = MAX_NET_USERS; id < MAX_NET_CONNECTIONS; id++) {
         if (IsUserActive(id) && !netstate.users[id].seat_requested && (netstate.users[id].spectator_state == NetSpectator_SnapshotPending || netstate.users[id].spectator_resync_requested)) {
-            recipients |= UINT64_C(1) << id;
+            numask_add(&recipients, id);
         }
     }
     if (spectator_resync_thread == NULL) {
-        if (recipients != 0) {
+        if (numask_any(recipients)) {
             begin_spectator_resync();
         }
         return;
@@ -801,7 +1070,7 @@ void network_spectator_send_snapshots(void)
             send_spectator_turn(&spectator_resync_turns[i], recipients);
         }
         for (NetUserId id = MAX_NET_USERS; id < MAX_NET_CONNECTIONS; id++) {
-            if (recipients & (UINT64_C(1) << id)) {
+            if (numask_has(recipients, id)) {
                 netstate.users[id].spectator_resync_requested = false;
                 if (netstate.users[id].spectator_state == NetSpectator_SnapshotPending) {
                     netstate.users[id].spectator_state = NetSpectator_Streaming;

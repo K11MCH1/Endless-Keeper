@@ -207,8 +207,8 @@ struct CreatureControl {
   {
       struct {
         int32_t stack_update_turn;
-        SubtlCodedCoords working_stl;
-        SubtlCodedCoords task_stl;
+        int32_t legacy_working_stl; /* unused: the 32-bit slot of older saves; see digger_working_stl */
+        int32_t legacy_task_stl;    /* unused: see digger_task_stl */
         unsigned short task_idx;
         unsigned char consecutive_reinforcements;
         unsigned char last_did_job;
@@ -415,6 +415,10 @@ struct CreatureControl {
     SpellKind active_timebomb_spell;
     short vertical_speed;
     GameTurnDelta hand_blocked_turns;
+    /** A digger's subtile being worked on and its task's subtile (packed, 64-bit). Outside the union above,
+     *  whose raw saved bytes keep their old 32-bit layout. */
+    SubtlCodedCoords digger_working_stl;
+    SubtlCodedCoords digger_task_stl;
 };
 
 struct Persons {

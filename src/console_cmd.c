@@ -80,6 +80,7 @@
 #include "kjm_input.h"
 #include "timer.h"
 #include "kfx/save/SaveManager.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -797,6 +798,17 @@ TbBool cmd_cls(PlayerNumber plyr_idx, char * args)
     return true;
 }
 
+/** !open: this endless world becomes a server others can join (as Minecraft's Open to LAN). */
+TbBool cmd_open_to_network(PlayerNumber plyr_idx, char * args)
+{
+    if (!network_open_running_game())
+    {
+        targeted_message_add(MsgType_Local, plyr_idx, plyr_idx, GUI_MESSAGES_DELAY, "Only an endless world in single player can be opened");
+        return false;
+    }
+    return true;
+}
+
 TbBool cmd_ver(PlayerNumber plyr_idx, char * args)
 {
     targeted_message_add(MsgType_Local, plyr_idx, plyr_idx, GUI_MESSAGES_DELAY, PRODUCT_VERSION);
@@ -986,6 +998,13 @@ TbBool cmd_conceal(PlayerNumber plyr_idx, char * args)
         MapSubtlCoord stl_x = coord_subtile((cursor_x));
         MapSubtlCoord stl_y = coord_subtile((cursor_y));
         conceal_map_area(plyr_idx, stl_x - radius_offset, stl_x + r - radius_offset, stl_y - radius_offset, stl_y + r - radius_offset, false);
+    } else
+    if (world_paged) {
+        // Paged mode: the whole map is the loaded chunks
+        MapSubtlCoord sx1, sy1, sx2, sy2;
+        map_loop_subtile_bounds(&sx1, &sy1, &sx2, &sy2);
+        if ((sx1 <= sx2) && (sy1 <= sy2))
+            conceal_map_area(plyr_idx, sx1, sx2, sy1, sy2, false);
     } else {
         conceal_map_area(plyr_idx, 0, game.map_subtiles_x - 1, 0, game.map_subtiles_y - 1, false);
     }
@@ -2725,6 +2744,7 @@ static const struct ConsoleCommand console_commands[] = {
    { "music.set", cmd_set_music, NULL, CmdS_Personal, CmdM_SingleplayerAndMultiplayer, CmdC_Unrestricted },
    { "netstats", cmd_network_stats, NULL, CmdS_Personal, CmdM_SingleplayerAndMultiplayer, CmdC_Unrestricted },
    { "object.create", cmd_create_object, NULL, CmdS_Synced, CmdM_SingleplayerAndMultiplayer, CmdC_CheatsRequired },
+   { "open", cmd_open_to_network, NULL, CmdS_Personal, CmdM_SingleplayerOnly, CmdC_Unrestricted },
    { "pause", cmd_pause, NULL, CmdS_Personal, CmdM_SingleplayerOnly, CmdC_Unrestricted },
    { "place.slab", cmd_place_slab, NULL, CmdS_Synced, CmdM_SingleplayerAndMultiplayer, CmdC_CheatsRequired },
    { "player.addgold", cmd_player_gold_add, NULL, CmdS_Synced, CmdM_SingleplayerAndMultiplayer, CmdC_CheatsRequired },

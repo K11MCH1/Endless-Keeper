@@ -27,6 +27,7 @@
 #include "ariadne.h"
 #include "kfx/profiling/KfxProfilingC.h"
 #include "replay_rewind.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -34,6 +35,17 @@ extern "C" {
 #endif
 /******************************************************************************/
 kfx_rewindable int32_t find_cache[4][4];
+/* the chunked world (world_paged): its coordinates are far past the 4x4 grid's (which clamps them all into one cell,
+   so a search started wherever the last one ended, anywhere in the loaded world); a hashed table of cells of 16
+   subtiles instead. A search finds the same triangle from any start, but on an edge the start can decide which. */
+#define FIND_CACHE_BIG_BITS 12
+kfx_rewindable static int32_t find_cache_big[1 << FIND_CACHE_BIG_BITS]; /* restored with the rest on a replay rewind */
+
+static uint32_t find_cache_big_cell(long pos_x, long pos_y)
+{
+    const uint32_t cx = (uint32_t)(pos_x >> 12), cy = (uint32_t)(pos_y >> 12);
+    return ((cx * 73856093u) ^ (cy * 19349663u)) & ((1u << FIND_CACHE_BIG_BITS) - 1);
+}
 
 /******************************************************************************/
 long triangle_brute_find8_near(long pos_x, long pos_y)
@@ -91,6 +103,22 @@ long triangle_brute_find8_near(long pos_x, long pos_y)
 
 static long triangle_find_cache_get(long pos_x, long pos_y)
 {
+    if (world_paged)
+    {
+        const uint32_t k = find_cache_big_cell(pos_x, pos_y);
+        long ntri = find_cache_big[k];
+        if ((ntri <= 0) || (ntri > ix_Triangles) || (get_triangle_tree_alt(ntri) == NAV_COL_UNSET))
+        {
+            ntri = triangle_brute_find8_near(pos_x, pos_y);
+            if ((ntri < 0) || (ntri > ix_Triangles))
+            {
+                ERRORLOG("triangles count overflow");
+                ntri = -1;
+            }
+            find_cache_big[k] = (int32_t)ntri;
+        }
+        return ntri;
+    }
     KFX_C_ZONE_BEGIN_COLOR(ctx_cache_get, "triangle_find_cache_get", KFX_COLOR_PATHFINDING);
     long cache_x = (pos_x >> 14);
     if (cache_x > 3)
@@ -123,6 +151,8 @@ static long triangle_find_cache_get(long pos_x, long pos_y)
 
 static void triangle_find_cache_put(long pos_x, long pos_y, long ntri)
 {
+    if (world_paged)
+        find_cache_big[find_cache_big_cell(pos_x, pos_y)] = (int32_t)ntri;
     long cache_x = (pos_x >> 14);
     if (cache_x > 3)
         cache_x = 3;
@@ -138,6 +168,8 @@ static void triangle_find_cache_put(long pos_x, long pos_y, long ntri)
 
 void triangulation_init_cache(long tri_idx)
 {
+    for (size_t k = 0; k < sizeof(find_cache_big) / sizeof(find_cache_big[0]); k++)
+        find_cache_big[k] = (int32_t)tri_idx;
     for (long i = 0; i < 4; i++)
     {
         find_cache[i][0] = tri_idx;

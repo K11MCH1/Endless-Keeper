@@ -14,6 +14,7 @@
 
 #include "pre_inc.h"
 #include "bflib_enet.h"
+#include "world_net.h"
 #include "bflib_datetm.h"
 #include "net_main.h"
 #include "front_network.h"
@@ -57,6 +58,8 @@ namespace
 
     NetDropCallback g_drop_callback = nullptr;
     ENetHost *host = nullptr;
+    /* how long a silent peer is kept (thin-client play keeps them longer, see net_state.c) */
+    enet_uint32 peer_timeout_ms = PEER_TIMEOUT_MS;
     ENetPeer *client_peer = nullptr;
     enet_uint32 connection_ids[MAX_NET_CONNECTIONS] = {0};
     enet_uint32 resync_saved_window[MAX_NET_CONNECTIONS] = {0};
@@ -103,6 +106,10 @@ namespace
 
     int ENET_CALLBACK intercept_punch(ENetHost *network_host, ENetEvent *)
     {
+        /* an endless world's ping from the World List menu */
+        if (wnet_game_port_intercept(network_host)) {
+            return 1;
+        }
         if (!punch_phase_active) {
             return 0;
         }
@@ -374,7 +381,7 @@ namespace
         LbNetLog("Join: connected successfully via %s (%s)\n", join_type, ip_version);
         net_join_rejection = NetJoin_Accepted;
         punch_phase_active = 0;
-        enet_peer_timeout(next_peer, PEER_TIMEOUT_LIMIT, PEER_TIMEOUT_MS, PEER_TIMEOUT_MS);
+        enet_peer_timeout(next_peer, PEER_TIMEOUT_LIMIT, peer_timeout_ms, peer_timeout_ms);
         cleanup_join_host(old_host, old_peer);
         log_peer_connection(next_peer, SERVER_ID, "connected");
         enet_host_set_intercept_callback(next_host, nullptr);
@@ -417,7 +424,7 @@ namespace
                 LbNetLog("Join: connected successfully via %s\n", join_type);
                 log_peer_connection(client_peer, SERVER_ID, "connected");
                 net_join_rejection = NetJoin_Accepted;
-                enet_peer_timeout(client_peer, PEER_TIMEOUT_LIMIT, PEER_TIMEOUT_MS, PEER_TIMEOUT_MS);
+                enet_peer_timeout(client_peer, PEER_TIMEOUT_LIMIT, peer_timeout_ms, peer_timeout_ms);
                 return Lb_OK;
             }
             if (service_result > 0 && (enet_event.type == ENET_EVENT_TYPE_DISCONNECT || enet_event.type == ENET_EVENT_TYPE_DISCONNECT_TIMEOUT)) {
@@ -742,7 +749,7 @@ namespace
         }
         for (size_t peer_index = 0; peer_index < host->peerCount; peer_index++) {
             ENetPeer *peer = &host->peers[peer_index];
-            if (peer->state == ENET_PEER_STATE_CONNECTED && peer->earliestTimeout != 0 && ENET_TIME_DIFFERENCE(host->serviceTime, peer->earliestTimeout) >= PEER_TIMEOUT_MS) {
+            if (peer->state == ENET_PEER_STATE_CONNECTED && peer->earliestTimeout != 0 && ENET_TIME_DIFFERENCE(host->serviceTime, peer->earliestTimeout) >= peer_timeout_ms) {
                 enet_peer_reset(peer);
                 report_dropped_peer(peer, NetJoin_Accepted, NETDROP_TIMEOUT);
             }
@@ -809,7 +816,7 @@ namespace
                 }
                 if (reason == NetJoin_Accepted) {
                     log_peer_connection(enet_event.peer, user_id, "accepted");
-                    enet_peer_timeout(enet_event.peer, PEER_TIMEOUT_LIMIT, PEER_TIMEOUT_MS, PEER_TIMEOUT_MS);
+                    enet_peer_timeout(enet_event.peer, PEER_TIMEOUT_LIMIT, peer_timeout_ms, peer_timeout_ms);
                     enet_event.peer->data = reinterpret_cast<void *>(user_id);
                 } else {
                     log_peer_connection(enet_event.peer, INVALID_USER_ID, "rejected");
@@ -1072,6 +1079,9 @@ namespace
         destroy_incoming_queue(id);
         ENetPeer *peer = find_user_peer(id);
         if (peer != nullptr) {
+            if ((reason == NetJoin_Kicked) || (reason == NetJoin_Banned) || (reason == NetJoin_BannedJoin)) {
+                enet_host_flush(peer->host); /* the server's last words (sent just before) go out first */
+            }
             enet_peer_disconnect_now(peer, reason);
         }
         if (g_drop_callback != nullptr) {
@@ -1274,6 +1284,62 @@ uint16_t enet_get_bound_port(void)
     return host->address.port;
 }
 
+/** Milliseconds since anything came in on this user's connection (-1: no connection). Endless worlds: a joiner with
+ *  a seated player's name is that player coming back only when the old connection has gone quiet. */
+int enet_user_ms_since_receive(int user)
+{
+    if (!host) {
+        return -1;
+    }
+    for (size_t i = 0; i < host->peerCount; i++) {
+        ENetPeer *peer = &host->peers[i];
+        if ((peer->state == ENET_PEER_STATE_CONNECTED) && ((int)reinterpret_cast<ptrdiff_t>(peer->data) == user)) {
+            return (int)ENET_TIME_DIFFERENCE(enet_time_get(), peer->lastReceiveTime);
+        }
+    }
+    return -1;
+}
+
+int enet_user_address(int user, char *buf, size_t len)
+{
+    if ((buf == NULL) || (len == 0)) {
+        return -1;
+    }
+    buf[0] = '\0';
+    if (!host) {
+        return -1;
+    }
+    for (size_t i = 0; i < host->peerCount; i++) {
+        ENetPeer *peer = &host->peers[i];
+        if ((peer->state != ENET_PEER_STATE_CONNECTED) || ((int)reinterpret_cast<ptrdiff_t>(peer->data) != user)) {
+            continue;
+        }
+        if (enet_address_get_host_ip(&peer->address, buf, len) < 0) {
+            buf[0] = '\0';
+            return -1;
+        }
+        /* the address alone: "[::ffff:1.2.3.4]:port" or "1.2.3.4:port" to "1.2.3.4" (an IPv4 peer on a
+           dual-stack socket has the ::ffff: prefix) */
+        if (buf[0] == '[') {
+            char *end = strchr(buf, ']');
+            if (end != NULL) {
+                *end = 0;
+            }
+            memmove(buf, buf + 1, strlen(buf + 1) + 1);
+        } else {
+            char *colon = strchr(buf, ':');
+            if ((colon != NULL) && (strchr(colon + 1, ':') == NULL)) {
+                *colon = 0;
+            }
+        }
+        if (strncmp(buf, "::ffff:", 7) == 0) {
+            memmove(buf, buf + 7, strlen(buf + 7) + 1);
+        }
+        return 0;
+    }
+    return -1;
+}
+
 uint16_t enet_get_bound_ipv6_port(void)
 {
     if (!host_is_dual_stack || !host) {
@@ -1351,4 +1417,17 @@ struct NetSP *InitEnetSP()
             .reassign_user = &bf_enet_reassign_user,
     };
     return &ret;
+}
+
+extern "C" void LbNetwork_SetPeerTimeout(unsigned long timeout_ms)
+{
+    peer_timeout_ms = (enet_uint32)timeout_ms;
+    if (host == nullptr)
+        return;
+    for (size_t i = 0; i < host->peerCount; i++)
+    {
+        ENetPeer *peer = &host->peers[i];
+        if (peer->state == ENET_PEER_STATE_CONNECTED)
+            enet_peer_timeout(peer, PEER_TIMEOUT_LIMIT, peer_timeout_ms, peer_timeout_ms);
+    }
 }

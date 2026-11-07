@@ -39,7 +39,13 @@ enum PlayerNames {
     PLAYER4          =  6,//purple
     PLAYER5          =  7,//black
     PLAYER6          =  8,//orange
-    ALL_PLAYERS      =  9,
+    ALL_PLAYERS      =  9, /* never a player, also when players 10-15 are in use */
+    PLAYER7          = 10, /* players 10 and up: endless worlds only (game.players_extended); 16-103 are PLAYER13-100 */
+    PLAYER8          = 11,
+    PLAYER9          = 12,
+    PLAYER10         = 13,
+    PLAYER11         = 14,
+    PLAYER12         = 15,
 };
 
 enum PlayerInstanceNum {

@@ -85,6 +85,8 @@
 
 #include "keeperfx.hpp"
 #include "kfx/ai/TargetSearchProbe.h"
+#include "world_stream.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1249,11 +1251,11 @@ struct Room *get_room_xy(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
  */
 TbBool fill_moveable_small_around_slabs_array_in_room(TbBool *avail, const struct Thing *thing, const struct Room *room)
 {
-    long slab_base = get_slab_number(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num));
+    SlabCodedCoords slab_base = get_slab_number(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num));
     // Fill the avail[] array
     for (long n = 0; n < SMALL_AROUND_SLAB_LENGTH; n++)
     {
-        long slab_num = slab_base + game.small_around_slab[n];
+        SlabCodedCoords slab_num = slab_base + game.small_around_slab[n];
         MapSlabCoord slb_x = slb_num_decode_x(slab_num);
         MapSlabCoord slb_y = slb_num_decode_y(slab_num);
         MapSubtlCoord stl_x = slab_subtile_center(slb_x);
@@ -1293,13 +1295,13 @@ TbBool person_get_somewhere_adjacent_in_room_f(struct Thing *thing, const struct
     SYNCDBG(17,"%s: Starting for %s index %d",func_name,thing_model_name(thing),(int)thing->index);
     MapSlabCoord slb_x = subtile_slab(thing->mappos.x.stl.num);
     MapSlabCoord slb_y = subtile_slab(thing->mappos.y.stl.num);
-    long slab_base = get_slab_number(slb_x, slb_y);
+    SlabCodedCoords slab_base = get_slab_number(slb_x, slb_y);
 
     int start_stl = THING_RANDOM(thing, AROUND_MAP_LENGTH);
     long m = THING_RANDOM(thing, SMALL_AROUND_SLAB_LENGTH);
     for (long n = 0; n < SMALL_AROUND_SLAB_LENGTH; n++)
     {
-        long slab_num = slab_base + game.small_around_slab[m];
+        SlabCodedCoords slab_num = slab_base + game.small_around_slab[m];
         slb_x = slb_num_decode_x(slab_num);
         slb_y = slb_num_decode_y(slab_num);
         struct Room* aroom = get_room_xy(slab_subtile_center(slb_x), slab_subtile_center(slb_y));
@@ -1353,7 +1355,7 @@ TbBool person_get_somewhere_adjacent_in_room_around_borders_f(struct Thing *thin
         pos->z.val = subtile_coord(1,0);
         return false;
     }
-    long slab_base = get_slab_number(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num));
+    SlabCodedCoords slab_base = get_slab_number(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num));
     long start_stl = THING_RANDOM(thing, STL_PER_SLB * STL_PER_SLB);
     // If the room is too small - don't try selecting adjacent slab
     if (room->slabs_count > 1)
@@ -1388,7 +1390,7 @@ TbBool person_get_somewhere_adjacent_in_room_around_borders_f(struct Thing *thin
         {
             if (avail[arnd])
             {
-                long slab_num = slab_base + game.small_around_slab[arnd];
+                SlabCodedCoords slab_num = slab_base + game.small_around_slab[arnd];
                 MapSlabCoord slb_x = slb_num_decode_x(slab_num);
                 MapSlabCoord slb_y = slb_num_decode_y(slab_num);
                 if (set_position_at_slab_for_thing(pos, thing, slb_x, slb_y, start_stl))
@@ -2019,13 +2021,13 @@ TbBool creature_choose_random_destination_on_valid_adjacent_slab(struct Thing *t
     SYNCDBG(17,"Starting for %s index %ld",thing_model_name(thing),(long)thing->index);
     MapSlabCoord slb_x = subtile_slab(thing->mappos.x.stl.num);
     MapSlabCoord slb_y = subtile_slab(thing->mappos.y.stl.num);
-    long slab_base = get_slab_number(slb_x, slb_y);
+    SlabCodedCoords slab_base = get_slab_number(slb_x, slb_y);
 
     MapSubtlCoord start_stl = THING_RANDOM(thing, 9);
     long m = THING_RANDOM(thing, SMALL_AROUND_SLAB_LENGTH);
     for (long n = 0; n < SMALL_AROUND_SLAB_LENGTH; n++)
     {
-        long slab_num = slab_base + game.small_around_slab[m];
+        SlabCodedCoords slab_num = slab_base + game.small_around_slab[m];
         slb_x = slb_num_decode_x(slab_num);
         slb_y = slb_num_decode_y(slab_num);
         if (slab_is_valid_for_creature_choose_move(thing, slb_x, slb_y))
@@ -2722,7 +2724,7 @@ TbBool find_random_valid_position_for_thing_in_room_avoiding_object(struct Thing
     struct RoomConfigStats* roomst = get_room_kind_stats(room->kind);
     long selected = THING_RANDOM(thing, room->slabs_count);
     unsigned long n = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     // Get the selected index
     while (i != 0)
     {
@@ -2855,7 +2857,7 @@ TbBool find_random_valid_position_for_thing_in_room_avoiding_object(struct Thing
 short creature_present_to_dungeon_heart(struct Thing *creatng)
 {
     TRACE_THING(creatng);
-    create_effect(&creatng->mappos, imp_spangle_effects[get_player_color_idx(creatng->owner)], creatng->owner);
+    create_effect(&creatng->mappos, imp_spangle_effects[world_display_colour(creatng->owner)], creatng->owner);
     thing_play_sample(creatng, snd_spell_stars, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
     if ( !external_set_thing_state(creatng, CrSt_CreatureDoingNothing) )
       set_start_state(creatng);
@@ -3176,7 +3178,7 @@ short creature_take_salary(struct Thing *creatng)
     struct Room* room = get_room_thing_is_on(creatng);
     struct Dungeon* dungeon = get_dungeon(creatng->owner);
     if (room_is_invalid(room) || !room_role_matches(room->kind, RoRoF_GoldStorage) ||
-      ((room->used_capacity == 0) && (dungeon->offmap_money_owned <= 0)))
+      ((room->used_capacity == 0) && (dungeon->offmap_money_owned <= 0) && !world_pays_at_nearest_treasury(creatng->owner)))
     {
         internal_set_thing_state(creatng, CrSt_CreatureWantsSalary);
         return 1;
@@ -3462,6 +3464,19 @@ struct Room* get_room_for_thing_salary(struct Thing* creatng, unsigned char *nav
     if (!player_has_room_of_role(creatng->owner, job_rrole))
     {
         return INVALID_ROOM;
+    }
+    // Endless world: the nearest treasury pays, even an empty one, as long as the keeper has gold somewhere
+    if (world_pays_at_nearest_treasury(creatng->owner))
+    {
+        struct Room* nearoom = find_nearest_room_of_role_for_thing(creatng, creatng->owner, job_rrole, NavRtF_Default);
+        *navtype = NavRtF_Default;
+        if (room_is_invalid(nearoom))
+        {
+            nearoom = find_nearest_room_of_role_for_thing(creatng, creatng->owner, job_rrole, NavRtF_NoOwner);
+            *navtype = NavRtF_NoOwner;
+        }
+        if (!room_is_invalid(nearoom))
+            return nearoom;
     }
 
     struct Room* room = find_nearest_room_of_role_for_thing_with_used_capacity(creatng, creatng->owner, job_rrole, NavRtF_Default, 1);
@@ -4000,7 +4015,7 @@ char new_slab_tunneller_check_for_breaches(struct Thing *creatng)
             continue;
 
         // Player dungeon already broken into
-        if (flag_is_set(cctrl->party.player_broken_into_flags, to_flag(i)))
+        if (pmask_has(cctrl->party.player_broken_into_flags, i))
             continue;
 
         if (!subtile_revealed(creatng->mappos.x.stl.num, creatng->mappos.y.stl.num, i))
@@ -4016,7 +4031,7 @@ char new_slab_tunneller_check_for_breaches(struct Thing *creatng)
         if (!creature_can_navigate_to(creatng, &hearttng->mappos, NavRtF_Default))
             continue;
 
-        set_flag(cctrl->party.player_broken_into_flags, to_flag(i));
+        pmask_add(&cctrl->party.player_broken_into_flags, i);
         ++dgn->times_broken_into;
         event_create_event_or_update_nearby_existing_event(creatng->mappos.x.val, creatng->mappos.y.val, EvKind_Breach, i, 0);
         output_player_message(i, SMsg_WallsBreach, 0);
@@ -5252,7 +5267,10 @@ long process_creature_needs_a_wage(struct Thing *creatng, const struct CreatureM
     }
 
     cctrl->collided_door_subtile = 0;
-    struct Room* room = find_nearest_room_of_role_for_thing_with_used_capacity(creatng, creatng->owner, RoRoF_GoldStorage, NavRtF_Default, 1);
+    // Endless world: head for the nearest treasury, empty or not (see get_room_for_thing_salary)
+    TbBool any_treasury = world_pays_at_nearest_treasury(creatng->owner);
+    struct Room* room = any_treasury ? find_nearest_room_of_role_for_thing(creatng, creatng->owner, RoRoF_GoldStorage, NavRtF_Default) :
+        find_nearest_room_of_role_for_thing_with_used_capacity(creatng, creatng->owner, RoRoF_GoldStorage, NavRtF_Default, 1);
     if (!room_is_invalid(room))
     {
         if (external_set_thing_state(creatng, CrSt_CreatureWantsSalary))
@@ -5266,7 +5284,8 @@ long process_creature_needs_a_wage(struct Thing *creatng, const struct CreatureM
     if (room_is_invalid(room))
     {
         //if we can't find an unlocked room, try a locked room, to wait in front of the door
-        room = find_nearest_room_of_role_for_thing_with_used_capacity(creatng, creatng->owner, RoRoF_GoldStorage, NavRtF_NoOwner, 1);
+        room = any_treasury ? find_nearest_room_of_role_for_thing(creatng, creatng->owner, RoRoF_GoldStorage, NavRtF_NoOwner) :
+            find_nearest_room_of_role_for_thing_with_used_capacity(creatng, creatng->owner, RoRoF_GoldStorage, NavRtF_NoOwner, 1);
     }
     if (!room_is_invalid(room))
     {

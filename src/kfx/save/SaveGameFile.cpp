@@ -9,6 +9,7 @@
 #include "game_merge.h"
 #include "kfx/platform/IPlatform.h"
 #include "lua_base.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #include <cstdlib>
@@ -62,6 +63,20 @@ enum SaveResult Build(const Game *game_state, const IntralevelData *ilvl, const 
     add(SCID_Level, ilvlbuf, true);
     if (lua_len > 0)
         succeeded = succeeded && (save_chunk_add(out, SCID_Lua, 0, lua_data, lua_len, true) == 0);
+    if (succeeded && (game_state == &game) && world_mode_active())
+    {
+        unsigned char *world_data = nullptr;
+        uint32_t world_len = 0;
+        if (world_save_blob(&world_data, &world_len))
+            succeeded = (save_chunk_add(out, SCID_World, 0, world_data, world_len, false) == 0);
+        else
+        {
+            /* a save without its world couldn't be loaded: fail it */
+            SAVEWARN("the endless world could not be saved");
+            succeeded = false;
+        }
+        free(world_data);
+    }
     if ((result == SVR_Ok) && !succeeded)
         result = save_fail(err, SVR_NoMemory, "out of memory");
     if (result != SVR_Ok)
@@ -108,7 +123,7 @@ struct RawChunk {
 };
 
 struct RawChunks {
-    RawChunk meta, schema, nams, conf, game, ilvl, lua;
+    RawChunk meta, schema, nams, conf, game, ilvl, lua, world;
     uint16_t minor = 0;     /* the file's schema revision */
 };
 
@@ -123,6 +138,7 @@ RawChunk *chunk_for(RawChunks &chunks, uint32_t id)
     case SCID_Game:   return &chunks.game;
     case SCID_Level:  return &chunks.ilvl;
     case SCID_Lua:    return &chunks.lua;
+    case SCID_World:  return &chunks.world;
     default:          return nullptr;   /* a chunk from a newer build that isn't required: skipped */
     }
 }
@@ -236,6 +252,7 @@ enum SaveResult Read(IFileSystem &filesystem, const char *fname, CatalogueEntry 
         out->nams_data = chunks.nams.data.release(); out->nams_len = chunks.nams.len;
         out->conf_data = chunks.conf.data.release(); out->conf_len = chunks.conf.len;
         out->lua_data = reinterpret_cast<char *>(chunks.lua.data.release()); out->lua_len = chunks.lua.len;
+        out->world_data = chunks.world.data.release(); out->world_len = chunks.world.len;
     }
     return result;
 }
@@ -245,6 +262,7 @@ void FreeReadResult(ReadResult *out)
     free(out->nams_data);
     free(out->conf_data);
     free(out->lua_data);
+    free(out->world_data);
     memset(out, 0, sizeof(*out));
 }
 
@@ -321,6 +339,43 @@ enum SaveCheckResult CheckFile(IFileSystem &filesystem, const char *fname, Catal
         centry->textname[SAVE_TEXTNAME_LEN-1] = '\0';
     if (result != SVR_Ok)
         set_detail(detail, detail_len, err.message);
+    return Classify(result);
+}
+
+enum SaveCheckResult CheckWorld(IFileSystem &filesystem, const char *fname, char *detail, size_t detail_len)
+{
+    set_detail(detail, detail_len, "");
+    std::vector<uint8_t> filebuf;
+    SaveError err;
+    enum SaveResult result = savefile::ReadFile(filesystem, fname, filebuf, &err);
+    if (result != SVR_Ok)
+    {
+        set_detail(detail, detail_len, err.message);
+        return Classify(result);
+    }
+    SaveReader reader;
+    result = save_reader_open(&reader, filebuf.data(), (uint32_t)filebuf.size(), &err);
+    SaveChunk chunk;
+    while ((result == SVR_Ok) && ((result = save_reader_next(&reader, &chunk, &err)) == SVR_Ok))
+    {
+        if (chunk.id != SCID_World)
+            continue;
+        uint8_t *raw = nullptr;
+        uint32_t raw_len = 0;
+        result = save_chunk_unpack(&chunk, &raw, &raw_len, &err);
+        savebytes::MallocBytes owned(raw);
+        if (result != SVR_Ok)
+            break;
+        char why[200];
+        const enum WorldBlobCheck world = world_blob_check(raw, raw_len, why, sizeof(why));
+        if (world == WBC_Ok)
+            return SvChk_Loadable;
+        set_detail(detail, detail_len, why);
+        return (world == WBC_Incompatible) ? SvChk_Incompatible : SvChk_Damaged;
+    }
+    if (result == SVR_NotFound)
+        return SvChk_Loadable; /* no world in it */
+    set_detail(detail, detail_len, err.message);
     return Classify(result);
 }
 

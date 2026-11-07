@@ -1104,10 +1104,10 @@ void frontnet_change_lobby_option(struct GuiButton *gbtn)
         } else {
             config->max_players++;
         }
-        if (config->max_players > MAX_NET_USERS) {
+        if (config->max_players > STOCK_NET_USERS) {
             config->max_players = min_players;
         } else if (config->max_players < min_players) {
-            config->max_players = MAX_NET_USERS;
+            config->max_players = STOCK_NET_USERS;
         }
     } else {
         uint8_t *toggle = lobby_option_toggle(config, option);

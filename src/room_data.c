@@ -641,7 +641,7 @@ void recount_and_reassociate_room_slabs(struct Room *room)
 {
     long n = 0;
     unsigned long k = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         struct SlabMap* slb = get_slabmap_direct(i);
@@ -656,7 +656,7 @@ void recount_and_reassociate_room_slabs(struct Room *room)
         slb->room_index = room->index;
         // Per room tile code ends
         k++;
-        if (k >= game.map_tiles_x*game.map_tiles_y)
+        if (k >= (int64_t)game.map_tiles_x * game.map_tiles_y)
         {
             ERRORLOG("Room slabs list length exceeded when sweeping");
             break;
@@ -674,10 +674,10 @@ void recount_and_reassociate_room_slabs(struct Room *room)
  */
 void get_room_mass_centre_coords(int32_t *mass_x, int32_t *mass_y, const struct Room *room)
 {
-    unsigned long tot_x = 0;
-    unsigned long tot_y = 0;
+    uint64_t tot_x = 0; // 64 bits: chunked-world slab coordinates are about 2^20
+    uint64_t tot_y = 0;
     unsigned long k = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         long slb_x = slb_num_decode_x(i);
@@ -917,7 +917,7 @@ void remove_slab_from_room_tiles_list(struct Room *room, MapSlabCoord slb_x, Map
     }
     // If the slab to remove is not first, we have to sweep the list
     unsigned short k = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         struct SlabMap* slb = get_slabmap_direct(i);
@@ -945,7 +945,7 @@ void remove_slab_from_room_tiles_list(struct Room *room, MapSlabCoord slb_x, Map
             break;
         }
     }
-    WARNLOG("Slab %d couldn't be found in room tiles list.",slb_num);
+    WARNLOG("Slab %llu couldn't be found in room tiles list.",(unsigned long long)slb_num);
     rmslb->next_in_room = 0;
     rmslb->room_index = 0;
 }
@@ -1214,7 +1214,7 @@ long calculate_cummulative_room_slabs_effeciency(const struct Room *room)
     SYNCDBG(7, "Starting for %s index %d owned by player %d", room_code_name(room->kind), (int)room->index, (int)room->owner);
     long score = 0;
     unsigned long k = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i != 0)
     {
         // Per room tile code
@@ -1438,7 +1438,7 @@ void init_room_sparks(struct Room *room)
         return;
     }
     unsigned long k = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i != 0)
     {
         long slb_x = slb_num_decode_x(i);
@@ -1467,7 +1467,7 @@ void init_room_sparks(struct Room *room)
 TbBool create_effects_on_room_slabs(struct Room *room, ThingModel effkind, long effrange, PlayerNumber effowner)
 {
     unsigned long k = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i != 0)
     {
         long slb_x = slb_num_decode_x(i);
@@ -1502,7 +1502,7 @@ TbBool create_effects_on_room_slabs(struct Room *room, ThingModel effkind, long 
 TbBool clear_dig_on_room_slabs(struct Room *room, PlayerNumber plyr_idx)
 {
     unsigned long k = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i != 0)
     {
         long slb_x = slb_num_decode_x(i);
@@ -1644,7 +1644,7 @@ TbBool find_random_position_at_area_of_room(struct Coord3d *pos, const struct Ro
 {
     // Find a random slab in the room to be used as our starting point
     long i = THING_RANDOM(thing, room->slabs_count);
-    unsigned long n = room->slabs_list;
+    SlabCodedCoords n = room->slabs_list;
     while (i > 0)
     {
         n = get_next_slab_number_in_room(n);
@@ -1925,7 +1925,7 @@ TbBool find_first_valid_position_for_thing_anywhere_in_room(const struct Thing *
     long block_radius = subtile_coord(thing_nav_block_sizexy(thing), 0) / 2;
 
     unsigned long k = 0;
-    unsigned long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         MapSubtlCoord slb_x = slb_num_decode_x(i);
@@ -2698,7 +2698,7 @@ void delete_room_slab_when_no_free_room_structures(MapCoord slb_x, MapCoord slb_
     }
 }
 
-TbBool find_random_valid_position_for_thing_in_room_avoiding_object_excluding_room_slab(struct Thing *thing, struct Room *room, struct Coord3d *pos, long slbnum)
+TbBool find_random_valid_position_for_thing_in_room_avoiding_object_excluding_room_slab(struct Thing *thing, struct Room *room, struct Coord3d *pos, SlabCodedCoords slbnum)
 {
     int nav_sizexy = subtile_coord(thing_nav_block_sizexy(thing), 0);
     if (room_is_invalid(room) || (room->slabs_count <= 0)) {
@@ -2708,7 +2708,7 @@ TbBool find_random_valid_position_for_thing_in_room_avoiding_object_excluding_ro
     struct RoomConfigStats* roomst = get_room_kind_stats(room->kind);
     long selected = THING_RANDOM(thing, room->slabs_count);
     unsigned long n = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     // Get the selected index
     while (i != 0)
     {
@@ -3592,7 +3592,7 @@ void delete_room_slabbed_objects(SlabCodedCoords slb_num)
                 }
                 i = thing->next_on_mapblk;
                 // Per-thing code start
-                if ((thing->parent_idx != slb_num) && (thing->class_id == TCls_Object))
+                if ((thing->parent_idx != slab_parent_key(slb_num)) && (thing->class_id == TCls_Object))
                 {
                     struct ObjectConfigStats* objst = get_object_model_stats(thing->model);
                     if ((objst->model_flags & OMF_DestroyedOnRoomPlace) != 0) {
@@ -3623,7 +3623,7 @@ void delete_room_slabbed_objects(SlabCodedCoords slb_num)
 static TbBool change_room_subtile_things_ownership(struct Room *room, MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx)
 {
     struct Map* mapblk = get_map_block_at(stl_x, stl_y);
-    long parent_idx = get_slab_number(subtile_slab(stl_x), subtile_slab(stl_y));
+    long parent_idx = slab_parent_key(get_slab_number(subtile_slab(stl_x), subtile_slab(stl_y)));
     unsigned long k = 0;
     long i = get_mapwho_thing_index(mapblk);
     while (i != 0)
@@ -3677,7 +3677,7 @@ static void change_room_map_element_ownership(struct Room *room, PlayerNumber pl
         increase_room_area(dungeon->owner, room->slabs_count);
     }
     unsigned long k = 0;
-    unsigned long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         MapSlabCoord slb_x = slb_num_decode_x(i);
@@ -3733,7 +3733,7 @@ void redraw_slab_map_elements(MapSlabCoord slb_x, MapSlabCoord slb_y)
 void redraw_room_map_elements(struct Room *room)
 {
     unsigned long k = 0;
-    unsigned long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         MapSlabCoord slb_x = slb_num_decode_x(i);
@@ -3758,7 +3758,7 @@ void redraw_room_map_elements(struct Room *room)
         }
         // Per-slab code end
         k++;
-        if (k > game.map_tiles_x*game.map_tiles_y)
+        if (k > (int64_t)game.map_tiles_x * game.map_tiles_y)
         {
             ERRORLOG("Infinite loop detected when sweeping room slabs");
             break;
@@ -3769,7 +3769,7 @@ void redraw_room_map_elements(struct Room *room)
 void do_room_unprettying(struct Room *room, PlayerNumber plyr_idx)
 {
     unsigned long k = 0;
-    unsigned long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         MapSlabCoord slb_x = slb_num_decode_x(i);
@@ -3779,7 +3779,7 @@ void do_room_unprettying(struct Room *room, PlayerNumber plyr_idx)
         do_unprettying(plyr_idx, slb_x, slb_y);
         // Per-slab code end
         k++;
-        if (k > game.map_tiles_x*game.map_tiles_y)
+        if (k > (int64_t)game.map_tiles_x * game.map_tiles_y)
         {
             ERRORLOG("Infinite loop detected when sweeping room slabs");
             break;

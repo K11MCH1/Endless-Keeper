@@ -45,6 +45,7 @@
 #include "moonphase.h"
 #include "ariadne_update.h"
 #include "replay.h"
+#include "world_pages.h"
 #include "user_prefs.h"
 #include "light_data.h"
 #include "map_ceiling.h"
@@ -52,6 +53,7 @@
 #include "map_data.h"
 #include "thing_creature.h"
 #include "kfx/platform/IPlatform.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #include <cstdlib>
@@ -109,8 +111,12 @@ enum SaveCheckResult SaveManager::Check(int slot, char *detail, size_t detail_le
         return SvChk_Missing;
     char reason[256];
     int title_ok;
-    enum SaveCheckResult result = savegame::CheckFile(Fs(), prepare_file_fmtpath(FGrp_Save, SAVED_GAME_FILENAME, slot),
-        nullptr, &title_ok, reason, sizeof(reason));
+    char fname[DISKPATH_SIZE];
+    snprintf(fname, sizeof(fname), "%s", prepare_file_fmtpath(FGrp_Save, SAVED_GAME_FILENAME, slot));
+    enum SaveCheckResult result = savegame::CheckFile(Fs(), fname, nullptr, &title_ok, reason, sizeof(reason));
+    // An endless world this build can't restore is refused here, before a load changes anything.
+    if (result == SvChk_Loadable)
+        result = savegame::CheckWorld(Fs(), fname, reason, sizeof(reason));
     if (result != SvChk_Loadable)
         SAVEWARN("slot %d can't be loaded: %s", slot, reason);
     set_detail(detail, detail_len, reason);
@@ -251,6 +257,23 @@ static TbBool apply_game_kfxs(const char *fname, struct LoadedSave *loaded_save,
             SAVEWARN("can't restore the Lua state of \"%s\"", fname);
             return false;
         }
+    }
+    if (read_result->world_len > 0)
+    {
+        if (!world_load_blob(read_result->world_data, read_result->world_len))
+        {
+            /* without its world the level can't run (a chunked map would run on the flat arrays) */
+            SAVEWARN("the endless world of \"%s\" could not be restored", fname);
+            return false;
+        }
+    } else
+    {
+        if (game.map_tiles_x == WP_PAGED_TILES)
+        {
+            SAVEWARN("\"%s\" is a chunked endless world without its world data", fname);
+            return false;
+        }
+        world_load_none();
     }
     rebuild_derived_game_state();
     update_trap_tab_to_config();

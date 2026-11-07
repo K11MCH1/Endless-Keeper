@@ -141,8 +141,12 @@ enum NavigationStateValues {
 #define NAVMAP_FLOORHEIGHT_MASK 0x0f
 #define NAVMAP_UNSAFE_SURFACE   0x10
 #define NAVMAP_OWNERSELECT_BIT  5
-#define NAVMAP_OWNERSELECT_MASK 0x3FE0
-#define NAVMAP_ABYSS            0x4000
+#define NAVMAP_OWNERSELECT_MASK 0x1FFFE0 /* bits 5-20: players 0-15, or an owner set (NAVMAP_OWNERSET_EXT) */
+#define NAVMAP_ABYSS            0x200000
+/** Bits 5-20 hold the index of an owner set (navmap_owner_set), not players 0-15: a door that blocks a player 16+. */
+#define NAVMAP_OWNERSET_EXT     0x400000
+/** Owner sets of one triangulation (cleared by init_navigation); 0 is never used. */
+#define NAVMAP_OWNER_SETS_MAX   4096
 
 struct Ariadne { // sizeof = 102
     /** Position where the journey stated. */
@@ -232,6 +236,15 @@ long thing_nav_block_sizexy(const struct Thing *thing);
 long thing_nav_sizexy(const struct Thing *thing);
 
 /******************************************************************************/
+/** A subtile's navigation colour (also in paged mode). */
+NavColour navmap_colour_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+/** The owner bits of a navigation colour for the players a door blocks: players 0-15 as bits 5-20 (as always), or
+ *  NAVMAP_OWNERSET_EXT and the index of the set when it has a player 16+. */
+NavColour navmap_owner_bits(PlayerBitFlags players);
+/** Whether a navigation colour's owner bits block the player. */
+TbBool navmap_owner_blocks(NavColour colour, PlayerNumber plyr_idx);
+void nav_refresh_area(MapSubtlCoord x1, MapSubtlCoord y1, MapSubtlCoord x2, MapSubtlCoord y2);
+
 #ifdef __cplusplus
 }
 #endif

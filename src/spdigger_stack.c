@@ -52,6 +52,7 @@
 #include "gui_soundmsgs.h"
 #include "front_simple.h"
 #include "game_legacy.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -184,7 +185,7 @@ void remove_task_from_all_other_players_digger_stacks(PlayerNumber skip_plyr_idx
         if (plyr_idx == skip_plyr_idx) {
             continue;
         }
-        long stl_num = get_subtile_number(stl_x, stl_y);
+        SubtlCodedCoords stl_num = get_subtile_number(stl_x, stl_y);
         long task_id = find_from_task_list(plyr_idx, stl_num);
         if (task_id >= 0)
         {
@@ -869,7 +870,7 @@ static int check_out_unreinforced_spiral(struct Thing *thing, int number_of_iter
                             if (setup_person_move_to_position(thing, stl_x, stl_y, 0))
                             {
                                 thing->continue_state = CrSt_ImpArrivesAtReinforce;
-                                cctrl->digger.working_stl = stl_num;
+                                cctrl->digger_working_stl = stl_num;
                                 cctrl->digger.consecutive_reinforcements = 0;
                                 return 1;
                             }
@@ -904,7 +905,7 @@ static long check_out_unreinforced_place(struct Thing *thing)
          0, 0, 0, 0};
 
     cctrl = creature_control_get_from_thing(thing);
-    working_stl = cctrl->digger.working_stl;
+    working_stl = cctrl->digger_working_stl;
     if (working_stl == 0)
         return check_out_unreinforced_spiral(thing, 1) != 0;
     const MapSlabCoord working_slb_x = subtile_slab(stl_num_decode_x(working_stl));
@@ -916,7 +917,7 @@ static long check_out_unreinforced_place(struct Thing *thing)
 
     MapSubtlCoord uncrowded_stl_x,uncrowded_stl_y;
     if (check_place_to_reinforce(thing, working_slb_x, working_slb_y) > 0
-        && check_out_uncrowded_reinforce_position(thing, cctrl->digger.working_stl, &uncrowded_stl_x, &uncrowded_stl_y) > 0
+        && check_out_uncrowded_reinforce_position(thing, cctrl->digger_working_stl, &uncrowded_stl_x, &uncrowded_stl_y) > 0
         && setup_person_move_to_position(thing, uncrowded_stl_x, uncrowded_stl_y, 0)
         )
     {
@@ -948,12 +949,12 @@ static long check_out_unreinforced_place(struct Thing *thing)
             around_idx = (around_idx + 2) % SMALL_AROUND_LENGTH;
             if (direction_attempt_count >= 4)
             {
-                cctrl->digger.working_stl = 0;
+                cctrl->digger_working_stl = 0;
                 return check_out_unreinforced_spiral(thing, 1) != 0;
             }
         }
         thing->continue_state = CrSt_ImpArrivesAtReinforce;
-        cctrl->digger.working_stl = stl_num;
+        cctrl->digger_working_stl = stl_num;
         cctrl->digger.consecutive_reinforcements = 0;
         return 1;
     }
@@ -1006,7 +1007,7 @@ static TbBool check_out_unreinforced_area(struct Thing *spdigtng)
     if ( min_distance == 28 || !setup_person_move_to_coord(spdigtng, &reinforce_pos, 0) )
         return false;
     spdigtng->continue_state = CrSt_ImpArrivesAtReinforce;
-    cctrl->digger.working_stl = final_working_stl;
+    cctrl->digger_working_stl = final_working_stl;
     cctrl->digger.consecutive_reinforcements = 0;
     return true;
 }
@@ -1077,13 +1078,13 @@ TbBool is_digging_indestructible_place(const struct Thing *creatng)
     cctrl = creature_control_get_from_thing(creatng);
     MapSlabCoord slb_x;
     MapSlabCoord slb_y;
-    slb_x = subtile_slab(stl_num_decode_x(cctrl->digger.task_stl));
-    slb_y = subtile_slab(stl_num_decode_y(cctrl->digger.task_stl));
+    slb_x = subtile_slab(stl_num_decode_x(cctrl->digger_task_stl));
+    slb_y = subtile_slab(stl_num_decode_y(cctrl->digger_task_stl));
     SYNCDBG(19,"Starting for %s index %d at %d,%d",thing_model_name(creatng),(int)creatng->index,(int)slb_x,(int)slb_y);
     // Note that digger task position stores the central subtile on slab to be excavated
     // which happens to be the same subtile as one stored in keeper map tasks
     long task_idx;
-    task_idx = find_dig_from_task_list(creatng->owner, cctrl->digger.task_stl);
+    task_idx = find_dig_from_task_list(creatng->owner, cctrl->digger_task_stl);
     if (task_idx != -1)
     {
         struct SlabMap *slb;
@@ -1104,8 +1105,8 @@ long check_out_undug_place(struct Thing *creatng)
     long n;
     SYNCDBG(19,"Starting");
     cctrl = creature_control_get_from_thing(creatng);
-    base_stl_x = stl_num_decode_x(cctrl->digger.task_stl);
-    base_stl_y = stl_num_decode_y(cctrl->digger.task_stl);
+    base_stl_x = stl_num_decode_x(cctrl->digger_task_stl);
+    base_stl_y = stl_num_decode_y(cctrl->digger_task_stl);
     n = THING_RANDOM(creatng, 4);
     for (i=0; i < 4; i++)
     {
@@ -1127,7 +1128,7 @@ long check_out_undug_place(struct Thing *creatng)
                 && setup_person_move_to_position(creatng, mv_x, mv_y, NavRtF_Default))
             {
                 cctrl->digger.task_idx = task_idx;
-                cctrl->digger.task_stl = task_pos;
+                cctrl->digger_task_stl = task_pos;
                 mtask = get_task_list_entry(creatng->owner, cctrl->digger.task_idx);
                 if (mtask->kind == SDDigTask_MineGold)
                 {
@@ -1197,8 +1198,8 @@ long get_nearest_undug_area_position_for_digger(struct Thing *thing, MapSubtlCoo
         tsk_max = MAPTASKS_COUNT;
     MapSubtlCoord digstl_y;
     MapSubtlCoord digstl_x;
-    digstl_x = stl_num_decode_x(cctrl->digger.task_stl);
-    digstl_y = stl_num_decode_y(cctrl->digger.task_stl);
+    digstl_x = stl_num_decode_x(cctrl->digger_task_stl);
+    digstl_y = stl_num_decode_y(cctrl->digger_task_stl);
     MapSubtlCoord best_dist;
     MapSubtlCoord best_stl_x;
     MapSubtlCoord best_stl_y;
@@ -1266,7 +1267,7 @@ long check_out_undug_area(struct Thing *thing)
     struct MapTask *mtask;
     mtask = &dungeon->task_list[tsk_id];
     cctrl->digger.task_idx = tsk_id;
-    cctrl->digger.task_stl = mtask->coords;
+    cctrl->digger_task_stl = mtask->coords;
     if (mtask->kind == SDDigTask_MineGold) {
         thing->continue_state = CrSt_ImpArrivesAtMineGold;
     } else {
@@ -1457,6 +1458,20 @@ enum SlabConnectedAreaOptions {
     SlbCAOpt_Processed = 0x02,
 };
 
+/* Paged mode (world_pages.h): the virtual map is far too big for a slab options map indexed by slab number, so the
+ * map has a cell per loaded slab (wp_cells_begin, wp_slab_cell); every slab of a chunk that isn't loaded shares one
+ * extra cell at index slbopt_cells, marked as a processed border so the search never enters it. */
+static SlabCodedCoords slbopt_cells = 0;
+
+/** Index of a slab in the slab options map: the slab number normally, its cell in paged mode. */
+static SlabCodedCoords slbopt_index(MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    if (!world_paged)
+        return get_slab_number(slb_x, slb_y);
+    const int32_t cell = wp_slab_cell(slb_x, slb_y);
+    return (cell < 0) ? slbopt_cells : (SlabCodedCoords)cell;
+}
+
 /**
  * Prepares slab options map used for finding pretty and convert tasks for diggers.
  * @param dungeon Target dungeon for which tasks are to be searched.
@@ -1466,6 +1481,26 @@ void add_pretty_and_convert_to_imp_stack_prepare(struct Dungeon *dungeon, unsign
 {
     MapSlabCoord slb_x;
     MapSlabCoord slb_y;
+    if (world_paged)
+    {
+        // Paged mode: a cell per loaded slab; the outside cell (every unloaded slab) is a processed border
+        const int npages = (int)(slbopt_cells / WP_CHUNK_SLAB_CELLS);
+        for (int n = 0; n < npages; n++)
+        {
+            struct WorldPage *pg = wp_cells_page(n);
+            for (int i = 0; i < WP_CHUNK_SLAB_CELLS; i++)
+            {
+                SlabCodedCoords slb_num = (SlabCodedCoords)n * WP_CHUNK_SLAB_CELLS + i;
+                struct SlabConfigStats *slabst = get_slab_stats(&pg->slab[i]);
+                slbopt[slb_num] = 0;
+                if ((slabst->block_flags & (SlbAtFlg_Filled|SlbAtFlg_Digable|SlbAtFlg_Valuable)) != 0) {
+                    slbopt[slb_num] |= SlbCAOpt_Border;
+                }
+            }
+        }
+        slbopt[slbopt_cells] = SlbCAOpt_Border|SlbCAOpt_Processed;
+        return;
+    }
     // Clear our slab options array and mark tall slabs with SlbCAOpt_Border
     for (slb_y=0; slb_y < game.map_tiles_y; slb_y++)
     {
@@ -1502,7 +1537,7 @@ long add_pretty_and_convert_to_imp_stack_starting_from_pos(struct Dungeon *dunge
     MapSlabCoord base_slb_x = subtile_slab(start_pos->x.stl.num);
     MapSlabCoord base_slb_y = subtile_slab(start_pos->y.stl.num);
     struct SlabMap *slb;
-    SlabCodedCoords slb_num = get_slab_number(base_slb_x, base_slb_y);
+    SlabCodedCoords slb_num = slbopt_index(base_slb_x, base_slb_y);
     slbopt[slb_num] |= SlbCAOpt_Processed;
 
     TbBool extra_handle = false;
@@ -1517,7 +1552,7 @@ long add_pretty_and_convert_to_imp_stack_starting_from_pos(struct Dungeon *dunge
         {
             slb_x = base_slb_x + (long)small_around[n].delta_x;
             slb_y = base_slb_y + (long)small_around[n].delta_y;
-            slb_num = get_slab_number(slb_x, slb_y);
+            slb_num = slbopt_index(slb_x, slb_y);
             // Per around code
             if ((slbopt[slb_num] & SlbCAOpt_Border) != 0)
             {
@@ -1560,6 +1595,40 @@ long add_pretty_and_convert_to_imp_stack_starting_from_pos(struct Dungeon *dunge
             // The area not connected to the heart
             // We added additional processing before the original exit to ensure that it does not affect the default behavior
             extra_handle = true;
+            if (world_paged)
+            {
+                // Paged mode: the loaded slabs in row-major order (pages sorted by chunk row, then column)
+                const int npages = (int)(slbopt_cells / WP_CHUNK_SLAB_CELLS);
+                for (int g = 0; g < npages; )
+                {
+                    int e = g + 1;
+                    while ((e < npages) && (wp_cells_page(e)->cy == wp_cells_page(g)->cy))
+                        e++;
+                    for (int y = 0; y < WP_CHUNK_SLABS; y++)
+                    {
+                        for (int k = g; k < e; k++)
+                        {
+                            struct WorldPage *pg = wp_cells_page(k);
+                            for (int x = 0; x < WP_CHUNK_SLABS; x++)
+                            {
+                                slb_num = (SlabCodedCoords)k * WP_CHUNK_SLAB_CELLS + y * WP_CHUNK_SLABS + x;
+                                slb = &pg->slab[y * WP_CHUNK_SLABS + x];
+                                if ( (slbopt[slb_num] & SlbCAOpt_Processed) == 0
+                                  && (slbopt[slb_num] & SlbCAOpt_Border) == 0
+                                  && slabmap_owner(slb) == dungeon->owner
+                                  )
+                                {
+                                    slbopt[slb_num] |= SlbCAOpt_Processed;
+                                    slblist[slblicount].x = pg->cx * WP_CHUNK_SLABS + x;
+                                    slblist[slblicount].y = pg->cy * WP_CHUNK_SLABS + y;
+                                    slblicount++;
+                                }
+                            }
+                        }
+                    }
+                    g = e;
+                }
+            } else
             for (slb_y=0; slb_y < game.map_tiles_y; slb_y++)
             {
                 for (slb_x=0; slb_x < game.map_tiles_x; slb_x++)
@@ -1620,6 +1689,21 @@ int add_pretty_and_convert_to_imp_stack(struct Dungeon *dungeon, int max_tasks)
     unsigned char *slbopt;
     struct SlabCoord *slblist;
     slbopt = big_scratch;
+    if (world_paged)
+    {
+        // Paged mode: the slab options map has a cell per loaded slab, plus the outside cell
+        const int npages = wp_cells_begin();
+        if (npages <= 0)
+            return 0;
+        size_t cells = (size_t)npages * WP_CHUNK_SLAB_CELLS;
+        size_t list_offs = (cells + 1 + 7) & ~(size_t)7;
+        if (list_offs + cells * sizeof(struct SlabCoord) > 16u * 1024 * 1024) {
+            WARNLOG("%d loaded chunks are too many for the digger task search", npages);
+            return 0;
+        }
+        slbopt_cells = (SlabCodedCoords)cells;
+        slblist = (struct SlabCoord *)(big_scratch + list_offs);
+    } else
     slblist = (struct SlabCoord *)(big_scratch + game.map_tiles_x*game.map_tiles_y);
     add_pretty_and_convert_to_imp_stack_prepare(dungeon, slbopt);
     add_pretty_and_convert_to_imp_stack_starting_from_pos(dungeon, slbopt, slblist, &start_pos, &remain_num);
@@ -3016,7 +3100,7 @@ long check_out_worker_reinforce_wall(struct Thing *thing, struct DiggerStack *ds
     }
     thing->continue_state = CrSt_ImpArrivesAtReinforce;
     cctrl->digger.consecutive_reinforcements = 0;
-    cctrl->digger.working_stl = dstack->stl_num;
+    cctrl->digger_working_stl = dstack->stl_num;
     cctrl->digger.last_did_job = SDLstJob_ReinforceWallUnprompted;
     return 1;
 }
@@ -3387,7 +3471,7 @@ long check_out_worker_dig_or_mine(struct Thing *thing, struct DiggerStack *dstac
     struct CreatureControl *cctrl;
     cctrl = creature_control_get_from_thing(thing);
     cctrl->digger.task_idx = i;
-    cctrl->digger.task_stl = dstack->stl_num;
+    cctrl->digger_task_stl = dstack->stl_num;
     cctrl->digger.last_did_job = SDLstJob_DigOrMine;
     struct MapTask *task;
     task = get_task_list_entry(thing->owner, i);

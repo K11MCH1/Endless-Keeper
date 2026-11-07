@@ -146,6 +146,8 @@ extern TbFileHandle jty_file_handle;
 
 extern long x_init_off;
 extern long y_init_off;
+extern MapSubtlCoord render_base_stl_x;
+extern MapSubtlCoord render_base_stl_y;
 extern struct Thing *thing_being_displayed;
 
 extern unsigned char temp_cluedo_mode;
@@ -155,6 +157,7 @@ extern TbSpriteData keepersprite_add[KEEPERSPRITE_ADD_NUM];
 /*****************************************************************************/
 float interpolate(float previous, float current);
 float interpolate_synced(float previous, float current);
+MapCoord interpolate_coord_synced(MapCoord previous, MapCoord current);
 struct ThingInterpolateResult interpolate_thing(struct Thing *thing);
 
 int floor_height_for_volume_box(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y);

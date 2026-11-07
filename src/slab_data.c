@@ -30,6 +30,7 @@
 #include "game_legacy.h"
 #include "creature_states.h"
 #include "map_data.h"
+#include "world_pages.h"
 #include "post_inc.h"
 #include "lua_triggers.h"
 
@@ -48,7 +49,7 @@ SlabCodedCoords get_slab_number(MapSlabCoord slb_x, MapSlabCoord slb_y)
   if (slb_y > game.map_tiles_y) slb_y = game.map_tiles_y;
   if (slb_x < 0)  slb_x = 0;
   if (slb_y < 0) slb_y = 0;
-  return slb_y*(game.map_tiles_x) + (SlabCodedCoords)slb_x;
+  return (SlabCodedCoords)slb_y*(game.map_tiles_x) + (SlabCodedCoords)slb_x;
 }
 
 /**
@@ -56,7 +57,9 @@ SlabCodedCoords get_slab_number(MapSlabCoord slb_x, MapSlabCoord slb_y)
  */
 MapSlabCoord slb_num_decode_x(SlabCodedCoords slb_num)
 {
-  return slb_num % (game.map_tiles_x);
+  if (world_paged)
+      return (MapSlabCoord)(slb_num & ((1ULL << WP_SLB_ROW_BITS) - 1));
+  return (MapSlabCoord)(slb_num % (game.map_tiles_x));
 }
 
 /**
@@ -64,7 +67,9 @@ MapSlabCoord slb_num_decode_x(SlabCodedCoords slb_num)
  */
 MapSlabCoord slb_num_decode_y(SlabCodedCoords slb_num)
 {
-  return (slb_num/(game.map_tiles_x))%game.map_tiles_y;
+  if (world_paged)
+      return (MapSlabCoord)(slb_num >> WP_SLB_ROW_BITS);
+  return (MapSlabCoord)((slb_num/(game.map_tiles_x))%game.map_tiles_y);
 }
 
 /**
@@ -72,7 +77,9 @@ MapSlabCoord slb_num_decode_y(SlabCodedCoords slb_num)
  */
 struct SlabMap *get_slabmap_direct(SlabCodedCoords slab_num)
 {
-  if (slab_num >= game.map_tiles_x*game.map_tiles_y)
+  if (world_paged)
+      return get_slabmap_block(slb_num_decode_x(slab_num), slb_num_decode_y(slab_num));
+  if (slab_num >= (SlabCodedCoords)game.map_tiles_x*game.map_tiles_y)
       return INVALID_SLABMAP_BLOCK;
   return &game.slabmap[slab_num];
 }
@@ -82,11 +89,16 @@ struct SlabMap *get_slabmap_direct(SlabCodedCoords slab_num)
  */
 struct SlabMap *get_slabmap_block(MapSlabCoord slab_x, MapSlabCoord slab_y)
 {
+  if (world_paged)
+  {
+      struct WorldPage *pg = wp_page_of_slab(slab_x, slab_y);
+      return (pg != NULL) ? &pg->slab[wp_slb_index(slab_x, slab_y)] : INVALID_SLABMAP_BLOCK;
+  }
   if ((slab_x < 0) || (slab_x >= game.map_tiles_x))
       return INVALID_SLABMAP_BLOCK;
   if ((slab_y < 0) || (slab_y >= game.map_tiles_y))
       return INVALID_SLABMAP_BLOCK;
-  return &game.slabmap[slab_y*(game.map_tiles_x) + slab_x];
+  return &game.slabmap[(SlabCodedCoords)slab_y*(game.map_tiles_x) + slab_x];
 }
 
 /**
@@ -96,11 +108,13 @@ struct SlabMap *get_slabmap_block(MapSlabCoord slab_x, MapSlabCoord slab_y)
  */
 struct SlabMap *get_slabmap_for_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
+    if (world_paged)
+        return get_slabmap_block(subtile_slab(stl_x), subtile_slab(stl_y));
     if ((stl_x < 0) || (stl_x >= game.map_subtiles_x))
         return INVALID_SLABMAP_BLOCK;
     if ((stl_y < 0) || (stl_y >= game.map_subtiles_y))
         return INVALID_SLABMAP_BLOCK;
-    return &game.slabmap[subtile_slab(stl_y)*(game.map_tiles_x) + subtile_slab(stl_x)];
+    return &game.slabmap[(SlabCodedCoords)subtile_slab(stl_y)*(game.map_tiles_x) + subtile_slab(stl_x)];
 }
 
 /**
@@ -131,6 +145,8 @@ TbBool slabmap_block_invalid(const struct SlabMap *slb)
         return true;
     if (slb == INVALID_SLABMAP_BLOCK)
         return true;
+    if (world_paged)
+        return false; /* page blocks can be anywhere in memory */
     return (slb < &game.slabmap[0]);
 }
 
@@ -170,11 +186,11 @@ void set_slab_owner(MapSlabCoord slb_x, MapSlabCoord slb_y, PlayerNumber owner)
     struct Dungeon *dungeon = get_dungeon(owner);
     if (dungeon->texture_pack == 0)
     {
-        game.slab_ext_data[get_slab_number(slb_x,slb_y)] = game.slab_ext_data_initial[get_slab_number(slb_x,slb_y)];
+        (*slab_ext_ptr(get_slab_number(slb_x,slb_y))) = (*slab_ext_initial_ptr(get_slab_number(slb_x,slb_y)));
     }
     else
     {
-        game.slab_ext_data[get_slab_number(slb_x,slb_y)] = dungeon->texture_pack;
+        (*slab_ext_ptr(get_slab_number(slb_x,slb_y))) = dungeon->texture_pack;
     }
     slb->owner = owner;
     if(old_owner != owner)
@@ -208,9 +224,14 @@ void slabmap_set_wlb(struct SlabMap *slb, unsigned long wlb_type)
  */
 SlabCodedCoords get_next_slab_number_in_room(SlabCodedCoords slab_num)
 {
-    if (slab_num >= game.map_tiles_x * game.map_tiles_y)
+    if (world_paged)
     {
-        ERRORLOG("Slabnumber %u exceeds map dimensions %d*%d", slab_num, game.map_tiles_x, game.map_tiles_y);
+        struct SlabMap *slb = get_slabmap_direct(slab_num);
+        return slabmap_block_invalid(slb) ? 0 : slb->next_in_room;
+    }
+    if (slab_num >= (SlabCodedCoords)game.map_tiles_x * game.map_tiles_y)
+    {
+        ERRORLOG("Slabnumber %llu exceeds map dimensions %d*%d", (unsigned long long)slab_num, game.map_tiles_x, game.map_tiles_y);
         return 0;
     }
     return game.slabmap[slab_num].next_in_room;
@@ -432,16 +453,79 @@ TbBool room_can_build_on_bridge_slab(RoomKind rkind, SlabKind slbkind)
     return false;
 }
 
+/** The texture pack of a slab (game.slab_ext_data), as a pointer that can be written. A slab outside the map or
+ *  in a chunk that isn't loaded gives a scratch byte (0). */
+unsigned char *slab_ext_ptr(SlabCodedCoords slb_num)
+{
+    static unsigned char scratch;
+    if (world_paged)
+    {
+        MapSlabCoord x = slb_num_decode_x(slb_num), y = slb_num_decode_y(slb_num);
+        struct WorldPage *pg = wp_page_of_slab(x, y);
+        if (pg != NULL)
+            return &pg->ext[wp_slb_index(x, y)];
+        scratch = 0;
+        return &scratch;
+    }
+    if (slb_num >= (SlabCodedCoords)MAX_TILES_X * MAX_TILES_Y)
+    {
+        scratch = 0;
+        return &scratch;
+    }
+    return &game.slab_ext_data[slb_num];
+}
+
+/** What a slab object keeps in its 16-bit parent_idx for its slab: the slab number on normal maps (they all
+ *  fit); on the endless world's paged map, whose slab numbers don't, the low 8 bits of x and 7 bits of y. Objects
+ *  are only matched against the slab they stand on or next to, so slabs 128 or more apart may share a key. */
+short slab_parent_key(SlabCodedCoords slb_num)
+{
+    if (!world_paged)
+        return (short)slb_num;
+    return (short)(((slb_num_decode_y(slb_num) & 0x7F) << 8) | (slb_num_decode_x(slb_num) & 0xFF));
+}
+
+/** What a slab's texture goes back to when nobody owns it (game.slab_ext_data_initial); as slab_ext_ptr. */
+unsigned char *slab_ext_initial_ptr(SlabCodedCoords slb_num)
+{
+    static unsigned char scratch;
+    if (world_paged)
+    {
+        MapSlabCoord x = slb_num_decode_x(slb_num), y = slb_num_decode_y(slb_num);
+        struct WorldPage *pg = wp_page_of_slab(x, y);
+        if (pg != NULL)
+            return &pg->ext_initial[wp_slb_index(x, y)];
+        scratch = 0;
+        return &scratch;
+    }
+    if (slb_num >= (SlabCodedCoords)MAX_TILES_X * MAX_TILES_Y)
+    {
+        scratch = 0;
+        return &scratch;
+    }
+    return &game.slab_ext_data_initial[slb_num];
+}
+
 /**
  * Clears all SlabMap structures in the map.
  */
 void clear_slabs(void)
 {
+    if (world_paged)
+    {
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+            for (int i = 0; i < WP_CHUNK_SLAB_CELLS; i++)
+            {
+                memset(&pg->slab[i], 0, sizeof(struct SlabMap));
+                pg->slab[i].kind = SlbT_ROCK;
+            }
+        return;
+    }
     for (unsigned long y = 0; y < game.map_tiles_y; y++)
     {
         for (unsigned long x = 0; x < game.map_tiles_x; x++)
         {
-            struct SlabMap* slb = &game.slabmap[y * game.map_tiles_x + x];
+            struct SlabMap* slb = &game.slabmap[(SlabCodedCoords)y * game.map_tiles_x + x];
             memset(slb, 0, sizeof(struct SlabMap));
             slb->kind = SlbT_ROCK;
         }
@@ -483,7 +567,7 @@ long calculate_effeciency_score_for_room_slab(SlabCodedCoords slab_num, PlayerNu
     long n;
     for (n=1; n < AROUND_SLAB_LENGTH; n+=2)
     {
-        long round_slab_num = slab_num + game.around_slab[n];
+        SlabCodedCoords round_slab_num = slab_num + game.around_slab[n];
         struct SlabMap* round_slb = get_slabmap_direct(round_slab_num);
         if (!slabmap_block_invalid(round_slb))
         {
@@ -536,7 +620,7 @@ long calculate_effeciency_score_for_room_slab(SlabCodedCoords slab_num, PlayerNu
     // Make sure this is room inside by checking corners
     for (n=0; n < AROUND_SLAB_LENGTH; n+=2)
     {
-        long round_slab_num = slab_num + game.around_slab[n];
+        SlabCodedCoords round_slab_num = slab_num + game.around_slab[n];
         struct SlabMap* round_slb = get_slabmap_direct(round_slab_num);
         if (!slabmap_block_invalid(round_slb))
         {
@@ -560,6 +644,21 @@ long calculate_effeciency_score_for_room_slab(SlabCodedCoords slab_num, PlayerNu
  */
 void reveal_whole_map(struct PlayerInfo *player)
 {
+    if (world_paged)
+    {
+        // Paged mode: the whole map is the loaded chunks
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+        {
+            const MapSlabCoord slb_x = pg->cx * WP_CHUNK_SLABS;
+            const MapSlabCoord slb_y = pg->cy * WP_CHUNK_SLABS;
+            const MapSubtlCoord stl_x = pg->cx * WP_CHUNK_STL;
+            const MapSubtlCoord stl_y = pg->cy * WP_CHUNK_STL;
+            clear_dig_for_map_rect(player->id_number, slb_x, slb_x + WP_CHUNK_SLABS, slb_y, slb_y + WP_CHUNK_SLABS);
+            reveal_map_rect(player->id_number, stl_x, stl_x + WP_CHUNK_STL, stl_y, stl_y + WP_CHUNK_STL);
+            panel_map_update(stl_x, stl_y, WP_CHUNK_STL, WP_CHUNK_STL);
+        }
+        return;
+    }
     clear_dig_for_map_rect(player->id_number, 0, game.map_tiles_x, 0, game.map_tiles_y);
     reveal_map_rect(player->id_number, 1, game.map_subtiles_x, 1, game.map_subtiles_y);
     panel_map_update(0, 0, game.map_subtiles_x+1, game.map_subtiles_y+1);
@@ -894,20 +993,24 @@ void set_player_texture(PlayerNumber plyr_idx, long texture_id)
     else
         dungeon->texture_pack = texture_id;
 
-    for (MapSlabCoord slb_y=0; slb_y < game.map_tiles_y; slb_y++)
+    // Paged mode: only the loaded chunks' bounding box
+    MapSlabCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_tiles_x - 1, loop_y2 = game.map_tiles_y - 1;
+    if (world_paged)
+        map_loop_slab_bounds(&loop_x1, &loop_y1, &loop_x2, &loop_y2);
+    for (MapSlabCoord slb_y=loop_y1; slb_y <= loop_y2; slb_y++)
     {
-        for (MapSlabCoord slb_x=0; slb_x < game.map_tiles_x; slb_x++)
+        for (MapSlabCoord slb_x=loop_x1; slb_x <= loop_x2; slb_x++)
         {
             struct SlabMap* slb = get_slabmap_block(slb_x,slb_y);
             if (slabmap_owner(slb) == plyr_idx)
             {
                 if (reset)
                 {
-                    game.slab_ext_data[get_slab_number(slb_x,slb_y)] = game.slab_ext_data_initial[get_slab_number(slb_x,slb_y)];
+                    (*slab_ext_ptr(get_slab_number(slb_x,slb_y))) = (*slab_ext_initial_ptr(get_slab_number(slb_x,slb_y)));
                 }
                 else
                 {
-                    game.slab_ext_data[get_slab_number(slb_x,slb_y)] = texture_id;
+                    (*slab_ext_ptr(get_slab_number(slb_x,slb_y))) = texture_id;
                 }
             }
         }

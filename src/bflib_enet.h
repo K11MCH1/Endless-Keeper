@@ -16,6 +16,7 @@
 #define GIT_BFLIB_ENET_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,6 +33,8 @@ enum {
 struct NetSP;
 struct NetSP* InitEnetSP();
 uint32_t GetPing(int id);
+/** How long a silent peer is kept before it is dropped (also applied to the peers connected now). */
+void LbNetwork_SetPeerTimeout(unsigned long timeout_ms);
 uint32_t GetPlayersPing(void);
 unsigned int GetPacketLoss(int id);
 unsigned int GetClientDataInTransit();
@@ -45,6 +48,9 @@ extern char external_ipv4_address[64];
 extern int skip_holepunch;
 uint16_t enet_get_bound_port(void);
 uint16_t enet_get_bound_ipv6_port(void);
+int enet_user_ms_since_receive(int user);
+/** A connected user's IP address as text (a dedicated server's console and bans); 0 when there is one. */
+int enet_user_address(int user, char *buf, size_t len);
 
 #ifdef __cplusplus
 }

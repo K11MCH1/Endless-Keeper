@@ -38,11 +38,14 @@ void network_spectator_evict_stalled_user(const struct NetUser *returning);
 void network_spectator_seat_users(void);
 TbError process_network_spectator_seat(NetUserId source, const char *buffer, size_t size);
 void network_spectator_finish_seat(void);
+void network_spectator_thin_notice(void);
 
 TbBool network_user_is_spectator(NetUserId user_id);
 void network_spectator_update_roles(void);
 void network_spectator_clear_roles(void);
 void network_spectator_reset(void);
+/** Dedicated server: the host watches as an observer; its keeper becomes a free seat. */
+void network_host_become_observer(void);
 void network_spectator_init_icons(uint32_t seed);
 enum PacketExchangeResult network_spectator_load_turn(TbBigChecksum checksum);
 void network_spectator_prepare_turn(TbBigChecksum checksum);

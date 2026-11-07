@@ -47,6 +47,7 @@
 #include "cursor_tag.h"
 #include "player_instances.h"
 #include "room_workshop.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -320,6 +321,16 @@ TbBool update_trap_trigger_line_of_sight_90(struct Thing *traptng)
         stl_x_aft = stl_x_end + line_of_sight_90_range;
         if (stl_x_aft >= game.map_subtiles_x+1)
             stl_x_aft = game.map_subtiles_x+1;
+        if (world_paged)
+        {
+            // Paged mode: an unlimited range ends at the loaded chunks, not millions of subtiles away
+            MapSubtlCoord sx1, sy1, sx2, sy2;
+            map_loop_subtile_bounds(&sx1, &sy1, &sx2, &sy2);
+            stl_y_pre = max(stl_y_pre, sy1);
+            stl_y_aft = min(stl_y_aft, sy2);
+            stl_x_pre = max(stl_x_pre, sx1);
+            stl_x_aft = min(stl_x_aft, sx2);
+        }
     }
     MapSubtlCoord stl_x;
     MapSubtlCoord stl_y;
@@ -329,7 +340,7 @@ TbBool update_trap_trigger_line_of_sight_90(struct Thing *traptng)
         for (stl_y = stl_y_beg; stl_y >= stl_y_pre; stl_y--)
         {
             struct Map* mapblk = get_map_block_at(stl_x, stl_y);
-            if ((mapblk->flags & SlbAtFlg_Blocking) != 0) {
+            if (((mapblk->flags & SlbAtFlg_Blocking) != 0) || (world_paged && map_block_invalid(mapblk))) {
                 stl_y_pre = stl_y + 1;
                 break;
             }
@@ -351,7 +362,7 @@ TbBool update_trap_trigger_line_of_sight_90(struct Thing *traptng)
         for (stl_y = stl_y_end; stl_y <= stl_y_aft; stl_y++)
         {
             struct Map* mapblk = get_map_block_at(stl_x, stl_y);
-            if ((mapblk->flags & SlbAtFlg_Blocking) != 0) {
+            if (((mapblk->flags & SlbAtFlg_Blocking) != 0) || (world_paged && map_block_invalid(mapblk))) {
                 stl_y_aft = stl_y - 1;
                 break;
             }
@@ -373,7 +384,7 @@ TbBool update_trap_trigger_line_of_sight_90(struct Thing *traptng)
         for (stl_x=stl_x_end; stl_x <= stl_x_aft; stl_x++)
         {
             struct Map* mapblk = get_map_block_at(stl_x, stl_y);
-            if ((mapblk->flags & SlbAtFlg_Blocking) != 0) {
+            if (((mapblk->flags & SlbAtFlg_Blocking) != 0) || (world_paged && map_block_invalid(mapblk))) {
                 stl_x_aft = stl_x - 1;
                 break;
             }
@@ -395,7 +406,7 @@ TbBool update_trap_trigger_line_of_sight_90(struct Thing *traptng)
         for (stl_x=stl_x_beg; stl_x >= stl_x_pre; stl_x--)
         {
             struct Map* mapblk = get_map_block_at(stl_x, stl_y);
-            if ((mapblk->flags & SlbAtFlg_Blocking) != 0) {
+            if (((mapblk->flags & SlbAtFlg_Blocking) != 0) || (world_paged && map_block_invalid(mapblk))) {
                 stl_x_pre = stl_x + 1;
                 break;
             }

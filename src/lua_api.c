@@ -33,6 +33,7 @@
 #include "lua_api_sound.h"
 
 
+#include "slab_data.h"
 #include "post_inc.h"
 
 /**********************************************/
@@ -2123,8 +2124,8 @@ static int lua_Change_slab_texture(lua_State *L)
     else
     {
         SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
-        game.slab_ext_data[slb_num] = texture_id;
-        game.slab_ext_data_initial[slb_num] = texture_id;
+        (*slab_ext_ptr(slb_num)) = texture_id;
+        (*slab_ext_initial_ptr(slb_num)) = texture_id;
     }
 
     return 0;

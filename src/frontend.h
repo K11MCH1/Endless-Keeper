@@ -32,7 +32,7 @@ extern "C" {
 // Limits for GUI arrays
 #define ACTIVE_BUTTONS_COUNT        100
 #define DOUBLE_CLICK_MS 250
-#define MENU_LIST_ITEMS_COUNT       52
+#define MENU_LIST_ITEMS_COUNT       54
 #define FRONTEND_BUTTON_INFO_COUNT 118
 #define NET_MESSAGES_COUNT           8
 #define NET_MESSAGE_LEN             192
@@ -88,6 +88,9 @@ enum FrontendMenuStates {
   FeSt_CAMPAIGN_INTRO,
   FeSt_MAPPACK_SELECT,
   FeSt_SKIRMISH_LOBBY,
+  FeSt_ENDLESS_MENU, /**< Endless Mode menu (world_menu.c): Continue, New Run, Load Game. */
+  FeSt_ENDLESS_LOAD, /**< Endless Mode: the list of endless saves. */
+  FeSt_WORLD_LIST, /**< Endless Mode: the world list (servers, an address, the menu chat). */
   // Special testing states
   FeSt_FONT_TEST          = 255,
 };
@@ -292,8 +295,9 @@ extern unsigned long playing_bad_descriptive_speech;
 extern unsigned long playing_good_descriptive_speech;
 extern long scrolling_index;
 extern float scrolling_offset;
-extern long packet_left_button_double_clicked[6];
-extern long packet_left_button_click_space_count[6];
+#define FRONTEND_CLICK_USERS 104 /* per user, one for each packet (PACKETS_COUNT): it was 6, which endless worlds with 7+ users overran into button_sprites */
+extern long packet_left_button_double_clicked[FRONTEND_CLICK_USERS];
+extern long packet_left_button_click_space_count[FRONTEND_CLICK_USERS];
 extern char frontend_alliances;
 extern char busy_doing_gui;
 extern long gui_last_left_button_pressed_id;
@@ -365,6 +369,7 @@ void finish_button_area_input(void);
 const char *frontend_button_caption_text(const struct GuiButton *gbtn);
 int frontend_button_caption_font(const struct GuiButton *gbtn, long mouse_over_btn_idx);
 void maintain_loadsave(struct GuiButton *gbtn);
+void maintain_save(struct GuiButton *gbtn);
 void gui_video_cluedo_maintain(struct GuiButton *gbtn);
 void maintain_zoom_to_event(struct GuiButton *gbtn);
 void maintain_scroll_up(struct GuiButton *gbtn);

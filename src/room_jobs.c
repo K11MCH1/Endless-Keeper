@@ -279,7 +279,7 @@ struct Thing *find_object_in_room_for_creature_matching_bool_filter(struct Thing
     }
     long selected = THING_RANDOM(creatng, room->slabs_count);
     unsigned long k = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i != 0)
     {
         MapSubtlCoord stl_x = slab_subtile_center(slb_num_decode_x(i));

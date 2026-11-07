@@ -56,6 +56,8 @@
 #include "bflib_planar.h"
 #include "kfx/profiling/KfxProfilingC.h"
 #include "kfx/ai/TargetSearchProbe.h"
+#include "world_pages.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -412,6 +414,22 @@ long highest_score_thing_filter_is_enemy_within_distance_which_can_be_attacked_b
     }
     struct Thing* creatng = thing_get(param->primary_number);
 
+    /* the distance first: an enemy farther than asked, or than the creature can hear or see, is turned down by the
+       checks below anyway (creature_can_have_combat_with_creature), and in a big world most creatures are far */
+    TSP_ZONE_BEGIN(z_dist, "TS/Filter: Distance");
+    long distance = get_combat_distance(creatng, thing);
+    TSP_ZONE_END(z_dist);
+    if (distance >= param->secondary_number) {
+        TSP_INC(TSP_Rej_Distance);
+        return -1;
+    }
+    if (thing_is_creature(creatng))
+    {
+        const struct CreatureModelConfig *crconf = creature_stats_get_from_thing(creatng);
+        if ((distance > subtile_coord(crconf->hearing, 0)) && (distance > subtile_coord(crconf->visual_range, 0)))
+            return -1;
+    }
+
     TSP_ZONE_BEGIN(z_wa, "TS/Filter: WillAttack");
     TbBool will_attack = creature_will_attack_creature(creatng, thing);
     TSP_ZONE_END(z_wa);
@@ -424,14 +442,6 @@ long highest_score_thing_filter_is_enemy_within_distance_which_can_be_attacked_b
     TSP_ZONE_END(z_ic);
     if (in_combat) {
         TSP_INC(TSP_Rej_InCombat);
-        return -1;
-    }
-
-    TSP_ZONE_BEGIN(z_dist, "TS/Filter: Distance");
-    long distance = get_combat_distance(creatng, thing);
-    TSP_ZONE_END(z_dist);
-    if (distance >= param->secondary_number) {
-        TSP_INC(TSP_Rej_Distance);
         return -1;
     }
 
@@ -1346,35 +1356,47 @@ void update_things(void)
     KFX_C_PLOT("Creatures", game.thing_lists[TngList_Creatures].count);
     TSP_EMIT_TURN();
 
+    int64_t wp_t0 = world_prof_now();
     KFX_C_ZONE_BEGIN(ctx_creatures, "update_things: Creatures");
     update_things_in_list(&game.thing_lists[TngList_Creatures]);
     update_creatures_not_in_list();
     KFX_C_ZONE_END(ctx_creatures);
+    world_prof_sum(WPS_TCreatures, wp_t0);
 
+    wp_t0 = world_prof_now();
     KFX_C_ZONE_BEGIN(ctx_traps, "update_things: Traps");
     update_things_in_list(&game.thing_lists[TngList_Traps]);
     KFX_C_ZONE_END(ctx_traps);
+    world_prof_sum(WPS_TTraps, wp_t0);
 
+    wp_t0 = world_prof_now();
     KFX_C_ZONE_BEGIN(ctx_shots, "update_things: Shots");
     update_things_in_list(&game.thing_lists[TngList_Shots]);
     KFX_C_ZONE_END(ctx_shots);
+    world_prof_sum(WPS_TShots, wp_t0);
 
+    wp_t0 = world_prof_now();
     KFX_C_ZONE_BEGIN(ctx_objects, "update_things: Objects");
     update_things_in_list(&game.thing_lists[TngList_Objects]);
     KFX_C_ZONE_END(ctx_objects);
+    world_prof_sum(WPS_TObjects, wp_t0);
 
+    wp_t0 = world_prof_now();
     KFX_C_ZONE_BEGIN(ctx_effects, "update_things: Effects");
     update_things_in_list(&game.thing_lists[TngList_Effects]);
     update_things_in_list(&game.thing_lists[TngList_EffectElems]);
     update_things_in_list(&game.thing_lists[TngList_EffectGens]);
     KFX_C_ZONE_END(ctx_effects);
+    world_prof_sum(WPS_TEffects, wp_t0);
 
+    wp_t0 = world_prof_now();
     KFX_C_ZONE_BEGIN(ctx_other, "update_things: Other");
     update_things_in_list(&game.thing_lists[TngList_DeadCreatrs]);
     update_things_in_list(&game.thing_lists[TngList_Doors]);
     update_things_sounds_in_list(&game.thing_lists[TngList_AmbientSnds]);
     update_cave_in_things();
     KFX_C_ZONE_END(ctx_other);
+    world_prof_sum(WPS_TOther, wp_t0);
 
     game.map_changed_for_navigation = 0;
     SYNCDBG(9,"Finished");
@@ -1523,7 +1545,7 @@ void setup_computer_players(PlayerBitFlags zombie_players)
         if (player_exists(player)) {
             continue;
         }
-        if (flag_is_set(zombie_players, to_flag(plr_idx))) {
+        if (pmask_has(zombie_players, plr_idx)) {
             script_support_setup_player_as_zombie_keeper(plr_idx);
         } else {
             setup_computer_player(plr_idx);
@@ -1644,6 +1666,20 @@ void place_thing_in_mapwho(struct Thing *thing)
     if ((thing->alloc_flags & TAlF_IsInMapWho) != 0)
         return;
     struct Map* mapblk = get_map_block_at(thing->mappos.x.stl.num, thing->mappos.y.stl.num);
+    if (world_paged && map_block_invalid(mapblk))
+    {
+        /* chunked world: the subtile's chunk isn't loaded; linking into the shared invalid block would corrupt it */
+        static int warned = 0;
+        if ((warned < 20) && !is_non_synchronized_thing_class(thing->class_id) &&
+            ((thing->mappos.x.val != 0) || (thing->mappos.y.val != 0)))
+        {
+            warned++;
+            WARNLOG("%s %d at (%d,%d) is on ground that isn't loaded; not placed in the map",
+                thing_class_and_model_name(thing->class_id, thing->model), (int)thing->index,
+                (int)thing->mappos.x.stl.num, (int)thing->mappos.y.stl.num);
+        }
+        return;
+    }
     thing->next_on_mapblk = get_mapwho_thing_index(mapblk);
     if (thing->next_on_mapblk > 0)
     {
@@ -2050,6 +2086,55 @@ struct Thing *get_nearest_enemy_creature_possible_to_attack_by(struct Thing *cre
     return get_nth_thing_of_class_with_filter(filter, &param, 0);
 }
 
+/* the dungeon hearts among the objects, in the objects list's order: only a heart passes the filter of
+   get_nearest_enemy_object_possible_to_attack_by, and a world has thousands of objects. Rebuilt each turn, and when an
+   object was made or one went (or the list starts elsewhere). */
+#define HEART_CACHE_MAX 512
+static ThingIndex heart_cache[HEART_CACHE_MAX];
+static int heart_cache_count = -1;
+static unsigned long heart_cache_made;
+static long heart_cache_objects, heart_cache_head;
+static GameTurn heart_cache_turn;
+
+static TbBool heart_cache_refresh(void)
+{
+    struct StructureList *slist = get_list_for_thing_class(TCls_Object);
+    if ((heart_cache_count >= 0) && (heart_cache_made == objects_made) && (heart_cache_objects == (long)slist->count) &&
+        (heart_cache_head == (long)slist->index) && (heart_cache_turn == game.play_gameturn))
+        return true;
+    heart_cache_count = 0;
+    unsigned long k = 0;
+    for (long i = slist->index; i != 0;)
+    {
+        struct Thing *t = thing_get(i);
+        if (thing_is_invalid(t))
+        {
+            heart_cache_count = -1;
+            return false;
+        }
+        i = t->next_of_class;
+        if (thing_is_dungeon_heart(t))
+        {
+            if (heart_cache_count >= HEART_CACHE_MAX)
+            {
+                heart_cache_count = -1;
+                return false;
+            }
+            heart_cache[heart_cache_count++] = t->index;
+        }
+        if (++k > slist->count)
+        {
+            heart_cache_count = -1;
+            return false;
+        }
+    }
+    heart_cache_made = objects_made;
+    heart_cache_objects = (long)slist->count;
+    heart_cache_head = (long)slist->index;
+    heart_cache_turn = game.play_gameturn;
+    return true;
+}
+
 struct Thing* get_nearest_enemy_object_possible_to_attack_by(struct Thing* creatng)
 {
     SYNCDBG(19, "Starting");
@@ -2061,7 +2146,36 @@ struct Thing* get_nearest_enemy_object_possible_to_attack_by(struct Thing* creat
     param.primary_number = creatng->index;
     param.secondary_number = -1;
     param.tertiary_number = -1;
-    return get_nth_thing_of_class_with_filter(filter, &param, 0);
+    if (!heart_cache_refresh())
+        return get_nth_thing_of_class_with_filter(filter, &param, 0);
+    /* get_nth_thing_of_class_with_filter(filter, &param, 0) over the objects list: every other object scores -1 */
+    creature_hostility_memo_begin_scan();
+    long maximizer = 0;
+    long curindex = 0;
+    struct Thing *retng = INVALID_THING;
+    for (int h = 0; h < heart_cache_count; h++)
+    {
+        struct Thing *thing = thing_get(heart_cache[h]);
+        if (!thing_exists(thing) || !thing_is_dungeon_heart(thing))
+            continue;
+        const long n = filter(thing, &param, maximizer);
+        if (n > maximizer)
+        {
+            retng = thing;
+            maximizer = n;
+            curindex = 0;
+        } else
+        if (n == maximizer)
+        {
+            if (curindex <= 0)
+                retng = thing;
+            if ((maximizer == INT32_MAX) && (curindex >= 0))
+                break;
+            curindex++;
+        }
+    }
+    creature_hostility_memo_end_scan();
+    return retng;
 }
 
 struct Thing *get_highest_score_enemy_creature_within_distance_possible_to_attack_by(struct Thing *creatng, MapCoordDelta dist, long move_on_ground)

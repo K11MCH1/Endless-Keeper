@@ -322,6 +322,7 @@ TbBool is_packet_empty(const struct Packet *pckt);
 void set_players_packet_action(struct PlayerInfo *player, unsigned char pcktype, unsigned long par1, unsigned long par2, unsigned short par3, unsigned short par4);
 void request_timestamp_packet(void);
 void set_pending_timestamp_packet_action(struct Packet *pckt);
+void prepare_local_packet_for_send(void);
 void set_packet_control(struct Packet *pckt, unsigned long flag);
 void set_players_packet_control(struct PlayerInfo *player, unsigned long flag);
 unsigned char get_players_packet_action(struct PlayerInfo *player);
@@ -348,6 +349,8 @@ unsigned char packet_camera_context(const struct Packet *pckt);
 void packet_set_camera_context(struct Packet *pckt, unsigned char cam_idx);
 void packet_set_camera_position(struct Packet *pckt, MapCoord x, MapCoord y);
 void packet_clear_camera_position(struct Packet *pckt);
+/** x, y: in, the position of the camera being updated (the endless world's paged map unwraps the packet's
+ * position to the value nearest it; normal maps ignore it); out, the packet's camera position. */
 TbBool packet_get_camera_position(const struct Packet *pckt, MapCoord *x, MapCoord *y);
 void packet_set_possession_target(struct Packet *pckt, ThingIndex target_idx);
 TbBool packet_get_possession_target(const struct Packet *pckt, ThingIndex *target_idx);

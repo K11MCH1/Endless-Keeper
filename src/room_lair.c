@@ -33,6 +33,7 @@
 #include "game_legacy.h"
 #include "front_simple.h"
 #include "thing_effects.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -288,7 +289,7 @@ void count_lair_occupants_on_slab(struct Room *room,MapSlabCoord slb_x, MapSlabC
             int required_cap = get_required_room_capacity_for_object(RoRoF_LairStorage, 0, creatng->model);
             if (room->used_capacity + required_cap > room->total_capacity)
             {
-                create_effect(&lairtng->mappos, imp_spangle_effects[get_player_color_idx(lairtng->owner)], lairtng->owner);
+                create_effect(&lairtng->mappos, imp_spangle_effects[world_display_colour(lairtng->owner)], lairtng->owner);
                 delete_lair_totem(lairtng);
             } else
             {
@@ -306,7 +307,7 @@ void count_lair_occupants(struct Room *room)
     room->used_capacity = 0;
     memset(room->content_per_model, 0, sizeof(room->content_per_model));
     unsigned long k = 0;
-    unsigned long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         MapSubtlCoord slb_x = slb_num_decode_x(i);
@@ -322,7 +323,7 @@ void count_lair_occupants(struct Room *room)
         count_lair_occupants_on_slab(room, slb_x, slb_y);
         // Per slab code ends
         k++;
-        if (k > game.map_tiles_x * game.map_tiles_y)
+        if (k > (int64_t)game.map_tiles_x * game.map_tiles_y)
         {
             ERRORLOG("Infinite loop detected when sweeping room slabs");
             break;

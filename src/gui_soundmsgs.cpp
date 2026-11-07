@@ -36,6 +36,7 @@
 #include <fstream>
 #include <map>
 #include "config.h"
+#include "net_state.h"
 #include "post_inc.h"
 
 // Maximum number of messages that can be queued at once.
@@ -534,6 +535,7 @@ extern "C" void clear_messages()
 
 extern "C" TbBool output_player_message(PlayerNumber plyr_idx, SoundSmplTblID msg_idx, int32_t duration)
 {
+	netstate_event_player_message(plyr_idx, msg_idx, duration);
 	if (!is_my_player_number(plyr_idx)) {
 		return false;
 	}
@@ -546,6 +548,7 @@ extern "C" TbBool output_room_message(
 	OutputMessageKind msg_kind
 )
 {
+	netstate_event_room_message(plyr_idx, rkind, msg_kind);
 	if (!is_my_player_number(plyr_idx)) {
 		return false;
 	}

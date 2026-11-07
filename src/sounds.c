@@ -55,6 +55,7 @@
 
 #include "keeperfx.hpp"
 #include "game_heap.h"
+#include "net_state.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -74,6 +75,8 @@ int sdl_flags = 0;
 /******************************************************************************/
 void thing_play_sample(struct Thing *thing, SoundSmplTblID smptbl_idx, SoundPitch pitch, char repeats, unsigned char ctype, unsigned char flags, long priority, SoundVolume loudness)
 {
+    /* thin-client play: the clients hear it too (before the local listener's checks) */
+    netstate_event_thing_sample(thing->index, smptbl_idx, pitch, repeats, ctype, flags, priority, loudness);
     if (SoundDisabled)
         return;
     if (GetCurrentSoundMasterVolume() <= 0)
@@ -116,6 +119,7 @@ void thing_play_sample(struct Thing *thing, SoundSmplTblID smptbl_idx, SoundPitc
 
 void play_player_sample(PlayerNumber plyr_idx, SoundSmplTblID smptbl_idx)
 {
+    netstate_event_player_sample(plyr_idx, smptbl_idx);
     if (!is_my_player_number(plyr_idx)) {
         return;
     }

@@ -38,6 +38,7 @@
 #include "gui_soundmsgs.h"
 #include "dungeon_data.h"
 #include "game_legacy.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -993,7 +994,7 @@ long computer_check_attack_with_filter(struct Computer2 *comp, struct ComputerPr
         suspend_process(comp, cproc);
         return CProcRet_Wait;
     }
-    struct THate hates[PLAYERS_COUNT];
+    struct THate hates[PLAYERS_MAX];
     get_opponent(comp, hates);
     // note that 'i' is not player index, player index is inside THate struct
     for (long i = 0; i < PLAYERS_COUNT; i++)
@@ -1032,7 +1033,7 @@ static long computer_look_for_opponent(struct Computer2 *comp, MapSubtlCoord stl
     struct Coord3d *pos;
 
     struct Dungeon *dungeon = comp->dungeon;
-    PlayerBitFlags potential_opponents = to_flag(dungeon->owner);
+    PlayerBitFlags potential_opponents = pmask_of(dungeon->owner);
     MapSubtlDelta radius = range / 2;
 
     MapSubtlCoord stl_x_start = STL_PER_SLB * ((stl_x - radius) / STL_PER_SLB);
@@ -1067,14 +1068,14 @@ static long computer_look_for_opponent(struct Computer2 *comp, MapSubtlCoord stl
                 struct SlabConfigStats *slabst = get_slab_kind_stats(slb->kind);
                 if (slab_owner != game.neutral_player_num || (!any_flag_is_set(slabst->block_flags, (SlbAtFlg_Valuable | SlbAtFlg_Digable | SlbAtFlg_Filled)) && slb->kind != SlbT_LAVA))
                 {
-                    if (!flag_is_set(potential_opponents, to_flag(slab_owner)) && (get_slabmap_for_subtile(stl_x_current,stl_y_current)->owner) == slab_owner)
+                    if (!pmask_has(potential_opponents, slab_owner) && (get_slabmap_for_subtile(stl_x_current,stl_y_current)->owner) == slab_owner)
                     {
                         if ((block_flags = slabst->block_flags,
                              (!flag_is_set(block_flags, SlbAtFlg_Blocking)) &&
                                  slb->kind != SlbT_LAVA) ||
                             flag_is_set(block_flags, SlbAtFlg_IsRoom))
                         {
-                            set_flag(potential_opponents, to_flag(slab_owner));
+                            pmask_add(&potential_opponents, slab_owner);
                             current_idx = comp->opponent_relations[slab_owner].next_idx;
                             pos = &comp->opponent_relations[slab_owner].pos_A[current_idx];
                             comp->opponent_relations[slab_owner].next_idx = (current_idx + 1) % COMPUTER_SPARK_POSITIONS_COUNT;
@@ -1083,8 +1084,8 @@ static long computer_look_for_opponent(struct Computer2 *comp, MapSubtlCoord stl
                             pos->x.stl.pos = 0;
                             pos->y.stl.num = stl_y_current;
                             pos->y.stl.pos = 0;
-                            if (all_flags_are_set(potential_opponents, PLAYERS_COUNT)) // exit early if every player is a potential opponent
-                                return potential_opponents;
+                            if (pmask_equal(potential_opponents, pmask_first(PLAYERS_COUNT))) // exit early if every player is a potential opponent
+                                return 1;
                         }
                     }
                 }
@@ -1094,10 +1095,10 @@ static long computer_look_for_opponent(struct Computer2 *comp, MapSubtlCoord stl
         stl_y_current += STL_PER_SLB;
     }
 
-    if (potential_opponents == to_flag(dungeon->owner)) // no opponents found
+    if (pmask_equal(potential_opponents, pmask_of(dungeon->owner))) // no opponents found
         return -1;
     else
-        return potential_opponents;
+        return 1;
 }
 
 long computer_process_sight_of_evil(struct Computer2 *comp, struct ComputerProcess *cproc)
@@ -1115,6 +1116,21 @@ long computer_process_sight_of_evil(struct Computer2 *comp, struct ComputerProce
 #define GRID COMPUTER_SOE_GRID_SIZE
         MapSlabCoord slb_x = game.map_tiles_x / 2;
         MapSlabCoord slb_y = game.map_tiles_y / 2;
+        // The grid of targets spans the map; in paged mode the loaded chunks' bounding box
+        MapSlabCoord area_x1 = 0, area_y1 = 0, area_w = game.map_tiles_x, area_h = game.map_tiles_y;
+        if (world_paged)
+        {
+            MapSlabCoord bx1, by1, bx2, by2;
+            map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
+            if ((bx1 > bx2) || (by1 > by2)) {
+                set_flag(cproc->flags, ComProc_Unkn0004);
+                return CProcRet_Unk3;
+            }
+            area_x1 = bx1;
+            area_y1 = by1;
+            area_w = bx2 - bx1 + 1;
+            area_h = by2 - by1 + 1;
+        }
         int n = PLAYER_RANDOM(dungeon->owner, GRID * GRID);
         int i;
         for (i=0; i < GRID*GRID; i++)
@@ -1123,8 +1139,8 @@ long computer_process_sight_of_evil(struct Computer2 *comp, struct ComputerProce
             unsigned int grid_y = n / GRID;
             if ((comp->soe_targets[grid_y] & (1 << grid_x)) == 0)
             {
-                slb_x = (unsigned long)game.map_tiles_x * grid_x / GRID + game.map_tiles_x/(2*GRID);
-                slb_y = (unsigned long)game.map_tiles_y * grid_y / GRID + game.map_tiles_y/(2*GRID);
+                slb_x = area_x1 + (unsigned long)area_w * grid_x / GRID + area_w/(2*GRID);
+                slb_y = area_y1 + (unsigned long)area_h * grid_y / GRID + area_h/(2*GRID);
                 comp->soe_targets[grid_y] |= (1 << grid_x);
                 struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
                 if ((slabmap_owner(slb) != dungeon->owner) && (slb->kind != SlbT_ROCK)) {

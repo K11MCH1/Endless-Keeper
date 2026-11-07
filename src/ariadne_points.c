@@ -73,7 +73,7 @@ void point_dispose(AridPointId pt_id)
 {
     KFX_C_FREE_NAMED(&ari_Points[pt_id], "Ariadne-Points");
     AridPointId last_pt_id = free_Points;
-    ari_Points[pt_id].y = 0x8000;
+    ari_Points[pt_id].y = NAV_POINT_FREE;
     free_Points = pt_id;
     ari_Points[pt_id].x = last_pt_id;
     count_Points--;
@@ -118,7 +118,7 @@ TbBool point_equals(AridPointId pt_idx, long pt_x, long pt_y)
 
 AridPointId allocated_point_search(long pt_x, long pt_y)
 {
-    if (pt_y == 0x8000) {
+    if (pt_y == NAV_POINT_FREE) {
         return -1;
     }
     for (AridPointId pt_idx = 0; pt_idx < POINTS_COUNT; pt_idx++)
@@ -153,7 +153,7 @@ void triangulation_initxy_points(long startx, long starty, long endx, long endy)
     for (long i = 0; i < POINTS_COUNT; i++)
     {
         struct Point* pt = &ari_Points[i];
-        pt->y = 0x8000;
+        pt->y = NAV_POINT_FREE;
     }
     ari_Points[0].x = startx;
     ari_Points[0].y = starty;

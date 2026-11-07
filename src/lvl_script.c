@@ -33,6 +33,7 @@
 #include "lvl_script_value.h"
 #include "lvl_script_commands_old.h"
 #include "lvl_script_commands.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -203,6 +204,8 @@ TbBool script_is_preloaded_command(long cmnd_index)
         case Cmd_NEW_ROOM_TYPE:
         case Cmd_NEW_CREATURE_TYPE:
         case Cmd_COPY_CREATURE_TYPE:
+        case Cmd_ENDLESS_WORLD: /* before the map is loaded: world_level_start fills it */
+        case Cmd_ENDLESS_PROGRESSION:
             return true;
         default:
             return false;
@@ -1091,6 +1094,18 @@ static TbBool scripted_outcome_applies_to_player(const struct PlayerInfo *player
         && (player->victory_state == VicS_Undecided);
 }
 
+/** Endless worlds (many keepers): a lose condition is about the players its IF names; IF(PLAYER0, DUNGEON_DESTROYED
+ *  == 1) LOSE_GAME is player 0's fall, not every keeper's (each keeper's own heart decides the others). */
+static TbBool lose_condition_is_about(unsigned short cond_idx, PlayerNumber plyr_idx)
+{
+    if (!world_mode_active() || (cond_idx >= CONDITIONS_COUNT))
+        return true;
+    int start = 0, end = 0;
+    if (get_players_range(game.script.conditions[cond_idx].plyr_range, &start, &end) < 0)
+        return true;
+    return (plyr_idx >= start) && (plyr_idx < end);
+}
+
 void process_win_and_lose_conditions(void)
 {
     for (size_t i = 0; i < game.script.win_conditions_num; i++)
@@ -1115,7 +1130,7 @@ void process_win_and_lose_conditions(void)
         for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_COUNT; plyr_idx++)
         {
             struct PlayerInfo* player = get_player(plyr_idx);
-            if (!scripted_outcome_applies_to_player(player))
+            if (!scripted_outcome_applies_to_player(player) || !lose_condition_is_about(k, plyr_idx))
                 continue;
             SYNCDBG(8,"Lose condition %d (cond. %d) met for player %d.",(int)i,(int)k,(int)plyr_idx);
             set_player_as_lost_level(player);

@@ -45,6 +45,8 @@ enum PacketSaveHeadFlags {
     PSHF_Checksum   = 0x01,
     PSHF_Compressed = 0x02,
     PSHF_MultiGame  = 0x04,
+    PSHF_Players16  = 0x40, // endless world: players 10-15 were in use (game.players_extended)
+    PSHF_ChunkedWorld = 0x80, // endless world: the level ran on the chunked world, not the sliding window
 };
 
 // Replay file header.
@@ -68,6 +70,8 @@ struct PacketSaveHead {
     signed char recording_user;
     int8_t frontend_alliances;
     char user_names[MAX_NET_USERS][20];
+    char world_seed[64]; // endless world: the seed text the level played (a New Run's random seed); empty otherwise
+    uint8_t players_in_use; // endless world with more than 16 players: how many; 0 otherwise (PSHF_Players16: 16)
 };
 
 #pragma pack()

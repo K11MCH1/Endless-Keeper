@@ -156,7 +156,7 @@ void count_gold_hoardes_in_room(struct Room *room)
     room->used_capacity = 0;
     room->capacity_used_for_storage = 0;
     uint32_t k = 0;
-    int32_t i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0) {
         MapSlabCoord slb_x = slb_num_decode_x(i);
         MapSlabCoord slb_y = slb_num_decode_y(i);
@@ -175,7 +175,7 @@ void count_gold_hoardes_in_room(struct Room *room)
 
         i = get_next_slab_number_in_room(i);
         k++;
-        if (k > game.map_tiles_x * game.map_tiles_y) {
+        if (k > (int64_t)game.map_tiles_x * game.map_tiles_y) {
             ERRORLOG("Infinite loop detected when sweeping room slabs");
             break;
         }

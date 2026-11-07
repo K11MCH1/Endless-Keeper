@@ -93,7 +93,7 @@ SAVE_STRUCT(LevelEnsignOverride, struct LevelEnsignOverride,
 
 SAVE_STRUCT(MapTask, struct MapTask,
     SAVE_FIELD(struct MapTask, kind, SV_U8),
-    SAVE_FIELD(struct MapTask, coords, SV_I32),
+    SAVE_FIELD(struct MapTask, coords, SV_I64),
 );
 
 SAVE_STRUCT(Packet, struct Packet,
@@ -117,9 +117,9 @@ SAVE_STRUCT(PacketSaveHead, struct PacketSaveHead,
     SAVE_FIELD(struct PacketSaveHead, game_ver_release, SV_U16),
     SAVE_FIELD(struct PacketSaveHead, game_ver_build, SV_U16),
     SAVE_FIELD(struct PacketSaveHead, level_num, SV_U32),
-    SAVE_FIELD(struct PacketSaveHead, players_exist, SV_U16),
-    SAVE_FIELD(struct PacketSaveHead, players_comp, SV_U16),
-    SAVE_FIELD(struct PacketSaveHead, players_seat, SV_U16),
+    SAVE_PLAYER_MASK(struct PacketSaveHead, players_exist),
+    SAVE_PLAYER_MASK(struct PacketSaveHead, players_comp),
+    SAVE_PLAYER_MASK(struct PacketSaveHead, players_seat),
     SAVE_FIELD(struct PacketSaveHead, flags, SV_U8),  /* PacketSaveHeadFlags bitmask */
     SAVE_FIELD(struct PacketSaveHead, action_seed, SV_U32),
     SAVE_FIELD(struct PacketSaveHead, timestamp, SV_I64),
@@ -127,8 +127,10 @@ SAVE_STRUCT(PacketSaveHead, struct PacketSaveHead,
     SAVE_FIELD(struct PacketSaveHead, timestamp_turn, SV_U32),
     SAVE_ARRAY(struct PacketSaveHead, map_checksums, SV_U32),
     SAVE_ARRAY2(struct PacketSaveHead, user_prefs, SV_U32),
-    SAVE_ARRAY(struct PacketSaveHead, user_players, SV_I8),
+    SAVE_ARRAY_EX(struct PacketSaveHead, user_players, SV_I8, .default_value = -1),  /* users an older replay doesn't have */
     SAVE_FIELD(struct PacketSaveHead, recording_user, SV_I8),
     SAVE_FIELD(struct PacketSaveHead, frontend_alliances, SV_I8),
     SAVE_ARRAY2(struct PacketSaveHead, user_names, SV_STR),  /* plain-char */
+    SAVE_STRING(struct PacketSaveHead, world_seed),  /* endless world seed text; missing in older replays */
+    SAVE_FIELD(struct PacketSaveHead, players_in_use, SV_U8),  /* more than 16 players; missing in older replays: 0 */
 );

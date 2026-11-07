@@ -45,6 +45,8 @@
 #include "moonphase.h"
 #include "keeperfx.hpp"
 #include "net_matchmaking.h"
+#include "world_net.h"
+#include "net_state.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -184,6 +186,7 @@ const struct NamedCommand conf_commands[] = {
   {"REPLAY_MAX_SIZE"               , 54},
   {"CHAT_FONT_SIZE"                , 55},
   {"REPLAY_REWIND_BUFFER_SIZE"     , 56},
+  {"WORLD_LIST_SERVER"             , 57},
   {NULL,                   0},
   };
 
@@ -288,6 +291,8 @@ TbBool resize_movies_enabled(void)
  */
 TbBool freeze_game_on_focus_lost(void)
 {
+    if (netstate_dedicated())
+        return false; /* a dedicated server plays on with its window hidden */
     if (network_is_active())
     {
         return false;
@@ -1155,6 +1160,13 @@ static void load_string_configuration(const char *buf, int32_t len, const char *
           }
           else {
               CONFWRNLOG("Invalid \"%s\" value in %s file.", COMMAND_TEXT(cmd_num), config_textname);
+          }
+          break;
+      case 57: // WORLD_LIST_SERVER: the endless worlds' list and menu chat (ws://host:5560/hub or wss://...)
+          if (get_conf_parameter_single(buf, &pos, len, word_buf, sizeof(word_buf)) > 0)
+          {
+              world_net_set_list_server(word_buf);
+              SYNCLOG("World list server: %s", world_list_server);
           }
           break;
       case ccr_comment:

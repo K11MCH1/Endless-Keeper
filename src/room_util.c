@@ -43,6 +43,7 @@
 #include "keeperfx.hpp"
 #include "frontend.h"
 #include <math.h>
+#include "world_colours.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -105,7 +106,7 @@ void process_room_surrounding_flames(struct Room *room)
     {
       create_room_surrounding_flame(room,&pos,get_gameturn() & 3,game.neutral_player_num);
     } else
-    if (room_effect_elements[get_player_color_idx(room->owner)] != 0)
+    if (room_effect_elements[world_display_colour(room->owner)] != 0)
     {
       create_room_surrounding_flame(room,&pos,get_player_color_idx(room->owner),room->owner);
     }
@@ -155,7 +156,7 @@ void process_rooms(void)
 void kill_all_room_slabs_and_contents(struct Room *room)
 {
     unsigned long k = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i != 0)
     {
         long slb_x = slb_num_decode_x(i);
@@ -199,7 +200,7 @@ void recreate_rooms_from_room_slabs(struct Room *room, unsigned char gnd_slab)
     // This will make sure that the old room won't be returned by subtile_room_get()
     // and used as one of new rooms.
     unsigned long k = 0;
-    long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         struct SlabMap* slb = get_slabmap_direct(i);

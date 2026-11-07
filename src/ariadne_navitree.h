@@ -20,14 +20,16 @@
 #define DK_ARIADNE_NAVITREE_H
 
 #include "globals.h"
+#include "ariadne_tringls.h"
 #include "bflib_basics.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define TREEITEMS_COUNT 100000
-#define TREEVALS_COUNT 100001
+/* indexed by triangle (Tags, tree_dad, tree_val): as many as there can be triangles */
+#define TREEITEMS_COUNT TRIANLGLES_COUNT
+#define TREEVALS_COUNT (TRIANLGLES_COUNT + 1)
 #define DELAUNAY_COUNT 1000
 
 /******************************************************************************/

@@ -757,6 +757,7 @@ void script_process_value(unsigned long var_index, unsigned long plr_range_id, l
   case Cmd_SET_CAMPAIGN_FLAG:
       for (i=plr_start; i < plr_end; i++)
       {
+          if (game.players_extended && (i >= PLAYERS_FOR_CAMPAIGN_FLAGS)) continue; /* rows 0-4 only */
           intralvl.campaign_flags[i][param1] = saturate_set_signed(param2, 32);
       }
       break;
@@ -764,6 +765,7 @@ void script_process_value(unsigned long var_index, unsigned long plr_range_id, l
 
       for (i=plr_start; i < plr_end; i++)
       {
+          if (game.players_extended && (i >= PLAYERS_FOR_CAMPAIGN_FLAGS)) continue; /* rows 0-4 only */
           intralvl.campaign_flags[i][param1] = saturate_set_signed(intralvl.campaign_flags[i][param1] + param2, 32);
       }
       break;
@@ -771,6 +773,7 @@ void script_process_value(unsigned long var_index, unsigned long plr_range_id, l
       for (i=plr_start; i < plr_end; i++)
       {
           SYNCDBG(8, "Setting campaign flag[%ld][%ld] to %ld.", i, param3, get_condition_value(i, param1, param2));
+          if (game.players_extended && (i >= PLAYERS_FOR_CAMPAIGN_FLAGS)) continue; /* rows 0-4 only */
           intralvl.campaign_flags[i][param3] = get_condition_value(i, param1, param2);
       }
       break;

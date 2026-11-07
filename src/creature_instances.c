@@ -54,6 +54,7 @@
 #include "gui_msgs.h"
 
 #include "keeperfx.hpp"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -651,14 +652,14 @@ long instf_dig(struct Thing *creatng, int32_t *param)
     TRACE_THING(creatng);
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     struct Dungeon* dungeon = get_dungeon(creatng->owner);
-    long task_idx = find_dig_from_task_list(creatng->owner, cctrl->digger.task_stl);
+    long task_idx = find_dig_from_task_list(creatng->owner, cctrl->digger_task_stl);
     if (task_idx < 0) {
         return 0;
     }
     struct MapTask* task = get_dungeon_task_list_entry(dungeon, task_idx);
     taskkind = task->kind;
-    stl_x = stl_num_decode_x(cctrl->digger.task_stl);
-    stl_y = stl_num_decode_y(cctrl->digger.task_stl);
+    stl_x = stl_num_decode_x(cctrl->digger_task_stl);
+    stl_y = stl_num_decode_y(cctrl->digger_task_stl);
     struct SlabMap* slb = get_slabmap_for_subtile(stl_x, stl_y);
     if (slabmap_block_invalid(slb)) {
         return 0;
@@ -743,7 +744,7 @@ long instf_destroy(struct Thing *creatng, int32_t *param)
             return 0;
         }
         clear_dig_on_room_slabs(room, creatng->owner);
-        create_effects_on_room_slabs(room, imp_spangle_effects[get_player_color_idx(creatng->owner)], 0, creatng->owner);
+        create_effects_on_room_slabs(room, imp_spangle_effects[world_display_colour(creatng->owner)], 0, creatng->owner);
         if (room->owner == game.neutral_player_num)
         {
             remove_room_from_players_list(room, game.neutral_player_num);
@@ -1033,7 +1034,7 @@ long instf_first_person_do_imp_task(struct Thing *creatng, int32_t *param)
             }
             if (reinforce)
             {
-                cctrl->digger.working_stl = get_subtile_number(ahead_stl_x, ahead_stl_y);
+                cctrl->digger_working_stl = get_subtile_number(ahead_stl_x, ahead_stl_y);
                 instf_reinforce(creatng, NULL);
                 return 1;
             }
@@ -1056,7 +1057,7 @@ long instf_pretty_path(struct Thing *creatng, int32_t *param)
     struct Dungeon* dungeon = get_dungeon(creatng->owner);
     MapSlabCoord slb_x = subtile_slab(creatng->mappos.x.stl.num);
     MapSlabCoord slb_y = subtile_slab(creatng->mappos.y.stl.num);
-    create_effect(&creatng->mappos, imp_spangle_effects[get_player_color_idx(creatng->owner)], creatng->owner);
+    create_effect(&creatng->mappos, imp_spangle_effects[world_display_colour(creatng->owner)], creatng->owner);
     thing_play_sample(creatng, snd_spell_stars, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
     place_slab_type_on_map(SlbT_CLAIMED, slab_subtile_center(slb_x), slab_subtile_center(slb_y), creatng->owner, 1);
     do_unprettying(creatng->owner, slb_x, slb_y);
@@ -1071,8 +1072,8 @@ long instf_reinforce(struct Thing *creatng, int32_t *param)
     SYNCDBG(16,"Starting");
     TRACE_THING(creatng);
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
-    MapSubtlCoord stl_x = stl_num_decode_x(cctrl->digger.working_stl);
-    MapSubtlCoord stl_y = stl_num_decode_y(cctrl->digger.working_stl);
+    MapSubtlCoord stl_x = stl_num_decode_x(cctrl->digger_working_stl);
+    MapSubtlCoord stl_y = stl_num_decode_y(cctrl->digger_working_stl);
     MapSlabCoord slb_x = subtile_slab(stl_x);
     MapSlabCoord slb_y = subtile_slab(stl_y);
     if (check_place_to_reinforce(creatng, slb_x, slb_y) <= 0) {
@@ -1104,7 +1105,7 @@ long instf_reinforce(struct Thing *creatng, int32_t *param)
         if (map_block_revealed(mapblk, creatng->owner) && ((mapblk->flags & SlbAtFlg_Blocking) == 0))
         {
             pos.z.val = get_floor_height_at(&pos);
-            create_effect(&pos, imp_spangle_effects[get_player_color_idx(creatng->owner)], creatng->owner);
+            create_effect(&pos, imp_spangle_effects[world_display_colour(creatng->owner)], creatng->owner);
         }
     }
     thing_play_sample(creatng, snd_spell_wall, NORMAL_PITCH, 0, 3, 0, 3, FULL_LOUDNESS);

@@ -49,6 +49,7 @@ void redraw_parchment_view(void);
 void redraw_minimal_overhead_view(void);
 
 long get_parchment_map_area_rect(struct TbRect *map_area);
+TbBool parchment_point_to_subtile(const long screen_x, const long screen_y, MapSubtlCoord *stl_x, MapSubtlCoord *stl_y);
 TbBool point_to_overhead_map(const struct Camera *camera, const long screen_x, const long screen_y, int32_t *map_x, int32_t *map_y);
 
 void zoom_from_parchment_map(void);

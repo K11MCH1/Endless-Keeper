@@ -12,6 +12,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include <time.h>
 
 #include "platform.h"
 #include "kfx/platform/PlatformManager.h"
@@ -42,6 +43,7 @@
 #include "bflib_filelst.h"
 #include "net_exchange_gameplay.h"
 #include "net_game.h"
+#include "world_net.h"
 #include "net_lobby.h"
 #include "net_resync.h"
 #include "bflib_planar.h"
@@ -145,11 +147,16 @@
 #include "room_library.h"
 #include <cstdint>
 #include "timer.h"
+#include "world_pages.h"
 
 #ifdef FUNCTESTING
   #include "ftests/ftest.h"
 #endif
 
+#include "net_state.h"
+#include "world_stream.h"
+#include "world_menu.h"
+#include "server_admin.h"
 #include "post_inc.h"
 
 #ifdef _MSC_VER
@@ -720,12 +727,18 @@ void reinit_tagged_blocks_for_player(PlayerNumber plyr_idx)
     // Clear tagged blocks
     MapSubtlCoord stl_x;
     MapSubtlCoord stl_y;
-    for (stl_y=0; stl_y < game.map_subtiles_y; stl_y++)
+    // Paged mode: only the loaded chunks' bounding box
+    MapSubtlCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_subtiles_x - 1, loop_y2 = game.map_subtiles_y - 1;
+    if (world_paged)
+        map_loop_subtile_bounds(&loop_x1, &loop_y1, &loop_x2, &loop_y2);
+    for (stl_y=loop_y1; stl_y <= loop_y2; stl_y++)
     {
-        for (stl_x=0; stl_x < game.map_subtiles_x; stl_x++)
+        for (stl_x=loop_x1; stl_x <= loop_x2; stl_x++)
         {
             struct Map *mapblk;
             mapblk = get_map_block_at(stl_x, stl_y);
+            if (world_paged && map_block_invalid(mapblk))
+                continue; // a chunk that isn't loaded
             mapblk->flags &= ~SlbAtFlg_Unexplored;
             mapblk->flags &= ~SlbAtFlg_TaggedValuable;
         }
@@ -943,14 +956,16 @@ void clear_things_and_persons_data(void)
 
         // Create the list of free indices (skip index 0 since that's INVALID_THING
         if (i > 0) {
-            if (i < SYNCED_THINGS_COUNT) {
-                game.synced_free_things[SYNCED_THINGS_COUNT-1-i] = i;
+            if (i < SYNCED_THINGS_LOW) {
+                game.synced_free_things[SYNCED_THINGS_COUNT-1-i] = i; /* on top: 1 first */
+            } else if (i < SYNCED_THINGS_HIGH_FIRST) {
+                game.unsynced_free_things[SYNCED_THINGS_HIGH_FIRST-1-i] = i;
             } else if (i < THINGS_COUNT) {
-                game.unsynced_free_things[THINGS_COUNT-1-i] = i;
+                game.synced_free_things[THINGS_COUNT-1-i] = i; /* below the first range */
             }
         }
     }
-    game.synced_free_things_count = SYNCED_THINGS_COUNT-1; // 1 to 8191. Note: COUNT macros aren't real representations of how many things there should be, all of them are off by 1.
+    game.synced_free_things_count = SYNCED_THINGS_COUNT-1; // 1 to 8191, then 12288 up. Note: COUNT macros aren't real representations of how many things there should be, all of them are off by 1.
     game.unsynced_free_things_count = UNSYNCED_THINGS_COUNT-1; // 8192 to 12287
 
     for (i=0; i < CREATURES_COUNT; i++)
@@ -971,7 +986,7 @@ void clear_computer(void)
     {
         memset(&game.gold_lookup[i], 0, sizeof(struct GoldLookup));
     }
-    for (i=0; i < PLAYERS_COUNT; i++)
+    for (i=0; i < PLAYERS_MAX; i++)
     {
         memset(&game.computer[i], 0, sizeof(struct Computer2));
     }
@@ -1037,10 +1052,12 @@ void delete_all_thing_structures(void)
       if (thing_exists(thing)) {
           delete_thing_structure(thing, 1);
       }
-        if (i < SYNCED_THINGS_COUNT) {
+        if (i < SYNCED_THINGS_LOW) {
             game.synced_free_things[SYNCED_THINGS_COUNT-1-i] = i;
+        } else if (i < SYNCED_THINGS_HIGH_FIRST) {
+            game.unsynced_free_things[SYNCED_THINGS_HIGH_FIRST-1-i] = i;
         } else if (i < THINGS_COUNT) {
-            game.unsynced_free_things[THINGS_COUNT-1-i] = i;
+            game.synced_free_things[THINGS_COUNT-1-i] = i;
         }
     }
     game.synced_free_things_count = SYNCED_THINGS_COUNT-1;
@@ -1533,10 +1550,10 @@ void update_blocks_pointed(void)
         {
           k = (vert_ptr_x - (vert_ptr_y >> 1)) / hvdiv_x;
           x_frac = (k & 3) << 6;
-          x = k >> 2;
+          x = render_base_stl_x + (k >> 2);
           k = (hori_ptr_x - (hori_ptr_y >> 1)) / hvdiv_y;
           y_frac = (k & 3) << 6;
-          y = k >> 2;
+          y = render_base_stl_y + (k >> 2);
           if ((x >= 0) && (x < game.map_subtiles_x) && (y >= 0) && (y < game.map_subtiles_y))
           {
               update_block_pointed(i,x,x_frac,y,y_frac);
@@ -1893,6 +1910,26 @@ static short process_command_line(unsigned short argc, char *argv[])
       else if (strcasecmp(parstr, "spectate") == 0) {
           net_join_role = NetRole_Spectator;
       }
+      else if (strcasecmp(parstr,"worldlist") == 0)
+      {
+          /* the world list hub (overrides WORLD_LIST_SERVER) */
+          narg++;
+          world_net_set_list_server(pr2str);
+      }
+      else if (strcasecmp(parstr,"title") == 0)
+      {
+          narg++;
+          snprintf(wnet_title, sizeof(wnet_title), "%s", pr2str);
+      }
+      else if (strcasecmp(parstr,"hubport") == 0)
+      {
+          narg++;
+          wnet_hub_port_wanted = atoi(pr2str);
+      }
+      else if (strcasecmp(parstr,"nohub") == 0)
+      {
+          wnet_hub_off = true;
+      }
       else if (strcasecmp(parstr,"connect") == 0)
       {
           narg++;
@@ -1901,7 +1938,46 @@ static short process_command_line(unsigned short argc, char *argv[])
       }
       else if (strcasecmp(parstr,"waitusers") == 0)
       {
-          autostart_multiplayer_users_expected = clamp(atoi(pr2str), MIN_NET_USERS, MAX_NET_USERS);
+          autostart_multiplayer_users_expected = clamp(atoi(pr2str), MIN_NET_USERS, STOCK_NET_USERS);
+          narg++;
+      }
+      else if (strcasecmp(parstr,"dedicated") == 0)
+      {
+          /* a dedicated endless-world server: it opens to the network by itself and plays no keeper */
+          netstate_set_dedicated(true);
+          int port = atoi(pr2str);
+          if (port > 0)
+          {
+              LbNetwork_SetServerPort(port);
+              narg++;
+          }
+      }
+      else if (strcasecmp(parstr,"seed") == 0)
+      {
+          world_set_next_seed(pr2str);
+          narg++;
+      }
+      else if (strcasecmp(parstr,"loadseed") == 0)
+      {
+          /* a dedicated server: that seed's newest autosave, or a new world with the seed */
+          world_set_next_seed(pr2str);
+          netstate_set_startup_load_slot(-3);
+          narg++;
+      }
+      else if (strcasecmp(parstr,"adminport") == 0)
+      {
+          /* keeperserver.exe's admin connection (127.0.0.1 only; the token in KFX_ADMIN_TOKEN or -admintoken) */
+          server_admin_configure(atoi(pr2str), NULL);
+          narg++;
+      }
+      else if (strcasecmp(parstr,"admintoken") == 0)
+      {
+          server_admin_configure(0, pr2str);
+          narg++;
+      }
+      else if (strcasecmp(parstr,"loadslot") == 0)
+      {
+          netstate_set_startup_load_slot((strcasecmp(pr2str, "continue") == 0) ? -2 : atoi(pr2str));
           narg++;
       }
       else if (strcasecmp(parstr,"server") == 0)
@@ -2036,6 +2112,24 @@ static short process_command_line(unsigned short argc, char *argv[])
       narg++;
   }
 
+  if (netstate_dedicated() && (level_num == LEVELNUMBER_ERROR) && (netstate_take_startup_load_slot_peek() == -1))
+  {
+      /* a dedicated server with nothing to load: a new endless world (a fresh seed unless -seed gave one) */
+      strcpy(start_params.selected_campaign, "levels/endless");
+      set_flag(start_params.operation_flags, GOF_SingleLevel);
+      level_num = 1;
+      if (world_next_seed_text()[0] == '\0')
+      {
+          /* a seed nobody has played, from the wall clock (the game's timer isn't running yet) */
+          uint64_t x = ((uint64_t)time(NULL) << 20) ^ (uint64_t)clock() ^ ((uint64_t)rand() << 40);
+          x ^= x >> 33;
+          x *= 0xff51afd7ed558ccdULL;
+          x ^= x >> 33;
+          char seed[16];
+          snprintf(seed, sizeof(seed), "%lu", (unsigned long)(x % 99999999ULL) + 1);
+          world_set_next_seed(seed);
+      }
+  }
   if (level_num == LEVELNUMBER_ERROR)
   {
       if (first_singleplayer_level() > 0)

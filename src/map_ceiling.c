@@ -24,6 +24,7 @@
 #include "front_simple.h"
 #include "globals.h"
 #include "game_legacy.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -32,6 +33,23 @@ extern "C"
 #endif
 
 static char ceiling_cache[MAX_SUBTILES_X*MAX_SUBTILES_Y];
+
+/** A subtile's cache cell: ceiling_cache, or its chunk page in paged mode (a chunk that isn't loaded gives a
+ *  scratch cell holding -1, no ceiling). */
+static char *ceiling_cache_cell(SubtlCodedCoords stl_num)
+{
+    if (world_paged)
+    {
+        static char unloaded_cell;
+        MapSubtlCoord x = stl_num_decode_x(stl_num), y = stl_num_decode_y(stl_num);
+        struct WorldPage *pg = wp_page_of_subtile(x, y);
+        if (pg != NULL)
+            return (char *)&pg->ceiling[wp_stl_index(x, y)];
+        unloaded_cell = -1;
+        return &unloaded_cell;
+    }
+    return &ceiling_cache[stl_num];
+}
 
 static int find_column_height_including_lintels(struct Column *col)
 {
@@ -174,6 +192,61 @@ void ceiling_partially_recompute_heights(MapSubtlCoord sx, MapSubtlCoord sy, Map
     if (solid_check_end_stl_y >= (game.map_subtiles_y + 1))
         solid_check_end_stl_y = (game.map_subtiles_y + 1);
 
+    if (world_paged && (solid_check_end_stl_x > solid_check_start_stl_x) && (solid_check_end_stl_y > solid_check_start_stl_y))
+    {
+        /* the paged world: the same computation over a local copy of the solid heights. The spiral reaches at most
+           ceiling_dist subtiles, so it never leaves the solid-check box; looking each step up in the chunk pages
+           cost most of a chunk load. */
+        const MapSubtlCoord bw = solid_check_end_stl_x - solid_check_start_stl_x;
+        const MapSubtlCoord bh = solid_check_end_stl_y - solid_check_start_stl_y;
+        signed char *box = (signed char *)malloc((size_t)bw * (size_t)bh);
+        if (box != NULL)
+        {
+            for (MapSubtlCoord y = 0; y < bh; y++)
+                for (MapSubtlCoord x = 0; x < bw; x++)
+                {
+                    MapSubtlCoord bx = solid_check_start_stl_x + x, by = solid_check_start_stl_y + y;
+                    /* a chunk that isn't loaded reads -1 (no ceiling), as its cache cell does */
+                    box[y * bw + x] = (wp_page_of_subtile(bx, by) == NULL) ? (signed char)-1 :
+                        (signed char)ceiling_block_is_solid_including_corners_return_height(get_subtile_number(bx, by), bx, by);
+                }
+            for (MapSubtlCoord cy = computation_start_stl_y; cy < computation_end_stl_y; cy++)
+            {
+                for (MapSubtlCoord cx = computation_start_stl_x; cx < computation_end_stl_x; cx++)
+                {
+                    int height = box[(cy - solid_check_start_stl_y) * bw + (cx - solid_check_start_stl_x)];
+                    if (height <= -1)
+                    {
+                        int found = -1;
+                        unsigned int steps = 0;
+                        TbBool is_near = false;
+                        for (int k = 0; k < game.ceiling_search_dist; k++)
+                        {
+                            MapSubtlCoord sx2 = cx + spiral_step[k].h, sy2 = cy + spiral_step[k].v;
+                            if ((sx2 < 0) || (sx2 >= game.map_subtiles_x) || (sy2 < 0) || (sy2 >= game.map_subtiles_y))
+                                continue;
+                            if ((sx2 >= solid_check_start_stl_x) && (sx2 < solid_check_end_stl_x) &&
+                                (sy2 >= solid_check_start_stl_y) && (sy2 < solid_check_end_stl_y))
+                                found = box[(sy2 - solid_check_start_stl_y) * bw + (sx2 - solid_check_start_stl_x)];
+                            else
+                                found = *ceiling_cache_cell(get_subtile_number(sx2, sy2));
+                            if (found > -1)
+                            {
+                                steps = chessboard_distance(cx, cy, sx2, sy2);
+                                is_near = true;
+                                break;
+                            }
+                        }
+                        height = is_near ? ceiling_calculate_height_from_nearest_walls(found, steps) : game.ceiling_height_max;
+                    }
+                    get_map_block_at_pos(get_subtile_number(cx, cy))->filled_subtiles = height;
+                }
+            }
+            free(box);
+            return;
+        }
+    }
+
     MapSubtlCoord cstl_y = solid_check_start_stl_y;
     while (cstl_y < solid_check_end_stl_y)
     {
@@ -181,7 +254,7 @@ void ceiling_partially_recompute_heights(MapSubtlCoord sx, MapSubtlCoord sy, Map
         while (cstl_x < solid_check_end_stl_x)
         {
             SubtlCodedCoords stl_num = get_subtile_number(cstl_x,cstl_y);
-            ceiling_cache[stl_num] = ceiling_block_is_solid_including_corners_return_height(stl_num,cstl_x,cstl_y);
+            *ceiling_cache_cell(stl_num) = ceiling_block_is_solid_including_corners_return_height(stl_num,cstl_x,cstl_y);
             cstl_x++;
         }
         cstl_y++;
@@ -194,7 +267,7 @@ void ceiling_partially_recompute_heights(MapSubtlCoord sx, MapSubtlCoord sy, Map
         while (computation_end_stl_x > current_stl_x)
         {
             SubtlCodedCoords stl_num2 = get_subtile_number(current_stl_x,current_stl_y);
-            ceiling_height = ceiling_cache[stl_num2];
+            ceiling_height = *ceiling_cache_cell(stl_num2);
             current_ceiling_height = ceiling_height;
             if (ceiling_height <= -1)
             {
@@ -209,7 +282,7 @@ void ceiling_partially_recompute_heights(MapSubtlCoord sx, MapSubtlCoord sy, Map
                         search_stl_y = current_stl_y + spir->v;
                         if (search_stl_x >= 0 && search_stl_x < game.map_subtiles_x && search_stl_y >= 0 && search_stl_y < game.map_subtiles_y)
                         {
-                            found_ceiling_height = ceiling_cache[get_subtile_number(search_stl_x ,search_stl_y)];
+                            found_ceiling_height = *ceiling_cache_cell(get_subtile_number(search_stl_x ,search_stl_y));
                             if (found_ceiling_height > -1)
                                 break;
                         }
@@ -270,9 +343,17 @@ static int get_ceiling_or_floor_filled_subtiles(SubtlCodedCoords stl_num)
 
 void ceiling_init()
 {
-    for (MapSubtlCoord stl_y=0; stl_y < game.map_subtiles_y; stl_y++)
+    /* normal levels: [0, map_subtiles); paged mode: the loaded chunks */
+    MapSubtlCoord bx1 = 0, by1 = 0, bx2 = game.map_subtiles_x, by2 = game.map_subtiles_y;
+    if (world_paged)
     {
-        for (MapSubtlCoord stl_x=0; stl_x < game.map_subtiles_x; stl_x++)
+        map_loop_subtile_bounds(&bx1, &by1, &bx2, &by2);
+        bx2++;
+        by2++;
+    }
+    for (MapSubtlCoord stl_y=by1; stl_y < by2; stl_y++)
+    {
+        for (MapSubtlCoord stl_x=bx1; stl_x < bx2; stl_x++)
         {
             int filled_h;
             if (map_pos_solid_at_ceiling(stl_x, stl_y))

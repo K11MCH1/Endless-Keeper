@@ -157,6 +157,7 @@ struct CallToArmsGraphics {
 extern const struct NamedCommand object_update_functions_desc[];
 
 /******************************************************************************/
+extern unsigned long objects_made;
 struct Thing *create_object(const struct Coord3d *pos, ThingModel model, unsigned short owner, long parent_idx);
 void destroy_object(struct Thing *thing);
 TngUpdateRet update_object(struct Thing *thing);

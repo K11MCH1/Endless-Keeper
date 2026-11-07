@@ -123,7 +123,7 @@ void person_search_for_food_again(struct Thing *creatng, struct Room *room)
     long near_food_dist = INT32_MAX;
     struct Thing* near_food_tng = INVALID_THING;
     unsigned long k = 0;
-    unsigned long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         MapSlabCoord slb_x = slb_num_decode_x(i);

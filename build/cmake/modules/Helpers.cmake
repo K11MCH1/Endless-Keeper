@@ -48,9 +48,11 @@ function(apply_keeperfx_link_flags TARGET)
         # toggle for explicitly-listed libs) looks like it should cover it -
         # that toggle is back to -dynamic by the time g++ appends its own
         # implicit libs, so it doesn't apply to them.
+        # --large-address-aware: on 64-bit Windows the 32-bit exe may use 4 GB, not 2 GB
+        # (big endless worlds and servers with many players).
         target_link_options(${TARGET} PRIVATE
             -mwindows -static-libgcc -static-libstdc++
-            -Wl,--enable-auto-import -Wl,-Map,${TARGET}.map)
+            -Wl,--enable-auto-import -Wl,--large-address-aware -Wl,-Map,${TARGET}.map)
         target_link_libraries(${TARGET} PUBLIC -static stdc++ winpthread -dynamic)
     else()
         target_link_options(${TARGET} PRIVATE -g -rdynamic)

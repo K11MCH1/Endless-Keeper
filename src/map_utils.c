@@ -31,6 +31,7 @@
 #include "config_terrain.h"
 #include "game_merge.h"
 #include "game_legacy.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -194,10 +195,72 @@ long near_coord_filter_battle_drop_point(const struct Coord3d *pos, MaxCoordFilt
 
 void slabs_fill_iterate_from_slab(MapSlabCoord src_slab_x, MapSlabCoord src_slab_y, SlabsFillIterAction f_action, MaxCoordFilterParam param)
 {
+    if (world_paged)
+    {
+        // Paged mode: the fill stays inside the loaded chunks' bounding box; the visited map uses local coordinates
+        MapSlabCoord bx1, by1, bx2, by2;
+        map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
+        if ((src_slab_x < bx1) || (src_slab_x > bx2) || (src_slab_y < by1) || (src_slab_y > by2))
+            return;
+        const long box_w = bx2 - bx1 + 1;
+        const size_t box_cells = (size_t)box_w * (by2 - by1 + 1);
+        // A slab is pushed at most once by each of its 4 neighbours (it's visited before any of them is popped
+        // again), plus the start: the stack never holds more than 4 * cells + 1 items
+        MapSlabCoord* pstack_x = malloc((4 * box_cells + 1) * sizeof(MapSlabCoord));
+        MapSlabCoord* pstack_y = malloc((4 * box_cells + 1) * sizeof(MapSlabCoord));
+        char* pvisited = malloc(box_cells);
+        if (pstack_x != NULL && pstack_y != NULL && pvisited != NULL)
+        {
+            memset(pvisited, 0, box_cells);
+            long stack_head = 0;
+            pstack_x[0] = src_slab_x;
+            pstack_y[0] = src_slab_y;
+            MapSlabCoord cx, cy;
+            while (stack_head != -1)
+            {
+                cx = pstack_x[stack_head];
+                cy = pstack_y[stack_head];
+                stack_head--;
+                pvisited[(cx - bx1) + ((cy - by1) * box_w)] = 1;
+
+                if (!f_action(cx, cy, param)) continue;
+
+                if (cx + 1 <= bx2 && !pvisited[(cx + 1 - bx1) + ((cy - by1) * box_w)])
+                {
+                    stack_head++;
+                    pstack_x[stack_head] = cx + 1;
+                    pstack_y[stack_head] = cy;
+                }
+                if (cx - 1 >= bx1 && !pvisited[(cx - 1 - bx1) + ((cy - by1) * box_w)])
+                {
+                    stack_head++;
+                    pstack_x[stack_head] = cx - 1;
+                    pstack_y[stack_head] = cy;
+                }
+                if (cy + 1 <= by2 && !pvisited[(cx - bx1) + ((cy + 1 - by1) * box_w)])
+                {
+                    stack_head++;
+                    pstack_x[stack_head] = cx;
+                    pstack_y[stack_head] = cy + 1;
+                }
+                if (cy - 1 >= by1 && !pvisited[(cx - bx1) + ((cy - 1 - by1) * box_w)])
+                {
+                    stack_head++;
+                    pstack_x[stack_head] = cx;
+                    pstack_y[stack_head] = cy - 1;
+                }
+            }
+        }
+        free(pstack_x);
+        free(pstack_y);
+        free(pvisited);
+        return;
+    }
     long max_slb_dim_x = (game.map_subtiles_x / STL_PER_SLB);
     long max_slb_dim_y = (game.map_subtiles_y / STL_PER_SLB);
-    MapSlabCoord* stack_x = malloc(max_slb_dim_x * max_slb_dim_y);
-    MapSlabCoord* stack_y = malloc(max_slb_dim_x * max_slb_dim_y);
+    // The stacks hold MapSlabCoord items; a slab is pushed at most once by each of its 4 neighbours, plus the start
+    MapSlabCoord* stack_x = malloc((4 * max_slb_dim_x * max_slb_dim_y + 1) * sizeof(MapSlabCoord));
+    MapSlabCoord* stack_y = malloc((4 * max_slb_dim_x * max_slb_dim_y + 1) * sizeof(MapSlabCoord));
     char* visited = malloc(max_slb_dim_x * max_slb_dim_y);
     if (stack_x != NULL && stack_y != NULL && visited != NULL)
     {

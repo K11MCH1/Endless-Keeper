@@ -208,8 +208,116 @@ typedef int32_t ScreenCoord;
 typedef int32_t RealScreenCoord;
 /** Player identification number, or owner of in-game thing/room/slab. */
 typedef int8_t PlayerNumber;
-/** bitflags where each bit represents a player (e.g. player id 0 = 0b000001, player id 1 = 0b000010, player id 2 = 0b000100). */
-typedef uint16_t PlayerBitFlags;
+/** Players the game has room for (arrays): a level uses STOCK_PLAYERS_COUNT; an endless world that needs more
+ *  turns on the rest (game.players_extended). PlayerNumber is 8 bits signed, so at most 127. */
+#define PLAYERS_MAX         104
+#define STOCK_PLAYERS_COUNT 9
+/** 32-bit words of a set of players. */
+#define PLAYER_MASK_WORDS   ((PLAYERS_MAX + 31) / 32)
+/** A set of players, one bit each (player p: bit p % 32 of word p / 32). Use the pmask_ functions below; a save
+ *  keeps word 0 under the field's old name (it was 16 bits) and the others as "<name>_hi". */
+typedef struct PlayerBitFlags {
+    uint32_t w[PLAYER_MASK_WORDS];
+} PlayerBitFlags;
+
+static inline PlayerBitFlags pmask_none(void)
+{
+    PlayerBitFlags m;
+    for (int i = 0; i < PLAYER_MASK_WORDS; i++)
+        m.w[i] = 0;
+    return m;
+}
+/** The set of players whose bits are set in a 32-bit value (players 0-31; for old 16-bit values). */
+static inline PlayerBitFlags pmask_from_u32(uint32_t bits)
+{
+    PlayerBitFlags m = pmask_none();
+    m.w[0] = bits;
+    return m;
+}
+/** Players 0-31 of a set as bits (for values stored in 32 bits or less; players 32+ are left out). */
+static inline uint32_t pmask_low32(PlayerBitFlags m)
+{
+    return m.w[0];
+}
+static inline unsigned char pmask_has(PlayerBitFlags m, int plyr_idx)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYER_MASK_WORDS * 32))
+        return 0;
+    return (unsigned char)((m.w[plyr_idx >> 5] >> (plyr_idx & 31)) & 1u);
+}
+static inline void pmask_add(PlayerBitFlags *m, int plyr_idx)
+{
+    if ((plyr_idx >= 0) && (plyr_idx < PLAYER_MASK_WORDS * 32))
+        m->w[plyr_idx >> 5] |= (1u << (plyr_idx & 31));
+}
+static inline void pmask_del(PlayerBitFlags *m, int plyr_idx)
+{
+    if ((plyr_idx >= 0) && (plyr_idx < PLAYER_MASK_WORDS * 32))
+        m->w[plyr_idx >> 5] &= ~(1u << (plyr_idx & 31));
+}
+static inline void pmask_put(PlayerBitFlags *m, int plyr_idx, int value)
+{
+    if (value)
+        pmask_add(m, plyr_idx);
+    else
+        pmask_del(m, plyr_idx);
+}
+static inline PlayerBitFlags pmask_of(int plyr_idx)
+{
+    PlayerBitFlags m = pmask_none();
+    pmask_add(&m, plyr_idx);
+    return m;
+}
+static inline unsigned char pmask_any(PlayerBitFlags m)
+{
+    for (int i = 0; i < PLAYER_MASK_WORDS; i++)
+        if (m.w[i] != 0)
+            return 1;
+    return 0;
+}
+static inline unsigned char pmask_equal(PlayerBitFlags a, PlayerBitFlags b)
+{
+    for (int i = 0; i < PLAYER_MASK_WORDS; i++)
+        if (a.w[i] != b.w[i])
+            return 0;
+    return 1;
+}
+static inline PlayerBitFlags pmask_or(PlayerBitFlags a, PlayerBitFlags b)
+{
+    for (int i = 0; i < PLAYER_MASK_WORDS; i++)
+        a.w[i] |= b.w[i];
+    return a;
+}
+static inline PlayerBitFlags pmask_and(PlayerBitFlags a, PlayerBitFlags b)
+{
+    for (int i = 0; i < PLAYER_MASK_WORDS; i++)
+        a.w[i] &= b.w[i];
+    return a;
+}
+/** The players of a that are not in b. */
+static inline PlayerBitFlags pmask_andnot(PlayerBitFlags a, PlayerBitFlags b)
+{
+    for (int i = 0; i < PLAYER_MASK_WORDS; i++)
+        a.w[i] &= ~b.w[i];
+    return a;
+}
+static inline unsigned char pmask_intersects(PlayerBitFlags a, PlayerBitFlags b)
+{
+    for (int i = 0; i < PLAYER_MASK_WORDS; i++)
+        if ((a.w[i] & b.w[i]) != 0)
+            return 1;
+    return 0;
+}
+/** Every player 0..count-1. */
+static inline PlayerBitFlags pmask_first(int count)
+{
+    PlayerBitFlags m = pmask_none();
+    for (int p = 0; p < count; p++)
+        pmask_add(&m, p);
+    return m;
+}
+/** The players in use: STOCK_PLAYERS_COUNT, or PLAYERS_MAX once an endless world has turned the rest on. */
+int players_in_use(void);
 /** Type which stores thing class. */
 typedef uint8_t ThingClass;
 /** Type which stores thing model. */
@@ -276,14 +384,16 @@ typedef int32_t MapCoordDelta;
 typedef int32_t MapSubtlCoord;
 /** Distance between map subtiles. */
 typedef int32_t MapSubtlDelta;
-/** Map slab coordinate. Slab is a cubic part of map with specific content. */
-typedef int16_t MapSlabCoord;
+/** Map slab coordinate. Slab is a cubic part of map with specific content.
+ *  32-bit (it was 16-bit) so the chunked endless world can reach about a million slabs from its start. */
+typedef int32_t MapSlabCoord;
 /** Distance between map coordinates in slabs.  */
-typedef int16_t MapSlabDelta;
-/** Map subtile 2D coordinates, coded into one number. */
-typedef int32_t SubtlCodedCoords;
-/** Map slab 2D coordinates, coded into one number. */
-typedef uint32_t SlabCodedCoords;
+typedef int32_t MapSlabDelta;
+/** Map subtile 2D coordinates, coded into one number (y * row length + x).
+ *  64-bit (it was 32-bit): the endless world's virtual map is too big for 32 bits. */
+typedef int64_t SubtlCodedCoords;
+/** Map slab 2D coordinates, coded into one number. 64-bit, as above. */
+typedef uint64_t SlabCodedCoords;
 /** Index in the columns array. */
 typedef int16_t ColumnIndex;
 /** Movement speed on objects in the game. */
@@ -312,7 +422,7 @@ typedef uint16_t SpDiggerTaskType;
 /** Flags for tracing route for creature movement. */
 typedef uint8_t NaviRouteFlags;
 /** data used for navigating contains floor height, locked doors per player, unsafe surfaces */
-typedef uint16_t NavColour;
+typedef uint32_t NavColour; /* 32 bits: owner bits for PLAYERS_MAX players */
 /** Either North (0), East (1), South (2), or West (3). */
 typedef int8_t SmallAroundIndex;
 /** a player state as defined in config_players*/

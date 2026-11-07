@@ -11,6 +11,61 @@
 #include "post_inc.h"
 #include "kfx/save/core/save_schema.h"
 #include "kfx/save/core/schema/save_tables_decl.h"
+#include "kfx/save/core/save_migrate.h"
+
+/** Saves of format minor 9 and older have user states for users 0-3 only (MAX_NET_USERS was 4); users 4-7 decode as
+ *  zeros, which would make them player 0's. */
+int save_migrate_game_users_4_7(struct SaveLoadCtx *context)
+{
+    struct Game *state = (struct Game *)context->state;
+    for (NetUserId user = STOCK_NET_USERS; user < MAX_NET_USERS; user++)
+    {
+        state->user_states[user].player_id = PLAYER_NONE;
+        state->user_states[user].reconnect_player_id = PLAYER_NONE;
+    }
+    return 0;
+}
+
+/** Saves of format minor 10 have user states for users 0-7 (MAX_NET_USERS was 8). */
+/** Saves before more thing slots (format minor 14 and older): their synced free list holds slots 1-8191 only; the new
+ *  slots 12288 up go below them, so they are taken only once those run out, as in a new game. */
+int save_migrate_game_things_high(struct SaveLoadCtx *context)
+{
+    struct Game *state = (struct Game *)context->state;
+    uint32_t count = state->synced_free_things_count;
+    if (count > SYNCED_THINGS_LOW)
+        count = SYNCED_THINGS_LOW;
+    memmove(&state->synced_free_things[SYNCED_THINGS_HIGH], &state->synced_free_things[0], count * sizeof(state->synced_free_things[0]));
+    for (uint32_t p = 0; p < SYNCED_THINGS_HIGH; p++)
+        state->synced_free_things[p] = (unsigned short)(THINGS_COUNT - 1 - p);
+    state->synced_free_things_count = (ThingIndex)(count + SYNCED_THINGS_HIGH);
+    return 0;
+}
+
+/** Saves with fewer user states than this build (format minor 11 and 12 had 13, 13 had 29): the others play no
+ *  player. */
+int save_migrate_game_users_13_up(struct SaveLoadCtx *context)
+{
+    struct Game *state = (struct Game *)context->state;
+    const NetUserId first = (context->file_minor <= 12) ? 13 : 29;
+    for (NetUserId user = first; user < MAX_NET_USERS; user++)
+    {
+        state->user_states[user].player_id = PLAYER_NONE;
+        state->user_states[user].reconnect_player_id = PLAYER_NONE;
+    }
+    return 0;
+}
+
+int save_migrate_game_users_8_12(struct SaveLoadCtx *context)
+{
+    struct Game *state = (struct Game *)context->state;
+    for (NetUserId user = 8; user < MAX_NET_USERS; user++)
+    {
+        state->user_states[user].player_id = PLAYER_NONE;
+        state->user_states[user].reconnect_player_id = PLAYER_NONE;
+    }
+    return 0;
+}
 
 SAVE_STRUCT(DesyncChecksums, struct DesyncChecksums,
     SAVE_FIELD(struct DesyncChecksums, creatures, SV_U32),
@@ -98,6 +153,7 @@ SAVE_STRUCT(Game, struct Game,
     SAVE_RUNTIME(struct Game, input_lag_turns),
     SAVE_FIELD(struct Game, human_players_count, SV_I8),
     SAVE_FIELD(struct Game, neutral_player_num, SV_I8),
+    SAVE_FIELD(struct Game, players_extended, SV_U8),  /* missing in older saves: 0, nine players */
     SAVE_SUB_ARRAY(struct Game, gold_lookup, GoldLookup),
     SAVE_FIELD(struct Game, ambient_sound_thing_idx, SV_U16),
     SAVE_ARRAY(struct Game, block_health, SV_I32),
@@ -171,8 +227,8 @@ SAVE_STRUCT(Game, struct Game,
     SAVE_RUNTIME(struct Game, flash_button_time),
     SAVE_FIELD(struct Game, map_subtiles_x, SV_I32),
     SAVE_FIELD(struct Game, map_subtiles_y, SV_I32),
-    SAVE_FIELD(struct Game, map_tiles_x, SV_I16),
-    SAVE_FIELD(struct Game, map_tiles_y, SV_I16),
+    SAVE_FIELD(struct Game, map_tiles_x, SV_I32),
+    SAVE_FIELD(struct Game, map_tiles_y, SV_I32),
     SAVE_DERIVED(struct Game, navigation_map_size_x, "set_map_size"),
     SAVE_DERIVED(struct Game, navigation_map_size_y, "set_map_size"),
     SAVE_DERIVED(struct Game, around_map, "set_map_size"),
@@ -256,8 +312,8 @@ SAVE_STRUCT(LogThingDesyncInfo, struct LogThingDesyncInfo,
     SAVE_FIELD(struct LogThingDesyncInfo, digger_pickup_creature_id, SV_U16),
     SAVE_FIELD(struct LogThingDesyncInfo, digger_move_flags, SV_U8),
     SAVE_FIELD(struct LogThingDesyncInfo, digger_stack_update_turn, SV_I32),
-    SAVE_FIELD(struct LogThingDesyncInfo, digger_working_stl, SV_I32),
-    SAVE_FIELD(struct LogThingDesyncInfo, digger_task_stl, SV_I32),
+    SAVE_FIELD(struct LogThingDesyncInfo, digger_working_stl, SV_I64),
+    SAVE_FIELD(struct LogThingDesyncInfo, digger_task_stl, SV_I64),
     SAVE_FIELD(struct LogThingDesyncInfo, digger_task_idx, SV_U16),
     SAVE_FIELD(struct LogThingDesyncInfo, digger_consecutive_reinforcements, SV_U8),
     SAVE_FIELD(struct LogThingDesyncInfo, digger_last_did_job, SV_U8),

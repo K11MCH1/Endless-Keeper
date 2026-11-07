@@ -63,7 +63,7 @@ struct ActionPoint *allocate_free_action_point_structure_with_number(ActionPoint
     }
     apt->exists = true;
     apt->num = apt_num;
-    apt->activated = 0;
+    apt->activated = pmask_none();
     return apt;
 }
 
@@ -149,11 +149,11 @@ TbBool action_point_reset_idx(ActionPointId apt_idx, PlayerNumber plyr_idx)
         return false;
     if (plyr_idx == ALL_PLAYERS)
     {
-        apt->activated = 0;
+        apt->activated = pmask_none();
     }
     else
     {
-        clear_flag(apt->activated, to_flag(plyr_idx));
+        pmask_del(&apt->activated, plyr_idx);
     }
     return apt->exists;
 }
@@ -165,11 +165,11 @@ TbBool action_point_trigger_idx(ActionPointId apt_idx, PlayerNumber plyr_idx)
         return false;
     if (plyr_idx == ALL_PLAYERS)
     {
-        set_flag(apt->activated, 0x1FF);
+        apt->activated = pmask_or(apt->activated, pmask_first(PLAYERS_COUNT));
     }
     else
     {
-        set_flag(apt->activated, to_flag(plyr_idx));
+        pmask_add(&apt->activated, plyr_idx);
     }
     return apt->exists;
 }
@@ -180,7 +180,7 @@ TbBool action_point_trigger_idx(ActionPointId apt_idx, PlayerNumber plyr_idx)
 TbBool action_point_activated_by_player(ActionPointId apt_idx, PlayerNumber plyr_idx)
 {
     struct ActionPoint* apt = action_point_get(apt_idx);
-    return flag_is_set(apt->activated, to_flag(plyr_idx));
+    return pmask_has(apt->activated, plyr_idx);
 }
 
 TbBool action_point_is_creature_from_list_within(const struct ActionPoint *apt, long first_thing_idx)
@@ -242,7 +242,7 @@ PlayerBitFlags action_point_get_players_within(long apt_idx)
         struct PlayerInfo* player = get_player(plyr_idx);
         if (player_exists(player))
         {
-            if (!flag_is_set(activated, to_flag(plyr_idx)))
+            if (!pmask_has(activated, plyr_idx))
             {
                 struct Dungeon* dungeon = get_players_dungeon(player);
                 if (dungeon_invalid(dungeon)) {
@@ -250,11 +250,11 @@ PlayerBitFlags action_point_get_players_within(long apt_idx)
                 }
                 SYNCDBG(16,"Checking player %d",(int)plyr_idx);
                 if (action_point_is_creature_from_list_within(apt, dungeon->digger_list_start)) {
-                    set_flag(activated, to_flag(plyr_idx));
+                    pmask_add(&activated, plyr_idx);
                     continue;
                 }
                 if (action_point_is_creature_from_list_within(apt, dungeon->creatr_list_start)) {
-                    set_flag(activated, to_flag(plyr_idx));
+                    pmask_add(&activated, plyr_idx);
                     continue;
                 }
             }
@@ -278,8 +278,8 @@ TbBool process_action_points(void)
                 for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_COUNT; plyr_idx++)
                 {
                     // If it's set now, but wasn't set in the previous check
-                    if (flag_is_set(apt->activated, to_flag(plyr_idx)) && 
-                        !flag_is_set(old_activated, to_flag(plyr_idx)))
+                    if (pmask_has(apt->activated, plyr_idx) && 
+                        !pmask_has(old_activated, plyr_idx))
                     {
                         struct ApiEventData event_data[] = {
                             {"player",API_EVENT_DATA_INT32,{ .int32_value = (int32_t)plyr_idx }},

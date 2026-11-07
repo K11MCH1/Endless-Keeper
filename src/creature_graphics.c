@@ -37,6 +37,7 @@
 #include "keeperfx.hpp"
 #include "engine_render.h"
 #include "player_instances.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -587,7 +588,7 @@ void update_creature_graphic_tint(struct Thing *thing)
         untint_thing(thing);
     } else
     {
-        tint_thing(thing, possession_hit_colours[get_player_color_idx(thing->owner)], 1);
+        tint_thing(thing, possession_hit_colours[world_display_colour(thing->owner)], 1);
     }
 }
 

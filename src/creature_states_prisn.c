@@ -64,7 +64,7 @@ TbBool jailbreak_possible(struct Room *room, PlayerNumber creature_owner)
         return false;
     }
     unsigned long k = 0;
-    unsigned long i = room->slabs_list;
+    SlabCodedCoords i = room->slabs_list;
     while (i > 0)
     {
         slb = get_slabmap_direct(i);
@@ -79,7 +79,7 @@ TbBool jailbreak_possible(struct Room *room, PlayerNumber creature_owner)
         }
         i = get_next_slab_number_in_room(i);
         k++;
-        if (k > game.map_tiles_x * game.map_tiles_y)
+        if (k > (int64_t)game.map_tiles_x * game.map_tiles_y)
         {
             ERRORLOG("Infinite loop detected when sweeping room slabs");
             break;

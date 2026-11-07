@@ -76,6 +76,9 @@ enum GUI_Menus {
   GMnu_ROOM2              = 47,
   GMnu_TRAP2              = 48,
   GMnu_SKIRMISH_LOBBY     = 49,
+  GMnu_FEENDLESS          = 50,
+  GMnu_FEENDLESS_LOAD     = 51,
+  GMnu_FEWORLD_LIST       = 52,
 };
 
 #define MENU_INVALID_ID -1

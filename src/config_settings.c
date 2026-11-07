@@ -537,7 +537,7 @@ TbBool load_settings(void)
         val = value_dict_get(vsec, "lobby_name");
         if (val && value_type(val) == VALUE_STRING) snprintf(net_config_info.net_lobby_name, sizeof(net_config_info.net_lobby_name), "%s", value_string(val));
         val = value_dict_get(vsec, "max_players");
-        if (val && value_type(val) == VALUE_INT32) net_config_info.max_players = (uint8_t)clamp(value_int32(val), MIN_NET_USERS, MAX_NET_USERS);
+        if (val && value_type(val) == VALUE_INT32) net_config_info.max_players = (uint8_t)clamp(value_int32(val), MIN_NET_USERS, STOCK_NET_USERS);
         val = value_dict_get(vsec, "spectators_enabled");
         if (val) net_config_info.spectators_enabled = value_coerce_bool(val);
         val = value_dict_get(vsec, "spectator_chat");
@@ -555,7 +555,7 @@ TbBool load_settings(void)
     vsec = value_dict_get(&root, "skirmish");
     if (vsec) {
         val = value_dict_get(vsec, "max_players");
-        if (val && value_type(val) == VALUE_INT32) skirmish_config_info.max_players = (uint8_t)clamp(value_int32(val), MIN_NET_USERS, MAX_NET_USERS);
+        if (val && value_type(val) == VALUE_INT32) skirmish_config_info.max_players = (uint8_t)clamp(value_int32(val), MIN_NET_USERS, STOCK_NET_USERS);
     }
 
     value_fini(&root);

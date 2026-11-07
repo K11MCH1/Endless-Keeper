@@ -37,16 +37,97 @@ extern "C" {
 #define PEER_TIMEOUT_MS 15000
 
 #define MIN_NET_USERS 2
-#define MAX_NET_USERS 4
+/* an endless world: a dedicated host and a user for every human seat (players 0-3, 6-7, 10 up: PLAYERS_MAX - 4) */
+#define MAX_NET_USERS 101 /* PLAYERS_MAX - 3 (checked in net_main.c; this header comes before globals.h in places) */
+/* users in a stock network game or skirmish: the lobby's seats and colours (an endless world takes all of
+   MAX_NET_USERS, its seats are players 0-3 and 6-7) */
+#define STOCK_NET_USERS 4
 #define MAX_NET_SPECTATORS 50
 #define MAX_NET_CONNECTIONS (MAX_NET_USERS + MAX_NET_SPECTATORS)
 #define SPECTATOR_CONNECT_DATA 0x53504543
-#define ALL_NET_USERS_MASK ((1 << MAX_NET_USERS) - 1)
+/** 64-bit words of a set of network connections (users and spectators). */
+#define NET_MASK_WORDS ((MAX_NET_CONNECTIONS + 63) / 64)
+/** A set of network connections, one bit each (connection id c: bit c % 64 of word c / 64). */
+typedef struct NetUserMask {
+    uint64_t w[NET_MASK_WORDS];
+} NetUserMask;
+
+static inline NetUserMask numask_none(void)
+{
+    NetUserMask m;
+    for (int i = 0; i < NET_MASK_WORDS; i++)
+        m.w[i] = 0;
+    return m;
+}
+static inline int numask_has(NetUserMask m, int id)
+{
+    if ((id < 0) || (id >= NET_MASK_WORDS * 64))
+        return 0;
+    return (int)((m.w[id >> 6] >> (id & 63)) & 1u);
+}
+static inline void numask_add(NetUserMask *m, int id)
+{
+    if ((id >= 0) && (id < NET_MASK_WORDS * 64))
+        m->w[id >> 6] |= (UINT64_C(1) << (id & 63));
+}
+static inline void numask_del(NetUserMask *m, int id)
+{
+    if ((id >= 0) && (id < NET_MASK_WORDS * 64))
+        m->w[id >> 6] &= ~(UINT64_C(1) << (id & 63));
+}
+static inline NetUserMask numask_of(int id)
+{
+    NetUserMask m = numask_none();
+    numask_add(&m, id);
+    return m;
+}
+/** Connections from..to-1. */
+static inline NetUserMask numask_range(int from, int to)
+{
+    NetUserMask m = numask_none();
+    for (int id = from; id < to; id++)
+        numask_add(&m, id);
+    return m;
+}
+static inline int numask_any(NetUserMask m)
+{
+    for (int i = 0; i < NET_MASK_WORDS; i++)
+        if (m.w[i] != 0)
+            return 1;
+    return 0;
+}
+static inline int numask_count(NetUserMask m)
+{
+    int n = 0;
+    for (int i = 0; i < NET_MASK_WORDS; i++)
+        n += __builtin_popcountll(m.w[i]);
+    return n;
+}
+static inline NetUserMask numask_or(NetUserMask a, NetUserMask b)
+{
+    for (int i = 0; i < NET_MASK_WORDS; i++)
+        a.w[i] |= b.w[i];
+    return a;
+}
+static inline NetUserMask numask_and(NetUserMask a, NetUserMask b)
+{
+    for (int i = 0; i < NET_MASK_WORDS; i++)
+        a.w[i] &= b.w[i];
+    return a;
+}
+static inline NetUserMask numask_andnot(NetUserMask a, NetUserMask b)
+{
+    for (int i = 0; i < NET_MASK_WORDS; i++)
+        a.w[i] &= ~b.w[i];
+    return a;
+}
+#define ALL_NET_USERS_MASK numask_range(0, MAX_NET_USERS)
+#define ALL_NET_CONNECTIONS_MASK numask_range(0, MAX_NET_CONNECTIONS)
 #define MAX_NET_PEERS (MAX_NET_USERS - 1)
 #define SERVER_ID 0
 #define SOLO_HUMAN_ID 0 /* human player's user id in non-multiplayer, when relevant */
 #define OBSERVER_USER MAX_NET_CONNECTIONS /* dummy user for observers */
-#define NET_MSG_BUFFER_SIZE 5000
+#define NET_MSG_BUFFER_SIZE 65536 /* the joiner bootstrap holds every user's startup packet (each with a slot per user) */
 #define INVALID_USER_ID 23456
 
 typedef int NetUserId;
@@ -78,6 +159,7 @@ enum NetMessageType {
     NETMSG_SPECTATOR_CONVERSION,
     NETMSG_LOBBY_SETTINGS,
     NETMSG_SPECTATOR_SEAT,
+    NETMSG_STATE_TURN,       /* thin-client play: the server's state record for a turn (net_state.c) */
 };
 
 enum NetConnectionRole {

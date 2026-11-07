@@ -58,6 +58,7 @@
 #include "local_camera.h"
 
 #include "keeperfx.hpp"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -936,6 +937,8 @@ static TbBool shot_hit_object_at(struct Thing *shotng, struct Thing *target, str
     {
         if (object_can_be_damaged(target)) // do not damage objects that cannot be destroyed
         {
+            if (thing_is_dungeon_heart(target))
+                world_heart_hit(target, shotng->owner); /* endless worlds: who destroys it gets XP */
             damage_done = apply_damage_to_thing(target, shotng->shot.damage, -1);
 
             // Drain allows caster to regain half of damage
@@ -1993,7 +1996,8 @@ static TngUpdateRet affect_thing_by_wind(struct Thing *thing, ModTngFilterParam 
                     apply_velocity = true;
                     set_flag(cctrl->spell_flags, CSAfF_Wind);
                 } // If weight_affect_push_rule is on.
-                else if (game.conf.rules[thing->owner].magic.weight_calculate_push > 0 && creature_distance >= blow_distance && !creatureAlreadyAffected)
+                else if (game.conf.rules[thing->owner].magic.weight_calculate_push > 0 && creature_distance >= blow_distance && !creatureAlreadyAffected &&
+                    (shotng->shot.num_wind_affected < WIND_AFFECTED_MAX))
                 {
                     // Add creature index to wind_affected_creature array.
                     shotng->shot.wind_affected_creature[shotng->shot.num_wind_affected++] = cctrl->index;

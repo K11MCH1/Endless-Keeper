@@ -231,7 +231,7 @@ const struct NamedFieldSet rules_named_fields_set = {
   "",
   NULL,
   NULL,
-  PLAYERS_COUNT,
+  PLAYERS_MAX,
   sizeof(game.conf.rules[0]),
   get_rules_base,
 };
@@ -356,7 +356,7 @@ static void set_rules_defaults()
     for (size_t i = 0; i < sizeof(ruleblocks) / sizeof(ruleblocks[0]); i++) {
         const struct NamedField* field = ruleblocks[i];
         while (field->name != NULL) {
-            for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_COUNT; plyr_idx++) {
+            for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_MAX; plyr_idx++) { /* every slot: players 10-15 may be turned on */
                 if (ruleblocks[i] == rules_script_only_named_fields) {
                     assign_named_field_value(field, field->default_value, &rules_named_fields_set, plyr_idx, "rules", ccf_SplitExecution | ccf_DuringLevel);
                 } else {
@@ -730,7 +730,7 @@ static TbBool load_rules_config_file(const char *fname, unsigned short flags)
 
     if (result)
     {
-        for (int i = 0; i < PLAYERS_COUNT; i++)
+        for (int i = 0; i < PLAYERS_MAX; i++) /* every slot: players 10-15 may be turned on */
         {
           parse_named_field_block(buf, len, fname, flags,"game",     rules_game_named_fields,      &rules_named_fields_set, i);
           parse_named_field_block(buf, len, fname, flags,"creatures",rules_creatures_named_fields, &rules_named_fields_set, i);

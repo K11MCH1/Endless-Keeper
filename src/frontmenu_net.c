@@ -77,6 +77,12 @@ const char *net_join_error_text(enum NetJoinRejection reason)
         return get_string(GUIStr_NetUnsyncedMap);
     case NetJoin_FxdataMismatch:
         return get_string(GUIStr_NetVerifyFxdataSame);
+    case NetJoin_Kicked:
+        return "You were kicked.";
+    case NetJoin_Banned:
+        return "You were banned from this server.";
+    case NetJoin_BannedJoin:
+        return "You are banned from this server. To appeal the ban contact an Admin.";
     default:
         return NULL;
     }

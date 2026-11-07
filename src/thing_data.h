@@ -23,7 +23,9 @@
 #include "bflib_basics.h"
 
 /** Max amount of creatures supported on any map. */
-#define CREATURES_COUNT       1024
+#define CREATURES_COUNT       4096 /* creature controls (1024 before: endless worlds with many dungeons need more) */
+/** Creatures a wind shot remembers it has pushed (it was CREATURES_COUNT, 1024: kept, so a thing keeps its size). */
+#define WIND_AFFECTED_MAX     1024
 
 
 #ifdef __cplusplus
@@ -190,7 +192,7 @@ struct Thing {
         CrtrExpLevel shot_level;
         struct Coord3d originpos;
         int num_wind_affected;
-        CctrlIndex wind_affected_creature[CREATURES_COUNT];  //list of wind affected Creatures
+        CctrlIndex wind_affected_creature[WIND_AFFECTED_MAX];  //list of wind affected Creatures
       } shot;
       struct {
         int32_t x;

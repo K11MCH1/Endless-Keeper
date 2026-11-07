@@ -62,7 +62,26 @@
 #include "observer.h"
 
 #include "keeperfx.hpp"
+#include "world_stream.h"
+#include "world_daynight.h"
+#include "frontmenu_ingame_map.h"
+#include "world_pages.h"
+#include "world_stream.h"
+#include "world_colours.h"
+#include "roomspace_input.h"
 #include "post_inc.h"
+
+/** The full-screen map's view in slabs: the map, or in paged mode (chunked endless world, no fixed map size) a
+ *  window-sized view. */
+static MapSlabCoord parchment_tiles_x(void)
+{
+    return world_paged ? (MapSlabCoord)WORLD_WINDOW_SLABS : game.map_tiles_x;
+}
+
+static MapSlabCoord parchment_tiles_y(void)
+{
+    return world_paged ? (MapSlabCoord)WORLD_WINDOW_SLABS : game.map_tiles_y;
+}
 
 /******************************************************************************/
 unsigned short engine_remap_texture_blocks(long stl_x, long stl_y, unsigned short tex_id);
@@ -150,12 +169,12 @@ long get_parchment_map_area_rect(struct TbRect *map_area)
     get_parchment_background_area_rect(&bkgnd_area);
     long bkgnd_width = bkgnd_area.right - bkgnd_area.left;
     long bkgnd_height = bkgnd_area.bottom - bkgnd_area.top;
-    long block_size = min((bkgnd_width - bkgnd_width / 3) / game.map_tiles_x, (bkgnd_height - bkgnd_height / 8) / game.map_tiles_y);
+    long block_size = min((bkgnd_width - bkgnd_width / 3) / parchment_tiles_x(), (bkgnd_height - bkgnd_height / 8) / parchment_tiles_y());
     if (block_size < 1) block_size = 1;
-    map_area->left = bkgnd_area.left + (bkgnd_width - block_size*game.map_tiles_x) / 2;
-    map_area->top = bkgnd_area.top + 3 * (bkgnd_height - block_size*game.map_tiles_y) / 4;
-    map_area->right = map_area->left + block_size*game.map_tiles_x;
-    map_area->bottom = map_area->top + block_size*game.map_tiles_y;
+    map_area->left = bkgnd_area.left + (bkgnd_width - block_size*parchment_tiles_x()) / 2;
+    map_area->top = bkgnd_area.top + 3 * (bkgnd_height - block_size*parchment_tiles_y()) / 4;
+    map_area->right = map_area->left + block_size*parchment_tiles_x();
+    map_area->bottom = map_area->top + block_size*parchment_tiles_y();
     return block_size;
 }
 
@@ -172,9 +191,32 @@ TbBool point_to_overhead_map(const struct Camera *camera, const long screen_x, c
     {
         *map_x = COORD_PER_STL * STL_PER_SLB * (screen_x-map_area.left) / block_size + COORD_PER_STL/2;
         *map_y = COORD_PER_STL * STL_PER_SLB * (screen_y-map_area.top)  / block_size + COORD_PER_STL/2;
+        if (world_mode_active())
+        {
+            MapSlabCoord view_x, view_y;
+            world_parchment_view_origin(&view_x, &view_y);
+            *map_x += COORD_PER_STL * STL_PER_SLB * view_x;
+            *map_y += COORD_PER_STL * STL_PER_SLB * view_y;
+        }
         return ((*map_x >= 0) && (*map_x < (game.map_subtiles_x+1)<<8) && (*map_y >= 0) && (*map_y < (game.map_subtiles_y+1)<<8));
     }
     return false;
+}
+
+/** Endless world: the subtile under a point of the full-screen map, also beyond the loaded window (then
+ *  outside 0..map_subtiles). False when the point is not on the map. */
+TbBool parchment_point_to_subtile(const long screen_x, const long screen_y, MapSubtlCoord *stl_x, MapSubtlCoord *stl_y)
+{
+    struct TbRect map_area;
+    long block_size = get_parchment_map_area_rect(&map_area);
+    if ((screen_x < map_area.left) || (screen_x >= map_area.right) || (screen_y < map_area.top) || (screen_y >= map_area.bottom))
+        return false;
+    MapSlabCoord view_x = 0, view_y = 0;
+    if (world_mode_active())
+        world_parchment_view_origin(&view_x, &view_y);
+    *stl_x = STL_PER_SLB * ((screen_x - map_area.left) / block_size + view_x) + 1;
+    *stl_y = STL_PER_SLB * ((screen_y - map_area.top) / block_size + view_y) + 1;
+    return true;
 }
 
 TbBool parchment_copy_background_at(const struct TbRect *bkgnd_area, int units_per_px)
@@ -249,13 +291,27 @@ enum OverheadMapStyle {
 
 static TbPixel get_player_path_colour(unsigned short owner)
 {
-  return player_path_colours[get_player_color_idx(owner % PLAYERS_COUNT)];
+  return player_path_colours[world_display_colour(owner % PLAYERS_COUNT)];
+}
+
+/* Endless world: the overlays (creatures, room icons, traps...) are drawn against a map area moved by the
+ * scroll offset; whatever falls outside the visible map area is left out. */
+static struct TbRect parchment_clip;
+static TbBool parchment_clip_on;
+
+static TbBool parchment_point_hidden(int x, int y)
+{
+    if (parchment_clip_on && ((x < parchment_clip.left) || (x >= parchment_clip.right)
+        || (y < parchment_clip.top) || (y >= parchment_clip.bottom)))
+        return true;
+    return RendererPointInZoomBoxScreenRect(x, y);
 }
 
 static int get_overhead_mapblock_style(const struct Map* mapblk, const struct SlabMap* slb, MapSlabCoord slb_x, MapSlabCoord slb_y, PlayerNumber plyr_idx, int gui_frame, TbPixel neutral_colour)
 {
     PlayerNumber owner = slb->owner;
-    if ((((mapblk->flags & SlbAtFlg_Unexplored) != 0) || ((mapblk->flags & SlbAtFlg_TaggedValuable) != 0)) && (gui_frame >= 4)) {
+    const unsigned char mark_flags = dig_marks_display_flags(slab_subtile_center(slb_x), slab_subtile_center(slb_y), mapblk->flags); /* a thin client's own dig marks */
+    if ((((mark_flags & SlbAtFlg_Unexplored) != 0) || ((mark_flags & SlbAtFlg_TaggedValuable) != 0)) && (gui_frame >= 4)) {
         if (slb->kind == SlbT_GEMS) {
             return OMapSt_TaggedGems;
         }
@@ -275,7 +331,7 @@ static int get_overhead_mapblock_style(const struct Map* mapblk, const struct Sl
         if (((gui_frame & 1) != 0) && (room->kind == gui_room_type_highlighted)) {
             return player_highlight_colours[owner];
         }
-        unsigned char color_idx = get_player_color_idx(owner);
+        unsigned char color_idx = world_display_colour(owner);
         if (color_idx == PLAYER_NEUTRAL) {
             return neutral_colour;
         }
@@ -362,6 +418,45 @@ static void fill_overhead_scratch_with_parchment_background(unsigned char* omap_
     }
 }
 
+static int get_overhead_world_style(MapSlabCoord slb_x, MapSlabCoord slb_y, PlayerNumber plyr_idx, int gui_frame, TbPixel neutral_colour)
+{
+    /* the live map where it is loaded (the window inside its rock frame, or any loaded page); memory elsewhere */
+    const TbBool live = world_paged ? (wp_page_of_slab(slb_x, slb_y) != NULL)
+        : ((slb_x >= 1) && (slb_y >= 1) && (slb_x < parchment_tiles_x() - 1) && (slb_y < parchment_tiles_y() - 1));
+    if (live)
+    {
+        const struct Map* mapblk = get_map_block_at(slab_subtile_center(slb_x), slab_subtile_center(slb_y));
+        const struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
+        return get_overhead_mapblock_style(mapblk, slb, slb_x, slb_y, plyr_idx, gui_frame, neutral_colour);
+    }
+    PlayerNumber owner;
+    unsigned short code = world_minimap_code(slab_subtile_center(slb_x), slab_subtile_center(slb_y));
+    switch (panel_code_class(code, &owner))
+    {
+    case PCC_Wall: return OMapSt_Wall;
+    case PCC_Rock: return 0;
+    case PCC_Gold: return OMapSt_Gold;
+    case PCC_Gems: return OMapSt_Gems;
+    case PCC_Lava: return 146;
+    case PCC_Water: return 85;
+    case PCC_Purple: return 255;
+    case PCC_RockFloor: return pixmap.ghost[3];
+    case PCC_Abyss: return OMapSt_Abyss;
+    case PCC_Door: return 60;
+    case PCC_DoorLocked: return 79;
+    case PCC_Path: return get_player_path_colour(owner);
+    case PCC_Room:
+    {
+        unsigned char color_idx = world_display_colour(owner);
+        if (color_idx == PLAYER_NEUTRAL)
+            return neutral_colour;
+        return player_room_colours[color_idx];
+    }
+    default:
+        return OMapSt_Unchanged;
+    }
+}
+
 void draw_overhead_map(const struct TbRect *map_area, long block_size, PlayerNumber plyr_idx)
 {
     int map_w = (int)(map_area->right - map_area->left);
@@ -382,16 +477,26 @@ void draw_overhead_map(const struct TbRect *map_area, long block_size, PlayerNum
     int styles[MAX_TILES_X];
     const struct SlabMap* slb = get_slabmap_block(0, 0);
     unsigned char* dstrow = omap_scratch;
-    for (MapSlabCoord slb_y = 0; slb_y < game.map_tiles_y; slb_y++, dstrow += block_stride) {
+    MapSlabCoord view_x = 0, view_y = 0;
+    const TbBool world_view = world_mode_active();
+    if (world_view)
+        world_parchment_view_origin(&view_x, &view_y);
+    for (MapSlabCoord slb_y = 0; slb_y < parchment_tiles_y(); slb_y++, dstrow += block_stride) {
+        if (world_view) {
+            for (MapSlabCoord slb_x = 0; slb_x < parchment_tiles_x(); slb_x++) {
+                styles[slb_x] = get_overhead_world_style(view_x + slb_x, view_y + slb_y, plyr_idx, gui_frame, neutral_colour);
+            }
+        } else {
         const struct Map* mapblk = get_map_block_at(slab_subtile_center(0), slab_subtile_center(slb_y));
-        for (MapSlabCoord slb_x = 0; slb_x < game.map_tiles_x; slb_x++, slb++, mapblk += STL_PER_SLB) {
+        for (MapSlabCoord slb_x = 0; slb_x < parchment_tiles_x(); slb_x++, slb++, mapblk += STL_PER_SLB) {
             styles[slb_x] = get_overhead_mapblock_style(mapblk, slb, slb_x, slb_y, plyr_idx, gui_frame, neutral_colour);
         }
+        }
         unsigned char* dstblock = dstrow;
-        for (MapSlabCoord slb_x = 0; slb_x < game.map_tiles_x;) {
+        for (MapSlabCoord slb_x = 0; slb_x < parchment_tiles_x();) {
             int style = styles[slb_x];
             MapSlabCoord run = 1;
-            while ((slb_x + run < game.map_tiles_x) && (styles[slb_x + run] == style)) {
+            while ((slb_x + run < parchment_tiles_x()) && (styles[slb_x + run] == style)) {
                 run++;
             }
             int32_t run_width = run * block_size;
@@ -494,7 +599,7 @@ void draw_overhead_room_icons(const struct TbRect *map_area, long block_size, Pl
                     const struct TbSprite* spr = get_panel_sprite(sprite_idx);
                     long pos_x = map_area->left + (block_size * room->central_stl_x / STL_PER_SLB) - (spr->SWidth * ps_units_per_px / 16 / 2);
                     long pos_y = map_area->top + (block_size * room->central_stl_y / STL_PER_SLB) - (spr->SHeight * ps_units_per_px / 16 / 2);
-                    if (RendererPointInZoomBoxScreenRect((int)pos_x, (int)pos_y)) continue;
+                    if (parchment_point_hidden((int)pos_x, (int)pos_y)) continue;
                     UIRenderer_SubmitPanelSpriteRaw(pos_x, pos_y, ps_units_per_px, spr, dimmed ? Lb_SPRITE_TRANSPAR4 : 0);
                 }
             }
@@ -516,8 +621,8 @@ int draw_overhead_call_to_arms(const struct TbRect *map_area, long block_size, P
             long pos_x = map_area->left + block_size * (int)dungeon->cta_stl_x / STL_PER_SLB;
             long pos_y = map_area->top + block_size * (int)dungeon->cta_stl_y / STL_PER_SLB;
             long radius = (((m & 7) + m) >> 3) / pixel_size;
-            unsigned char col = player_room_colours[get_player_color_idx(i)];
-            if (RendererPointInZoomBoxScreenRect((int)pos_x, (int)pos_y)) { n++; continue; }
+            unsigned char col = player_room_colours[world_display_colour(i)];
+            if (parchment_point_hidden((int)pos_x, (int)pos_y)) { n++; continue; }
             UIRenderer_SubmitCircleOutline(pos_x, pos_y, radius, col);
             n++;
         }
@@ -546,7 +651,7 @@ int draw_overhead_creatures(const struct TbRect *map_area, long block_size, Play
         // Per-thing code
         if (!thing_is_picked_up(thing))
         {
-            unsigned char color_idx = get_player_color_idx(thing->owner);
+            unsigned char color_idx = world_display_colour(thing->owner);
             TbPixel col1 = player_highlight_colours[color_idx];
             TbPixel col2 = 1;
             if (thing_revealed(thing, plyr_idx))
@@ -571,7 +676,7 @@ int draw_overhead_creatures(const struct TbRect *map_area, long block_size, Play
                 {
                     col = col1;
                 }
-                if (!RendererPointInZoomBoxScreenRect((int)pos_x, (int)pos_y))
+                if (!parchment_point_hidden((int)pos_x, (int)pos_y))
                 {
                     pixel_end = get_pixels_scaled_and_zoomed(TWO_PIXELS);
                     for (p = 0; p < pixel_end; p++)
@@ -587,8 +692,8 @@ int draw_overhead_creatures(const struct TbRect *map_area, long block_size, Play
                 struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
                 if ((get_gameturn() % (8 * gui_blink_rate)) < 4 * gui_blink_rate)
                 {
-                    col1 = player_room_colours[get_player_color_idx((int)(cctrl->party.target_plyr_idx>=0?cctrl->party.target_plyr_idx:0))];
-                    col2 = player_room_colours[get_player_color_idx(thing->owner)];
+                    col1 = player_room_colours[world_display_colour((int)(cctrl->party.target_plyr_idx>=0?cctrl->party.target_plyr_idx:0))];
+                    col2 = player_room_colours[world_display_colour(thing->owner)];
                 }
                 if (thing->owner == plyr_idx)
                 {
@@ -600,16 +705,33 @@ int draw_overhead_creatures(const struct TbRect *map_area, long block_size, Play
                 }
                 for (int m = 0; m < 5; m++)
                 {
-                    long memberpos = cctrl->party.member_pos_stl[m];
+                    SubtlCodedCoords memberpos = cctrl->party.member_pos_stl[m];
                     if (memberpos == 0)
                         break;
                     long pos_x = map_area->left + block_size * stl_num_decode_x(memberpos) / STL_PER_SLB;
                     long pos_y = map_area->top + block_size * stl_num_decode_y(memberpos) / STL_PER_SLB;
-                    if (RendererPointInZoomBoxScreenRect((int)pos_x, (int)pos_y)) { n++; continue; }
+                    if (parchment_point_hidden((int)pos_x, (int)pos_y)) { n++; continue; }
                     pixel_end = get_pixels_scaled_and_zoomed(TWO_PIXELS);
                     for (p = 0; p < pixel_end; p++)
                     {
                         UIRenderer_SubmitSolidBox(pos_x + draw_square[p].delta_x, pos_y + draw_square[p].delta_y, 1, 1, col);
+                    }
+                    n++;
+                }
+            } else
+            // Endless world: heroes of a day raid, like tunnelling parties (blinking white and the target's colour)
+            if (world_raid_hero(thing))
+            {
+                const TbPixel raid_col = ((get_gameturn() % (8 * gui_blink_rate)) < 4 * gui_blink_rate) ?
+                    player_room_colours[world_display_colour(plyr_idx)] : 31;
+                long pos_x = map_area->left + block_size * (int)thing->mappos.x.stl.num / STL_PER_SLB;
+                long pos_y = map_area->top + block_size * (int)thing->mappos.y.stl.num / STL_PER_SLB;
+                if (!parchment_point_hidden((int)pos_x, (int)pos_y))
+                {
+                    pixel_end = get_pixels_scaled_and_zoomed(TWO_PIXELS);
+                    for (p = 0; p < pixel_end; p++)
+                    {
+                        UIRenderer_SubmitSolidBox(pos_x + draw_square[p].delta_x, pos_y + draw_square[p].delta_y, 1, 1, raid_col);
                     }
                     n++;
                 }
@@ -650,7 +772,7 @@ int draw_overhead_traps(const struct TbRect *map_area, long block_size, PlayerNu
                 {
                     long pos_x = map_area->left + (block_size * (int)thing->mappos.x.stl.num / STL_PER_SLB) + ((block_size + 1)/5);
                     long pos_y = map_area->top + (block_size * (int)thing->mappos.y.stl.num / STL_PER_SLB) + ((block_size + 1)/5);
-                    if (!RendererPointInZoomBoxScreenRect((int)pos_x, (int)pos_y))
+                    if (!parchment_point_hidden((int)pos_x, (int)pos_y))
                     {
                     short pixels_amount = scale_pixel(ONE_PIXEL);
                     short pixel_end = get_pixels_scaled_and_zoomed(ONE_PIXEL);
@@ -704,7 +826,7 @@ int draw_overhead_spells(const struct TbRect *map_area, long block_size, PlayerN
               {
                   long pos_x = map_area->left + block_size * (int)thing->mappos.x.stl.num / STL_PER_SLB  + ((block_size + 1)/5);
                   long pos_y = map_area->top + block_size * (int)thing->mappos.y.stl.num / STL_PER_SLB + ((block_size + 1)/5);
-                  if (!RendererPointInZoomBoxScreenRect((int)pos_x, (int)pos_y)) {
+                  if (!parchment_point_hidden((int)pos_x, (int)pos_y)) {
                   short pixel_end = get_pixels_scaled_and_zoomed(TWO_PIXELS);
                   for (int p = 0; p < pixel_end; p++)
                   {
@@ -716,7 +838,7 @@ int draw_overhead_spells(const struct TbRect *map_area, long block_size, PlayerN
               {
                   long pos_x = map_area->left + block_size * (int)thing->mappos.x.stl.num / STL_PER_SLB  + ((block_size + 1)/5);
                   long pos_y = map_area->top + block_size * (int)thing->mappos.y.stl.num / STL_PER_SLB + ((block_size + 1)/5);
-                  if (!RendererPointInZoomBoxScreenRect((int)pos_x, (int)pos_y)) {
+                  if (!parchment_point_hidden((int)pos_x, (int)pos_y)) {
                   short pixel_end = get_pixels_scaled_and_zoomed(TWO_PIXELS);
                   for (int p = 0; p < pixel_end; p++)
                   {
@@ -760,6 +882,36 @@ void draw_2d_map(void)
     long block_size = get_parchment_map_area_rect(&map_area);
     // Now draw
     draw_overhead_map(&map_area, block_size, player->id_number);
+    if (world_mode_active())
+    {
+        // Endless world: the map can be scrolled past the loaded window
+        MapSlabCoord view_x, view_y;
+        world_parchment_view_origin(&view_x, &view_y);
+        struct TbRect view_area = map_area;
+        view_area.left -= block_size * view_x;
+        view_area.right -= block_size * view_x;
+        view_area.top -= block_size * view_y;
+        view_area.bottom -= block_size * view_y;
+        parchment_clip = map_area;
+        parchment_clip_on = true;
+        draw_overhead_things(&view_area, block_size, player->id_number);
+        draw_overhead_room_icons(&view_area, block_size, player->id_number);
+        MapSlabCoord heart_x, heart_y;
+        if (world_parchment_heart(&heart_x, &heart_y))
+        {
+            long pos_x = view_area.left + block_size * heart_x + block_size / 2;
+            long pos_y = view_area.top + block_size * heart_y + block_size / 2;
+            if (!parchment_point_hidden((int)pos_x, (int)pos_y))
+            {
+                unsigned char col = player_room_colours[world_display_colour(player->id_number)];
+                long radius = block_size * (3 + ((get_gameturn() / 4) & 1));
+                UIRenderer_SubmitCircleOutline(pos_x, pos_y, radius, col);
+                UIRenderer_SubmitCircleOutline(pos_x, pos_y, radius + 1, col);
+            }
+        }
+        parchment_clip_on = false;
+        return;
+    }
     draw_overhead_things(&map_area, block_size, player->id_number);
     draw_overhead_room_icons(&map_area, block_size, player->id_number);
 }
@@ -797,6 +949,14 @@ void draw_map_level_name(void)
         LbTextSetWindow(x, y, w, h);
         int tx_units_per_px = ( (MyScreenHeight < 400) && (dbc_initialized && dbc_enabled) ) ? scale_ui_value(32) : (22 * units_per_pixel) / LbTextLineHeight();
         LbTextDrawResized((w-LbTextStringWidth(lv_name)*units_per_pixel/16)/2, h/10 - 8*units_per_pixel/16, tx_units_per_px, lv_name);
+    }
+    if (world_mode_active())
+    {
+        const char *hint = "W A S D: scroll the map (Shift: faster)    H: your Dungeon Heart    Click: go there";
+        int hint_units_per_px = (14 * units_per_pixel) / LbTextLineHeight();
+        LbTextSetWindow(x, y, w, h + h / 2);
+        LbTextDrawResized((w - LbTextStringWidth(hint) * hint_units_per_px / 16) / 2, h / 10 + 24 * units_per_pixel / 16,
+            hint_units_per_px, hint);
     }
 }
 
@@ -1023,6 +1183,20 @@ void draw_zoom_box(void)
     // Source map coordinates
     int stl_x = STL_PER_SLB * (mouse_x / pixel_size - map_area.left) / block_size - draw_tiles_x / 2;
     int stl_y = STL_PER_SLB * (mouse_y / pixel_size - map_area.top) / block_size - draw_tiles_y / 2;
+    if (world_mode_active())
+    {
+        MapSlabCoord view_x, view_y;
+        world_parchment_view_origin(&view_x, &view_y);
+        stl_x += STL_PER_SLB * view_x;
+        stl_y += STL_PER_SLB * view_y;
+        const int cx = stl_x + draw_tiles_x / 2, cy = stl_y + draw_tiles_y / 2;
+        if ((cx < STL_PER_SLB) || (cy < STL_PER_SLB) || (cx >= game.map_subtiles_x - STL_PER_SLB) || (cy >= game.map_subtiles_y - STL_PER_SLB))
+            return;
+        /* paged: only over the drawn map, and only where the world is loaded */
+        if (world_paged && ((mouse_x / pixel_size < map_area.left) || (mouse_x / pixel_size >= map_area.right)
+         || (mouse_y / pixel_size < map_area.top) || (mouse_y / pixel_size >= map_area.bottom) || (wp_page_of_subtile(cx, cy) == NULL)))
+            return;
+    }
     // Draw only on map area (do not allow zoom box to be empty)
     if ((stl_x < -draw_tiles_x/2) || (stl_x >= game.map_subtiles_x+1-draw_tiles_x/2)
      || (stl_y < -draw_tiles_y/2) || (stl_y >= game.map_subtiles_y+1-draw_tiles_y/2))

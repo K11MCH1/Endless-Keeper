@@ -36,6 +36,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>
+#include "world_colours.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -1884,7 +1885,7 @@ void GLWorldViewRenderer::append_keeper_sprite_instance(const IRWorldKeeperSprit
         float oc_r = 0.9f, oc_g = 0.9f, oc_b = 0.9f;
         if (cmd.owner >= 0)
         {
-            unsigned char color_idx = get_player_color_idx((PlayerNumber)cmd.owner);
+            unsigned char color_idx = world_display_colour((PlayerNumber)cmd.owner);
             if (color_idx < 9)
             {
                 uint8_t pal_idx = player_room_colours[color_idx];
@@ -2104,7 +2105,7 @@ int GLWorldViewRenderer::render_keepersprite_gpu(const IRWorldKeeperSpriteCmd& c
         float oc_r = 0.9f, oc_g = 0.9f, oc_b = 0.9f;
         if (sprite_owner >= 0)
         {
-            unsigned char color_idx = get_player_color_idx((PlayerNumber)sprite_owner);
+            unsigned char color_idx = world_display_colour((PlayerNumber)sprite_owner);
             if (color_idx < 9)
             {
                 uint8_t pal_idx = player_room_colours[color_idx];

@@ -20,6 +20,7 @@
 #include "bflib_basics.h"          /* TbBool */
 #include "local_camera.h"
 #include "observer.h"
+#include "world_daynight.h"
 
 #include "post_inc.h"
 
@@ -52,6 +53,7 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
         draw_whole_status_panel();
     }
     draw_gui();
+    world_daynight_draw();
     if (show_sidebar) {
         draw_overlay_compass(local_state.minimap_pos_x, local_state.minimap_pos_y);
     }

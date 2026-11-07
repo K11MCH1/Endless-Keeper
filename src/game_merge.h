@@ -141,7 +141,7 @@ struct LevelEnsignOverride {
 #define INTRALEVEL_DATA_VER 1
 struct IntralevelData {
     unsigned char bonuses_found[BONUS_LEVEL_STORAGE_COUNT];
-    struct CreatureStorage transferred_creatures[PLAYERS_COUNT][TRANSFER_CREATURE_STORAGE_COUNT];
+    struct CreatureStorage transferred_creatures[STOCK_PLAYERS_COUNT][TRANSFER_CREATURE_STORAGE_COUNT]; /* campaigns: nine players */
     int32_t campaign_flags[PLAYERS_FOR_CAMPAIGN_FLAGS][CAMPAIGN_FLAGS_PER_PLAYER];
     LevelNumber next_level;
     struct LevelEnsignOverride ensign_overrides[ENSIGN_OVERRIDES_COUNT];

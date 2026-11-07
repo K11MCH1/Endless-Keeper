@@ -53,6 +53,14 @@
 #include "net_checksums.h"
 #include "net_spectator.h"
 #include "keeperfx.hpp"
+#include "world_stream.h"
+#include "net_state.h"
+#include "world_pages.h"
+#include "world_net.h"
+#include "world_menu.h"
+#include "thing_creature.h"
+#include "gui_frontmenu.h"
+#include "server_admin.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -86,7 +94,7 @@ short setup_network_service(enum FrontendNetService service)
     process_network_error(-800);
     return 0;
   }
-  if ( LbNetwork_Init(NS_ENET_UDP, MAX_NET_USERS, &net_user_info[0], init_data) )
+  if ( LbNetwork_Init(NS_ENET_UDP, STOCK_NET_USERS, &net_user_info[0], init_data) )
   {
     process_network_error(-800);
     return 0;
@@ -335,6 +343,9 @@ static TbBool verify_startup_sprite_zip_checksums(const struct StartupSyncPacket
 
 static struct StartupSyncPacket s_local_startup_sync;
 static struct StartupSyncPacket s_startup_sync_packets[MAX_NET_USERS];
+/* a joiner's bootstrap carries every user's startup packet in one message */
+_Static_assert(sizeof(int32_t) + DISKPATH_SIZE + sizeof(PlayerNumber) * MAX_NET_USERS + sizeof(s_startup_sync_packets) + 16
+    <= NET_MSG_BUFFER_SIZE, "the spectator bootstrap doesn't fit a network message");
 
 static TbBool reject_network_startup(enum NetJoinRejection reason)
 {
@@ -746,6 +757,9 @@ void resolve_placeholders(void)
 
 void hand_waiting_placeholders_to_ai(void)
 {
+    if (netstate_thin_mode()) {
+        return; /* a server: a departed player's dungeon stays as it is until they come back */
+    }
     for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_COUNT; plyr_idx++) {
         struct PlayerInfo *player = get_player(plyr_idx);
         if (!player_exists(player) || !player_is_placeholder(player)
@@ -821,6 +835,9 @@ static TbBool remove_user_from_game(NetUserId user, const char *announce_fmt)
 
 static void leave_network_if_alone(void)
 {
+    if (netstate_thin_mode()) {
+        return; /* a server keeps its session open for people to join */
+    }
     if (network_is_host() && (net_config_info.spectators_enabled || net_lobby_spectator_count() > 0 || network_spectator_seat_open(NULL))) {
         return;
     }
@@ -865,7 +882,7 @@ void process_user_leave_game_packet(NetUserId user)
         announce_fmt = get_string(GUIStr_NetPlayerTimedOut);
     }
     if (remove_user_from_game(user, announce_fmt) && network_is_active() && (user != SERVER_ID)) {
-        if (timed_out) {
+        if (timed_out && !netstate_thin_mode()) {
             process_pause_packet(1, 0);
         }
         net_lobby_refresh_metadata();
@@ -944,6 +961,38 @@ void process_disconnected_network_players(void)
     stop_network_game_and_continue_locally();
 }
 
+/** A thin client whose server is gone (the host closed the world, or it stopped answering): back to the menu with a
+ *  message. It can't play on alone as a lockstep client does: it never simulated the world. */
+TbBool network_thin_client_server_gone(void)
+{
+    if (!network_is_active() || network_is_host() || (netstate.users[SERVER_ID].progress != USER_UNUSED))
+        return false;
+    const TbBool timed_out = netstate.users_timed_out[SERVER_ID];
+    SYNCLOG("Thin client: the server is gone (%s)", timed_out ? "it stopped answering" : "it closed the connection");
+    const char *why = server_farewell_text();
+    if ((why == NULL) && (net_join_rejection >= NetJoin_Kicked) && (net_join_rejection <= NetJoin_BannedJoin))
+        why = net_join_error_text(net_join_rejection);
+    world_menu_return_to_list((why != NULL) ? why : (timed_out ? "The connection to the world's server was lost." : "The world's server has closed."));
+    server_farewell_set(NULL);
+    turn_off_all_menus();
+    free_swipe_graphic();
+    stop_network_game_and_quit_to_main_menu();
+    return true;
+}
+
+/** A thin client leaving (Quit, or closing the game): the quit has gone to the server, which keeps the dungeon for
+ *  when the player comes back; this machine leaves at once. Nothing is saved here: the world is the server's. */
+void network_thin_client_leave(TbBool close_app)
+{
+    SYNCLOG("Thin client: leaving the world%s", close_app ? " and closing the game" : "");
+    world_menu_return_to_list(NULL);
+    turn_off_all_menus();
+    free_swipe_graphic();
+    stop_network_game_and_quit_to_main_menu();
+    if (close_app)
+        exit_keeper = 1;
+}
+
 void apply_recorded_network_stop(void)
 {
     remove_remote_users_after_host_lost(replay.head.recording_user);
@@ -964,6 +1013,15 @@ int32_t network_session_join(void)
     snprintf(join_lobby_id, sizeof(join_lobby_id), "%s", net_session[net_session_index_active]->join_address);
     if (LbNetwork_Join(net_session[net_session_index_active], net_player_name, &plyr_num, NULL) == 0)
         return plyr_num;
+    if ((net_join_rejection == NetJoin_InGame) && (net_join_role == NetRole_Player)
+     && (net_session[net_session_index_active]->phase == NetPhase_Unknown) && !attempting_to_join_cancel_requested()) {
+        /* a direct connect to a game in progress: join it the way the session list does */
+        net_join_role = NetRole_Spectator;
+        net_join_rejection = NetJoin_Accepted;
+        spectator_join_error[0] = '\0';
+        if (LbNetwork_Join(net_session[net_session_index_active], net_player_name, &plyr_num, NULL) == 0)
+            return plyr_num;
+    }
     join_lobby_id[0] = '\0';
     if (!attempting_to_join_cancel_requested()) {
         if (frontnet_service_selected(FrontendNetSvc_Online)) {
@@ -996,11 +1054,20 @@ void sync_initial_network_seed(void)
    if (!network_is_active()) {
       return;
    }
-   struct { uint32_t action_seed; int32_t timestamp_tz; int64_t timestamp; } initial = { game.action_random_seed, game.timestamp_tz, game.timestamp };
+   /* the endless world's seed travels with it: the host's pending seed (a random one for a new run), so every
+      machine generates the host's world (sent before the level and its world are loaded) */
+   struct { uint32_t action_seed; int32_t timestamp_tz; int64_t timestamp; char world_seed[64]; } initial;
+   memset(&initial, 0, sizeof(initial));
+   initial.action_seed = game.action_random_seed;
+   initial.timestamp_tz = game.timestamp_tz;
+   initial.timestamp = game.timestamp;
+   snprintf(initial.world_seed, sizeof(initial.world_seed), "%s", world_next_seed_text());
    if (!LbNetwork_Resync(&initial, sizeof(initial))) {
       ERRORLOG("Initial sync failed");
       return;
    }
+   initial.world_seed[sizeof(initial.world_seed) - 1] = '\0';
+   world_set_next_seed(initial.world_seed);
    game.action_random_seed = initial.action_seed;
    game.timestamp = initial.timestamp;
    game.timestamp_tz = initial.timestamp_tz;
@@ -1009,13 +1076,123 @@ void sync_initial_network_seed(void)
    initial_replay_seed = game.action_random_seed;
    NETLOG("Initial network seed synced: action_seed=%u", game.action_random_seed);
 }
+/** Thin-client play: this running single-player endless world becomes a server that others join, as Minecraft's
+ *  Open to LAN. The session is created at once (online service: -connect and the session list find it), the game is
+ *  a network game from now on, and joiners get what they check against: this game's map and sprite checksums. */
+TbBool network_open_running_game(void)
+{
+    if (network_is_active() || !world_mode_active() || !world_paged) {
+        WARNLOG("Open to network: needs a chunked endless world in single player");
+        return false;
+    }
+    /* the network service, without the frontend's session screen (setting it up would change the campaign) */
+    memset(net_user_info, 0, sizeof(net_user_info));
+    network_lobby_ping = 0;
+    if (LbNetwork_Init(NS_ENET_UDP, MAX_NET_USERS, &net_user_info[0], NULL)) {
+        WARNLOG("Open to network: the network service didn't start");
+        return false;
+    }
+    /* no stock service: an endless world isn't put on KeeperFX's public list or the LAN; the world list has it */
+    net_service_index_selected = FrontendNetSvc_None;
+    if (net_player_name[0] == '\0') {
+        snprintf(net_player_name, sizeof(net_player_name), "%s", net_config_info.net_player_name);
+    }
+    uint32_t plyr_num = 0;
+    if (LbNetwork_Create(net_player_name, &plyr_num, NULL) != Lb_OK) {
+        WARNLOG("Open to network: the session couldn't be created");
+        LbNetwork_Stop();
+        return false;
+    }
+    netstate.phase = NetPhase_InGame;
+    set_flag(local_system_flags, GSF_NetworkActive);
+    fe_network_active = 1;
+    game.game_kind = GKind_MultiGame;
+    memset(net_user_info, 0, sizeof(net_user_info));
+    net_user_info[SERVER_ID].network_user_active = 1;
+    snprintf(net_user_info[SERVER_ID].name, sizeof(net_user_info[SERVER_ID].name), "%s", net_player_name);
+    set_net_user_player_number(SERVER_ID, my_player_number);
+    /* what a joiner checks before it loads the level */
+    memset(s_startup_sync_packets, 0, sizeof(s_startup_sync_packets));
+    struct StartupSyncPacket *sync = &s_startup_sync_packets[SERVER_ID];
+    sync->startup_sync_packet_valid = 1;
+    calculate_network_startup_map_checksums(sync->map_checksums);
+    memcpy(sync->required_sprite_zip_checksums, required_sprite_zip_checksums, sizeof(sync->required_sprite_zip_checksums));
+    build_local_user_preferences(sync->user_prefs);
+    sync->initial_action_seed = game.action_random_seed;
+    for (NetUserId u = 0; u < MAX_NET_USERS; u++) {
+        sync->player_slots[u] = (u == SERVER_ID) ? my_player_number : PLAYER_NONE;
+    }
+    initialize_packet_history();
+    game.input_lag_turns = 0;
+    game.skip_initial_input_turns = 0;
+    netstate_level_start(); /* the state stream */
+    if (!netstate_dedicated())
+    {
+        world_set_seat_token(my_player_number, net_local_reconnect_token()); /* the host's keeper is the host's */
+        /* a single-player world had no name on the host's keeper: the others see it by the host's nickname */
+        struct PlayerInfo *host = get_my_player();
+        snprintf(host->player_name, sizeof(host->player_name), "%s", net_player_name);
+    }
+    /* the world list: a dedicated server keeps one (the hub) unless -nohub; every open world registers */
+    if (netstate_dedicated() && !wnet_hub_off)
+    {
+        if (wnet_hub_start(wnet_hub_port_wanted))
+            server_admin_log("world", "World List hub on TCP port %d (ws://<this PC>:%d/hub)", wnet_hub_port_wanted, wnet_hub_port_wanted);
+        else
+            server_admin_log("warn", "The World List hub could not start on TCP port %d (in use?)", wnet_hub_port_wanted);
+    }
+    {
+        char title[WNET_TITLE_MAX];
+        if (wnet_title[0] != '\0')
+            snprintf(title, sizeof(title), "%s", wnet_title);
+        else if (netstate_dedicated())
+            snprintf(title, sizeof(title), "World %s", world_seed_text());
+        else
+            snprintf(title, sizeof(title), "%s's world", net_player_name);
+        wnet_server_begin(title, (int)enet_get_bound_port());
+        server_admin_log("world", "\"%s\" is open to players on UDP port %u", title, (unsigned)enet_get_bound_port());
+    }
+    message_add(MsgType_Blank, 0, "The world is open: others can join");
+    SYNCLOG("Server: the world is open to the network (port %u, campaign %s, level %d)", (unsigned)enet_get_bound_port(),
+        campaign.fname, (int)get_loaded_level_number());
+    return true;
+}
+
+/** After a save is loaded in an endless world, outside a network game: a world saved while it was a server plays on
+ *  in single player. The other players' keepers stay in the world as departed players (their names keep their seats
+ *  for when the world is opened again). */
+void network_after_save_loaded(void)
+{
+    if (network_is_active() || !world_mode_active()) {
+        return;
+    }
+    game.game_kind = GKind_LocalGame;
+    remap_user_to_solo(get_my_player(), get_local_user());
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++) {
+        struct PlayerInfo *player = get_player(p);
+        if ((p != my_player_number) && player_exists(player) && flag_is_set(player->allocflags, PlaF_Seat)
+         && (get_player_primary_user(player) < 0)) {
+            player->allocflags |= PlaF_Placeholder;
+        }
+    }
+    setup_count_players();
+}
+
 void network_spectator_send_bootstrap(NetUserId user_id)
 {
     char *write_pos = begin_net_message(NETMSG_SPECTATOR_BOOTSTRAP);
     int32_t level = get_loaded_level_number();
     memcpy(write_pos, &level, sizeof(level));
     write_pos += sizeof(level);
-    snprintf(write_pos, DISKPATH_SIZE, "%s", campaign.fname);
+    /* the campaign file's name without folders (a level started from the command line may carry them; the joiner
+       accepts a bare name only) */
+    const char *fname = campaign.fname;
+    for (const char *c = campaign.fname; *c != '\0'; c++) {
+        if ((*c == '/') || (*c == '\\')) {
+            fname = c + 1;
+        }
+    }
+    snprintf(write_pos, DISKPATH_SIZE, "%s", fname);
     write_pos += strlen(write_pos) + 1;
     PlayerNumber user_player_number[MAX_NET_USERS];
     for (NetUserId user = 0; user < MAX_NET_USERS; user++) {
@@ -1059,7 +1236,8 @@ TbError process_network_spectator_bootstrap(NetUserId source, const char *buffer
     buffer += sizeof(spectator_user_player_number);
     memcpy(s_startup_sync_packets, buffer, sizeof(s_startup_sync_packets));
     for (NetUserId id = 0; id < MAX_NET_USERS; id++) {
-        if (spectator_user_player_number[id] < PLAYER_NONE || spectator_user_player_number[id] >= PLAYERS_COUNT) {
+        /* a joiner hasn't loaded the level yet: an endless world's players 10-15 aren't in use here before it */
+        if (spectator_user_player_number[id] < PLAYER_NONE || spectator_user_player_number[id] >= PLAYERS_MAX) {
             return Lb_FAIL;
         }
     }

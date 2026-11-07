@@ -39,6 +39,7 @@
 #include "game_legacy.h"
 #include "player_data.h"
 #include "local_camera.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -359,6 +360,11 @@ void move_thing_in_map_f(struct Thing *thing, const struct Coord3d *pos, const c
     {
         SYNCDBG(19,"Moving %s index %d from (%d,%d) to (%d,%d), subtile changed",thing_model_name(thing),
             (int)thing->index,(int)thing->mappos.x.val,(int)thing->mappos.y.val,(int)pos->x.val,(int)pos->y.val);
+        // chunked world: ground that isn't loaded stops creatures, objects and shots like a wall
+        if (world_paged && ((thing->class_id == TCls_Creature) || (thing->class_id == TCls_Object) ||
+            (thing->class_id == TCls_Shot)) && (thing->alloc_flags & TAlF_IsInMapWho) &&
+            map_block_invalid(get_map_block_at(pos->x.stl.num, pos->y.stl.num)))
+            return;
         remove_thing_from_mapwho(thing);
         thing->mappos.x.val = pos->x.val;
         thing->mappos.y.val = pos->y.val;

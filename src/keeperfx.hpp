@@ -212,6 +212,7 @@ extern struct StartupParameters start_params;
 short setup_game(void);
 void game_loop(void);
 void update(void);
+void update_thin_client(void);
 void update_gameplay_delta_time(void);
 
 TbBool can_thing_be_queried(struct Thing *thing, PlayerNumber plyr_idx);
@@ -240,6 +241,7 @@ void clear_map(void);
 void clear_game(void);
 void clear_game_for_save(void);
 void clear_complete_game(void);
+void players_extend(int count);
 void clear_things_and_persons_data(void);
 void clear_computer(void);
 void engine(struct PlayerInfo *player, struct Camera *cam);

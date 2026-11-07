@@ -439,7 +439,7 @@ struct Computer2 { // sizeof = 5322
   struct ComputerProcess processes[COMPUTER_PROCESSES_COUNT+1];
   struct ComputerCheck checks[COMPUTER_CHECKS_COUNT];
   struct ComputerEvent events[COMPUTER_EVENTS_COUNT];
-  struct OpponentRelation opponent_relations[PLAYERS_COUNT];
+  struct OpponentRelation opponent_relations[PLAYERS_MAX];
   // TODO we could use coord2d for trap locations
   struct Coord3d trap_locations[COMPUTER_TRAP_LOC_COUNT];
   /** Stores Sight Of Evil target points data. */

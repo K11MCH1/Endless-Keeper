@@ -44,7 +44,8 @@
 extern "C" {
 #endif
 /******************************************************************************/
-#define DUNGEONS_COUNT              9
+#define DUNGEONS_COUNT              (players_in_use()) /* the dungeons in use; storage is DUNGEONS_MAX */
+#define DUNGEONS_MAX                PLAYERS_MAX
 #define DIGGER_TASK_MAX_COUNT       64
 #define DUNGEON_RESEARCH_COUNT      2000
 #define MAX_THINGS_IN_HAND          64
@@ -194,9 +195,9 @@ struct Dungeon {
     CrtrExpLevel creature_max_level[CREATURE_TYPES_MAX];
     unsigned short creatures_annoyed;
     unsigned short battles_lost;
-    unsigned short battles_lost_vs[PLAYERS_COUNT+1];
+    unsigned short battles_lost_vs[PLAYERS_MAX+1];
     unsigned short battles_won;
-    unsigned short battles_won_vs[PLAYERS_COUNT+1];
+    unsigned short battles_won_vs[PLAYERS_MAX+1];
     /** Amount of room tiles a player had which were destroyed (vandalized or damaged by enemy). */
     unsigned short rooms_destroyed;
     unsigned short spells_stolen;
@@ -319,6 +320,7 @@ TbBool dungeon_invalid(const struct Dungeon *dungeon);
 
 void clear_dungeons(void);
 void init_dungeons(void);
+void init_dungeon(int i);
 
 void decrease_dungeon_area(PlayerNumber plyr_idx, int32_t value);
 void increase_room_area(PlayerNumber plyr_idx, int32_t value);

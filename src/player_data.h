@@ -31,7 +31,7 @@
 extern "C" {
 #endif
 /******************************************************************************/
-#define PLAYERS_COUNT       9
+#define PLAYERS_COUNT       (players_in_use()) /* the players in use (9); storage is PLAYERS_MAX */
 #define COLOURS_COUNT       9
 
 #define INVALID_PLAYER (&bad_player)
@@ -129,7 +129,7 @@ struct Wander
   /** Index at which the search function inserts (or replaces) points. */
   uint32_t point_insert_idx;
   /** Slab last checked by the search function. */
-  uint32_t last_checked_slb_num;
+  SlabCodedCoords last_checked_slb_num;
   /** Amount of slabs to be checked in one run of the search function. */
   uint32_t num_check_per_run;
   /** Max amount of points added in one run of the search function. */
@@ -137,7 +137,7 @@ struct Wander
   unsigned char search_limiting_enabled;
   unsigned char wandr_slot;
   PlayerNumber plyr_idx;
-  PlayerBitFlags plyr_bit; // unused?
+  uint16_t plyr_bit; // unused (players 0-15 as a bit)
   /** Array of points where the creatures could go wander. */
   struct SubtileXY points[WANDER_POINTS_COUNT];
 };

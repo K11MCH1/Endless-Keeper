@@ -33,6 +33,7 @@
 #include "thing_objects.h"
 #include "player_instances.h"
 #include "game_legacy.h"
+#include "net_state.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -462,7 +463,9 @@ long setup_player_battlers(struct PlayerInfo *player, struct CreatureBattle *bat
         }
         TRACE_THING(thing);
         if (!thing_is_creature(thing)) {
-            ERRORLOG("Dead thing index %d in friend/enemy battle-list",(int)i);
+            /* a thin client has only the creatures in its area: the rest of the list is out of its reach */
+            if (!netstate_is_client())
+                ERRORLOG("Dead thing index %d in friend/enemy battle-list",(int)i);
             break;
         }
         struct CreatureControl* cctrl = creature_control_get_from_thing(thing);

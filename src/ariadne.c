@@ -39,6 +39,9 @@
 #include "game_legacy.h"
 #include "kfx/profiling/KfxProfilingC.h"
 #include "replay_rewind.h"
+#include "world_stream.h"
+#include "world_pages.h"
+#include <math.h>
 #include "post_inc.h"
 
 #define EDGEFIT_LEN           64
@@ -253,6 +256,23 @@ static long ariadne_get_blocked_flags(struct Thing *thing, const struct Coord3d 
 static long triangle_findSE8(long ptfind_x, long ptfind_y);
 static long ma_triangle_route(long ptfind_x, long ptfind_y, int32_t *ptstart_x);
 static void edgelen_init(void);
+
+/** Length of (dx, dy) in map coordinates. Normal levels keep the old 32-bit sum, wrap-around included, so they
+ *  behave exactly as before; endless levels, whose positions are far bigger, sum in 64 bits. */
+static long ari_length(int32_t dx, int32_t dy)
+{
+    if (!world_mode_active())
+        return LbSqrL((long)((uint32_t)dx * (uint32_t)dx + (uint32_t)dy * (uint32_t)dy));
+    uint64_t sq = (uint64_t)((int64_t)dx * dx) + (uint64_t)((int64_t)dy * dy);
+    if (sq <= (uint64_t)LONG_MAX)
+        return LbSqrL((long)sq);
+    uint64_t r = (uint64_t)sqrt((double)sq);
+    while (r * r > sq)
+        r--;
+    while ((r + 1) * (r + 1) <= sq)
+        r++;
+    return (r > (uint64_t)LONG_MAX) ? LONG_MAX : (long)r;
+}
 /******************************************************************************/
 
 
@@ -300,20 +320,16 @@ static unsigned long fits_thro(long tri_idx, long ormask_idx)
 }
 
 
-static PlayerBitFlags get_navtree_owner_flags(NavColour treeI)
-{
-    return treeI >> NAVMAP_OWNERSELECT_BIT;
-}
-
 static long navigation_rule_normal(NavColour treeA, NavColour treeB)
 {
-    if ((treeB & NAVMAP_FLOORHEIGHT_MASK) - (treeA & NAVMAP_FLOORHEIGHT_MASK) > 1)
+    /* signed: a step down is negative (NavColour is unsigned and 32 bits wide, so it would wrap) */
+    if ((int)(treeB & NAVMAP_FLOORHEIGHT_MASK) - (int)(treeA & NAVMAP_FLOORHEIGHT_MASK) > 1)
       return NavigationRule_Blocked;
-    if ((treeB & (NAVMAP_OWNERSELECT_MASK | NAVMAP_UNSAFE_SURFACE | NAVMAP_ABYSS)) == 0)
+    if ((treeB & (NAVMAP_OWNERSELECT_MASK | NAVMAP_OWNERSET_EXT | NAVMAP_UNSAFE_SURFACE | NAVMAP_ABYSS)) == 0)
       return NavigationRule_Normal;
     if (owner_player_navigating != -1)
     {
-        if (get_navtree_owner_flags(treeB) & (1 << owner_player_navigating))
+        if (navmap_owner_blocks(treeB, owner_player_navigating))
           return NavigationRule_Blocked;
     }
     if ((treeB & NAVMAP_ABYSS) != 0 && !nav_thing_is_flying)
@@ -451,7 +467,7 @@ static long route_to_path(long ptfind_x, long ptfind_y, long ptstart_x, long pts
     wp_num = 0;
     if (wp_lim == 0)
     {
-      *total_len = LbSqrL((ptstart_x - ptfind_x) * (ptstart_x - ptfind_x) + (ptstart_y - ptfind_y) * (ptstart_y - ptfind_y));
+      *total_len = ari_length(ptstart_x - ptfind_x, ptstart_y - ptfind_y);
       path->waypoints[0].x = ptstart_x;
       path->waypoints[0].y = ptstart_y;
       wayPoints.waypoint_index_array[0] = 0;
@@ -497,8 +513,7 @@ static long route_to_path(long ptfind_x, long ptfind_y, long ptstart_x, long pts
       }
       if (edge2_region == FieldOfViewRegion_OutsideLeft)
       {
-        *total_len += LbSqrL((fov_AC.tipB.x - fov_AC.tipA.x) * (fov_AC.tipB.x - fov_AC.tipA.x)
-            + (fov_AC.tipB.y - fov_AC.tipA.y) * (fov_AC.tipB.y - fov_AC.tipA.y));
+        *total_len += ari_length(fov_AC.tipB.x - fov_AC.tipA.x, fov_AC.tipB.y - fov_AC.tipA.y);
         fov_AC.tipA.x = fov_AC.tipB.x;
         path->waypoints[wp_num].x = fov_AC.tipB.x;
         path->waypoints[wp_num].y = fov_AC.tipB.y;
@@ -517,8 +532,7 @@ static long route_to_path(long ptfind_x, long ptfind_y, long ptstart_x, long pts
       } else
       if (edge1_region == FieldOfViewRegion_OutsideRight)
       {
-        *total_len += LbSqrL((fov_AC.tipC.x - fov_AC.tipA.x) * (fov_AC.tipC.x - fov_AC.tipA.x)
-            + (fov_AC.tipC.y - fov_AC.tipA.y) * (fov_AC.tipC.y - fov_AC.tipA.y));
+        *total_len += ari_length(fov_AC.tipC.x - fov_AC.tipA.x, fov_AC.tipC.y - fov_AC.tipA.y);
         fov_AC.tipA.x = fov_AC.tipC.x;
         path->waypoints[wp_num].x = fov_AC.tipC.x;
         path->waypoints[wp_num].y = fov_AC.tipC.y;
@@ -541,8 +555,7 @@ static long route_to_path(long ptfind_x, long ptfind_y, long ptstart_x, long pts
         ERRORLOG("Exceeded max path length - gate_route_to_coords");
         wp_num = ARID_PATH_WAYPOINTS_COUNT - 1;
     }
-    *total_len += LbSqrL((ptstart_x - fov_AC.tipA.x) * (ptstart_x - fov_AC.tipA.x)
-        + (ptstart_y - fov_AC.tipA.y) * (ptstart_y - fov_AC.tipA.y));
+    *total_len += ari_length(ptstart_x - fov_AC.tipA.x, ptstart_y - fov_AC.tipA.y);
     path->waypoints[wp_num].x = ptstart_x;
     path->waypoints[wp_num].y = ptstart_y;
     wayPoints.waypoint_index_array[wp_num] = wp_lim;
@@ -1332,6 +1345,19 @@ static void set_nearpoint(long tri_id, long cor_id, long dstx, long dsty, int32_
     pt1 = get_triangle_point(tri_id,cor_id);
     unsigned int tngflags;
     tngflags = 0;
+    if (world_paged)
+    {
+        /* paged mode: the real colours (normal levels keep the old 256-wide reading below, as before) */
+        if ((navmap_colour_at(pt1->x-1, pt1->y-1) & TriangleFlag_All) == TriangleFlag_All)
+          tngflags = TriangleFlag_TopLeft;
+        if ((navmap_colour_at(pt1->x, pt1->y-1) & TriangleFlag_All) == TriangleFlag_All)
+          tngflags |= TriangleFlag_TopRight;
+        if ((navmap_colour_at(pt1->x-1, pt1->y) & TriangleFlag_All) == TriangleFlag_All)
+          tngflags |= TriangleFlag_BottomLeft;
+        if ((navmap_colour_at(pt1->x, pt1->y) & TriangleFlag_All) == TriangleFlag_All)
+          tngflags |= TriangleFlag_BottomRight;
+    } else
+    {
     if ((LastTriangulatedMap[256 * (pt1->y-1) + (pt1->x-1)] & TriangleFlag_All) == TriangleFlag_All)
       tngflags = TriangleFlag_TopLeft;
     if ((LastTriangulatedMap[256 * (pt1->y-1) + (pt1->x)]   & TriangleFlag_All) == TriangleFlag_All)
@@ -1340,6 +1366,7 @@ static void set_nearpoint(long tri_id, long cor_id, long dstx, long dsty, int32_
       tngflags |= TriangleFlag_BottomLeft;
     if ((LastTriangulatedMap[256 * (pt1->y)   + (pt1->x)]   & TriangleFlag_All) == TriangleFlag_All)
       tngflags |= TriangleFlag_BottomRight;
+    }
     struct Point *pt2;
     switch (tngflags)
     {
@@ -3266,7 +3293,18 @@ AriadneReturn creature_follow_route_to_using_gates(struct Thing *thing, struct C
  * @param subroute Random factor for determining position within route, or negative special value.
  * @param nav_size
  */
+static void path_init8_wide_body(struct Path *path, long start_x, long start_y, long end_x, long end_y,
+    long subroute, unsigned char nav_size, const char *func_name);
+
 void path_init8_wide_f(struct Path *path, long start_x, long start_y, long end_x, long end_y,
+    long subroute, unsigned char nav_size, const char *func_name)
+{
+    const int64_t wp_t0 = world_prof_now();
+    path_init8_wide_body(path, start_x, start_y, end_x, end_y, subroute, nav_size, func_name);
+    world_prof_sum(WPS_Path, wp_t0);
+}
+
+static void path_init8_wide_body(struct Path *path, long start_x, long start_y, long end_x, long end_y,
     long subroute, unsigned char nav_size, const char *func_name)
 {
     KFX_C_ZONE_BEGIN_COLOR(ctx_path_init, "path_init8_wide_f", KFX_COLOR_PATHFINDING);

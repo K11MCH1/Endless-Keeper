@@ -35,6 +35,7 @@
 #include "frontmenu_ingame_tabs.h"
 
 #include "keeperfx.hpp"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -56,13 +57,20 @@ static int get_packet_roomspace_size(const struct Packet *pckt, int size)
     return size;
 }
 
+SlabCodedCoords dig_pred_index(SlabCodedCoords slb_num)
+{
+    if (!world_paged)
+        return slb_num;
+    return (SlabCodedCoords)(slb_num_decode_y(slb_num) % MAX_TILES_Y) * MAX_TILES_X + (slb_num_decode_x(slb_num) % MAX_TILES_X);
+}
+
 static enum DigTagMode get_roomspace_slab_dig_tag_mode(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y, const struct DigTagPrediction *prediction)
 {
     if (slab_coords_invalid(slb_x, slb_y)) {
         return DigTagMode_Tag;
     }
     if (prediction != NULL) {
-        unsigned char predicted_dig_tag_mode = prediction->slab_tag_modes[get_slab_number(slb_x, slb_y)];
+        unsigned char predicted_dig_tag_mode = prediction->slab_tag_modes[dig_pred_index(get_slab_number(slb_x, slb_y))];
         if (predicted_dig_tag_mode == DigTagMode_Tag) {
             return DigTagMode_Untag;
         }
@@ -378,7 +386,7 @@ void create_roomspace_from_current_room(struct RoomSpace *roomspace, int search_
     int bottom_extent = centre_y;
     // Loop through list of slabs in the room to find extents
     unsigned long k = 0;
-    long i = current_room->slabs_list;
+    SlabCodedCoords i = current_room->slabs_list;
     while (i != 0)
     {
         long slb_x = slb_num_decode_x(i);
@@ -1072,12 +1080,12 @@ int apply_roomspace_dig_tag_selection(PlayerNumber plyr_idx, struct RoomSpace *r
                         return dig_change_count;
                     }
                     if (prediction != NULL) {
-                        int32_t slb_num = get_slab_number(path_slb_x, path_slb_y);
-                        if (prediction->slab_tag_modes[slb_num] == 0) {
+                        SlabCodedCoords slb_num = get_slab_number(path_slb_x, path_slb_y);
+                        if (prediction->slab_tag_modes[dig_pred_index(slb_num)] == 0) {
                             prediction->slabs[prediction->slab_count++] = slb_num;
                         }
-                        prediction->slab_tag_modes[slb_num] = dig_tag_mode;
-                        prediction->slab_turns[slb_num] = prediction->turn;
+                        prediction->slab_tag_modes[dig_pred_index(slb_num)] = dig_tag_mode;
+                        prediction->slab_turns[dig_pred_index(slb_num)] = prediction->turn;
                         prediction->task_count += (dig_tag_mode == DigTagMode_Tag) - (dig_tag_mode == DigTagMode_Untag);
                         dig_change_count++;
                     } else if (dig_tag_mode == DigTagMode_Untag) {

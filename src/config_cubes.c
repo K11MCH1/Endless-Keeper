@@ -63,7 +63,7 @@ static const struct NamedField cubes_named_fields[] = {
     {"Textures",        4, field_a(struct CubeConfigStats, texture_id, 4),     0,  0,             USHRT_MAX, NULL,                      value_default,   assign_default},
     {"Textures",        5, field_a(struct CubeConfigStats, texture_id, 5),     0,  0,             USHRT_MAX, NULL,                      value_default,   assign_default},
     {"OwnershipGroup",  0, field_t(struct CubeConfigStats, ownershipGroup),    0,  0, CUBE_OWNERSHIP_GROUPS, NULL,                      value_default,   assign_default},
-    {"Owner",           0, field_t(struct CubeConfigStats, owner),             0,  0,         PLAYERS_COUNT, cmpgn_human_player_options,value_default,   assign_owner},
+    {"Owner",           0, field_t(struct CubeConfigStats, owner),             0,  0,         PLAYERS_MAX, cmpgn_human_player_options,value_default,   assign_owner},
     {"Properties",     -1, field_t(struct CubeConfigStats, properties_flags),  0,  0,             UCHAR_MAX, cubes_properties_flags,    value_flagsfield,assign_default},
     {NULL},
 };

@@ -35,6 +35,7 @@
 #include "replay.h"
 #include "thing_data.h"
 #include "thing_list.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -517,6 +518,9 @@ void replay_rewind_capture(void)
 {
     if (!replay.load_enable || (replay_rewind_buffer_kb == 0) || rewind_disabled)
         return;
+    /* endless levels: the keyframes would hold `game` but not the world (chunk pages, the chunk store) */
+    if (world_mode_active())
+        return;
     const GameTurn turn = get_gameturn();
     if ((turn % REWIND_LOG_INTERVAL == 0) && (keyframes_count > 0))
     {
@@ -628,6 +632,12 @@ size_t replay_rewind_buffer_used(void)
     if (keyframes_count == 0)
         return 0;
     return (ring_head > ring_tail) ? ring_head - ring_tail : ring_wrap - ring_tail + ring_head;
+}
+
+void replay_rewind_tracked_statics(unsigned char **start, size_t *len)
+{
+    *start = (unsigned char *)rwd_start;
+    *len = (size_t)(rwd_end - rwd_start);
 }
 
 void replay_rewind_deinit(void)

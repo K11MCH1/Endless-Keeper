@@ -262,8 +262,8 @@ long optimise_heuristic(long tri_id1, long cor_id1)
     if (LbCompareMultiplications(Ay-By, Cx-Bx, Ax-Bx, Cy-By) <= 0)
         return 0;
 
-    return ((Bx-Ax) * (Bx-Ax)) + ((By-Ay) * (By-Ay)) <
-           ((Dy-Cy) * (Dy-Cy)) + ((Dx-Cx) * (Dx-Cx));
+    return ((long long)(Bx-Ax) * (Bx-Ax)) + ((long long)(By-Ay) * (By-Ay)) <
+           ((long long)(Dy-Cy) * (Dy-Cy)) + ((long long)(Dx-Cx) * (Dx-Cx));
 }
 
 long delaunay_seeded(long start_x, long start_y, long end_x, long end_y, TbBool keep_edge)

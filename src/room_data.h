@@ -30,7 +30,7 @@ extern "C" {
 #endif
 
 #define SLAB_AROUND_COUNT      4
-#define ROOMS_COUNT          511
+#define ROOMS_COUNT          4095 /* 511 before: 100 dungeons and the world's keepers and outposts; taken lowest first */
 /******************************************************************************/
 enum RoomFlags {
     RoF_Allocated           = 0x01,
@@ -91,7 +91,7 @@ struct Room {
     
     /* Informs whether players are interested in that room.
      * Usually used for neutral rooms, set if a player is starting to dig to that room. */
-    unsigned char player_interested[PLAYERS_COUNT];
+    unsigned char player_interested[PLAYERS_MAX];
     /** For rooms which can store things, amount of storage space, or sum of gold, used by them.
      *  Rooms which can store things are workshops, libraries, treasure rooms etc. */
     uint32_t capacity_used_for_storage;
@@ -222,7 +222,7 @@ void update_room_total_capacity(struct Room *room);
 long reinitialise_rooms_of_kind(RoomKind rkind);
 long recalculate_effeciency_for_rooms_of_kind(RoomKind rkind);
 
-TbBool find_random_valid_position_for_thing_in_room_avoiding_object_excluding_room_slab(struct Thing *thing, struct Room *room, struct Coord3d *pos, long slbnum);
+TbBool find_random_valid_position_for_thing_in_room_avoiding_object_excluding_room_slab(struct Thing *thing, struct Room *room, struct Coord3d *pos, SlabCodedCoords slbnum);
 
 /* MOVE TO room_list.c/h */
 struct Room *find_nearest_room_of_role_for_thing_with_spare_item_capacity(struct Thing *thing, PlayerNumber plyr_idx, RoomRole rrole, unsigned char nav_flags);

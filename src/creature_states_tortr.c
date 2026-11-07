@@ -40,6 +40,7 @@
 #include "map_blocks.h"
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -335,6 +336,30 @@ void convert_tortured_creature_owner(struct Thing *creatng, PlayerNumber new_own
     }
 }
 
+/* Paged mode (world_pages.h): the virtual map is far too big for an ownership map indexed by slab number, so
+ * reveal_players_map_to_player()'s map covers the loaded chunks' bounding box (local index (y - y1) * w + (x - x1));
+ * every slab outside the box shares one extra cell at index w * h, marked as done (as are unloaded slabs). */
+static MapSlabCoord torture_box_x1 = 0, torture_box_y1 = 0, torture_box_w = 0, torture_box_h = 0;
+
+/** Index of a slab in the ownership map: the slab number normally, the local index in paged mode. */
+static SlabCodedCoords torture_map_index(MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    if (!world_paged)
+        return get_slab_number(slb_x, slb_y);
+    if ((slb_x < torture_box_x1) || (slb_x >= torture_box_x1 + torture_box_w)
+     || (slb_y < torture_box_y1) || (slb_y >= torture_box_y1 + torture_box_h))
+        return (SlabCodedCoords)torture_box_w * torture_box_h;
+    return (SlabCodedCoords)(slb_y - torture_box_y1) * torture_box_w + (slb_x - torture_box_x1);
+}
+
+/** The slab of an ownership map index (get_slabmap_direct() normally). */
+static struct SlabMap *torture_map_slabmap(SlabCodedCoords map_idx, MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    if (!world_paged)
+        return get_slabmap_direct(map_idx);
+    return get_slabmap_block(slb_x, slb_y);
+}
+
 long reveal_players_map_to_player(struct Thing *thing, PlayerNumber benefit_plyr_idx)
 {
     SlabCodedCoords slb_num;
@@ -359,7 +384,46 @@ long reveal_players_map_to_player(struct Thing *thing, PlayerNumber benefit_plyr
     }
     TbBool reveal_success = 0;
 
-    unsigned char* ownership_map = (unsigned char*)malloc(game.map_tiles_y * game.map_tiles_x);
+    unsigned char* ownership_map;
+    struct IPOINT_2D* revealed_pts;
+    if (world_paged)
+    {
+        // Paged mode: the ownership map covers the loaded chunks' bounding box, plus the outside cell
+        MapSlabCoord bx1, by1, bx2, by2;
+        map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
+        if ((bx1 > bx2) || (by1 > by2))
+            return 1;
+        torture_box_x1 = bx1;
+        torture_box_y1 = by1;
+        torture_box_w = bx2 - bx1 + 1;
+        torture_box_h = by2 - by1 + 1;
+        size_t cells = (size_t)torture_box_w * torture_box_h;
+        ownership_map = (unsigned char*)malloc(cells + 1);
+        revealed_pts = (struct IPOINT_2D*)malloc(cells * sizeof(struct IPOINT_2D));
+        if ((ownership_map == NULL) || (revealed_pts == NULL))
+        {
+            free(revealed_pts);
+            free(ownership_map);
+            return 1;
+        }
+        memset(ownership_map, 0, cells + 1);
+        for (slb_y=by1; slb_y <= by2; slb_y++)
+        {
+            for (slb_x=bx1; slb_x <= bx2; slb_x++)
+            {
+                slb_num = torture_map_index(slb_x, slb_y);
+                slb = get_slabmap_block(slb_x, slb_y);
+                if (slabmap_block_invalid(slb))
+                    ownership_map[slb_num] |= 0x03;
+                else
+                if (slabmap_owner(slb) != thing->owner)
+                    ownership_map[slb_num] |= 0x01;
+            }
+        }
+        ownership_map[cells] = 0x03;
+    } else
+    {
+    ownership_map = (unsigned char*)malloc(game.map_tiles_y * game.map_tiles_x);
     memset(ownership_map,0,game.map_tiles_y*game.map_tiles_x);
     for (slb_y=0; slb_y < game.map_tiles_y; slb_y++)
     {
@@ -371,14 +435,15 @@ long reveal_players_map_to_player(struct Thing *thing, PlayerNumber benefit_plyr
                 ownership_map[slb_num] |= 0x01;
         }
     }
-    struct USPOINT_2D* revealed_pts = (struct USPOINT_2D*)malloc((game.map_tiles_y * game.map_tiles_x) * sizeof(struct USPOINT_2D));
+    revealed_pts = (struct IPOINT_2D*)malloc((game.map_tiles_y * game.map_tiles_x) * sizeof(struct IPOINT_2D));
+    }
     unsigned int pts_to_reveal = 32;
     unsigned int pts_count = 0;
     unsigned int pt_idx = 0;
 
     slb_x = subtile_slab(revealstl_x);
     slb_y = subtile_slab(revealstl_y);
-    slb_num = get_slab_number(slb_x, slb_y);
+    slb_num = torture_map_index(slb_x, slb_y);
     ownership_map[slb_num] |= 0x02;
     do
     {
@@ -393,44 +458,44 @@ long reveal_players_map_to_player(struct Thing *thing, PlayerNumber benefit_plyr
               break;
         }
         // Add sibling points to reveal list
-        slb_num = get_slab_number(slb_x-1, slb_y);
+        slb_num = torture_map_index(slb_x-1, slb_y);
         if ((ownership_map[slb_num] & 0x03) == 0)
         {
             ownership_map[slb_num] |= 0x02;
-            slb = get_slabmap_direct(slb_num);
+            slb = torture_map_slabmap(slb_num, slb_x-1, slb_y);
             if (slabmap_owner(slb) == thing->owner) {
                 revealed_pts[pts_count].x = slb_x - 1;
                 revealed_pts[pts_count].y = slb_y;
                 pts_count++;
             }
         }
-        slb_num = get_slab_number(slb_x+1, slb_y);
+        slb_num = torture_map_index(slb_x+1, slb_y);
         if ((ownership_map[slb_num] & 0x03) == 0)
         {
             ownership_map[slb_num] |= 0x02;
-            slb = get_slabmap_direct(slb_num);
+            slb = torture_map_slabmap(slb_num, slb_x+1, slb_y);
             if (slabmap_owner(slb) == thing->owner) {
                 revealed_pts[pts_count].x = slb_x + 1;
                 revealed_pts[pts_count].y = slb_y;
                 pts_count++;
             }
         }
-        slb_num = get_slab_number(slb_x, slb_y-1);
+        slb_num = torture_map_index(slb_x, slb_y-1);
         if ((ownership_map[slb_num] & 0x03) == 0)
         {
             ownership_map[slb_num] |= 0x02;
-            slb = get_slabmap_direct(slb_num);
+            slb = torture_map_slabmap(slb_num, slb_x, slb_y-1);
             if (slabmap_owner(slb) == thing->owner) {
                 revealed_pts[pts_count].x = slb_x;
                 revealed_pts[pts_count].y = slb_y - 1;
                 pts_count++;
             }
         }
-        slb_num = get_slab_number(slb_x, slb_y+1);
+        slb_num = torture_map_index(slb_x, slb_y+1);
         if ((ownership_map[slb_num] & 0x03) == 0)
         {
             ownership_map[slb_num] |= 0x02;
-            slb = get_slabmap_direct(slb_num);
+            slb = torture_map_slabmap(slb_num, slb_x, slb_y+1);
             if (slabmap_owner(slb) == thing->owner) {
                 revealed_pts[pts_count].x = slb_x;
                 revealed_pts[pts_count].y = slb_y + 1;

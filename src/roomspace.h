@@ -68,6 +68,11 @@ enum DigTagMode {
     DigTagMode_Untag = 2,
 };
 
+/** Index into a DigTagPrediction's per-slab arrays: the slab number, or in paged mode (chunked endless world,
+ *  slab numbers far past the arrays) the slab's position modulo MAX_TILES_X x MAX_TILES_Y; a drag never spans
+ *  that far. */
+SlabCodedCoords dig_pred_index(SlabCodedCoords slb_num);
+
 struct DigTagPrediction {
     unsigned char slab_tag_modes[MAX_TILES_X * MAX_TILES_Y];
     GameTurn slab_turns[MAX_TILES_X * MAX_TILES_Y];

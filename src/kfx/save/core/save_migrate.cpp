@@ -10,8 +10,17 @@
 #include <iterator>
 #include <vector>
 
+extern "C" int save_migrate_game_users_4_7(struct SaveLoadCtx *context);
+extern "C" int save_migrate_game_users_8_12(struct SaveLoadCtx *context);
+extern "C" int save_migrate_game_users_13_up(struct SaveLoadCtx *context);
+extern "C" int save_migrate_game_things_high(struct SaveLoadCtx *context);
+
 // NOLINTNEXTLINE(modernize-avoid-c-arrays)
 static const struct SaveMigration save_migrations[] = {
+    { "Game", 9, "user states 4-7 play no player", save_migrate_game_users_4_7 },
+    { "Game", 10, "user states 8-12 play no player", save_migrate_game_users_8_12 },
+    { "Game", 13, "user states past the file's play no player", save_migrate_game_users_13_up },
+    { "Game", 14, "thing slots 12288 up are free", save_migrate_game_things_high },
     { nullptr, 0, nullptr, nullptr }
 };
 

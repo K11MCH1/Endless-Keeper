@@ -54,6 +54,11 @@
 #include "local_camera.h"
 
 #include <math.h>
+#include "world_stream.h"
+#include "world_daynight.h"
+#include "world_pages.h"
+#include "world_colours.h"
+#include "roomspace_input.h"
 #include "post_inc.h"
 
 // Local constants
@@ -190,7 +195,7 @@ static void draw_call_to_arms_circle(unsigned char owner, int32_t pos_x, int32_t
     const struct PowerConfigStats *powerst = get_power_model_stats(PwrK_CALL2ARMS);
     struct Dungeon *dungeon = get_players_num_dungeon(owner);
     const int units_per_px = (16*status_panel_width + 140/2) / 140;
-    const TbPixel col = player_room_colours[get_player_color_idx(owner)];
+    const TbPixel col = player_room_colours[world_display_colour(owner)];
     int i = 2*(PANEL_MAP_RADIUS*units_per_px/16) / 2;
     const int32_t center_x = i + pos_x;
     const int32_t center_y = i + pos_y;
@@ -353,7 +358,7 @@ static void draw_overlay_creature(struct Thing *thing, const struct MinimapOverl
     {
         if (blink_on)
         {
-            col1 = player_room_colours[get_player_color_idx(thing->owner)];
+            col1 = player_room_colours[world_display_colour(thing->owner)];
             col2 = col1;
         }
         const struct Coord2d pos = thing_minimap_position(thing, ov->cam, ov->zoom);
@@ -363,7 +368,7 @@ static void draw_overlay_creature(struct Thing *thing, const struct MinimapOverl
         {
             TbPixel col = col1;
             if (thing->owner == game.neutral_player_num) {
-                col = player_room_colours[get_player_color_idx(((get_gameturn() + 1) % (4 * neutral_flash_rate)) / neutral_flash_rate)];
+                col = player_room_colours[world_display_colour(((get_gameturn() + 1) % (4 * neutral_flash_rate)) / neutral_flash_rate)];
             }
             panel_map_draw_creature_dot(x, y, col, ov->basic_zoom, ov->is_low_res);
         } else
@@ -395,8 +400,8 @@ static void draw_overlay_creature(struct Thing *thing, const struct MinimapOverl
                 break;
             if (blink_on)
             {
-                col1 = player_room_colours[get_player_color_idx((int)(cctrl->party.target_plyr_idx >= 0 ? cctrl->party.target_plyr_idx : 0))];
-                col2 = player_room_colours[get_player_color_idx(thing->owner)];
+                col1 = player_room_colours[world_display_colour((int)(cctrl->party.target_plyr_idx >= 0 ? cctrl->party.target_plyr_idx : 0))];
+                col2 = player_room_colours[world_display_colour(thing->owner)];
             }
             MapCoord x = subtile_coord_center(stl_num_decode_x(memberpos));
             MapCoord y = subtile_coord_center(stl_num_decode_y(memberpos));
@@ -404,6 +409,14 @@ static void draw_overlay_creature(struct Thing *thing, const struct MinimapOverl
             TbPixel col = (thing->owner == plyr_idx) ? col2 : col1;
             panel_map_draw_creature_dot(x + ov->basepos, y + ov->basepos, col, ov->basic_zoom, ov->is_low_res);
         }
+    } else
+    // Endless world: heroes of a day raid show like tunnelling parties, blinking white and the target's colour
+    if (world_raid_hero(thing))
+    {
+        if (blink_on)
+            col1 = player_room_colours[world_display_colour(plyr_idx)];
+        const struct Coord2d pos = thing_minimap_position(thing, ov->cam, ov->zoom);
+        panel_map_draw_creature_dot(pos.x.val + ov->basepos, pos.y.val + ov->basepos, col1, ov->basic_zoom, ov->is_low_res);
     }
 }
 
@@ -460,6 +473,52 @@ void panel_map_draw_overlay_things(int32_t units_per_px, int32_t scaled_zoom, in
     draw_line_to_heart(&ov);
 }
 
+int panel_code_class(unsigned short code, PlayerNumber *owner)
+{
+    *owner = game.neutral_player_num;
+    switch (code)
+    {
+    case PnC_Wall: return PCC_Wall;
+    case PnC_Rock: return PCC_Rock;
+    case PnC_Tagged_Gold: case PnC_Gold: return PCC_Gold;
+    case PnC_Tagged_Gems: case PnC_Gems: return PCC_Gems;
+    case PnC_Lava: return PCC_Lava;
+    case PnC_Water: return PCC_Water;
+    case PnC_purplePath: return PCC_Purple;
+    case PnC_RockFloor: return PCC_RockFloor;
+    case PnC_Abyss: return PCC_Abyss;
+    default: break;
+    }
+    if ((code >= PnC_RoomsStart) && (code < PnC_DoorsStart))
+    {
+        *owner = (code - PnC_RoomsStart) % COLOURS_COUNT;
+        return PCC_Room;
+    }
+    if ((code >= PnC_DoorsStart) && (code < PnC_PathStart))
+    {
+        *owner = (code - PnC_DoorsStart) % COLOURS_COUNT;
+        return ((((code - PnC_DoorsStart) / COLOURS_COUNT) & 1) != 0) ? PCC_DoorLocked : PCC_Door;
+    }
+    if ((code >= PnC_PathStart) && (code < PnC_End))
+    {
+        *owner = code - PnC_PathStart;
+        return PCC_Path;
+    }
+    return PCC_None;
+}
+
+unsigned short panel_map_code_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+{
+    if (world_paged)
+    {
+        struct WorldPage *pg = wp_page_of_subtile(stl_x, stl_y);
+        return (pg != NULL) ? pg->panel[wp_stl_index(stl_x, stl_y)] : 0;
+    }
+    if ((stl_x < 0) || (stl_y < 0) || (stl_x > game.map_subtiles_x) || (stl_y > game.map_subtiles_y))
+        return 0;
+    return PanelMap[stl_x + (SubtlCodedCoords)stl_y * (game.map_subtiles_x + 1)];
+}
+
 void panel_map_update_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
     MapSlabCoord slb_x = subtile_slab(stl_x);
@@ -467,15 +526,18 @@ void panel_map_update_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSub
     SubtlCodedCoords stl_num = get_subtile_number(stl_x, stl_y);
     struct Map *mapblk = get_map_block_at_pos(stl_num);
     struct SlabMap *slb = get_slabmap_block(slb_x, slb_y);
+    const unsigned char mark_flags = dig_marks_display_flags(stl_x, stl_y, mapblk->flags); /* a thin client's own dig marks */
     int col = 0;
     int owner_col = slabmap_owner(slb);
+    if (owner_col >= COLOURS_COUNT)
+        owner_col = get_player_color_idx(owner_col) % COLOURS_COUNT; /* players 10-15: their colour's slot */
     TbBool revealed;
     if (get_my_player() == &local_observer_player) {
         revealed = map_block_revealed_to_players(mapblk, local_observer_player.allied_players);
     } else {
         revealed = map_block_revealed(mapblk, plyr_idx);
     }
-    if ((mapblk->flags & SlbAtFlg_Unexplored) != 0)
+    if ((mark_flags & SlbAtFlg_Unexplored) != 0)
     {
         col = PnC_Unexplored;
     }
@@ -483,7 +545,7 @@ void panel_map_update_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSub
         if ((slb->kind == SlbT_GOLD) || (slb->kind == SlbT_DENSEGOLD))
         {
             col = PnC_Gold;
-            if ((mapblk->flags & SlbAtFlg_TaggedValuable) != 0)
+            if ((mark_flags & SlbAtFlg_TaggedValuable) != 0)
             {
                 col--;
             }
@@ -491,7 +553,7 @@ void panel_map_update_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSub
         if (slb->kind == SlbT_GEMS)
         {
             col = PnC_Gems;
-            if ((mapblk->flags & SlbAtFlg_TaggedValuable) != 0)
+            if ((mark_flags & SlbAtFlg_TaggedValuable) != 0)
             {
                 col--;
             }
@@ -501,7 +563,7 @@ void panel_map_update_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSub
         {
             struct Room *room;
             room = room_get(slb->room_index);
-            col = owner_col + PLAYERS_COUNT * room->kind + PnC_RoomsStart;
+            col = owner_col + COLOURS_COUNT * room->kind + PnC_RoomsStart;
         } else
         if (slb->kind == SlbT_ROCK)
         {
@@ -531,7 +593,7 @@ void panel_map_update_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSub
                 }
                 else
                 {
-                    col = owner_col + PLAYERS_COUNT * ((doortng->door.is_locked == 1) + 2 * doortng->model ) + PnC_DoorsStart;
+                    col = owner_col + COLOURS_COUNT * ((doortng->door.is_locked == 1) + 2 * doortng->model ) + PnC_DoorsStart;
                 }
             }
         } else
@@ -552,6 +614,13 @@ void panel_map_update_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSub
         }
 
     }
+    if (world_paged)
+    {
+        struct WorldPage *pg = wp_page_of_subtile(stl_x, stl_y);
+        if (pg != NULL)
+            pg->panel[wp_stl_index(stl_x, stl_y)] = col;
+        return;
+    }
     ushort *mapptr = &PanelMap[stl_num];
     *mapptr = col;
 }
@@ -559,6 +628,40 @@ void panel_map_update_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSub
 void panel_map_update(long x, long y, long w, long h)
 {
     SYNCDBG(17,"Starting for rect (%ld,%ld) at (%ld,%ld)",w,h,x,y);
+    if (world_paged)
+    {
+        /* only the loaded chunks have minimap codes */
+        MapSubtlCoord bx1, by1, bx2, by2;
+        map_loop_subtile_bounds(&bx1, &by1, &bx2, &by2);
+        if (bx1 > bx2)
+            return;
+        long ex = min(x + w, (long)bx2 + 1), ey = min(y + h, (long)by2 + 1);
+        x = max(x, (long)bx1);
+        y = max(y, (long)by1);
+        w = ex - x;
+        h = ey - y;
+        if ((w <= 0) || (h <= 0))
+            return;
+        if ((int64_t)w * h > 4 * (int64_t)WP_CHUNK_STL_CELLS)
+        {
+            /* a big rectangle (the whole map, a keeper's set-up): only the loaded pages it overlaps */
+            for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+            {
+                const long px1 = max(x, (long)pg->cx * WP_CHUNK_STL), py1 = max(y, (long)pg->cy * WP_CHUNK_STL);
+                const long px2 = min(x + w, (long)pg->cx * WP_CHUNK_STL + WP_CHUNK_STL);
+                const long py2 = min(y + h, (long)pg->cy * WP_CHUNK_STL + WP_CHUNK_STL);
+                for (long py = py1; py < py2; py++)
+                {
+                    for (long px = px1; px < px2; px++)
+                    {
+                        if (subtile_has_slab(px, py))
+                            panel_map_update_subtile(my_player_number, px, py);
+                    }
+                }
+            }
+            return;
+        }
+    }
     MapSubtlCoord stl_x;
     MapSubtlCoord stl_y;
     for (stl_y = y; stl_y < y + h; stl_y++)
@@ -751,7 +854,7 @@ static TbPixel panel_room_colour(PlayerNumber plyr_idx, TbPixel frcol)
 {
     if (plyr_idx == PLAYER_NEUTRAL)
         return frcol;
-    return player_room_colours[get_player_color_idx(plyr_idx)];
+    return player_room_colours[world_display_colour(plyr_idx)];
 }
 
 void setup_panel_colors(void)
@@ -783,25 +886,25 @@ void setup_panel_colors(void)
     int n = PnC_RoomsStart;
     for (int i = TERRAIN_ITEMS_MAX; i > 0; i--)
     {
-        for (PlayerNumber k = 0; k < PLAYERS_COUNT; k++)
+        for (PlayerNumber k = 0; k < COLOURS_COUNT; k++)
         {
             PanelColours[n + k] = panel_room_colour(k, frcol);
         }
-        n += PLAYERS_COUNT;
+        n += COLOURS_COUNT;
     }
-    for (PlayerNumber k = 0; k < PLAYERS_COUNT; k++)
+    for (PlayerNumber k = 0; k < COLOURS_COUNT; k++)
     {
-        PanelColours[PnC_PathStart + k] = player_path_colours[(k == PLAYER_NEUTRAL) ? PLAYER_NEUTRAL : get_player_color_idx(k)];
+        PanelColours[PnC_PathStart + k] = player_path_colours[(k == PLAYER_NEUTRAL) ? PLAYER_NEUTRAL : world_display_colour(k)];
     }
     n = PnC_DoorsStart;
     for (int i = TRAPDOOR_TYPES_MAX; i > 0; i--)
     {
-        for (int k = 0; k < PLAYERS_COUNT; k++)
+        for (int k = 0; k < COLOURS_COUNT; k++)
         {
             PanelColours[n + k] = Tbp_OpenDoor;
-            PanelColours[n + PLAYERS_COUNT + k] = Tbp_LockedDoor;
+            PanelColours[n + COLOURS_COUNT + k] = Tbp_LockedDoor;
         }
-        n += 2 * PLAYERS_COUNT;
+        n += 2 * COLOURS_COUNT;
     }
 }
 
@@ -811,7 +914,7 @@ void update_panel_color_player_color(PlayerNumber plyr_idx, unsigned char color_
     for (int i=TERRAIN_ITEMS_MAX; i > 0; i--)
     {
         PanelColours[n + plyr_idx] = player_room_colours[color_idx];
-        n += PLAYERS_COUNT;
+        n += COLOURS_COUNT;
     }
     PanelColours[PnC_PathStart + plyr_idx] = player_path_colours[color_idx];
 }
@@ -824,7 +927,7 @@ void update_panel_colors(void)
     for (int i=TERRAIN_ITEMS_MAX; i > 0; i--)
     {
         PanelColours[n + PLAYER_NEUTRAL] = frcol;
-        n += PLAYERS_COUNT;
+        n += COLOURS_COUNT;
     }
 
     const TbBool highlight_off = (get_gameturn() % (2 * gui_blink_rate)) >= gui_blink_rate;
@@ -833,16 +936,16 @@ void update_panel_colors(void)
     {
         if (PrevRoomHighlight >= 0)
         {
-            n = PLAYERS_COUNT * PrevRoomHighlight + PnC_RoomsStart;
-            for (PlayerNumber k = 0; k < PLAYERS_COUNT; k++)
+            n = COLOURS_COUNT * PrevRoomHighlight + PnC_RoomsStart;
+            for (PlayerNumber k = 0; k < COLOURS_COUNT; k++)
             {
                 PanelColours[n + k] = panel_room_colour(k, frcol);
             }
         }
         if (highlight >= 0)
         {
-            n = PLAYERS_COUNT * highlight + PnC_RoomsStart;
-            for (int k = 0; k < PLAYERS_COUNT; k++)
+            n = COLOURS_COUNT * highlight + PnC_RoomsStart;
+            for (int k = 0; k < COLOURS_COUNT; k++)
             {
                 PanelColours[n + k] = 31;
             }
@@ -855,8 +958,8 @@ void update_panel_colors(void)
     {
         if ((PrevDoorHighlight >= 0) && (PrevDoorHighlight != TRAPDOOR_TYPES_MAX))
         {
-            n = 2 * PLAYERS_COUNT * PrevDoorHighlight;
-            for (int k=0; k < PLAYERS_COUNT; k++)
+            n = 2 * COLOURS_COUNT * PrevDoorHighlight;
+            for (int k=0; k < COLOURS_COUNT; k++)
             {
               PanelColours[n + PnC_DoorsStart       + k] = Tbp_OpenDoor;
               PanelColours[n + PnC_DoorsStartLocked + k] = Tbp_LockedDoor;
@@ -864,8 +967,8 @@ void update_panel_colors(void)
         }
         if (highlight >= 0)
         {
-            n = 2 * PLAYERS_COUNT * highlight;
-            for (int k=0; k < PLAYERS_COUNT; k++)
+            n = 2 * COLOURS_COUNT * highlight;
+            for (int k=0; k < COLOURS_COUNT; k++)
             {
               PanelColours[n + PnC_DoorsStart       + k] = Tbp_DoorHighlighted;
               PanelColours[n + PnC_DoorsStartLocked + k] = Tbp_DoorHighlighted;
@@ -901,14 +1004,54 @@ void panel_map_draw_slabs(long x, long y, long units_per_px, long zoom)
 
     const int32_t shift_x = -LbSinL(cam->rotation_angle_x) * zoom / 256;
     const int32_t shift_y = LbCosL(cam->rotation_angle_x) * zoom / 256;
-    int32_t shift_stl_x = (cam->mappos.x.val << 8) - MapDiagonalLength * shift_x / 2 - MapDiagonalLength * shift_y / 2;
-    int32_t shift_stl_y = (cam->mappos.y.val << 8) - MapDiagonalLength * shift_y / 2 + MapDiagonalLength * shift_x / 2;
+    int64_t shift_stl_x = ((int64_t)cam->mappos.x.val << 8) - MapDiagonalLength * shift_x / 2 - MapDiagonalLength * shift_y / 2;
+    int64_t shift_stl_y = ((int64_t)cam->mappos.y.val << 8) - MapDiagonalLength * shift_y / 2 + MapDiagonalLength * shift_x / 2;
 
     // The buffer from UIRenderer_AcquireMinimapBuffer() already holds what each pixel is
     // drawn over, in its own size*size coordinate space (no PanelMapX/Y offset -- the
     // renderer positions it at (PanelMapX, PanelMapY) on submit).
     TbPixel *out_line;
     out_line = s_minimap_pixels;
+    if (world_mode_active())
+    {
+        // Endless world: what lies outside the loaded window (and in its rock frame) comes from the map
+        // memory of dropped chunks; nothing is loaded or generated for it.
+        const MapSubtlCoord frame_x2 = game.map_subtiles_x - STL_PER_SLB;
+        const MapSubtlCoord frame_y2 = game.map_subtiles_y - STL_PER_SLB;
+        for (int h = 0; h < MapDiagonalLength; h++)
+        {
+            int start_w = MapShapeStart[h];
+            int end_w = MapShapeEnd[h];
+            int64_t px = shift_stl_x + shift_y * start_w;
+            int64_t py = shift_stl_y - shift_x * start_w;
+            TbPixel *out = &out_line[start_w];
+            for (int w = start_w; w < end_w; w++)
+            {
+                MapSubtlCoord stl_x = (MapSubtlCoord)(px >> 16);
+                MapSubtlCoord stl_y = (MapSubtlCoord)(py >> 16);
+                unsigned short kind;
+                if (world_paged)
+                {
+                    struct WorldPage *pg = wp_page_of_subtile(stl_x, stl_y);
+                    kind = (pg != NULL) ? pg->panel[wp_stl_index(stl_x, stl_y)] : world_minimap_code(stl_x, stl_y);
+                } else
+                if ((stl_x >= STL_PER_SLB) && (stl_y >= STL_PER_SLB) && (stl_x < frame_x2) && (stl_y < frame_y2))
+                    kind = PanelMap[stl_x + (SubtlCodedCoords)stl_y * (game.map_subtiles_x + 1)];
+                else
+                    kind = world_minimap_code(stl_x, stl_y);
+                if (kind >= PnC_End)
+                    kind = 0;
+                *out = (kind <= PnC_Abyss) ? MapKindColours[kind][*out] : ((kind < PnC_End) ? PanelColours[kind] : 0);
+                px += shift_y;
+                py -= shift_x;
+                out++;
+            }
+            out_line += MapDiagonalLength;
+            shift_stl_x += shift_x;
+            shift_stl_y += shift_y;
+        }
+        return;
+    }
     int h;
     for (h = 0; h < MapDiagonalLength; h++)
     {
@@ -922,7 +1065,7 @@ void panel_map_draw_slabs(long x, long y, long units_per_px, long zoom)
         subpos_x = shift_stl_y - shift_x * (end_w - 1);
         for (; end_w > start_w; end_w--)
         {
-            if ((subpos_y >= 0) && (subpos_x >= 0) && (subpos_y < (1<<16)*game.map_subtiles_x) && (subpos_x < (1<<16)*game.map_subtiles_y)) {
+            if ((subpos_y >= 0) && (subpos_x >= 0) && (subpos_y < ((int64_t)1<<16)*game.map_subtiles_x) && (subpos_x < ((int64_t)1<<16)*game.map_subtiles_y)) {
                 break;
             }
             subpos_y -= shift_y;
@@ -932,7 +1075,7 @@ void panel_map_draw_slabs(long x, long y, long units_per_px, long zoom)
         subpos_x = shift_stl_y - shift_x * start_w;
         for (; start_w < end_w; start_w++)
         {
-            if ((subpos_y >= 0) && (subpos_x >= 0) && (subpos_y < (1<<16)*game.map_subtiles_x) && (subpos_x < (1<<16)*game.map_subtiles_y)) {
+            if ((subpos_y >= 0) && (subpos_x >= 0) && (subpos_y < ((int64_t)1<<16)*game.map_subtiles_x) && (subpos_x < ((int64_t)1<<16)*game.map_subtiles_y)) {
                 break;
             }
             subpos_y += shift_y;
@@ -947,10 +1090,11 @@ void panel_map_draw_slabs(long x, long y, long units_per_px, long zoom)
         int w;
         for (w = end_w-start_w; w > 0; w--)
         {
-            int pnmap_idx;
-            pnmap_idx = ((precor_x>>16)) + (((precor_y>>16)) * (game.map_subtiles_x + 1) );
-            unsigned short kind = PanelMap[pnmap_idx];
-            *out = (kind <= PnC_Abyss) ? MapKindColours[kind][*out] : PanelColours[kind];
+            SubtlCodedCoords pnmap_idx;
+            pnmap_idx = ((precor_x>>16)) + (((SubtlCodedCoords)(precor_y>>16)) * (game.map_subtiles_x + 1) );
+            unsigned short kind = world_paged ? panel_map_code_at((MapSubtlCoord)(precor_x>>16), (MapSubtlCoord)(precor_y>>16))
+                                              : PanelMap[pnmap_idx];
+            *out = (kind <= PnC_Abyss) ? MapKindColours[kind][*out] : ((kind < PnC_End) ? PanelColours[kind] : 0);
             precor_x += shift_y;
             precor_y -= shift_x;
             out++;

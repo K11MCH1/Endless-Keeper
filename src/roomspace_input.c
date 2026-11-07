@@ -23,6 +23,11 @@
 #include "roomspace_input.h"
 
 #include "keeperfx.hpp"
+#include "world_pages.h"
+#include "net_state.h"
+#include "spdigger_stack.h"
+#include "frontmenu_ingame_map.h"
+#include "dungeon_data.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -46,6 +51,68 @@ static GameTurn cursor_release_turn;
 static MapSlabCoord room_drag_start_slb_x;
 static MapSlabCoord room_drag_start_slb_y;
 
+/* a thin client's own dig marks: its dungeon's dig tasks on the server, by slab (the map's mark bits are the
+   server's own player's) */
+static unsigned char thin_marks[MAX_TILES_X * MAX_TILES_Y];
+static SlabCodedCoords thin_mark_list[MAPTASKS_COUNT];
+static SlabCodedCoords thin_mark_slabs[MAPTASKS_COUNT];
+static int thin_mark_count = 0;
+
+static void thin_marks_changed(SlabCodedCoords slb_num)
+{
+    panel_map_update(slab_subtile(slb_num_decode_x(slb_num), 0), slab_subtile(slb_num_decode_y(slb_num), 0), STL_PER_SLB, STL_PER_SLB);
+}
+
+/** Each thin client turn: the marks from the task list as the server has it now (the minimap redraws what changed). */
+static void rebuild_thin_marks(void)
+{
+    static SlabCodedCoords old_slabs[MAPTASKS_COUNT];
+    const int old_count = thin_mark_count;
+    memcpy(old_slabs, thin_mark_slabs, sizeof(SlabCodedCoords) * old_count);
+    for (int i = 0; i < thin_mark_count; i++)
+        thin_marks[thin_mark_list[i]] = 0;
+    thin_mark_count = 0;
+    struct Dungeon *dungeon = get_players_num_dungeon(my_player_number);
+    if (!dungeon_invalid(dungeon))
+    {
+        const long imax = min((long)dungeon->highest_task_number, (long)MAPTASKS_COUNT);
+        for (long i = 0; i < imax; i++)
+        {
+            const struct MapTask *mtask = &dungeon->task_list[i];
+            if ((mtask->kind == SDDigTask_None) || (mtask->coords == 0))
+                continue;
+            const MapSlabCoord slb_x = subtile_slab(stl_num_decode_x(mtask->coords));
+            const MapSlabCoord slb_y = subtile_slab(stl_num_decode_y(mtask->coords));
+            const SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
+            const SlabCodedCoords idx = dig_pred_index(slb_num);
+            if (thin_marks[idx] || (thin_mark_count >= MAPTASKS_COUNT))
+                continue;
+            thin_marks[idx] = 1;
+            thin_mark_list[thin_mark_count] = idx;
+            thin_mark_slabs[thin_mark_count] = slb_num;
+            thin_mark_count++;
+        }
+    }
+    /* the minimap: the slabs that gained or lost a mark */
+    for (int i = 0; i < old_count; i++)
+        if (!thin_marks[dig_pred_index(old_slabs[i])])
+            thin_marks_changed(old_slabs[i]);
+    for (int i = 0; i < thin_mark_count; i++)
+    {
+        TbBool had = false;
+        for (int k = 0; (k < old_count) && !had; k++)
+            had = (old_slabs[k] == thin_mark_slabs[i]);
+        if (!had)
+            thin_marks_changed(thin_mark_slabs[i]);
+    }
+}
+
+/** Tests: the dig marks predicted here and not yet settled. */
+int dig_prediction_count(void)
+{
+    return dig_tags.slab_count;
+}
+
 void reset_dig_prediction(void)
 {
     memset(&dig_tags, 0, sizeof(dig_tags));
@@ -59,13 +126,33 @@ static void reconcile_dig_predictions(struct DigTagPrediction *tags, GameTurn pr
     tags->task_count = get_players_dungeon(get_my_player())->task_count;
     for (int i = 0; i < tags->slab_count;) {
         SlabCodedCoords slb_num = tags->slabs[i];
-        if ((GameTurnDelta)(tags->slab_turns[slb_num] - processed_turn) <= 0) {
-            tags->slab_tag_modes[slb_num] = 0;
+        if ((GameTurnDelta)(tags->slab_turns[dig_pred_index(slb_num)] - processed_turn) <= 0) {
+            tags->slab_tag_modes[dig_pred_index(slb_num)] = 0;
             tags->slabs[i] = tags->slabs[--tags->slab_count];
             continue;
         }
         TbBool tagged = find_from_task_list_by_slab(my_player_number, slb_num_decode_x(slb_num), slb_num_decode_y(slb_num)) != -1;
-        tags->task_count += (tags->slab_tag_modes[slb_num] == DigTagMode_Tag) - tagged;
+        tags->task_count += (tags->slab_tag_modes[dig_pred_index(slb_num)] == DigTagMode_Tag) - tagged;
+        i++;
+    }
+}
+
+/** A thin client: a predicted mark lasts until the server's state has it (or 3 s, if the server turned it down). */
+#define THIN_DIG_PREDICTION_TURNS 60
+static void reconcile_thin_dig_predictions(struct DigTagPrediction *tags)
+{
+    tags->task_count = get_players_dungeon(get_my_player())->task_count;
+    for (int i = 0; i < tags->slab_count;) {
+        SlabCodedCoords slb_num = tags->slabs[i];
+        const unsigned char mode = tags->slab_tag_modes[dig_pred_index(slb_num)];
+        TbBool tagged = find_from_task_list_by_slab(my_player_number, slb_num_decode_x(slb_num), slb_num_decode_y(slb_num)) != -1;
+        TbBool settled = (mode == DigTagMode_Tag) ? tagged : !tagged;
+        if (settled || ((GameTurnDelta)(get_gameturn() - tags->slab_turns[dig_pred_index(slb_num)]) > THIN_DIG_PREDICTION_TURNS)) {
+            tags->slab_tag_modes[dig_pred_index(slb_num)] = 0;
+            tags->slabs[i] = tags->slabs[--tags->slab_count];
+            continue;
+        }
+        tags->task_count += (mode == DigTagMode_Tag) - tagged;
         i++;
     }
 }
@@ -214,10 +301,18 @@ static void apply_dig_tag_selection(struct Packet *pckt, struct UserState *predi
     if (!apply_selection) {
         return;
     }
-    dig_tags.turn = pckt->turn;
+    dig_tags.turn = netstate_is_client() ? get_gameturn() : pckt->turn; /* a thin client's packet turn is an input number */
     int changed_slab_count = apply_roomspace_dig_tag_selection(my_player_number, roomspace, dig_cursor.previous_slb_x, dig_cursor.previous_slb_y, predicted_ustate->roomspace_highlight_mode, &dig_tags);
     if (changed_slab_count > 0) {
-        uint16_t previous_slb = (uint16_t)dig_cursor.previous_slb_x | ((uint16_t)dig_cursor.previous_slb_y << 8);
+        /* 8 bits each; normal maps are narrower than 256 slabs, the chunked world sends the low bits (and
+           packets_input.c takes them back to the slab nearest the cursor) */
+        MapSlabCoord prev_x = dig_cursor.previous_slb_x, prev_y = dig_cursor.previous_slb_y;
+        if (world_paged)
+        {
+            prev_x &= 0xFF;
+            prev_y &= 0xFF;
+        }
+        uint16_t previous_slb = (uint16_t)prev_x | ((uint16_t)prev_y << 8);
         set_packet_action(pckt, PckA_ApplyRoomspaceDigTag, predicted_ustate->roomspace_highlight_mode, predicted_ustate->roomspace_width, previous_slb, roomspace->untag_mode);
         play_non_3d_sample(snd_tile_dig);
     }
@@ -255,7 +350,8 @@ void update_dig_tag_input(void)
         dig_cursor.cursor_locked = false;
         dig_cursor.cursor_state = cursor_context;
     }
-    if (click || dig_input_is_blocked(get_history_packet(get_local_user(), pckt->turn - 1))) {
+    const struct Packet *previous_pckt = netstate_is_client() ? netstate_client_last_input() : get_history_packet(get_local_user(), pckt->turn - 1);
+    if (click || dig_input_is_blocked(previous_pckt)) {
         dig_cursor.previous_slb_x = slb_x;
         dig_cursor.previous_slb_y = slb_y;
     }
@@ -284,14 +380,32 @@ void update_dig_tag_input(void)
     dig_cursor.previous_slb_y = slb_y;
 }
 
+/** The map flags to show a block with: on a thin client its marks are this player's own (see above); elsewhere the
+ *  map's flags as they are. For the views that read the map's flags directly (front view, minimap, parchment). */
+unsigned char dig_marks_display_flags(MapSubtlCoord stl_x, MapSubtlCoord stl_y, unsigned char map_flags)
+{
+    if (!netstate_is_client())
+        return map_flags;
+    return get_dig_prediction_render_flags(stl_x, stl_y, map_flags);
+}
+
 unsigned char get_dig_prediction_render_flags(MapSubtlCoord stl_x, MapSubtlCoord stl_y, unsigned char base_map_flags)
 {
     MapSlabCoord slb_x = subtile_slab(stl_x);
     MapSlabCoord slb_y = subtile_slab(stl_y);
-    if (!dig_input_is_enabled() || slab_coords_invalid(slb_x, slb_y)) {
+    if (slab_coords_invalid(slb_x, slb_y)) {
         return base_map_flags;
     }
-    unsigned char predicted_dig_tag_mode = dig_tags.slab_tag_modes[get_slab_number(slb_x, slb_y)];
+    unsigned char predicted_dig_tag_mode = 0;
+    if (netstate_is_client()) {
+        /* the map's mark bits are the server's own player's: this player's marks are its dig tasks */
+        base_map_flags &= ~(SlbAtFlg_TaggedValuable | SlbAtFlg_Unexplored);
+        if (thin_marks[dig_pred_index(get_slab_number(slb_x, slb_y))])
+            predicted_dig_tag_mode = DigTagMode_Tag;
+    }
+    if (dig_input_is_enabled() && (dig_tags.slab_tag_modes[dig_pred_index(get_slab_number(slb_x, slb_y))] != 0)) {
+        predicted_dig_tag_mode = dig_tags.slab_tag_modes[dig_pred_index(get_slab_number(slb_x, slb_y))];
+    }
     if (predicted_dig_tag_mode == DigTagMode_Untag) {
         return base_map_flags & ~(SlbAtFlg_TaggedValuable | SlbAtFlg_Unexplored);
     }
@@ -310,11 +424,20 @@ unsigned char get_dig_prediction_render_flags(MapSubtlCoord stl_x, MapSubtlCoord
 void update_dig_prediction_cursor_preview(void)
 {
     set_local_user_state_prediction(NULL);
+    if (netstate_is_client()) {
+        rebuild_thin_marks();
+    }
     if (!dig_input_is_enabled()) {
         return;
     }
-    const struct Packet *pckt = get_history_packet(get_local_user(), get_gameturn());
-    reconcile_dig_predictions(&dig_tags, get_local_packet()->turn);
+    const struct Packet *pckt;
+    if (netstate_is_client()) {
+        pckt = netstate_client_last_input();
+        reconcile_thin_dig_predictions(&dig_tags);
+    } else {
+        pckt = get_history_packet(get_local_user(), get_gameturn());
+        reconcile_dig_predictions(&dig_tags, get_local_packet()->turn);
+    }
     if (get_local_user_state()->work_state != PSt_OrderCreatr) {
         map_volume_box.visible = 0;
     }

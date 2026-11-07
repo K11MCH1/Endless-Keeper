@@ -51,6 +51,9 @@
 #include "thing_shots.h"
 #include "thing_stats.h"
 #include <math.h>
+#include "world_colours.h"
+#include "net_state.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -187,7 +190,7 @@ struct Thing *create_effect_element(const struct Coord3d *pos, ThingModel eelmod
         thing->transformation_speed = 0;
     }
 
-    if (eestat->light_radius != 0)
+    if ((eestat->light_radius != 0) && !netstate_is_client())
     {
         ilght.mappos.x.val = thing->mappos.x.val;
         ilght.mappos.y.val = thing->mappos.y.val;
@@ -338,7 +341,7 @@ void process_spells_affected_by_effect_elements(struct Thing *thing)
         {
             crconf = creature_stats_get_from_thing(thing);
             if ((dturn % 2) == 0) {
-                effeltng = create_effect_element(&thing->mappos, birth_effect_element[get_player_color_idx(thing->owner)], thing->owner);
+                effeltng = create_effect_element(&thing->mappos, birth_effect_element[world_display_colour(thing->owner)], thing->owner);
             }
             creature_turn_to_face_angle(thing, thing->move_angle_xy + crconf->max_turning_speed);
         }
@@ -916,7 +919,7 @@ struct Thing *create_effect(const struct Coord3d *pos, ThingModel effmodel, Play
     thing->rendering_flags |= TRF_Invisible;
     thing->health = effcst->start_health;
     thing->shot_effect.hit_type = effcst->effect_hit_type;
-    if (effcst->ilght.radius != 0)
+    if ((effcst->ilght.radius != 0) && !netstate_is_client())
     {
         struct InitLight ilght;
         memcpy(&ilght, &effcst->ilght, sizeof(struct InitLight));
@@ -1089,6 +1092,7 @@ TbBool explosion_affecting_thing(struct Thing *tngsrc, struct Thing *tngdst, con
             {
                 HitPoints damage = get_radially_decaying_value(max_damage, max_dist / 4, 3 * max_dist / 4, distance) + 1;
                 SYNCDBG(7,"Causing %d damage to %s at distance %d",(int)damage,thing_model_name(tngdst),(int)distance);
+                world_heart_hit(tngdst, owner); /* endless worlds: who destroys it gets XP */
                 apply_damage_to_thing(tngdst, damage, -1);
                 affected = true;
                 event_create_event_or_update_nearby_existing_event(tngdst->mappos.x.val, tngdst->mappos.y.val,EvKind_HeartAttacked, tngdst->owner, 0);

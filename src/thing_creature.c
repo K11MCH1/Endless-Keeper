@@ -106,6 +106,9 @@
 
 #include "keeperfx.hpp"
 #include "kfx/profiling/KfxProfilingC.h"
+#include "slab_data.h"
+#include "world_colours.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2067,7 +2070,7 @@ void creature_cast_spell_at_thing(struct Thing *castng, struct Thing *targetng, 
 
 void teleport_familiar_to_summoner(struct Thing *famlrtng, struct Thing* creatng)
 {
-    create_effect(&famlrtng->mappos, imp_spangle_effects[get_player_color_idx(famlrtng->owner)], famlrtng->owner);
+    create_effect(&famlrtng->mappos, imp_spangle_effects[world_display_colour(famlrtng->owner)], famlrtng->owner);
     move_thing_in_map(famlrtng, &creatng->mappos);
     cleanup_current_thing_state(famlrtng);
     reset_interpolation_of_thing(famlrtng);
@@ -3288,6 +3291,7 @@ struct Thing* cause_creature_death(struct Thing *thing, CrDeathFlags flags)
     }
 
     creature_throw_out_gold(thing);
+    world_progress_creature_died(thing);
     // Beyond this point, the creature thing is bound to be deleted
     if ((!flag_is_set(flags,CrDed_NotReallyDying)) || (flag_is_set(game.conf.rules[thing->owner].gameplay.classic_bugs_flags,ClscBug_ResurrectRemoved)))
     {
@@ -3460,7 +3464,7 @@ struct Thing *kill_creature(struct Thing *creatng, struct Thing *killertng, Play
     struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
     if ((cctrl->unsummon_turn > 0) && (cctrl->unsummon_turn > get_gameturn()))
     {
-        create_effect_around_thing(creatng, ball_puff_effects[get_player_color_idx(creatng->owner)]);
+        create_effect_around_thing(creatng, ball_puff_effects[world_display_colour(creatng->owner)]);
         set_flag(flags, CrDed_NotReallyDying | CrDed_NoEffects);
         return cause_creature_death(creatng, flags);
     }
@@ -6174,7 +6178,7 @@ ThingModel get_footstep_effect_element(struct Thing* thing)
     };
 
     short texture;
-        unsigned char ext_txtr = game.slab_ext_data[get_slab_number(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num))];
+        unsigned char ext_txtr = (*slab_ext_ptr(get_slab_number(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num))));
     if (ext_txtr == 0)
     {
         // Default map texture
@@ -6260,7 +6264,7 @@ void process_magic_fall_effect(struct Thing *thing)
         GameTurnDelta dturn = get_gameturn() - thing->creation_turn;
         if ((dturn & 1) == 0)
         {
-            create_effect_element(&thing->mappos, birth_effect_element[get_player_color_idx(thing->owner)], thing->owner);
+            create_effect_element(&thing->mappos, birth_effect_element[world_display_colour(thing->owner)], thing->owner);
         }
         struct CreatureModelConfig *crconf = creature_stats_get_from_thing(thing);
         creature_turn_to_face_angle(thing, thing->move_angle_xy + crconf->max_turning_speed);
@@ -6285,7 +6289,7 @@ void process_landscape_affecting_creature(struct Thing *thing)
     }
     cctrl->corpse_to_piss_on = 0;
 
-    int stl_idx = get_subtile_number(thing->mappos.x.stl.num, thing->mappos.y.stl.num);
+    SubtlCodedCoords stl_idx = get_subtile_number(thing->mappos.x.stl.num, thing->mappos.y.stl.num);
     if (thing_touching_floor(thing))
     {
         int i = get_top_cube_at_pos(stl_idx);
@@ -6540,7 +6544,7 @@ TngUpdateRet update_creature(struct Thing *thing)
     }
     if ((cctrl->unsummon_turn > 0) && (cctrl->unsummon_turn < get_gameturn()))
     {
-        create_effect_around_thing(thing, ball_puff_effects[get_player_color_idx(thing->owner)]);
+        create_effect_around_thing(thing, ball_puff_effects[world_display_colour(thing->owner)]);
         kill_creature(thing, INVALID_THING, -1, CrDed_NotReallyDying| CrDed_NoEffects);
         return TUFRet_Deleted;
     }

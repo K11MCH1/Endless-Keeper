@@ -22,7 +22,7 @@
 #include "bflib_basics.h"
 #include "globals.h"
 
-#define REGIONS_COUNT        300
+#define REGIONS_COUNT        1000 /* 300 before; at most 1023 (the region's 10 bits of region_and_edgelen) */
 #define REGION_QUEUE_LEN     200
 
 struct RegionT {

@@ -38,6 +38,7 @@
 #include "timer.h"
 #include "observer.h"
 #include "player_instances.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -97,7 +98,10 @@ void message_draw(void)
                     }
                     else
                     {
-                        spr_idx = (player_has_heart_or_needs_none(game.messages[i].plyr_idx)) ? GPS_plyrsym_symbol_player_red_std_b : GPS_plyrsym_symbol_player_red_dead;
+                        TbBool alive = player_has_heart_or_needs_none(game.messages[i].plyr_idx);
+                        if (world_mode_active()) /* endless: another keeper's heart is often not on this machine */
+                            alive = (get_player(game.messages[i].plyr_idx)->victory_state != VicS_LostLevel);
+                        spr_idx = alive ? GPS_plyrsym_symbol_player_red_std_b : GPS_plyrsym_symbol_player_red_dead;
                     }
                     break;
                 }

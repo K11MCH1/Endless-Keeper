@@ -146,6 +146,18 @@ struct SaveStructDesc {
 #define SAVE_FIELD_EX(T, f, ST, ...) { SAVE_MEMBER(T, f, ST), __VA_ARGS__ }
 #define SAVE_FIELD(T, f, ST) SAVE_FIELD_EX(T, f, ST, .flags = 0)
 
+/* A set of players (PlayerBitFlags): word 0 under the member's name (players 0-31; it was a 16-bit field, so older
+ * saves convert), the other words as "<name>_hi". */
+#if PLAYER_MASK_WORDS > 1
+#define SAVE_PLAYER_MASK(T, f) \
+    { .name = #f, .offset = (uint32_t)offsetof(T, f.w[0]), .mem_size = 4, .stored_type = SV_U32, .flags = 0 }, \
+    { .name = #f "_hi", .offset = (uint32_t)offsetof(T, f.w[1]), .mem_size = 4 * (PLAYER_MASK_WORDS - 1), \
+      .dims = { PLAYER_MASK_WORDS - 1 }, .stored_type = SV_U32, .flags = 0 }
+#else
+#define SAVE_PLAYER_MASK(T, f) \
+    { .name = #f, .offset = (uint32_t)offsetof(T, f.w[0]), .mem_size = 4, .stored_type = SV_U32, .flags = 0 }
+#endif
+
 /* A member that is a struct with its own table. */
 #define SAVE_SUB_EX(T, f, Sub, ...) { SAVE_MEMBER(T, f, SV_STRUCT), .sub = &save_desc_##Sub, __VA_ARGS__ }
 #define SAVE_SUB(T, f, Sub) SAVE_SUB_EX(T, f, Sub, .flags = 0)
