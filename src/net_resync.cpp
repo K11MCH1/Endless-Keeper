@@ -524,7 +524,7 @@ static TbBool apply_resync_game_data(const char * full_resync_data, size_t full_
         ERRORLOG("Lua state is not initialized");
         return false;
     }
-    if (Lvl_script != NULL && !lua_set_serialised_data(full_resync_data + lua_data_offset, lua_data_len)) {
+    if (Lvl_script != NULL && !lua_set_serialised_data(full_resync_data + lua_data_offset, lua_data_len, false)) {
         return false;
     }
     // Decoded in place: fields the table excludes from sync (local UI/per-player

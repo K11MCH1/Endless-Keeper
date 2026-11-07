@@ -985,6 +985,9 @@ TbBool open_packet_file_for_load(char *fname, struct CatalogueEntry *centry)
         return false;
     }
     packet_load_dec_ready = true;
+    // The file's names reach %s formats and the UI.
+    for (NetUserId user = 0; user < MAX_NET_USERS; user++)
+        replay.head.user_names[user][sizeof(replay.head.user_names[user]) - 1] = '\0';
     replay.file_pos = LbFilePosition(replay.fp);
     reset_packet_codec();
     if (packet_wire_size == 0)

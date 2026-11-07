@@ -109,14 +109,25 @@ function GetSerializedData()
     return result
 end
 
-function SetSerializedData(serialized_data)
+-- allow_bytecode is only for data this engine made itself, or a file the player chose to trust.
+local function restore_serialized_data(serialized_data, allow_bytecode)
+    binser.setBytecodeAllowed(allow_bytecode)
     local values, count = binser.deserialize(serialized_data)
     local restored = values[1]
     assert(type(restored) == "table", "Serialized game state must be a table")
     assert(count == 2 and values[2] == serialization_version,
         "Save was made with an incompatible Lua serialization version (" .. tostring(values[2]) .. ")")
-    anon_functions.begin()
+    anon_functions.begin(allow_bytecode)
     restore_anon_functions(restored, {})
     anon_functions.finish("restored")
+    return restored
+end
+
+function SetSerializedData(serialized_data, allow_bytecode)
+    local ok, restored = pcall(restore_serialized_data, serialized_data, allow_bytecode == true)
+    binser.setBytecodeAllowed(false)
+    if not ok then
+        error(restored, 0)
+    end
     Game = restored
 end
