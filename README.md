@@ -2,7 +2,7 @@
 
 # ⛏️ Endless Keeper
 
-### Dungeon Keeper, reborn as an endless, living underworld.
+### Dungeon Keeper survival sandbox mod.
 
 *Dig forever. Grow stronger. There is always more underworld to conquer.*
 
