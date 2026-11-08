@@ -2380,14 +2380,25 @@ static void get_overhead_view_nonaction_inputs(void)
     local_state.camera_speedup_pressed = false;
     if (world_mode_active() && !rotate_pressed && ((get_local_user_state()->init_flags & UsrIF_KeyboardInputDisabled) == 0))
     {
-        // Endless world: the move keys scroll the full-screen map, the heart key brings it back home
+        // Endless world: the move keys scroll the full-screen map, and so does the mouse at the window's edge (as in
+        // the dungeon view, unless cursor panning is turned off); the heart key brings it back home
         const int step = speed_pressed ? 6 : 2;
-        int dx = 0;
-        int dy = 0;
-        if (is_game_key_pressed(Gkey_MoveLeft, false, true)) dx -= step;
-        if (is_game_key_pressed(Gkey_MoveRight, false, true)) dx += step;
-        if (is_game_key_pressed(Gkey_MoveUp, false, true)) dy -= step;
-        if (is_game_key_pressed(Gkey_MoveDown, false, true)) dy += step;
+        TbBool left = is_game_key_pressed(Gkey_MoveLeft, false, true);
+        TbBool right = is_game_key_pressed(Gkey_MoveRight, false, true);
+        TbBool up = is_game_key_pressed(Gkey_MoveUp, false, true);
+        TbBool down = is_game_key_pressed(Gkey_MoveDown, false, true);
+        if (IsMouseInsideWindow() && !is_feature_on(Ft_DisableCursorCameraPanning))
+        {
+            const int32_t edge_scrolling_border = max(4, scale_fixed_DK_value(4));
+            const int32_t mouse_x = GetMouseX();
+            const int32_t mouse_y = GetMouseY();
+            left |= (mouse_x <= edge_scrolling_border);
+            right |= (mouse_x >= MyScreenWidth - edge_scrolling_border);
+            up |= (mouse_y <= edge_scrolling_border);
+            down |= (mouse_y >= MyScreenHeight - edge_scrolling_border);
+        }
+        const int dx = (right ? step : 0) - (left ? step : 0);
+        const int dy = (down ? step : 0) - (up ? step : 0);
         if ((dx != 0) || (dy != 0))
             world_parchment_scroll(dx, dy);
         if (is_game_key_pressed(Gkey_ZoomRoomHeart, false, true))

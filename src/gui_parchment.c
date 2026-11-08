@@ -1002,7 +1002,7 @@ void draw_map_level_name(void)
     }
     if (world_mode_active())
     {
-        const char *hint = "Drag with the mouse (or W A S D): scroll the map    Click: go there    H: your Dungeon Heart";
+        const char *hint = "Mouse at the edge, drag or W A S D: scroll the map    Click: go there    H: your Dungeon Heart";
         int hint_units_per_px = (14 * units_per_pixel) / LbTextLineHeight();
         LbTextSetWindow(x, y, w, h + h / 2);
         LbTextDrawResized((w - LbTextStringWidth(hint) * hint_units_per_px / 16) / 2, h / 10 + 24 * units_per_pixel / 16,
