@@ -8,3 +8,9 @@
 *.cpp text
 *.h text
 *.sh text eol=lf
+
+# The Endless Mode level: host and joiners compare its files byte for byte when a network game starts
+# (net_checksums.c), so they are never converted to CRLF on checkout
+levels/endless/** -text
+levels/endless.cfg -text
+levels/endless_cfgs/** -text
