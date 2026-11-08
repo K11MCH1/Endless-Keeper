@@ -49,6 +49,8 @@
 #include "game_legacy.h"
 #include "map_locations.h"
 #include "world_colours.h"
+#include "world_daynight.h"
+#include "world_outpost.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -963,6 +965,10 @@ short good_doing_nothing(struct Thing *creatng)
             return 1;
         }
         cctrl->job_assigned_check_turn = get_gameturn();
+    }
+    // Endless worlds: raid heroes going home after their third night; outpost and fortress heroes roam
+    if (world_raid_hero_goes_home(creatng) || world_stronghold_hero_wanders(creatng)) {
+        return 1;
     }
     // Now go the standard hero path - find a target player
     PlayerNumber target_plyr_idx = cctrl->party.target_plyr_idx;

@@ -683,6 +683,73 @@ void world_progress_book_shelved(struct Thing *thing, struct Room *room)
     SYNCLOG("World progress: player %d's heroes' spellbook opens the %s's research", (int)plyr_idx, wpr_items[i].label);
 }
 
+/** Boxes that stack in a Library: Increase Level and Steal Hero. */
+static TbBool box_stacks(const struct Thing *thing)
+{
+    if (!thing_exists(thing) || !thing_is_special_box(thing) || thing_is_custom_special_box(thing))
+        return false;
+    const SpecialKind k = box_thing_to_special(thing);
+    return (k == SpcKind_IncrseLvl) || (k == SpcKind_StealHero);
+}
+
+int world_progress_box_power(const struct Thing *thing)
+{
+    if (!world_mode_active() || !box_stacks(thing))
+        return 1;
+    return 1 + min((int)thing->custom_box.box_kind, WORLD_BOX_MAX_UPGRADES);
+}
+
+void world_progress_box_shelved(struct Thing *thing, struct Room *room)
+{
+    if (!world_mode_active() || !box_stacks(thing) || room_is_invalid(room))
+        return;
+    const PlayerNumber owner = thing->owner;
+    /* the box to fuse with: the same kind, the same keeper's, lying in one of their Libraries, not full; the
+       fullest first (one fills up to the top before the next starts), then the one in this room */
+    struct Thing *best = INVALID_THING;
+    int best_score = -1;
+    const struct StructureList *slist = get_list_for_thing_class(TCls_Object);
+    long guard = 0;
+    for (long i = slist->index; (i > 0) && (guard++ <= (long)slist->count);)
+    {
+        struct Thing *other = thing_get(i);
+        if (thing_is_invalid(other))
+            break;
+        i = other->next_of_class;
+        if ((other == thing) || (other->model != thing->model) || (other->owner != owner) || !box_stacks(other) ||
+            thing_is_dragged_or_pulled(other) || thing_is_picked_up(other) ||
+            (other->custom_box.box_kind >= WORLD_BOX_MAX_UPGRADES))
+            continue;
+        struct Room *oroom = get_room_thing_is_on(other);
+        if (room_is_invalid(oroom) || (oroom->owner != owner) || !room_role_matches(oroom->kind, RoRoF_PowersStorage))
+            continue;
+        const int score = other->custom_box.box_kind * 2 + ((oroom == room) ? 1 : 0);
+        if (score > best_score)
+        {
+            best_score = score;
+            best = other;
+        }
+    }
+    if (thing_is_invalid(best))
+        return;
+    /* the boxes' powers add up: one box takes what fits, the rest stays in the one brought (none: it goes) */
+    const int total = (1 + best->custom_box.box_kind) + (1 + min((int)thing->custom_box.box_kind, WORLD_BOX_MAX_UPGRADES));
+    const int top = 1 + WORLD_BOX_MAX_UPGRADES;
+    best->custom_box.box_kind = (unsigned char)(min(total, top) - 1);
+    struct SpecialConfigStats *specst = get_special_model_stats(box_thing_to_special(thing));
+    create_used_effect_or_element(&thing->mappos, specst->effect_id, owner, thing->index);
+    create_effect(&best->mappos, TngEff_ResearchComplete, owner);
+    SYNCLOG("World: player %d's %s box fuses with the one in the Library: it now works %d times", (int)owner,
+        thing_model_name(best), 1 + (int)best->custom_box.box_kind);
+    if (total > top)
+    {
+        thing->custom_box.box_kind = (unsigned char)(total - top - 1);
+        return;
+    }
+    remove_events_thing_is_attached_to(thing);
+    destroy_object(thing);
+}
+
 static void give_boon(PlayerNumber plyr_idx, int grade, uint64_t roll)
 {
     struct WprPlayer *wp = &wpr_players[plyr_idx];

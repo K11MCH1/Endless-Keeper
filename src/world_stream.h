@@ -88,6 +88,10 @@ TbBool world_view_slab(MapSlabCoord *slb_x, MapSlabCoord *slb_y);
 TbBool world_user_view_slab(int user, MapSlabCoord *slb_x, MapSlabCoord *slb_y);
 void world_slab_to_world(MapSlabCoord slb_x, MapSlabCoord slb_y, int64_t *wx, int64_t *wy);
 void world_remove_thing_quietly(struct Thing *thing);
+/** Is a world chunk made already (stored, or on the map)? */
+TbBool world_chunk_made(int32_t cx, int32_t cy);
+/** Slabs from a world slab to the nearest player start. */
+double world_dist_to_nearest_start(int64_t x, int64_t y);
 /** The world's generator (NULL outside a world). */
 struct WgWorld *world_generator(void);
 /** The other human seats' copies of the start: how many, and does one lie in this box of world slabs? */
@@ -127,6 +131,8 @@ TbBool world_read_slab_box(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, Ma
 /** Chunked world: loads the chunks within r of the chunk holding an engine slab now (a raid's landing spot).
  *  Returns how many were loaded. */
 int world_load_chunks_round(MapSlabCoord slb_x, MapSlabCoord slb_y, int r);
+/** The same round a world slab (loaded or not). */
+int world_load_chunks_round_world(int64_t wx, int64_t wy, int r);
 /** Chunked world: reads up to `budget` chunks of a box of engine slabs that aren't loaded into world_read_slab_box's
  *  cache ahead of time (no effect on the game; it only spreads the work). Returns how many it read. */
 int world_peek_warm(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSlabCoord y2, int budget);

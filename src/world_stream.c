@@ -89,6 +89,7 @@
 #include "net_state.h"
 #include "world_progress.h"
 #include "world_outpost.h"
+#include "power_specials.h"
 #include "net_spectator.h"
 #include "roomspace_input.h"
 #include "frontmenu_ingame_tabs.h"
@@ -131,6 +132,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_LEVELS_MAGIC 0x31564C50u /* "PLV1": optional, before the seats' owners: the players' XP (player levels) */
 #define WORLD_OUTPOSTS_MAGIC 0x3153504Fu /* "OPS1": optional, after PLV1: what happened to the heroes outposts */
 #define WORLD_STARTGOLD_MAGIC 0x31594D53u /* "SMY1": optional, after OPS1: the gold seats that join get */
+#define WORLD_RAIDS_MAGIC 0x31534452u /* "RDS1": optional, after SMY1: the hero raids going on */
 #define WORLD_STATS_MAGIC 0x31545350u /* "PST1": optional, after PKY1 (last): the players' records (server console) */
 #define WORLD_MAX_PORTALS 65536
 /* The player's creature limit (imps don't count, as in stock): this many, plus this many per owned portal. */
@@ -607,6 +609,7 @@ enum WorldThingFlags {
     WTF_LaidToRest = 0x04, /* a dead body in a graveyard */
     WTF_Prisoner = 0x08,   /* a creature kept in its captor's prison */
     WTF_Tortured = 0x10,   /* a creature on its captor's torture room */
+    WTF_Revealed = 0x20,   /* a trap that has gone off: it shows (2026-11-08: frozen traps came back hidden) */
 };
 
 /** What a frozen creature keeps besides its WorldThing: its mood, hunger, wages and kills (the CEX1 block). */
@@ -722,8 +725,56 @@ static TbBool stamp_structure_cell(uint8_t wg_slab, uint8_t wg_owner)
 #define STAMP_CLEAR_DIST 14
 #define WTF_StampCopy 0x80 /* generation only: a thing copied by a stamp (never stored) */
 
-/** The heroes outposts in a freshly generated chunk: their slabs, iron doors, traps, portals and loot; whatever the
- *  generator put on their cells goes. */
+/** Can a creature stand on the slab (open floor, liquids too)? Off the map counts as solid. */
+static TbBool door_side_open(MapSlabCoord x, MapSlabCoord y)
+{
+    if ((x < 0) || (y < 0) || (x >= game.map_tiles_x) || (y >= game.map_tiles_y))
+        return false;
+    struct SlabMap *slb = get_slabmap_block(x, y);
+    const struct SlabConfigStats *slabst = get_slab_stats(slb);
+    return ((slabst->block_flags & SlbAtFlg_Filled) == 0) || slab_kind_is_door(slb->kind);
+}
+
+/** A door the world places (generated, or brought back with its chunk), turned across the way through it
+ *  (2026-11-08): by the slabs round it, not by the columns' heights (room furniture and walls not built yet fooled
+ *  that, and a door with walls on three or four sides, or none, came out facing a wall). */
+static TbBool world_place_door(MapSlabCoord x, MapSlabCoord y, PlayerNumber owner, ThingModel model)
+{
+    const TbBool n = door_side_open(x, y - 1), s = door_side_open(x, y + 1);
+    const TbBool e = door_side_open(x + 1, y), w = door_side_open(x - 1, y);
+    char angle;
+    if ((n || s) && !e && !w)
+        angle = 0; /* walls east and west: the way runs north-south */
+    else if ((e || w) && !n && !s)
+        angle = 1; /* walls north and south */
+    else
+    {
+        angle = determine_door_angle(x, y);
+        if (angle < 0)
+            angle = ((int)n + (int)s >= (int)e + (int)w) ? 0 : 1;
+    }
+    struct Coord3d pos;
+    set_coords_to_slab_center(&pos, x, y);
+    struct Thing *door = create_door(&pos, model, (unsigned char)angle, owner, 0);
+    if (thing_is_invalid(door))
+        return false;
+    do_slab_efficiency_alteration(x, y);
+    return true;
+}
+
+static int32_t engine_chunk_of(int64_t wc);
+TbBool world_chunk_made(int32_t cx, int32_t cy)
+{
+    if (!W.active)
+        return false;
+    if (table_find(&W.store, cx, cy) != NULL)
+        return true;
+    /* the chunked world: a page is made just before its chunk is generated (the one being generated is skipped) */
+    return world_paged && (wp_page(engine_chunk_of(cx), engine_chunk_of(cy)) != NULL);
+}
+
+/** The heroes outposts and fortresses in a freshly generated chunk: their slabs, doors, traps, portals, loot, guards
+ *  and books; whatever the generator put on their cells goes. */
 static void apply_outposts(int32_t cx, int32_t cy, struct WorldChunkData *cd)
 {
     static struct OutpostOverlay ov;
@@ -759,11 +810,94 @@ static void apply_outposts(int32_t cx, int32_t cy, struct WorldChunkData *cd)
         th->oclass = ov.things[t].oclass;
         th->model = ov.things[t].model;
         th->owner = ov.things[t].heroes ? WOwn_Heroes : WOwn_Neutral;
+        th->level = (th->oclass == TCls_Creature) ? (uint8_t)max(1, (int)ov.things[t].level) : 0;
         th->x = ov.things[t].x;
         th->y = ov.things[t].y;
         th->z = -1;
         th->health = -1;
         th->extra = ov.things[t].extra;
+    }
+}
+
+/** Reward caves get a few decorations along their edges (2026-11-08): candles and lanterns round a box's shrine,
+ *  barrels and lanterns in a hoard's treasury, the biome's rocks, ferns and mushrooms where creatures wait. Seeded by
+ *  the world slab, so a cave across chunks gets the same either way. */
+static void decorate_rewards(const struct WgChunk *ch, int32_t cx, int32_t cy, struct WorldChunkData *cd)
+{
+    static const char *const box_decor[] = {"CANDLESTCK", "CANDLESTCK", "LANTERN_PST"};
+    static const char *const hoard_decor[] = {"BARREL", "LANTERN_PST", "CANDLESTCK"};
+    static const char *const biome_decor[WgB_COUNT][3] = {
+        [WgB_Earthen] = {"FERN", "MUSHROOM_YELLOW", "FERN_SMALL"},
+        [WgB_Rocky] = {"ROCK", "ROCK_PILLAR", "ROCK"},
+        [WgB_Volcanic] = {"LAVA_ROCK", "LAVA_PILLAR", "LAVA_ROCK"},
+        [WgB_Flooded] = {"CATTAILS", "FERN_SMALL", "MUSHROOM_GREEN"},
+        [WgB_Frozen] = {"ICE_ROCK", "ICE_PILLAR", "ICE_ROCK"},
+        [WgB_Sandstone] = {"ROCK", "FERN_BROWN", "FERN_SMALL_BROWN"},
+        [WgB_Crystal] = {"ROCK_PILLAR", "MUSHROOM_RED", "ROCK"},
+        [WgB_Ruins] = {"GRAVE_STONE", "ROCK", "FERN_BROWN"},
+        [WgB_LavaOcean] = {"LAVA_ROCK", "LAVA_PILLAR", "LAVA_ROCK"},
+        [WgB_FloodedOcean] = {"CATTAILS", "FERN_SMALL", "MUSHROOM_GREEN"},
+        [WgB_LavaRivers] = {"LAVA_ROCK", "LAVA_PILLAR", "LAVA_ROCK"},
+        [WgB_FloodedRivers] = {"CATTAILS", "FERN_SMALL", "MUSHROOM_GREEN"},
+        [WgB_DeadMans] = {"GRAVE_STONE", "ROCK", "GRAVE_STONE"},
+    };
+    for (int s = 0; s < ch->struct_count; s++)
+    {
+        const struct WgStructRef *ref = &ch->structs[s];
+        if ((ref->id.type != WgT_Reward) || (ref->reward == WgR_None))
+            continue;
+        const SlabKind floor = (ref->reward == WgR_SpecialBox) ? SlbT_CLAIMED :
+            ((ref->reward == WgR_GoldHoard) ? SlbT_TREASURE : SlbT_PATH);
+        for (int64_t wy = ref->origin_y - 3; wy <= ref->origin_y + 3; wy++)
+            for (int64_t wx = ref->origin_x - 3; wx <= ref->origin_x + 3; wx++)
+            {
+                const int64_t lx = wx - (int64_t)cx * WG_CHUNK, ly = wy - (int64_t)cy * WG_CHUNK;
+                if ((lx < 0) || (ly < 0) || (lx >= WG_CHUNK) || (ly >= WG_CHUNK) || (cd->thing_count >= WORLD_MAX_THINGS_PER_CHUNK))
+                    continue;
+                if ((cd->kind[ly * WG_CHUNK + lx] != floor) || ((wx == ref->origin_x) && (wy == ref->origin_y)))
+                    continue;
+                /* on the edge: next to something that isn't the cave's floor (this chunk's cells only) */
+                TbBool edge = false;
+                static const int ddx[4] = {1, -1, 0, 0}, ddy[4] = {0, 0, 1, -1};
+                for (int k = 0; k < 4; k++)
+                {
+                    const int64_t nx = lx + ddx[k], ny = ly + ddy[k];
+                    if ((nx >= 0) && (ny >= 0) && (nx < WG_CHUNK) && (ny < WG_CHUNK) && (cd->kind[ny * WG_CHUNK + nx] != floor))
+                        edge = true;
+                }
+                if (!edge)
+                    continue;
+                uint64_t h = W.seed ^ ((uint64_t)wx * 0x9E3779B97F4A7C15ULL) ^ ((uint64_t)wy * 0xC2B2AE3D27D4EB4FULL) ^ 0x4445434FULL;
+                h ^= h >> 33;
+                h *= 0xff51afd7ed558ccdULL;
+                h ^= h >> 33;
+                h *= 0xc4ceb9fe1a85ec53ULL;
+                h ^= h >> 33;
+                if ((h % 100) >= 30)
+                    continue;
+                /* not on another thing */
+                TbBool taken = false;
+                for (int t = 0; (t < cd->thing_count) && !taken; t++)
+                    taken = ((cd->things[t].x / (COORD_PER_STL * STL_PER_SLB)) == lx) &&
+                        ((cd->things[t].y / (COORD_PER_STL * STL_PER_SLB)) == ly);
+                if (taken)
+                    continue;
+                const char *name = (ref->reward == WgR_SpecialBox) ? box_decor[(h >> 8) % 3] :
+                    ((ref->reward == WgR_GoldHoard) ? hoard_decor[(h >> 8) % 3] :
+                    ((ref->biome < WgB_COUNT) ? biome_decor[ref->biome][(h >> 8) % 3] : "ROCK"));
+                const long model = (name != NULL) ? get_id(object_desc, name) : -1;
+                if (model <= 0)
+                    continue;
+                struct WorldThing *th = &cd->things[cd->thing_count++];
+                memset(th, 0, sizeof(*th));
+                th->oclass = TCls_Object;
+                th->model = (uint16_t)model;
+                th->owner = WOwn_Neutral;
+                th->x = (int32_t)(lx * STL_PER_SLB + 1) * COORD_PER_STL + COORD_PER_STL / 2 + (int32_t)((h >> 16) % 129) - 64;
+                th->y = (int32_t)(ly * STL_PER_SLB + 1) * COORD_PER_STL + COORD_PER_STL / 2 + (int32_t)((h >> 24) % 129) - 64;
+                th->z = -1;
+                th->health = -1;
+            }
     }
 }
 
@@ -912,6 +1046,12 @@ static int world_starts(int64_t *xs, int64_t *ys, int max_starts)
 
 /** Slabs from a world slab to the nearest player start: research books grade by it, so every player's books grow
  *  from their own start outward. */
+static double dist_to_nearest_start(int64_t x, int64_t y);
+double world_dist_to_nearest_start(int64_t x, int64_t y)
+{
+    return dist_to_nearest_start(x, y);
+}
+
 static double dist_to_nearest_start(int64_t x, int64_t y)
 {
     int64_t xs[WORLD_MAX_STAMPS + 1], ys[WORLD_MAX_STAMPS + 1];
@@ -1191,6 +1331,7 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
             (int)cx, (int)cy, heroes_regraded, heroes_dropped);
     /* no heart objects: placing the heart pedestal makes the heart (a slab object) */
     place_books(&ch, cx, cy, cd);
+    decorate_rewards(&ch, cx, cy, cd);
     apply_outposts(cx, cy, cd);
     apply_stamps(cx, cy, cd);
     return true;
@@ -1718,8 +1859,8 @@ static void freeze_thing(const struct Thing *thing, MapSubtlCoord stl_x0, MapSub
             th->gold = (uint32_t)thing->valuable.gold_stored;
         if (object_is_hero_gate(thing))
             th->extra = thing->hero_gate.number;
-        else if (thing_is_custom_special_box(thing))
-            th->extra = thing->custom_box.box_kind;
+        else if (thing_is_special_box(thing))
+            th->extra = thing->custom_box.box_kind; /* custom boxes' kind; Library-fused boxes' upgrades */
         break;
     case TCls_Door:
         if (thing->door.is_locked)
@@ -1727,6 +1868,8 @@ static void freeze_thing(const struct Thing *thing, MapSubtlCoord stl_x0, MapSub
         break;
     case TCls_Trap:
         th->extra = (uint16_t)thing->trap.num_shots;
+        if (thing->trap.revealed)
+            th->flags |= WTF_Revealed;
         break;
     case TCls_DeadCreature:
         th->level = (uint8_t)(thing->corpse.exp_level + 1);
@@ -2173,7 +2316,7 @@ static void place_world_thing(const struct WorldThing *th, const struct WorldCre
             return;
         if (object_is_hero_gate(thing))
             thing->hero_gate.number = (unsigned char)th->extra;
-        else if (thing_is_custom_special_box(thing))
+        else if (thing_is_special_box(thing))
             thing->custom_box.box_kind = (unsigned char)th->extra;
         if ((th->gold > 0) && object_is_gold_pile(thing))
         {
@@ -2192,7 +2335,10 @@ static void place_world_thing(const struct WorldThing *th, const struct WorldCre
     case TCls_Trap:
         thing = create_trap(&pos, th->model, owner);
         if (!thing_is_invalid(thing))
+        {
             thing->trap.num_shots = th->extra;
+            thing->trap.revealed = (th->flags & WTF_Revealed) ? 1 : 0; /* hidden until it goes off, then it shows */
+        }
         break;
     case TCls_DeadCreature:
     {
@@ -2217,7 +2363,7 @@ static void place_world_thing(const struct WorldThing *th, const struct WorldCre
         break;
     }
     case TCls_Door:
-        if (player_place_door_without_check_at(pos.x.stl.num, pos.y.stl.num, owner, th->model, true))
+        if (world_place_door(subtile_slab(pos.x.stl.num), subtile_slab(pos.y.stl.num), owner, th->model))
         {
             thing = get_door_for_position(pos.x.stl.num, pos.y.stl.num);
             if (!thing_is_invalid(thing))
@@ -2362,7 +2508,7 @@ static void fill_chunks(struct FillChunk *list, int count)
                 continue;
             MapSlabCoord x = sx0 + i % WG_CHUNK, y = sy0 + i / WG_CHUNK;
             PlayerNumber owner = owner_to_engine(cd->owner[i]);
-            player_place_door_without_check_at(slab_subtile_center(x), slab_subtile_center(y), owner, cd->door[i], true);
+            world_place_door(x, y, owner, cd->door[i]);
         }
     }
     for (int c = 0; c < count; c++)
@@ -3515,6 +3661,13 @@ static void chunk_manager_turn(void)
         objects, effgens);
 }
 
+int world_load_chunks_round_world(int64_t wx, int64_t wy, int r)
+{
+    if (!W.active)
+        return 0;
+    return world_load_chunks_round((MapSlabCoord)engine_slab_x(wx), (MapSlabCoord)engine_slab_y(wy), r);
+}
+
 int world_load_chunks_round(MapSlabCoord slb_x, MapSlabCoord slb_y, int r)
 {
     if (!W.active || !world_paged)
@@ -3987,21 +4140,22 @@ void world_level_start(void)
         W.keeper_count);
 }
 
-/** A place for seat plyr's copy of the start: their own direction, 160-260 slabs out, where no structure lies and
- *  no other start is near. */
-#define SPAWN_FIRST_RADIUS 500      /* slabs from the first player's start to the second player's */
-#define SPAWN_RADIUS_STEP 100       /* each later spawn this much further out */
+/** A place for seat plyr's copy of the start (2026-11-08): 1000-2000 slabs from the nearest other start, where no
+ *  structure lies. */
+#define SPAWN_SPACING 1000          /* slabs: the spiral's scale, and the least distance between two starts */
+#define SPAWN_MAX_GAP 2000          /* slabs: the most a new start may be from the start nearest it */
 #define SPAWN_GOLDEN_ANGLE 782      /* the golden angle in the engine's 2048 steps: spawns spread all round */
 
-/** Where the n-th player after the first starts (n = 1, 2, ...): on a widening spiral round the first player's start.
- *  Integer sine tables, so every machine places it the same. Nudged out and sideways until no keeper, fortress or
- *  portal is near and no other start is close. */
+/** Where the n-th player after the first starts (n = 1, 2, ...): on a golden-angle spiral round the first player's
+ *  start whose radius grows with the square root of n (a sunflower: SPAWN_SPACING for the second player, then evenly
+ *  spread, about 1.6-1.9 times SPAWN_SPACING between neighbours). Integer maths, so every machine places it the same.
+ *  Nudged out and sideways until no keeper, fortress or portal is near and the nearest start is 1000-2000 slabs off. */
 static TbBool choose_seat_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
 {
     const int n = W.stamp_count + 1;
-    const long radius = SPAWN_FIRST_RADIUS + (long)SPAWN_RADIUS_STEP * (n - 1);
+    const long radius = (long)LbSqrL((long)n * SPAWN_SPACING * SPAWN_SPACING);
     const long angle = (ANGLE_EAST + (long)(n - 1) * SPAWN_GOLDEN_ANGLE) & ANGLE_MASK;
-    static const int outs[] = {0, 30, 60, 90, 120};
+    static const int outs[] = {0, 40, 80, 120, 160, 200, 260};
     static const int turns[] = {0, 40, -40, 80, -80, 120, -120};
     struct WgStructRef refs[2];
     for (size_t o = 0; o < sizeof(outs) / sizeof(outs[0]); o++)
@@ -4027,14 +4181,15 @@ static TbBool choose_seat_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
                         (world_paged && (wp_page(engine_chunk_of(cx), engine_chunk_of(cy)) != NULL));
             if (made)
                 continue;
-            TbBool clash = false;
-            for (int k = 0; (k < W.stamp_count) && !clash; k++)
+            /* 1000-2000 slabs from the nearest start (the first player's is at offset 0,0) */
+            int64_t nearest = st.dx * st.dx + st.dy * st.dy;
+            for (int k = 0; k < W.stamp_count; k++)
             {
-                int64_t ax1, ay1, ax2, ay2;
-                stamp_rect(&W.stamps[k], &ax1, &ay1, &ax2, &ay2);
-                clash = (x1 <= ax2 + 32) && (ax1 <= x2 + 32) && (y1 <= ay2 + 32) && (ay1 <= y2 + 32);
+                const int64_t ex = st.dx - W.stamps[k].dx, ey = st.dy - W.stamps[k].dy;
+                if (ex * ex + ey * ey < nearest)
+                    nearest = ex * ex + ey * ey;
             }
-            if (clash)
+            if ((nearest < (int64_t)SPAWN_SPACING * SPAWN_SPACING) || (nearest > (int64_t)SPAWN_MAX_GAP * SPAWN_MAX_GAP))
                 continue;
             *dx = st.dx;
             *dy = st.dy;
@@ -5416,6 +5571,295 @@ static void world_testoutpost_hook(void)
     }
 }
 
+/** Test hook KFX_WORLD_TESTSTRONG="T,F" (F: 0 outpost, 1 fortress; KFX_WORLD_FINDERLEVEL picks the size): T: the
+ *  nearest one is decided, its chunks load (player 0's slabs at its corners keep them) and the view goes there;
+ *  T+100: a creature of player 0's (level 10) stands in its first portal room (Small and Moderate outposts: the
+ *  entrance door breaks); T+500: where its heroes are (in the box or out roaming). KFX_WORLD_STRONGDUMP=1 logs every
+ *  size of both kinds at the first turn. */
+static void world_teststrong_hook(void)
+{
+    static long base = -2;
+    static int family = 0;
+    static int64_t x0, y0, gx, gy, ex, ey;
+    static int n, tier;
+    if (base == -2)
+    {
+        const char *v = getenv("KFX_WORLD_TESTSTRONG");
+        base = -1;
+        if (v != NULL)
+        {
+            base = atol(v);
+            const char *c = strchr(v, ',');
+            family = (c != NULL) ? atoi(c + 1) : 0;
+        }
+        if (getenv("KFX_WORLD_STRONGDUMP") != NULL)
+            world_strongholds_test_dump();
+    }
+    if ((base < 0) || (W.gen == NULL))
+        return;
+    const long t = (long)game.play_gameturn - base;
+    if ((t == 50) || (t == 600))
+    {
+        /* the full-screen map on it, for a screenshot (KFX_WORLD_SHOTS at T+80 and T+630); closed again after */
+        zoom_to_parchment_map();
+        world_parchment_look_at(x0 + n / 2, y0 + n / 2);
+        return;
+    }
+    if ((t == 70) || (t == 620))
+    {
+        struct TbRect area;
+        get_parchment_map_area_rect(&area);
+        for (int z = 0; z < 4; z++)
+            parchment_zoom(1, (area.left + area.right) / 2, (area.top + area.bottom) / 2);
+        return;
+    }
+    if ((t == 90) || (t == 640))
+    {
+        zoom_from_parchment_map();
+        return;
+    }
+    static int32_t seen_x[THINGS_COUNT], seen_y[THINGS_COUNT];
+    if (t == 300)
+    {
+        for (long i = 1; i < THINGS_COUNT; i++)
+        {
+            const struct Thing *th = thing_get(i);
+            seen_x[i] = seen_y[i] = -1;
+            if (thing_exists(th) && (th->owner == PLAYER_GOOD) && (th->class_id == TCls_Creature))
+            {
+                seen_x[i] = (int32_t)subtile_slab(th->mappos.x.stl.num);
+                seen_y[i] = (int32_t)subtile_slab(th->mappos.y.stl.num);
+            }
+        }
+        return;
+    }
+    if (t == 110)
+    {
+        int mine = 0;
+        const ThingModel bile = (ThingModel)get_id(creature_desc, "BILE_DEMON");
+        for (long i = 1; i < THINGS_COUNT; i++)
+        {
+            const struct Thing *th = thing_get(i);
+            if (thing_exists(th) && (th->owner == PLAYER0) && (th->class_id == TCls_Creature) && (th->model == bile))
+                mine++;
+        }
+        SYNCLOG("World test: player 0's test creature %s", mine ? "is alive" : "is gone");
+        return;
+    }
+    if ((t != 0) && (t != 100) && (t != 500))
+        return;
+    if (t == 0)
+    {
+        struct WgStructRef start;
+        wg_start_ref(W.gen, &start);
+        if (!world_stronghold_test_target(family, start.heart_x, start.heart_y, &x0, &y0, &n, &gx, &gy, &ex, &ey, &tier))
+        {
+            SYNCLOG("World test: no stronghold found");
+            base = -1;
+            return;
+        }
+        const int loaded = world_load_chunks_round((MapSlabCoord)engine_slab_x(x0 + n / 2), (MapSlabCoord)engine_slab_y(y0 + n / 2), 2);
+        for (int k = 0; k < 4; k++)
+        {
+            const int64_t cx = (k & 1) ? x0 + n + 1 : x0 - 2, cy = (k & 2) ? y0 + n + 1 : y0 - 2;
+            place_slab_type_on_map(SlbT_CLAIMED, slab_subtile_center((MapSlabCoord)engine_slab_x(cx)),
+                slab_subtile_center((MapSlabCoord)engine_slab_y(cy)), PLAYER0, 0);
+        }
+        struct UserState *ustate = get_user_state(get_my_user());
+        if (ustate != NULL)
+        {
+            struct DungeonCamera pose = ustate->dungeon_camera;
+            pose.x = subtile_coord_center(slab_subtile_center((MapSlabCoord)engine_slab_x(x0 + n / 2)));
+            pose.y = subtile_coord_center(slab_subtile_center((MapSlabCoord)engine_slab_y(y0 + n / 2)));
+            ustate->dungeon_camera = pose;
+            sync_local_camera_pose(get_my_user(), &pose);
+        }
+        /* what came in: traps (and whether they show), doors, heroes */
+        int traps = 0, shown = 0, doors = 0, heroes = 0;
+        for (long i = 1; i < THINGS_COUNT; i++)
+        {
+            const struct Thing *th = thing_get(i);
+            if (!thing_exists(th) || (th->owner != PLAYER_GOOD))
+                continue;
+            int64_t wx, wy;
+            world_slab_to_world(subtile_slab(th->mappos.x.stl.num), subtile_slab(th->mappos.y.stl.num), &wx, &wy);
+            if ((wx < x0) || (wy < y0) || (wx >= x0 + n) || (wy >= y0 + n))
+                continue;
+            if (th->class_id == TCls_Trap)
+            {
+                traps++;
+                shown += th->trap.revealed ? 1 : 0;
+            } else if (th->class_id == TCls_Door)
+            {
+                doors++;
+                SYNCLOG("World test:   door at world (%lld,%lld) angle %d", (long long)wx, (long long)wy, (int)th->door.orientation);
+            } else if (th->class_id == TCls_Creature)
+                heroes++;
+        }
+        SYNCLOG("World test: %s %dx%d loaded (%d chunks): %d traps (%d showing), %d doors, %d heroes", family ? "fortress" : "outpost",
+            n, n, loaded, traps, shown, doors, heroes);
+    } else if (t == 100)
+    {
+        if ((family == 0) && (tier <= 1))
+        {
+            struct Thing *door = get_door_for_position(slab_subtile_center((MapSlabCoord)engine_slab_x(ex)),
+                slab_subtile_center((MapSlabCoord)engine_slab_y(ey)));
+            SYNCLOG("World test: the outpost's entrance door %s", thing_exists(door) ? "breaks" : "is not there");
+            if (thing_exists(door))
+                destroy_door(door);
+            return;
+        }
+        struct Coord3d pos;
+        pos.x.val = subtile_coord_center(slab_subtile_center((MapSlabCoord)engine_slab_x(gx)));
+        pos.y.val = subtile_coord_center(slab_subtile_center((MapSlabCoord)engine_slab_y(gy)));
+        pos.z.val = 0;
+        struct Thing *crtng = create_creature(&pos, (ThingModel)get_id(creature_desc, "BILE_DEMON"), PLAYER0);
+        if (thing_exists(crtng))
+            init_creature_level(crtng, 29);
+        SYNCLOG("World test: a creature of player 0's in the portal room at world (%lld,%lld): %s", (long long)gx, (long long)gy,
+            thing_exists(crtng) ? "yes" : "no");
+    } else
+    {
+        int in = 0, out = 0, far = 0, moved = 0, tracked = 0;
+        for (long i = 1; i < THINGS_COUNT; i++)
+        {
+            const struct Thing *th = thing_get(i);
+            if (!thing_exists(th) || (th->owner != PLAYER_GOOD) || (th->class_id != TCls_Creature))
+                continue;
+            int64_t wx, wy;
+            world_slab_to_world(subtile_slab(th->mappos.x.stl.num), subtile_slab(th->mappos.y.stl.num), &wx, &wy);
+            if ((wx >= x0) && (wy >= y0) && (wx < x0 + n) && (wy < y0 + n))
+                in++;
+            else
+                out++;
+            const int64_t dx = wx - (x0 + n / 2), dy = wy - (y0 + n / 2);
+            if (dx * dx + dy * dy > 15 * 15)
+                far++;
+            if (seen_x[i] >= 0)
+            {
+                const int mv = max(abs(seen_x[i] - (int)subtile_slab(th->mappos.x.stl.num)),
+                    abs(seen_y[i] - (int)subtile_slab(th->mappos.y.stl.num)));
+                moved += (mv >= 3) ? 1 : 0;
+                tracked++;
+            }
+        }
+        SYNCLOG("World test: heroes that moved 3 slabs or more in 200 turns: %d of %d", moved, tracked);
+        SYNCLOG("World test: heroes round the stronghold: %d inside its box, %d outside, %d more than 15 slabs from its middle",
+            in, out, far);
+    }
+}
+
+/** Test hook KFX_WORLD_TESTBOX="T": at T a Library of player 0's east of the heart and boxes shelved in it one by one
+ *  (12 Increase Level, 2 Steal Hero: they fuse); T+20 the boxes are listed; T+30 the strongest Increase Level box is
+ *  opened (imp levels before and after) and the Steal Hero box (creatures before and after). */
+static void world_testbox_hook(void)
+{
+    static long base = -2;
+    if (base == -2)
+    {
+        const char *v = getenv("KFX_WORLD_TESTBOX");
+        base = (v != NULL) ? atol(v) : -1;
+    }
+    if ((base < 0) || (W.gen == NULL))
+        return;
+    const long t = (long)game.play_gameturn - base;
+    if ((t != 0) && (t != 20) && (t != 30))
+        return;
+    struct Thing *heart = get_player_soul_container(PLAYER0);
+    if (!thing_exists(heart))
+        return;
+    const MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
+    const ThingModel inclev = (ThingModel)get_id(object_desc, "SPECBOX_INCLEV");
+    const ThingModel steal = (ThingModel)get_id(object_desc, "SPECBOX_STEALHR");
+    if (t == 0)
+    {
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = 6; dx <= 8; dx++)
+                place_slab_type_on_map(SlbT_LIBRARY, slab_subtile_center(hx + dx), slab_subtile_center(hy + dy), PLAYER0, 0);
+        struct Room *room = create_room(PLAYER0, (RoomKind)get_id(room_desc, "RESEARCH"), slab_subtile_center(hx + 7),
+            slab_subtile_center(hy));
+        if (room_is_invalid(room))
+        {
+            SYNCLOG("World test: no Library");
+            return;
+        }
+        do_room_integration(room);
+        for (int k = 0; k < 14; k++)
+        {
+            struct Coord3d pos;
+            pos.x.val = subtile_coord_center(slab_subtile_center(hx + 7) - 1 + (k % 3));
+            pos.y.val = subtile_coord_center(slab_subtile_center(hy) - 1 + (k / 3) % 3);
+            pos.z.val = 0;
+            pos.z.val = get_floor_height_at(&pos);
+            struct Thing *box = create_object(&pos, (k < 12) ? inclev : steal, PLAYER0, -1);
+            if (thing_is_invalid(box))
+                continue;
+            struct Room *r = get_room_thing_is_on(box);
+            world_progress_box_shelved(box, room_is_invalid(r) ? room : r);
+        }
+    }
+    int imps = 0, imp_levels = 0, creatures = 0;
+    struct Dungeon *dungeon = get_players_num_dungeon(PLAYER0);
+    for (long i = 1; i < THINGS_COUNT; i++)
+    {
+        struct Thing *th = thing_get(i);
+        if (!thing_exists(th))
+            continue;
+        if ((th->class_id == TCls_Object) && ((th->model == inclev) || (th->model == steal)) && (t == 20))
+            SYNCLOG("World test: box %s owned by %d works x%d", thing_model_name(th), (int)th->owner,
+                world_progress_box_power(th));
+        if ((th->class_id == TCls_Creature) && (th->owner == PLAYER0))
+        {
+            creatures++;
+            if (thing_is_creature_digger(th))
+            {
+                imps++;
+                imp_levels += creature_control_get_from_thing(th)->exp_level + 1;
+            }
+        }
+    }
+    (void)dungeon;
+    SYNCLOG("World test: player 0: %d creatures, %d imps, imp levels add up to %d", creatures, imps, imp_levels);
+    if (t == 30)
+    {
+        struct Thing *best = INVALID_THING, *st = INVALID_THING;
+        for (long i = 1; i < THINGS_COUNT; i++)
+        {
+            struct Thing *th = thing_get(i);
+            if (!thing_exists(th) || (th->class_id != TCls_Object))
+                continue;
+            if ((th->model == inclev) && (!thing_exists(best) || (world_progress_box_power(th) > world_progress_box_power(best))))
+                best = th;
+            if ((th->model == steal) && !thing_exists(st))
+                st = th;
+        }
+        if (thing_exists(best))
+        {
+            SYNCLOG("World test: opening the Increase Level box that works x%d", world_progress_box_power(best));
+            activate_dungeon_special(best, get_player(PLAYER0));
+        }
+        if (thing_exists(st))
+        {
+            SYNCLOG("World test: opening the Steal Hero box that works x%d", world_progress_box_power(st));
+            activate_dungeon_special(st, get_player(PLAYER0));
+        }
+        int after_imps = 0, after_levels = 0, after = 0;
+        for (long i = 1; i < THINGS_COUNT; i++)
+        {
+            struct Thing *th = thing_get(i);
+            if (!thing_exists(th) || (th->class_id != TCls_Creature) || (th->owner != PLAYER0))
+                continue;
+            after++;
+            if (thing_is_creature_digger(th))
+            {
+                after_imps++;
+                after_levels += creature_control_get_from_thing(th)->exp_level + 1;
+            }
+        }
+        SYNCLOG("World test: after: %d creatures, %d imps, imp levels add up to %d", after, after_imps, after_levels);
+    }
+}
+
 /** Test hook KFX_WORLD_TESTFREEZE="T": at T, 7 chunks east of the start, a heroes' Knight with a set mood (hunger 1234,
  *  annoyance 777, 5 kills, 2 paydays owed), a dead Archer, and a heroes' prison holding a neutral Fly; the chunk
  *  freezes when nothing keeps it; at T+700 it loads again and what came back is logged. */
@@ -5471,6 +5915,17 @@ static void world_testfreeze_hook(void)
             cleanup_current_thing_state(fly);
             internal_set_thing_state(fly, CrSt_CreatureArrivedAtPrison);
         }
+        /* two heroes' traps: one gone off already (it shows), one not (hidden) */
+        for (int k = 0; k < 2; k++)
+        {
+            struct Coord3d tpos;
+            tpos.x.val = subtile_coord_center(slab_subtile_center(sx + 2 + k));
+            tpos.y.val = subtile_coord_center(slab_subtile_center(sy + 2));
+            tpos.z.val = 0;
+            struct Thing *trap = create_trap(&tpos, (ThingModel)get_id(trap_desc, "LIGHTNING"), PLAYER_GOOD);
+            if (thing_exists(trap))
+                trap->trap.revealed = (k == 0) ? 1 : 0;
+        }
         SYNCLOG("World test: freeze: knight %d, body %d, prison %d, fly %d at engine slab (%d,%d)",
             thing_exists(knight) ? (int)knight->index : -1, thing_exists(body) ? (int)body->index : -1,
             room_is_invalid(room) ? -1 : (int)room->index, thing_exists(fly) ? (int)fly->index : -1, (int)sx, (int)sy);
@@ -5510,6 +5965,19 @@ static void world_testfreeze_hook(void)
         if ((labs((long)subtile_slab(thing->mappos.x.stl.num) - sx) <= 8) && (labs((long)subtile_slab(thing->mappos.y.stl.num) - sy) <= 8))
             SYNCLOG("World test: freeze: dead %s %d, level %d", thing_model_name(thing), (int)thing->index,
                 (int)thing->corpse.exp_level + 1);
+    }
+    slist = get_list_for_thing_class(TCls_Trap);
+    guard = 0;
+    for (long i = slist->index; (i > 0) && (guard++ <= (long)slist->count);)
+    {
+        struct Thing *thing = thing_get(i);
+        if (thing_is_invalid(thing))
+            break;
+        i = thing->next_of_class;
+        if ((labs((long)subtile_slab(thing->mappos.x.stl.num) - sx) <= 8) && (labs((long)subtile_slab(thing->mappos.y.stl.num) - sy) <= 8))
+            SYNCLOG("World test: freeze: trap %s at engine slab (%d,%d) owner %d: %s", thing_model_name(thing),
+                (int)subtile_slab(thing->mappos.x.stl.num), (int)subtile_slab(thing->mappos.y.stl.num), (int)thing->owner,
+                thing->trap.revealed ? "shows" : "hidden");
     }
 }
 
@@ -5607,6 +6075,8 @@ void world_process_turn(void)
     world_testheart_hook();
     world_testportal_hook();
     world_testoutpost_hook();
+    world_teststrong_hook();
+    world_testbox_hook();
     world_testfreeze_hook();
     world_daynight_turn();
     world_wild_turn();
@@ -6142,6 +6612,19 @@ TbBool world_save_blob(unsigned char **data, uint32_t *len)
         rec_u32(&w, WORLD_STARTGOLD_MAGIC);
         rec_put(&w, &gold, 8);
     }
+    {
+        /* the hero raids going on (also in a lockstep resync: they are game state) */
+        const size_t rds = world_raids_save_size();
+        uint8_t *rb = (uint8_t *)malloc(rds);
+        if (rb != NULL)
+        {
+            world_raids_save(rb);
+            rec_u32(&w, WORLD_RAIDS_MAGIC);
+            rec_u32(&w, (uint32_t)rds);
+            rec_put(&w, rb, (uint32_t)rds);
+            free(rb);
+        }
+    }
     /* the seats' owners: a save (single player, or a server); never a lockstep resync to the other machines */
     if (!network_is_active() || netstate_is_server())
     {
@@ -6537,6 +7020,19 @@ TbBool world_load_blob(const unsigned char *data, uint32_t len)
         rec_get(&r, &gold, 8);
         if (!r.bad && (gold >= 0))
             W.start_money = (GoldAmount)gold;
+        ok = !r.bad;
+    }
+    world_raids_reset();
+    if (ok && (r.len - r.pos >= 8) && (rec_peek_u32(&r) == WORLD_RAIDS_MAGIC))
+    {
+        rec_get_u32(&r);
+        const uint32_t n = rec_get_u32(&r);
+        if (!r.bad && (n <= r.len - r.pos))
+        {
+            world_raids_load(r.buf + r.pos, n);
+            r.pos += n;
+        } else
+            r.bad = true;
         ok = !r.bad;
     }
     if (ok && (r.len - r.pos >= 8) && (rec_peek_u32(&r) == WORLD_KEYS_MAGIC))

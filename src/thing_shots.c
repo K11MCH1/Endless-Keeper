@@ -59,6 +59,7 @@
 
 #include "keeperfx.hpp"
 #include "world_progress.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1653,6 +1654,9 @@ static void affect_nearby_friends_with_alarm(struct Thing *traptng)
     unsigned long k;
     int i;
     dungeon = get_players_num_dungeon(traptng->owner);
+    /* endless worlds: the heroes' alarms in their outposts and fortresses are at their strongest, calling heroes
+       from three times as far (2026-11-08) */
+    const MapCoordDelta alarm_reach = (world_mode_active() && (traptng->owner == PLAYER_GOOD)) ? 3 * 4096 : 4096;
     k = 0;
     i = dungeon->creatr_list_start;
     while (i != 0)
@@ -1675,7 +1679,7 @@ static void affect_nearby_friends_with_alarm(struct Thing *traptng)
         {
             struct CreatureStateConfig *stati;
             stati = get_thing_state_info_num(get_creature_state_besides_interruptions(thing));
-            if (stati->react_to_cta && (get_chessboard_distance(&traptng->mappos, &thing->mappos) < 4096))
+            if (stati->react_to_cta && (get_chessboard_distance(&traptng->mappos, &thing->mappos) < alarm_reach))
             {
                 creature_mark_if_woken_up(thing);
                 if (external_set_thing_state(thing, CrSt_ArriveAtAlarm))

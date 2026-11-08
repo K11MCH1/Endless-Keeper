@@ -187,10 +187,10 @@ static const struct Weighted keeper_creatures[] = {
 static const struct Weighted hero_types[] = {
     {"ARCHER", 4, 0}, {"DWARFA", 3, 0}, {"THIEF", 2, 0}, {"BARBARIAN", 3, 120}, {"MONK", 2, 160},
     {"WIZARD", 2, 200}, {"WITCH", 1, 260}, {"SAMURAI", 1, 320}, {"GIANT", 1, 320}, {"KNIGHT", 1, 400}};
+/* no Resurrect, Transfer, Hidden World or Get Gold boxes in endless worlds (2026-11-08) */
 static const struct Weighted special_boxes[] = {
-    {"SPECBOX_REVMAP", 3, 0}, {"SPECBOX_RESURCT", 2, 0}, {"SPECBOX_TRANSFR", 2, 0}, {"SPECBOX_STEALHR", 2, 0},
-    {"SPECBOX_MULTPLY", 1, 0}, {"SPECBOX_INCLEV", 3, 0}, {"SPECBOX_MKSAFE", 1, 0}, {"SPECBOX_HIDNWRL", 2, 0},
-    {"SPECBOX_HEALALL", 2, 0}, {"SPECBOX_GETGOLD", 3, 0}};
+    {"SPECBOX_REVMAP", 3, 0}, {"SPECBOX_STEALHR", 2, 0}, {"SPECBOX_MULTPLY", 1, 0}, {"SPECBOX_INCLEV", 3, 0},
+    {"SPECBOX_MKSAFE", 1, 0}, {"SPECBOX_HEALALL", 2, 0}};
 static const struct Weighted neutral_creatures[] = {
     {"FLY", 3, 0}, {"BUG", 3, 0}, {"SPIDER", 2, 0}, {"DEMONSPAWN", 2, 0}, {"TROLL", 2, 60}, {"ORC", 2, 60},
     {"SORCEROR", 1, 150}, {"DARK_MISTRESS", 1, 200}, {"BILE_DEMON", 1, 200}, {"HELL_HOUND", 1, 150},
@@ -236,7 +236,7 @@ static const struct Spec specs[WgT_COUNT] = {
     {24, 10, 0.45, 150, 24, 4, 8}, /* keeper */
     {14, 5, 0.6, 90, 10, 3, 3},    /* fortress */
     {7, 2, 0.75, 40, 6, 2, 3},     /* portal */
-    {4, 1, 0.55, 26, 6, 1, 3},     /* reward */
+    {4, 1, 0.495, 26, 6, 1, 3},    /* reward: 10% rarer than 0.55 (2026-11-08) */
 };
 /* worldgen.SPECS (highest priority first) is keeper, fortress, portal, reward: the enum order */
 #define PLACED_MASK ((1u << WgT_Keeper) | (1u << WgT_Fortress) | (1u << WgT_Portal) | (1u << WgT_Reward))
@@ -2657,25 +2657,22 @@ static void ref_count(struct WgStructRef *ref, const char *name)
 
 static void build_start(struct Builder *b)
 {
-    static const int64_t imps[4][2] = {{-2, -2}, {2, -2}, {-2, 2}, {2, 2}};
+    static const int64_t imps[8][2] = {{-2, -2}, {2, -2}, {-2, 2}, {2, 2}, {0, -3}, {3, 0}, {0, 3}, {-3, 0}};
     /* worldgen.build_start: the seams stay in the +x/+y quarter; the one whose sector the portal's arm
      * crosses (east or south) moves to the diagonal */
     int los[2] = {-15, 65}, spans[2] = {40, 40}, pd;
     struct Rng *rng = &b->rng;
     const int64_t ox = b->ox, oy = b->oy;
     const int me = WgO_Player;
-    int64_t keep[4][2], dist, px, py, gc, gx, gy;
+    int64_t dist, px, py, gc, gx, gy;
     double ga, gr, ca, sa, gd;
-    int d, i;
-    b_heart_room(b, me);
-    for (d = 0; d < 4; d++) {
-        int64_t x = ox + dir_x[d] * 3, y = oy + dir_y[d] * 3;
-        b_set(b, x, y, WgS_Claimed, me);
-        keep[d][0] = x + dir_x[d];
-        keep[d][1] = y + dir_y[d];
-    }
-    b_fortify(b, me, keep, 4);
-    for (i = 0; i < 4; i++)
+    int i;
+    /* a 7x7 square of claimed floor round the 3x3 heart, fully walled in (the keeper digs a way out through their
+     * own wall); 8 imps round the heart (2026-11-08) */
+    b_rect(b, ox - 3, oy - 3, ox + 3, oy + 3, WgS_Claimed, me);
+    b_rect(b, ox - 1, oy - 1, ox + 1, oy + 1, WgS_Heart, me);
+    b_fortify(b, me, NULL, 0);
+    for (i = 0; i < 8; i++)
         b_creature(b, "IMP", ox + imps[i][0], oy + imps[i][1], me, 1);
     /* the portal: straight out from the heart in one of the four directions, 8-14 slabs away (3-9 slabs of earth
      * between the dungeon's wall and the portal) */
@@ -2958,6 +2955,16 @@ static void build_reward(struct Builder *b)
             k = (int)rng_randint(rng, 0, 3);
             b_obj(b, hoard[k], spots[i][0], spots[i][1], WgO_Neutral);
         }
+    }
+    if (kind != 1) {
+        /* a box lies on neutral claimed ground; a hoard's cave is a neutral treasury (2026-11-08) */
+        const int floor_slab = (kind == 0) ? WgS_Claimed : WgS_Treasury;
+        for (gy = 0; gy < b->side; gy++)
+            for (gx = 0; gx < b->side; gx++) {
+                size_t li = (size_t)gy * (size_t)b->side + (size_t)gx;
+                if (b->lay->op[li] == OP_SET && b->lay->slab[li] == WgS_Path)
+                    b_set(b, b->bx1 + gx, b->by1 + gy, floor_slab, WgO_Neutral);
+            }
     }
     b_blob(b, ox, oy, r + 2.6, 0.6, BLOB_SOFT, 0.0);
     ref->reward = (uint8_t)(kind + 1);
@@ -3557,6 +3564,20 @@ int wg_structures_in(struct WgWorld *w, int64_t x1, int64_t y1, int64_t x2, int6
     }
     free(buf);
     return n;
+}
+
+int wg_terrain_at(struct WgWorld *w, int64_t x, int64_t y)
+{
+    maintain_caches(w);
+    if (w->version >= 7) {
+        struct Clim7 c7;
+        climate7(w, x, y, &c7);
+        return terrain7(w, x, y, &c7);
+    } else {
+        double clim[4];
+        climate(w, x, y, clim);
+        return terrain(w, x, y, clim);
+    }
 }
 
 void wg_start_ref(struct WgWorld *w, struct WgStructRef *out)

@@ -46,6 +46,7 @@
 #include "game_legacy.h"
 #include "local_camera.h"
 #include "keeperfx.hpp"
+#include "world_progress.h"
 #include "post_inc.h"
 #include <math.h>
 
@@ -227,7 +228,11 @@ TbBool setup_object_tooltips(struct Coord3d *pos)
                 else
                 {
                     i = box_thing_to_special(thing);
-                    set_gui_tooltip_box_fmt(5, "%s", get_string(get_special_description_strindex(i)));
+                    const int power = world_progress_box_power(thing); /* endless worlds: boxes fused in a Library */
+                    if (power > 1)
+                        set_gui_tooltip_box_fmt(5, "%s (x%d)", get_string(get_special_description_strindex(i)), power);
+                    else
+                        set_gui_tooltip_box_fmt(5, "%s", get_string(get_special_description_strindex(i)));
                 }
                 return true;
             }

@@ -66,6 +66,12 @@ void world_progress_drop_outpost_book(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 struct Room;
 /** An imp put a special box into its keeper's Library: a heroes' spellbook opens a research there. */
 void world_progress_book_shelved(struct Thing *thing, struct Room *room);
+/** Endless worlds: an Increase Level or Steal Hero box an imp puts in a Library fuses with one of the same kind
+ *  there (up to WORLD_BOX_MAX_UPGRADES upgrades, then a second box starts). */
+#define WORLD_BOX_MAX_UPGRADES 10
+void world_progress_box_shelved(struct Thing *thing, struct Room *room);
+/** How many times a box works: 1 + its upgrades (endless worlds' Increase Level and Steal Hero boxes), else 1. */
+int world_progress_box_power(const struct Thing *thing);
 /** A day raid came for a player: the first raid of a day from day 2 carries a book one time in two. */
 void world_progress_raid(PlayerNumber plyr_idx, long day, int raid_idx, uint64_t world_seed);
 /** A creature died: a raid hero drops its party's book. */

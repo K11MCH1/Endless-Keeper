@@ -9,8 +9,12 @@
  * from game.play_gameturn and the world seed.
  *
  * By day, heroes break in through the ceiling (the FALL spawn of scripts) at open spots about 100 slabs from the
- * player's heart: a Tunneller that digs its way to the heart, followed by Dwarves, Thieves and Tunnellers (2-6
- * in all). Each possible raid comes one time in three. Their levels follow the player's best creature.
+ * player's heart: parties of a Tunneller that digs its way to the heart and its followers (2-6 in all). Each possible
+ * raid comes one time in two. The player's best creature sets their levels, how many parties land at once and who
+ * follows (2026-11-08: 1 party up to level 3, 1-2 to level 5, 1-3 to level 8, 2-4 to level 12, then 3-5; Thieves
+ * and Tunnellers, then Dwarves, Archers, Barbarians, Monks, and from level 9 the heroes of the landing's biome).
+ * A raid's heroes stay until the dawn after their third night, then walk back to where they landed and leave; no
+ * new raid comes for a player while the last one's heroes are still there (the invasions are saved: RDS1).
  */
 /******************************************************************************/
 #include "pre_inc.h"
@@ -21,6 +25,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include "bflib_basics.h"
 #include "bflib_math.h"
 #include "bflib_sprite.h"
@@ -46,6 +51,7 @@
 #include "thing_factory.h"
 #include "thing_list.h"
 #include "thing_stats.h"
+#include "thing_navigate.h"
 #include "kfx/renderer/RendererBridge_UI.h"
 #include "world_menu.h"
 #include "world_pages.h"
@@ -63,7 +69,7 @@
 static GameTurnDelta dn_day_turns = DN_DAY_TURNS_DEFAULT;
 static GameTurnDelta dn_night_turns = DN_NIGHT_TURNS_DEFAULT;
 /* each possible raid of a day happens with this chance, in percent (KFX_WORLD_RAIDCHANCE changes it for tests) */
-#define DN_RAID_CHANCE 33
+#define DN_RAID_CHANCE 50
 static int dn_raid_chance = DN_RAID_CHANCE;
 /** Set on the first turn of each day after the first: autosave once the turn is over. */
 static TbBool dn_dawn_save;
@@ -293,13 +299,51 @@ struct DnHero {
     int weight;
 };
 
-/* a raid is a Tunneller digging its way in, followed by these (Tunnellers dig, so they can follow anywhere) */
-static const struct DnHero dn_followers[3] = {{"DWARFA", 4}, {"THIEF", 3}, {"TUNNELLER", 2}};
+/* Raid tiers by the player's best creature level (2026-11-08): how many parties land at once, and who follows each
+ * party's Tunneller (Tunnellers dig, so the others can follow anywhere). Each tier adds a hero to the ones before;
+ * from level 9 the heroes of the landing's biome come along too. */
+struct DnTier {
+    int min_level;
+    int parties_min, parties_max;
+    struct DnHero add;          /* the hero this tier adds to the followers */
+    int biome_weight;           /* the weight of the landing biome's heroes (0: not in this tier) */
+};
+static const struct DnTier dn_tiers[] = {
+    {1, 1, 1, {"THIEF", 3}, 0},
+    {4, 1, 2, {"DWARFA", 4}, 0},
+    {6, 1, 3, {"ARCHER", 3}, 0},
+    {9, 2, 4, {"BARBARIAN", 3}, 2},
+    {13, 3, 5, {"MONK", 2}, 3},
+};
+#define DN_TIERS ((int)(sizeof(dn_tiers) / sizeof(dn_tiers[0])))
+/* Tunnellers follow in every tier */
+static const struct DnHero dn_tunneller_follower = {"TUNNELLER", 2};
 
+/* The heroes each biome adds in the last two tiers */
+static const char *const dn_biome_heroes[WgB_COUNT][2] = {
+    [WgB_Earthen] = {"KNIGHT", NULL},
+    [WgB_Rocky] = {"GIANT", NULL},
+    [WgB_Volcanic] = {"WIZARD", NULL},
+    [WgB_Flooded] = {"FAIRY", NULL},
+    [WgB_Frozen] = {"WITCH", NULL},
+    [WgB_Sandstone] = {"SAMURAI", NULL},
+    [WgB_Crystal] = {"WIZARD", "FAIRY"},
+    [WgB_Ruins] = {"KNIGHT", "SAMURAI"},
+    [WgB_LavaOcean] = {"WIZARD", NULL},
+    [WgB_FloodedOcean] = {"FAIRY", NULL},
+    [WgB_LavaRivers] = {"WIZARD", NULL},
+    [WgB_FloodedRivers] = {"FAIRY", NULL},
+    [WgB_DeadMans] = {"KNIGHT", "GIANT"},
+};
 
 #define DN_SPAWN_DIST 100
 #define DN_SPAWN_SLACK 5
 #define DN_SPAWN_MIN_DIST 40
+#define DN_PARTY_GAP 8               /* slabs at least between two parties' landings */
+#define DN_MAX_PARTIES 5
+#define DN_RETREAT_NIGHTS 3          /* raiders go home at the dawn after their third night */
+#define DN_HOME_DIST 2               /* slabs from a landing spot a raider going home leaves at */
+#define DN_RETREAT_TURNS (2 * 60 * 20) /* after this long going home, the raiders left leave wherever they are */
 
 #ifdef CREATURE_MAX_LEVEL_LIMIT
 #define DN_LEVEL_CAP CREATURE_MAX_LEVEL_LIMIT /* with the max-level patch; set_creature_level keeps to the rule */
@@ -325,7 +369,7 @@ static uint32_t dn_rand(struct DnRng *r, uint32_t n)
     return (n > 0) ? (uint32_t)(r->s % n) : 0;
 }
 
-/** Possible tunnel-ins on a day: 1 on day 1, one more every 2 days, at most 4 (each comes one time in three). */
+/** Possible tunnel-ins on a day: 1 on day 1, one more every 2 days, at most 4 (each comes one time in two). */
 static int dn_raids_on_day(long day)
 {
     long n = 1 + (day - 1) / 2;
@@ -419,18 +463,56 @@ static ThingModel dn_model(const char *name)
     return (model > 0) ? (ThingModel)model : 0;
 }
 
-static ThingModel dn_pick_follower(struct DnRng *rng)
+static int dn_tier_for(int best)
 {
-    int total = 0;
-    for (int i = 0; i < 3; i++)
-        total += dn_followers[i].weight;
-    int r = (int)dn_rand(rng, (uint32_t)total), i = 0;
-    while ((i < 2) && (r >= dn_followers[i].weight))
+    int t = 0;
+    for (int i = 0; i < DN_TIERS; i++)
+        if (best >= dn_tiers[i].min_level)
+            t = i;
+    return t;
+}
+
+/** The followers of a tier's parties landing in a biome. */
+struct DnPool {
+    ThingModel model[16];
+    int weight[16];
+    int n, total;
+};
+
+static void dn_pool_add(struct DnPool *pool, const char *name, int weight)
+{
+    const ThingModel model = dn_model(name);
+    if ((model <= 0) || (weight <= 0) || (pool->n >= 16))
+        return;
+    pool->model[pool->n] = model;
+    pool->weight[pool->n] = weight;
+    pool->total += weight;
+    pool->n++;
+}
+
+static void dn_make_pool(int tier, int biome, struct DnPool *pool)
+{
+    memset(pool, 0, sizeof(*pool));
+    dn_pool_add(pool, dn_tunneller_follower.name, dn_tunneller_follower.weight);
+    for (int t = 0; t <= tier; t++)
+        dn_pool_add(pool, dn_tiers[t].add.name, dn_tiers[t].add.weight);
+    if ((dn_tiers[tier].biome_weight > 0) && (biome >= 0) && (biome < WgB_COUNT))
+        for (int k = 0; k < 2; k++)
+            if (dn_biome_heroes[biome][k] != NULL)
+                dn_pool_add(pool, dn_biome_heroes[biome][k], dn_tiers[tier].biome_weight);
+}
+
+static ThingModel dn_pick_follower(struct DnRng *rng, const struct DnPool *pool)
+{
+    if (pool->n <= 0)
+        return dn_model("THIEF");
+    int r = (int)dn_rand(rng, (uint32_t)pool->total), i = 0;
+    while ((i < pool->n - 1) && (r >= pool->weight[i]))
     {
-        r -= dn_followers[i].weight;
+        r -= pool->weight[i];
         i++;
     }
-    return dn_model(dn_followers[i].name);
+    return pool->model[i];
 }
 
 /** Does possible raid i of a day come? Fixed by the seed: DN_RAID_CHANCE percent of them do. */
@@ -469,8 +551,204 @@ static void dn_party_levels(struct DnRng *rng, int n, int best, long day, int *l
     }
 }
 
+/******************************************************************************/
+/* Invasions: the parties of one raid on one player (2026-11-08). A new raid on a player waits until the last one is
+ * over (every raider gone); at the dawn after their third night the raiders walk back to where they landed and leave
+ * through the ceiling. Saved with the world (world_raids_save). */
+struct DnInvasion {
+    uint8_t active, retreating, nspots;
+    int32_t day;                       /* the day it landed */
+    GameTurn retreat_turn;
+    int64_t spot_x[DN_MAX_PARTIES], spot_y[DN_MAX_PARTIES]; /* the parties' landings, world slabs */
+};
+static struct DnInvasion dn_inv[PLAYERS_MAX];
+
+/** The invasion a raider belongs to: its target's, else the one whose landing is nearest; -1 none. */
+static int dn_raider_invasion(const struct Thing *thing)
+{
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    const PlayerNumber t = cctrl->party.target_plyr_idx;
+    if ((t >= 0) && (t < PLAYERS_COUNT) && dn_inv[t].active)
+        return t;
+    int64_t wx, wy;
+    world_slab_to_world(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num), &wx, &wy);
+    int best = -1;
+    int64_t best_d = 0;
+    for (int p = 0; p < PLAYERS_COUNT; p++)
+    {
+        if (!dn_inv[p].active)
+            continue;
+        for (int s = 0; s < dn_inv[p].nspots; s++)
+        {
+            const int64_t dx = dn_inv[p].spot_x[s] - wx, dy = dn_inv[p].spot_y[s] - wy;
+            if ((best < 0) || (dx * dx + dy * dy < best_d))
+            {
+                best = p;
+                best_d = dx * dx + dy * dy;
+            }
+        }
+    }
+    return best;
+}
+
+static TbBool dn_invasion_on(PlayerNumber plyr_idx)
+{
+    return (plyr_idx >= 0) && (plyr_idx < PLAYERS_COUNT) && dn_inv[plyr_idx].active;
+}
+
+/** A raider leaves the world: back up through the ceiling. */
+static void dn_raider_leaves(struct Thing *thing)
+{
+    create_effect(&thing->mappos, TngEff_CeilingBreach, thing->owner);
+    world_remove_thing_quietly(thing);
+}
+
+/** A raider of a retreating invasion: on its way to the nearest landing, or gone when it is there (or can't get
+ *  there, or has taken too long). Returns true when it was dealt with (it goes home or has left). */
+static TbBool dn_raider_go_home(struct Thing *thing, struct DnInvasion *inv)
+{
+    if (creature_is_being_unconscious(thing) || creature_is_dying(thing) || thing_is_picked_up(thing) ||
+        thing_is_dragged_or_pulled(thing) || creature_is_kept_in_custody(thing))
+        return false;
+    struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    const MapSlabCoord tx = subtile_slab(thing->mappos.x.stl.num), ty = subtile_slab(thing->mappos.y.stl.num);
+    TbBool found = false;
+    MapSlabCoord bx = 0, by = 0;
+    long best_d = LONG_MAX;
+    for (int s = 0; s < inv->nspots; s++)
+    {
+        MapSlabCoord sx, sy;
+        if (!world_engine_slab(inv->spot_x[s], inv->spot_y[s], &sx, &sy))
+            continue;
+        const long d = max(labs((long)sx - tx), labs((long)sy - ty));
+        if (d < best_d)
+        {
+            best_d = d;
+            bx = sx;
+            by = sy;
+            found = true;
+        }
+    }
+    const TbBool late = ((GameTurnDelta)(game.play_gameturn - inv->retreat_turn) > DN_RETREAT_TURNS);
+    if (!found && !late)
+    {
+        /* its landing's ground went: it comes back, and the raider goes there next time */
+        for (int s = 0; s < inv->nspots; s++)
+            world_load_chunks_round_world(inv->spot_x[s], inv->spot_y[s], 1);
+        return true;
+    }
+    if (!found || (best_d <= DN_HOME_DIST) || late)
+    {
+        SYNCLOG("World: a raiding %s leaves %s", thing_model_name(thing),
+            !found ? "(its landing is off the map)" : (best_d <= DN_HOME_DIST) ? "where it landed" : "where it is (too long on its way)");
+        dn_raider_leaves(thing);
+        return true;
+    }
+    if ((cctrl->combat_flags != 0) || (get_creature_state_besides_interruptions(thing) == CrSt_MoveToPosition))
+        return true; /* a fight first; or on its way already */
+    struct Coord3d pos;
+    pos.x.val = subtile_coord_center(slab_subtile_center(bx));
+    pos.y.val = subtile_coord_center(slab_subtile_center(by));
+    pos.z.val = 0;
+    if (!creature_can_navigate_to(thing, &pos, NavRtF_Default))
+        return true; /* no way there yet (not loaded, or dug shut): it waits, and leaves when the time is up */
+    cleanup_current_thing_state(thing);
+    if (setup_person_move_to_coord(thing, &pos, NavRtF_Default))
+        thing->continue_state = CrSt_GoodDoingNothing;
+    return true;
+}
+
+TbBool world_raid_hero_goes_home(struct Thing *thing)
+{
+    if (!world_raid_hero(thing))
+        return false;
+    const int p = dn_raider_invasion(thing);
+    if ((p < 0) || !dn_inv[p].retreating)
+        return false;
+    return dn_raider_go_home(thing, &dn_inv[p]);
+}
+
+/** Every 16 turns: invasions end when their raiders are gone, turn back after their third night; raiders of an
+ *  older save (no invasion yet) start one. */
+static void dn_invasions_turn(long day, GameTurnDelta t)
+{
+    if ((game.play_gameturn % 16) != 5)
+        return;
+    static int count[PLAYERS_MAX];
+    memset(count, 0, sizeof(count));
+    /* turn back at dawn after the third night */
+    for (int p = 0; p < PLAYERS_COUNT; p++)
+    {
+        struct DnInvasion *inv = &dn_inv[p];
+        if (inv->active && !inv->retreating && (day >= inv->day + DN_RETREAT_NIGHTS) && (t < dn_day_turns))
+        {
+            inv->retreating = 1;
+            inv->retreat_turn = game.play_gameturn;
+            for (int s = 0; s < inv->nspots; s++)
+                world_load_chunks_round_world(inv->spot_x[s], inv->spot_y[s], 1);
+            SYNCLOG("World: the heroes raiding player %d since day %d go home (day %ld)", p, (int)inv->day, day);
+        }
+    }
+    struct Dungeon *heroes = get_players_num_dungeon(PLAYER_GOOD);
+    if (dungeon_invalid(heroes))
+        return;
+    ThingIndex lists[2] = {heroes->creatr_list_start, heroes->digger_list_start};
+    for (int l = 0; l < 2; l++)
+    {
+        long i = lists[l];
+        long guard = 0;
+        while ((i > 0) && (guard++ < CREATURES_COUNT))
+        {
+            struct Thing *thing = thing_get(i);
+            if (!thing_exists(thing))
+                break;
+            struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+            if (creature_control_invalid(cctrl))
+                break;
+            i = cctrl->players_next_creature_idx;
+            if (!world_raid_hero(thing))
+                continue;
+            if (creature_is_kept_in_custody(thing) || creature_is_being_unconscious(thing))
+                continue; /* a captive (or one lying senseless) doesn't keep the raid going */
+            int p = dn_raider_invasion(thing);
+            if (p < 0)
+            {
+                /* a raider from before the invasions were kept: it starts one for its target, landed here today */
+                const PlayerNumber tp = cctrl->party.target_plyr_idx;
+                if ((tp < 0) || (tp >= PLAYERS_COUNT) || !world_player_is_human(tp))
+                    continue;
+                struct DnInvasion *inv = &dn_inv[tp];
+                memset(inv, 0, sizeof(*inv));
+                inv->active = 1;
+                inv->day = (int32_t)day;
+                inv->nspots = 1;
+                world_slab_to_world(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num),
+                    &inv->spot_x[0], &inv->spot_y[0]);
+                p = tp;
+            }
+            count[p]++;
+            if (dn_inv[p].retreating)
+                dn_raider_go_home(thing, &dn_inv[p]);
+        }
+    }
+    for (int p = 0; p < PLAYERS_COUNT; p++)
+    {
+        if (dn_inv[p].active && (count[p] == 0))
+        {
+            SYNCLOG("World: the raid on player %d (day %d) is over", p, (int)dn_inv[p].day);
+            memset(&dn_inv[p], 0, sizeof(dn_inv[p]));
+        }
+    }
+}
+
 static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
 {
+    if (dn_invasion_on(plyr_idx))
+    {
+        SYNCLOG("World: day %ld raid %d doesn't come for player %d: the last raid's heroes are still here", day, idx + 1,
+            (int)plyr_idx);
+        return;
+    }
     world_progress_raid(plyr_idx, day, idx, world_seed());
     struct DnRng rng = {dn_mix(world_seed() ^ ((uint64_t)day << 8) ^ (uint64_t)idx ^ 0x5A1D5A1D5A1DULL ^
         dn_player_salt(plyr_idx))};
@@ -530,93 +808,170 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
                 cand[ncand++] = (y - by1) * w + (x - bx1);
         }
     }
-    const int32_t spot = (ncand > 0) ? cand[dn_rand(&rng, (uint32_t)ncand)] : -1;
-    free(cand);
-    free(area.kind);
-    free(area.mine);
-    if (spot < 0)
+    if (ncand <= 0)
     {
+        free(cand);
+        free(area.kind);
+        free(area.mine);
         SYNCLOG("World: day %ld raid %d skipped: no open ground at least %d slabs from the heart", day, idx + 1,
             DN_SPAWN_MIN_DIST);
         return;
     }
-    const MapSlabCoord sx = bx1 + spot % w, sy = by1 + spot / w;
-    /* the chunked world: the landing chunks come in now; the heroes keep chunks loaded round them from then on */
-    const int landing_chunks = world_load_chunks_round(sx, sy, 1);
-    if (landing_chunks > 0)
-        SYNCLOG("World: day %ld raid %d: %d chunks loaded round the landing", day, idx + 1, landing_chunks);
-    const int biome = world_biome_at_engine_slab(sx, sy);
-    /* the party */
-    int total = 0;
-    for (int i = 0; i < 5; i++)
-        total += dn_party_weights[i];
-    int r = (int)dn_rand(&rng, (uint32_t)total), n = 2;
-    for (int i = 0; i < 5; i++)
-    {
-        if (r < dn_party_weights[i])
-        {
-            n = 2 + i;
-            break;
-        }
-        r -= dn_party_weights[i];
-    }
-    int levels[6];
+    /* how many parties: by the player's best creature, each party landing on its own spot */
     const int best = dn_keeper_best_level(plyr_idx);
-    dn_party_levels(&rng, n, best, day, levels);
-    struct Thing *leader = INVALID_THING;
-    int made = 0;
-    char desc[160];
-    int dlen = 0;
-    desc[0] = 0;
-    for (int k = 0; k < n; k++)
+    const int tier = dn_tier_for(best);
+    const int want = dn_tiers[tier].parties_min +
+        (int)dn_rand(&rng, (uint32_t)(dn_tiers[tier].parties_max - dn_tiers[tier].parties_min + 1));
+    MapSlabCoord spot_x[DN_MAX_PARTIES], spot_y[DN_MAX_PARTIES];
+    int nspots = 0;
     {
-        if (!creature_count_below_map_limit(0))
-        {
-            WARNLOG("World: raid stopped at the creature limit");
-            break;
-        }
-        const ThingModel model = thing_is_invalid(leader) ? dn_model("TUNNELLER") : dn_pick_follower(&rng);
-        if (model <= 0)
-            continue;
-        struct Coord3d pos;
-        pos.x.val = subtile_coord_center(slab_subtile_center(sx)) + (MapCoord)((int)dn_rand(&rng, 193) - 96);
-        pos.y.val = subtile_coord_center(slab_subtile_center(sy)) + (MapCoord)((int)dn_rand(&rng, 193) - 96);
-        pos.z.val = 0;
-        struct Thing *thing = create_thing_at_position_then_move_to_valid_and_add_light(&pos, TCls_Creature, model,
-            PLAYER_GOOD);
-        if (thing_is_invalid(thing))
-            continue;
-        /* the FALL spawn of script commands: through the ceiling */
-        thing->mappos.z.val = get_ceiling_height(&thing->mappos);
-        create_effect(&thing->mappos, TngEff_CeilingBreach, thing->owner);
-        initialise_thing_state(thing, CrSt_CreatureHeroEntering);
-        set_flag(thing->rendering_flags, TRF_Invisible);
-        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
-        cctrl->countdown = 24 + 8 * k;
-        init_creature_level(thing, (CrtrExpLevel)(levels[k] - 1));
-        cctrl->party.original_objective = CHeroTsk_AttackEnemies; /* marks raid heroes (world_raid_hero) */
-        if (thing_is_invalid(leader))
-        {
-            /* the Tunneller leads, digging its way to the heart, like ADD_TUNNELLER_PARTY_TO_LEVEL */
-            leader = thing;
-            if (!script_support_send_tunneller_to_dungeon_heart(thing, plyr_idx))
-                cctrl->party.objective = CHeroTsk_AttackEnemies;
-        } else
-        {
-            cctrl->party.objective = CHeroTsk_AttackEnemies;
-            cctrl->party.target_plyr_idx = plyr_idx;
-            add_creature_to_group(thing, leader);
-        }
-        made++;
-        if (dlen < (int)sizeof(desc) - 24)
-            dlen += snprintf(desc + dlen, sizeof(desc) - dlen, "%s%s %d", (made > 1) ? ", " : "",
-                creature_code_name(model), (int)cctrl->exp_level + 1);
+        /* the first party: one of the best spots, as raids always chose */
+        const int k = (int)dn_rand(&rng, (uint32_t)ncand);
+        spot_x[0] = bx1 + cand[k] % w;
+        spot_y[0] = by1 + cand[k] / w;
+        nspots = 1;
     }
-    if (made == 0)
+    if (want > 1)
+    {
+        /* the others: the next best spots (fewest blockers on the way, then nearest DN_SPAWN_DIST out, then by
+           chance), each DN_PARTY_GAP slabs from the spots taken */
+        struct DnSpot { int32_t cell, score; uint32_t tie; };
+        struct DnSpot *all = (struct DnSpot *)malloc(sizeof(struct DnSpot) * (size_t)w * h);
+        int nall = 0;
+        for (MapSlabCoord y = by1; (all != NULL) && (y <= by2); y++)
+            for (MapSlabCoord x = bx1; x <= bx2; x++)
+            {
+                if (!dn_landing(&area, x, y))
+                    continue;
+                const double d = sqrt((double)(x - hx) * (x - hx) + (double)(y - hy) * (y - hy));
+                if (d < DN_SPAWN_MIN_DIST)
+                    continue;
+                const int off = (int)max(0.0, fabs(d - DN_SPAWN_DIST) - DN_SPAWN_SLACK);
+                all[nall].cell = (y - by1) * w + (x - bx1);
+                all[nall].score = dn_line_blockers(&area, x, y, hx, hy) * 1000 + min(off, 999);
+                all[nall].tie = dn_rand(&rng, 0x7FFFFFFF);
+                nall++;
+            }
+        while ((all != NULL) && (nspots < want) && (nall > 0))
+        {
+            int bi = -1;
+            for (int k = 0; k < nall; k++)
+            {
+                const MapSlabCoord sx = bx1 + all[k].cell % w, sy = by1 + all[k].cell / w;
+                TbBool close = false;
+                for (int s = 0; s < nspots; s++)
+                    close = close || ((abs(sx - spot_x[s]) < DN_PARTY_GAP) && (abs(sy - spot_y[s]) < DN_PARTY_GAP));
+                if (close)
+                    continue;
+                if ((bi < 0) || (all[k].score < all[bi].score) || ((all[k].score == all[bi].score) && (all[k].tie < all[bi].tie)))
+                    bi = k;
+            }
+            if (bi < 0)
+                break;
+            spot_x[nspots] = bx1 + all[bi].cell % w;
+            spot_y[nspots] = by1 + all[bi].cell / w;
+            nspots++;
+            all[bi] = all[--nall];
+        }
+        free(all);
+    }
+    free(cand);
+    free(area.kind);
+    free(area.mine);
+    struct DnInvasion inv;
+    memset(&inv, 0, sizeof(inv));
+    int made_all = 0;
+    for (int s = 0; s < nspots; s++)
+    {
+        const MapSlabCoord sx = spot_x[s], sy = spot_y[s];
+        /* the chunked world: the landing chunks come in now; the heroes keep chunks loaded round them from then on */
+        const int landing_chunks = world_load_chunks_round(sx, sy, 1);
+        if (landing_chunks > 0)
+            SYNCLOG("World: day %ld raid %d: %d chunks loaded round landing %d", day, idx + 1, landing_chunks, s + 1);
+        const int biome = world_biome_at_engine_slab(sx, sy);
+        struct DnPool pool;
+        dn_make_pool(tier, biome, &pool);
+        /* the party */
+        int total = 0;
+        for (int i = 0; i < 5; i++)
+            total += dn_party_weights[i];
+        int r = (int)dn_rand(&rng, (uint32_t)total), n = 2;
+        for (int i = 0; i < 5; i++)
+        {
+            if (r < dn_party_weights[i])
+            {
+                n = 2 + i;
+                break;
+            }
+            r -= dn_party_weights[i];
+        }
+        int levels[6];
+        dn_party_levels(&rng, n, best, day, levels);
+        struct Thing *leader = INVALID_THING;
+        int made = 0;
+        char desc[200];
+        int dlen = 0;
+        desc[0] = 0;
+        for (int k = 0; k < n; k++)
+        {
+            if (!creature_count_below_map_limit(0))
+            {
+                WARNLOG("World: raid stopped at the creature limit");
+                break;
+            }
+            const ThingModel model = thing_is_invalid(leader) ? dn_model("TUNNELLER") : dn_pick_follower(&rng, &pool);
+            if (model <= 0)
+                continue;
+            struct Coord3d pos;
+            pos.x.val = subtile_coord_center(slab_subtile_center(sx)) + (MapCoord)((int)dn_rand(&rng, 193) - 96);
+            pos.y.val = subtile_coord_center(slab_subtile_center(sy)) + (MapCoord)((int)dn_rand(&rng, 193) - 96);
+            pos.z.val = 0;
+            struct Thing *thing = create_thing_at_position_then_move_to_valid_and_add_light(&pos, TCls_Creature, model,
+                PLAYER_GOOD);
+            if (thing_is_invalid(thing))
+                continue;
+            /* the FALL spawn of script commands: through the ceiling */
+            thing->mappos.z.val = get_ceiling_height(&thing->mappos);
+            create_effect(&thing->mappos, TngEff_CeilingBreach, thing->owner);
+            initialise_thing_state(thing, CrSt_CreatureHeroEntering);
+            set_flag(thing->rendering_flags, TRF_Invisible);
+            struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+            cctrl->countdown = 24 + 8 * k;
+            init_creature_level(thing, (CrtrExpLevel)(levels[k] - 1));
+            cctrl->party.original_objective = CHeroTsk_AttackEnemies; /* marks raid heroes (world_raid_hero) */
+            if (thing_is_invalid(leader))
+            {
+                /* the Tunneller leads, digging its way to the heart, like ADD_TUNNELLER_PARTY_TO_LEVEL */
+                leader = thing;
+                if (!script_support_send_tunneller_to_dungeon_heart(thing, plyr_idx))
+                    cctrl->party.objective = CHeroTsk_AttackEnemies;
+                cctrl->party.target_plyr_idx = plyr_idx;
+            } else
+            {
+                cctrl->party.objective = CHeroTsk_AttackEnemies;
+                cctrl->party.target_plyr_idx = plyr_idx;
+                add_creature_to_group(thing, leader);
+            }
+            made++;
+            if (dlen < (int)sizeof(desc) - 24)
+                dlen += snprintf(desc + dlen, sizeof(desc) - dlen, "%s%s %d", (made > 1) ? ", " : "",
+                    creature_code_name(model), (int)cctrl->exp_level + 1);
+        }
+        if (made == 0)
+            continue;
+        world_slab_to_world(sx, sy, &inv.spot_x[inv.nspots], &inv.spot_y[inv.nspots]);
+        inv.nspots++;
+        made_all += made;
+        const long dist = (long)floor(sqrt((double)(sx - hx) * (sx - hx) + (double)(sy - hy) * (sy - hy)) + 0.5);
+        SYNCLOG("World: day %ld raid %d party %d of %d: %d heroes tunnel in at engine slab (%d,%d), %ld slabs from the"
+            " heart, %s: %s (player's best level %d)", day, idx + 1, s + 1, nspots, made, (int)sx, (int)sy, dist,
+            wg_biome_name(biome), desc, best);
+    }
+    if (made_all == 0)
         return;
-    const long dist = (long)floor(sqrt((double)(sx - hx) * (sx - hx) + (double)(sy - hy) * (sy - hy)) + 0.5);
-    SYNCLOG("World: day %ld raid %d: %d heroes tunnel in at engine slab (%d,%d), %ld slabs from the heart, %s: %s"
-        " (player's best level %d)", day, idx + 1, made, (int)sx, (int)sy, dist, wg_biome_name(biome), desc, best);
+    inv.active = 1;
+    inv.day = (int32_t)day;
+    dn_inv[plyr_idx] = inv;
     /* no message and no event: a raid is meant to be a surprise */
 }
 
@@ -629,9 +984,87 @@ TbBool world_raid_hero(const struct Thing *thing)
     return !creature_control_invalid(cctrl) && (cctrl->party.original_objective == CHeroTsk_AttackEnemies);
 }
 
+/* saving: the invasions on */
+#pragma pack(1)
+struct DnSaved {
+    uint32_t plyr;
+    int32_t day;
+    uint8_t retreating, nspots;
+    uint32_t retreat_age;              /* turns since it turned back */
+    int64_t spot_x[DN_MAX_PARTIES], spot_y[DN_MAX_PARTIES];
+};
+#pragma pack()
+
+size_t world_raids_save_size(void)
+{
+    size_t n = 0;
+    for (int p = 0; p < PLAYERS_MAX; p++)
+        if (dn_inv[p].active)
+            n++;
+    return 4 + n * sizeof(struct DnSaved);
+}
+
+void world_raids_save(uint8_t *buf)
+{
+    uint32_t n = 0;
+    uint8_t *out = buf + 4;
+    for (int p = 0; p < PLAYERS_MAX; p++)
+    {
+        const struct DnInvasion *inv = &dn_inv[p];
+        if (!inv->active)
+            continue;
+        struct DnSaved s;
+        memset(&s, 0, sizeof(s));
+        s.plyr = (uint32_t)p;
+        s.day = inv->day;
+        s.retreating = inv->retreating;
+        s.nspots = inv->nspots;
+        s.retreat_age = inv->retreating ? (uint32_t)(game.play_gameturn - inv->retreat_turn) : 0;
+        memcpy(s.spot_x, inv->spot_x, sizeof(s.spot_x));
+        memcpy(s.spot_y, inv->spot_y, sizeof(s.spot_y));
+        memcpy(out, &s, sizeof(s));
+        out += sizeof(s);
+        n++;
+    }
+    memcpy(buf, &n, 4);
+}
+
+TbBool world_raids_load(const uint8_t *buf, size_t len)
+{
+    memset(dn_inv, 0, sizeof(dn_inv));
+    uint32_t n;
+    if (len < 4)
+        return false;
+    memcpy(&n, buf, 4);
+    if (n > (len - 4) / sizeof(struct DnSaved))
+        return false;
+    for (uint32_t i = 0; i < n; i++)
+    {
+        struct DnSaved s;
+        memcpy(&s, buf + 4 + (size_t)i * sizeof(s), sizeof(s));
+        if ((s.plyr >= PLAYERS_MAX) || (s.nspots > DN_MAX_PARTIES))
+            continue;
+        struct DnInvasion *inv = &dn_inv[s.plyr];
+        inv->active = 1;
+        inv->day = s.day;
+        inv->retreating = s.retreating;
+        inv->nspots = s.nspots;
+        inv->retreat_turn = game.play_gameturn - s.retreat_age;
+        memcpy(inv->spot_x, s.spot_x, sizeof(s.spot_x));
+        memcpy(inv->spot_y, s.spot_y, sizeof(s.spot_y));
+    }
+    return true;
+}
+
+void world_raids_reset(void)
+{
+    memset(dn_inv, 0, sizeof(dn_inv));
+}
+
 void world_daynight_level_end(void)
 {
     dn_dawn_save = false;
+    world_raids_reset();
 }
 
 void world_daynight_after_turn(void)
@@ -660,6 +1093,7 @@ void world_daynight_turn(void)
         SYNCLOG("World: night %ld begins", day);
         server_admin_log("world", "Night %ld begins", day);
     }
+    dn_invasions_turn(day, t);
     if (t >= dn_day_turns)
         return;
     /* by day, read the raid search box ahead a few chunks at a time (the first raid of a run would otherwise

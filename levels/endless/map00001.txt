@@ -17,7 +17,7 @@ REM The engine keeps your creature limit (imps don't count) at 10, plus 5 for ea
 REM even while the portal's part of the world is unloaded. Creatures collect their wages at the
 REM nearest treasury, empty or not, while you have gold anywhere.
 
-START_MONEY(PLAYER0,3000)
+START_MONEY(PLAYER0,10000)
 MAX_CREATURES(PLAYER0,10)
 
 ADD_CREATURE_TO_POOL(FLY,15)

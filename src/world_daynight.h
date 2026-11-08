@@ -30,6 +30,14 @@ void world_daynight_level_end(void);
 
 /** Is this one of the heroes of a day raid? (They show on the maps like tunnelling hero parties.) */
 TbBool world_raid_hero(const struct Thing *thing);
+/** A raid hero whose raid is over (after its third night) walks back to its landing and leaves; true when this one
+ *  was seen to (the hero AI then leaves it alone). */
+TbBool world_raid_hero_goes_home(struct Thing *thing);
+/** The raids going on (saved with the world, RDS1). */
+size_t world_raids_save_size(void);
+void world_raids_save(uint8_t *buf);
+TbBool world_raids_load(const uint8_t *buf, size_t len);
+void world_raids_reset(void);
 
 /** Draws the day/night icon in the top right corner (endless levels only; from the in-game UI). */
 void world_daynight_draw(void);

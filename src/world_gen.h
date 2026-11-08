@@ -193,6 +193,10 @@ int wg_generate_chunk(struct WgWorld *world, int32_t cx, int32_t cy, struct WgCh
 int wg_structures_in(struct WgWorld *world, int64_t x1, int64_t y1, int64_t x2, int64_t y2,
                      unsigned type_mask, struct WgStructRef *out, int max);
 
+/** The ground at a world slab as the terrain stage makes it, before gems and structures (a WgSlab): for the engine's
+ *  own structures to fit into the land. Not part of worldgen.py: it changes no chunk. */
+int wg_terrain_at(struct WgWorld *world, int64_t x, int64_t y);
+
 /** The player's start structure (heart at world slab 8,8). */
 void wg_start_ref(struct WgWorld *world, struct WgStructRef *out);
 

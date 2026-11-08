@@ -2044,6 +2044,7 @@ short creature_drops_spell_object_in_library(struct Thing *creatng)
     if (thing_is_special_box(spelltng))
     {
         spelltng->owner = creatng->owner;
+        world_progress_box_shelved(spelltng, room);  /* endless worlds: Increase Level and Steal Hero boxes stack */
         world_progress_book_shelved(spelltng, room); /* endless worlds: a heroes' spellbook opens a research */
     }
     // The action of moving object is now finished

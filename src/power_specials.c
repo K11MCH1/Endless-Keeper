@@ -645,13 +645,20 @@ void activate_dungeon_special(struct Thing *cratetng, struct PlayerInfo *player)
             start_transfer_creature(player, cratetng);
             break;
         case SpcKind_StealHero:
-            if (steal_hero(player, &cratetng->mappos))
+        {
+            /* endless worlds: a box fused in the Library steals a hero for each time it works */
+            int stolen = 0;
+            for (int n = world_progress_box_power(cratetng); n > 0; n--)
+                if (steal_hero(player, &cratetng->mappos))
+                    stolen++;
+            if (stolen > 0)
             {
                 remove_events_thing_is_attached_to(cratetng);
                 used = 1;
                 destroy_object(cratetng);
             }
             break;
+        }
         case SpcKind_MultplCrtr:
             multiply_creatures(player);
             remove_events_thing_is_attached_to(cratetng);
@@ -659,7 +666,7 @@ void activate_dungeon_special(struct Thing *cratetng, struct PlayerInfo *player)
             destroy_object(cratetng);
             break;
         case SpcKind_IncrseLvl:
-            increase_level(player, 1);
+            increase_level(player, world_progress_box_power(cratetng)); /* endless worlds: fused boxes give more */
             remove_events_thing_is_attached_to(cratetng);
             used = 1;
             destroy_object(cratetng);
