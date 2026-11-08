@@ -59,6 +59,8 @@
 #include "kfx/save/SaveManager.h"
 #include "local_camera.h"
 #include "gui_parchment.h"
+#include "bflib_video.h"
+#include "bflib_planar.h"
 #include "engine_camera.h"
 #include "packets.h"
 #include "tasks_list.h"
@@ -4732,6 +4734,56 @@ static void world_shots_hook(void)
     }
 }
 
+/** Test hook KFX_WORLD_MAPDRAG=T (local only): at T-60 the full-screen map opens; at T the left button goes down on
+ *  the middle of the map, the mouse moves 80 pixels right and 50 down over 10 turns and the button comes up (a drag:
+ *  the view moves, the map stays open); at T+30 a click that doesn't move (the camera goes there, the map closes).
+ *  It sets the mouse state the game's input code reads each frame (lbDisplay), not the system's mouse. */
+static void world_mapdrag_hook(void)
+{
+    static long at = -2;
+    if (at == -2)
+    {
+        const char *v = getenv("KFX_WORLD_MAPDRAG");
+        at = (v != NULL) ? atol(v) : -1;
+    }
+    if (at < 0)
+        return;
+    const long now = (long)game.play_gameturn;
+    if (now == at - 60)
+        zoom_to_parchment_map();
+    if ((now < at) || (now > at + 60))
+        return;
+    struct TbRect area;
+    get_parchment_map_area_rect(&area);
+    const long cx = (area.left + area.right) / 2, cy = (area.top + area.bottom) / 2;
+    if ((now == at) || (now == at + 12) || (now == at + 29) || (now == at + 60))
+    {
+        MapSlabCoord vx = 0, vy = 0;
+        const TbBool open = (get_local_view_type() == PVT_MapScreen);
+        if (open)
+            world_parchment_view_origin(&vx, &vy);
+        SYNCLOG("World map drag: turn %ld, map %s, view origin (%ld,%ld), one slab is %ld pixels", now,
+            open ? "open" : "closed", (long)vx, (long)vy, get_parchment_map_area_rect(&area));
+    }
+    if ((now == at) || (now == at + 30))
+    {
+        lbDisplay.MMouseX = cx;
+        lbDisplay.MMouseY = cy;
+        lbDisplay.MouseX = cx;
+        lbDisplay.MouseY = cy;
+        lbDisplay.LeftButton = 1;
+        lbDisplay.MLeftButton = 1;
+    }
+    else if (now <= at + 10)
+    {
+        lbDisplay.MMouseX = cx + 8 * (now - at);
+        lbDisplay.MMouseY = cy + 5 * (now - at);
+        lbDisplay.MLeftButton = 1;
+    }
+    else if ((now == at + 11) || (now == at + 31))
+        lbDisplay.MLeftButton = 0;
+}
+
 /** Test hook KFX_WORLD_ASSIST (network tests). */
 static void world_assist_hook(void)
 {
@@ -5377,6 +5429,7 @@ void world_process_turn(void)
     world_colours_turn(); /* local presentation only */
     world_progress_present();
     world_shots_hook();
+    world_mapdrag_hook();
     world_progress_turn();
     server_admin_turn(); /* a dedicated server's console: play time, status */
     world_open_hook();

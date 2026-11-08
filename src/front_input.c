@@ -2165,6 +2165,17 @@ static short get_map_action_inputs(void)
     int32_t map_x;
     int32_t map_y;
     TbBool map_valid = point_to_overhead_map(camera, mouse_x / pixel_size, mouse_y / pixel_size, &map_x, &map_y);
+    if (world_mode_active())
+    {
+        /* Endless world: hold the left button on the map and move the mouse to scroll it; a click that doesn't move
+           still takes the camera there */
+        if (left_button_clicked)
+            parchment_drag(PDrag_Press, mouse_x / pixel_size, mouse_y / pixel_size);
+        else if (left_button_held)
+            parchment_drag(PDrag_Move, mouse_x / pixel_size, mouse_y / pixel_size);
+        if (left_button_released && parchment_drag(PDrag_Release, mouse_x / pixel_size, mouse_y / pixel_size))
+            left_button_released = 0; /* the end of a drag, not a click */
+    }
     MapSubtlCoord world_stl_x = 0;
     MapSubtlCoord world_stl_y = 0;
     const TbBool world_valid = world_mode_active() && parchment_point_to_subtile(mouse_x / pixel_size, mouse_y / pixel_size, &world_stl_x, &world_stl_y);

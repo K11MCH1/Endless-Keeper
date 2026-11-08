@@ -50,6 +50,15 @@ void redraw_minimal_overhead_view(void);
 
 long get_parchment_map_area_rect(struct TbRect *map_area);
 TbBool parchment_point_to_subtile(const long screen_x, const long screen_y, MapSubtlCoord *stl_x, MapSubtlCoord *stl_y);
+/** Endless world: dragging the full-screen map with the left mouse button. */
+enum ParchmentDrag {
+    PDrag_Press,   /**< the button went down */
+    PDrag_Move,    /**< it is held */
+    PDrag_Release, /**< it came up */
+};
+/** Feeds the drag; coordinates as for parchment_point_to_subtile. The map follows the mouse once it has moved
+ *  further than a click may. Returns true for a release that ends a drag (it is no click). */
+TbBool parchment_drag(enum ParchmentDrag what, long screen_x, long screen_y);
 TbBool point_to_overhead_map(const struct Camera *camera, const long screen_x, const long screen_y, int32_t *map_x, int32_t *map_y);
 
 void zoom_from_parchment_map(void);

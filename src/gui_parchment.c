@@ -219,6 +219,56 @@ TbBool parchment_point_to_subtile(const long screen_x, const long screen_y, MapS
     return true;
 }
 
+/* Endless world: the drag of the full-screen map (local presentation only) */
+static struct {
+    TbBool active;          /* the left button went down on the map */
+    TbBool dragging;        /* it has moved further than a click may */
+    long start_x, start_y;  /* where it went down */
+    long moved_x, moved_y;  /* whole slabs this drag has scrolled the view */
+} pdrag;
+
+TbBool parchment_drag(enum ParchmentDrag what, long screen_x, long screen_y)
+{
+    struct TbRect map_area;
+    const long block_size = get_parchment_map_area_rect(&map_area);
+    if (what == PDrag_Press)
+    {
+        pdrag.active = (screen_x >= map_area.left) && (screen_x < map_area.right) &&
+            (screen_y >= map_area.top) && (screen_y < map_area.bottom);
+        pdrag.dragging = false;
+        pdrag.start_x = screen_x;
+        pdrag.start_y = screen_y;
+        pdrag.moved_x = 0;
+        pdrag.moved_y = 0;
+        return false;
+    }
+    if (what == PDrag_Release)
+    {
+        const TbBool was_drag = pdrag.active && pdrag.dragging;
+        pdrag.active = false;
+        pdrag.dragging = false;
+        return was_drag;
+    }
+    if (!pdrag.active)
+        return false;
+    /* the content follows the mouse: moving it right shows what lies further left */
+    const long dx = pdrag.start_x - screen_x;
+    const long dy = pdrag.start_y - screen_y;
+    const long slack = max(3L, (long)(6 * units_per_pixel / 16)); /* a click may wobble this far */
+    if (!pdrag.dragging && ((dx > slack) || (dx < -slack) || (dy > slack) || (dy < -slack)))
+        pdrag.dragging = true;
+    if (pdrag.dragging)
+    {
+        const long tx = dx / block_size;
+        const long ty = dy / block_size;
+        if ((tx != pdrag.moved_x) || (ty != pdrag.moved_y))
+            world_parchment_scroll((int)(tx - pdrag.moved_x), (int)(ty - pdrag.moved_y));
+        pdrag.moved_x = tx;
+        pdrag.moved_y = ty;
+    }
+    return pdrag.dragging;
+}
+
 TbBool parchment_copy_background_at(const struct TbRect *bkgnd_area, int units_per_px)
 {
     int img_width;
@@ -952,7 +1002,7 @@ void draw_map_level_name(void)
     }
     if (world_mode_active())
     {
-        const char *hint = "W A S D: scroll the map (Shift: faster)    H: your Dungeon Heart    Click: go there";
+        const char *hint = "Drag with the mouse (or W A S D): scroll the map    Click: go there    H: your Dungeon Heart";
         int hint_units_per_px = (14 * units_per_pixel) / LbTextLineHeight();
         LbTextSetWindow(x, y, w, h + h / 2);
         LbTextDrawResized((w - LbTextStringWidth(hint) * hint_units_per_px / 16) / 2, h / 10 + 24 * units_per_pixel / 16,
