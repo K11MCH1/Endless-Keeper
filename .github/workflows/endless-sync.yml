@@ -1,0 +1,239 @@
+# Keeps Endless Keeper on KeeperFX's newest stable release, fully automatically.
+#
+# Once a week it looks for a KeeperFX stable release newer than the one the setup is built on
+# (installer/endless-keeper.iss, BaseVersion). If there is one, it
+#   1. merges it into main as one commit (KeeperFX's own .github folder stays out: Endless Keeper has its own
+#      workflows); installer/keeperfx-merged.txt lists the KeeperFX commits merged this way, so that git still finds
+#      the right merge base next time,
+#   2. makes that release's complete package the setup's base game (name, address, checksum, sizes, build),
+#   3. builds the Endless Keeper package,
+#   4. pushes to main and publishes the next Endless Keeper release with the Release workflow.
+# Merge conflicts or a failed build stop it before anything is pushed, and open an issue that says what happened.
+name: KeeperFX update
+
+on:
+  schedule:
+    - cron: '23 6 * * 1'   # Mondays, 06:23 UTC
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'KeeperFX tag, branch or commit to merge (empty: the newest stable release)'
+        type: string
+        default: ''
+      force:
+        description: 'Merge it even if it is not newer than the setup base'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Test run: push nothing, the release is made as a draft and deleted again'
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        default: ''
+      force:
+        type: boolean
+        default: false
+      dry_run:
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: keeperfx-update
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-24.04
+    outputs:
+      merged: ${{ steps.commit.outputs.merged }}
+      sha: ${{ steps.push.outputs.sha }}
+      note: ${{ steps.commit.outputs.note }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET: ${{ inputs.target }}
+      FORCE: ${{ inputs.force }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      STOP: /tmp/endless-update-stop.md   # why it stopped (the issue text)
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Find KeeperFX's newest stable release
+        id: find
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add keeperfx https://github.com/dkfans/keeperfx.git
+          git fetch -q keeperfx master --tags
+          latest=$(gh api repos/dkfans/keeperfx/releases/latest --jq .tag_name)
+          target=${TARGET:-$latest}
+          base=$(sed -n 's/^#define BaseVersion *"\(.*\)"/\1/p' installer/endless-keeper.iss)
+          # the release whose complete package becomes the setup's base: the target if it is a release
+          if gh api "repos/dkfans/keeperfx/releases/tags/$target" > /dev/null 2>&1; then release=$target; else release=$latest; fi
+          echo "KeeperFX's newest stable release: $latest. The setup is built on KeeperFX $base. To merge: $target."
+          newer=$(printf '%s\n%s\n' "$base" "${release#v}" | sort -V | tail -1)
+          if [ "$newer" = "$base" ] && [ "$FORCE" != true ]; then
+            echo "Endless Keeper is up to date."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "go=true" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
+      - name: Merge it
+        id: merge
+        if: steps.find.outputs.go == 'true'
+        env:
+          T: ${{ steps.find.outputs.target }}
+        run: |
+          set -euo pipefail
+          target_commit=$(git rev-parse --verify -q "refs/tags/$T^{commit}" || git rev-parse --verify -q "keeperfx/$T^{commit}" ||
+            git rev-parse --verify "$T^{commit}")
+          # our side: main, with the KeeperFX commits merged before as extra parents (they are not in main's history,
+          # each merge being a single commit)
+          parents=(-p HEAD)
+          if [ -f installer/keeperfx-merged.txt ]; then
+            for c in $(grep -Eo '^[0-9a-f]{40}' installer/keeperfx-merged.txt); do parents+=(-p "$c"); done
+          fi
+          ours=$(git commit-tree "HEAD^{tree}" "${parents[@]}" -m ours)
+          # KeeperFX's side, without its .github folder
+          export GIT_INDEX_FILE="$RUNNER_TEMP/theirs.idx"
+          git read-tree "$target_commit"
+          git rm -r -q --cached --ignore-unmatch .github
+          theirs=$(git commit-tree "$(git write-tree)" -p "$target_commit" -m theirs)
+          unset GIT_INDEX_FILE
+          set +e
+          out=$(git merge-tree --write-tree --name-only "$ours" "$theirs")
+          rc=$?
+          set -e
+          if [ $rc -eq 1 ]; then
+            {
+              echo "Merging KeeperFX $T into Endless Keeper gives merge conflicts in these files:"
+              echo
+              sed -n '2,/^$/p' <<< "$out" | sed '/^$/d' | sed 's/^/- `/; s/$/`/'
+              echo
+              echo "Nothing was pushed. Merge it by hand (see installer/keeperfx-merged.txt for the extra merge bases), push,"
+              echo "then run the Release workflow."
+            } > "$STOP"
+            cat "$STOP"
+            exit 1
+          elif [ $rc -ne 0 ]; then
+            echo "git merge-tree failed ($rc): $out" | tee "$STOP"
+            exit 1
+          fi
+          git read-tree -u --reset "$(head -1 <<< "$out")"
+          echo "commit=$target_commit" >> "$GITHUB_OUTPUT"
+          echo "Merged cleanly: $(git diff --cached --shortstat HEAD)"
+
+      - name: Make the release's complete package the setup's base game
+        id: commit
+        if: steps.find.outputs.go == 'true'
+        env:
+          T: ${{ steps.find.outputs.target }}
+          REL: ${{ steps.find.outputs.release }}
+          TC: ${{ steps.merge.outputs.commit }}
+        run: |
+          set -euo pipefail
+          read -r name size digest < <(gh api "repos/dkfans/keeperfx/releases/tags/$REL" \
+            --jq '.assets[] | select(.name | test("_complete\\.7z$")) | "\(.name) \(.size) \(.digest)"' | head -1) || true
+          if [ -z "${name:-}" ]; then echo "KeeperFX's $REL release has no complete package" | tee "$STOP"; exit 1; fi
+          hash=${digest#sha256:}
+          command -v 7z > /dev/null || { sudo apt-get update -q && sudo apt-get install -y -q p7zip-full; }
+          gh release download "$REL" -R dkfans/keeperfx -p "$name" -D "$RUNNER_TEMP"
+          echo "$hash  $RUNNER_TEMP/$name" | sha256sum -c -
+          unpacked=$(7z l "$RUNNER_TEMP/$name" | tail -1 | awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) { print $i; exit }}')
+          build=$(git rev-list --count "$REL")
+          # the KeeperFX build the game reports: the newest code merged in so far
+          engine=$(git rev-list --count "$TC")
+          previous=$(cat installer/keeperfx-build.txt)
+          [ "$engine" -gt "$previous" ] || engine=$previous
+          echo "$engine" > installer/keeperfx-build.txt
+          url="https://github.com/dkfans/keeperfx/releases/download/$REL/$name"
+          sed -i -e "s|^#define BaseVersion .*|#define BaseVersion  \"${REL#v}\"|" \
+                 -e "s|^#define BaseName .*|#define BaseName     \"${name%.7z}\"|" \
+                 -e "s|^#define BaseBuild .*|#define BaseBuild    \"$build\"|" \
+                 -e "s|^#define BaseUrl .*|#define BaseUrl      \"$url\"|" \
+                 -e "s|^#define BaseHash .*|#define BaseHash     \"$hash\"|" \
+                 -e "s|^#define BaseSize .*|#define BaseSize     \"$size\"|" \
+                 -e "s|^#define BaseUnpacked .*|#define BaseUnpacked \"$unpacked\"|" installer/endless-keeper.iss
+          [ -f installer/keeperfx-merged.txt ] || printf '%s\n' \
+            '# KeeperFX commits merged into Endless Keeper as single commits (by the KeeperFX update workflow).' \
+            '# They are extra merge bases for the next merge: git merge-tree <main + these as parents> <KeeperFX>.' \
+            > installer/keeperfx-merged.txt
+          echo "$TC KeeperFX $T" >> installer/keeperfx-merged.txt
+          git add -A
+          git commit -q -m "Merge KeeperFX $T" -m "KeeperFX $T merged into Endless Keeper, without KeeperFX's .github folder.
+          The setup now installs KeeperFX ${REL#v} ($name, build $build) as the base game; the game reports build $engine."
+          git log --stat -1 | tail -5
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+          echo "note=This release brings KeeperFX ${REL#v}." >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        if: steps.find.outputs.go == 'true'
+        uses: ./.github/actions/build-package
+
+      - name: Keep the package for the release
+        if: steps.find.outputs.go == 'true'
+        run: |
+          mkdir -p rel
+          cp pkg/endless-keeper.7z installer/endless-keeper.iss installer/endless-keeper.ico rel/
+          git rev-parse HEAD > rel/commit.txt
+
+      - uses: actions/upload-artifact@v6
+        if: steps.find.outputs.go == 'true'
+        with:
+          name: endless-keeper-package
+          path: rel/
+          retention-days: 7
+
+      - name: Push to main
+        id: push
+        if: steps.find.outputs.go == 'true'
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then
+            echo "Test run: not pushed."
+          else
+            git fetch -q origin main
+            git rebase -q origin/main   # the README is sometimes edited on GitHub meanwhile
+            git push origin HEAD:main
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Open an issue
+        if: failure() && steps.find.outputs.go == 'true'
+        env:
+          T: ${{ steps.find.outputs.target }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="KeeperFX $T: the automatic update stopped"
+          [ -f "$STOP" ] || echo "The build or another step failed: see the run." > "$STOP"
+          printf '\n[The run](%s)\n' "$RUN" >> "$STOP"
+          if [ "$DRY_RUN" = true ]; then echo "Test run, no issue: $title"; cat "$STOP"; exit 0; fi
+          if [ -n "$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[].number')" ]; then
+            echo "An issue is open already."
+          else
+            gh issue create --title "$title" --body-file "$STOP"
+          fi
+
+  release:
+    needs: merge
+    if: needs.merge.outputs.merged == 'true'
+    uses: ./.github/workflows/endless-release.yml
+    with:
+      prebuilt: true
+      sha: ${{ needs.merge.outputs.sha }}
+      dry_run: ${{ inputs.dry_run == true }}
+      note: ${{ needs.merge.outputs.note }}
+    secrets: inherit

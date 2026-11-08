@@ -1,0 +1,20 @@
+name: Build the Endless Keeper package
+description: >
+  Installs the build tools of the Development Guide and builds the Endless Keeper package with
+  installer/make-package.sh (the game, its DLLs and data, the fonts and the Endless Mode stub level).
+inputs:
+  output:
+    description: Where the package (.7z) goes
+    default: pkg/endless-keeper.7z
+runs:
+  using: composite
+  steps:
+    - name: Build tools
+      shell: bash
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y -q build-essential cmake ninja-build gcc-mingw-w64-i686 g++-mingw-w64-i686 \
+          python3 libpng16-16t64 p7zip-full
+    - name: Package
+      shell: bash
+      run: installer/make-package.sh "${{ inputs.output }}"

@@ -1,0 +1,30 @@
+# Builds the Endless Keeper package for every change to main and for pull requests, to show it still builds.
+# Nothing is released; the package is kept for two weeks as a download of the run.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/build-package
+      - uses: actions/upload-artifact@v6
+        with:
+          name: endless-keeper-${{ github.sha }}
+          path: pkg/endless-keeper.7z
+          retention-days: 14

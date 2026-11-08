@@ -1,0 +1,221 @@
+# Builds and publishes an Endless Keeper release: the package (installer/make-package.sh, on Linux), the setup
+# (Inno Setup, on Windows) and a GitHub release with both.
+#
+# Names: <KeeperFX stable>-<Endless Keeper release> <stage>, e.g. 1.4.0-2 Alpha: EndlessKeeperSetup-1_4_0-2-Alpha.exe,
+# endless-keeper-1_4_0-2-Alpha.7z, tag v1.4.0-2-alpha. The KeeperFX version is the setup's base (BaseVersion in
+# installer/endless-keeper.iss); the release number is one more than the highest so far; the stage stays what the
+# last release had unless one is given. Alpha and Beta are published as pre-releases.
+#
+# Run it from the Actions tab (Release, Run workflow) to release Endless Keeper's own changes from main. The KeeperFX
+# update workflow runs it by itself after merging a new KeeperFX stable release.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Stage (auto: the same as the last release)'
+        type: choice
+        options: [auto, Alpha, Beta, Stable]
+        default: auto
+      dry_run:
+        description: 'Test run: the release is made as a draft and deleted again'
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      prebuilt:
+        description: 'The caller built the package (artifact endless-keeper-package)'
+        type: boolean
+        default: false
+      sha:
+        description: 'The commit to release (default: the one the workflow runs on)'
+        type: string
+        default: ''
+      stage:
+        type: string
+        default: ''
+      dry_run:
+        type: boolean
+        default: false
+      note:
+        description: 'A line for the top of the release notes'
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: endless-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: ${{ !inputs.prebuilt }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - uses: ./.github/actions/build-package
+      - name: Keep the package for the release
+        run: |
+          mkdir -p rel
+          cp pkg/endless-keeper.7z installer/endless-keeper.iss installer/endless-keeper.ico rel/
+          git rev-parse HEAD > rel/commit.txt
+      - uses: actions/upload-artifact@v6
+        with:
+          name: endless-keeper-package
+          path: rel/
+          retention-days: 7
+
+  setup:
+    needs: package
+    if: ${{ !cancelled() && (needs.package.result == 'success' || needs.package.result == 'skipped') }}
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STAGE: ${{ inputs.stage }}
+    outputs:
+      base: ${{ steps.version.outputs.base }}
+      file: ${{ steps.version.outputs.file }}
+      tag: ${{ steps.version.outputs.tag }}
+      title: ${{ steps.version.outputs.title }}
+      stage: ${{ steps.version.outputs.stage }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: endless-keeper-package
+          path: rel
+
+      - name: Version
+        id: version
+        run: |
+          set -euo pipefail
+          base=$(sed -n 's/^#define BaseVersion *"\(.*\)"/\1/p' rel/endless-keeper.iss | tr -d '\r')
+          [ -n "$base" ] || { echo "no BaseVersion in the setup script"; exit 1; }
+          tags=$(gh api "repos/$GITHUB_REPOSITORY/tags" --paginate --jq '.[].name' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-' || true)
+          last=$(sed -E 's/^v[0-9.]+-([0-9]+)-.*/\1/' <<< "$tags" | sort -n | tail -1)
+          n=$(( ${last:-0} + 1 ))
+          [ "$STAGE" != auto ] || STAGE=
+          if [ -z "$STAGE" ]; then
+            stage=$(grep -E -- "-${last:-x}-[a-z]+$" <<< "$tags" | head -1 | sed -E 's/.*-([a-z]+)$/\1/')
+            stage=${stage:-alpha}
+            STAGE="${stage^}"
+          fi
+          file="${base//./_}-$n-$STAGE"
+          {
+            echo "base=$base"
+            echo "file=$file"
+            echo "tag=v$base-$n-${STAGE,,}"
+            echo "title=Endless Keeper $base-$n $STAGE"
+            echo "stage=$STAGE"
+            echo "release=$n"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Inno Setup
+        run: |
+          choco upgrade innosetup -y --no-progress > /dev/null
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" /? 2>&1 | head -2 || true
+
+      - name: Setup
+        env:
+          N: ${{ steps.version.outputs.release }}
+          S: ${{ steps.version.outputs.stage }}
+          FILE: ${{ steps.version.outputs.file }}
+          MSYS_NO_PATHCONV: 1   # Git Bash would take ISCC's /D options for paths
+        run: |
+          set -euo pipefail
+          "/c/Program Files/7-Zip/7z.exe" x -y -orel/stage rel/endless-keeper.7z > /dev/null
+          mkdir -p out
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" /Q "/DRelease=$N" "/DStage=$S" \
+            "/DPackageDir=$(cygpath -w "$PWD/rel/stage")" "/DOutputDir=$(cygpath -w "$PWD/out")" "$(cygpath -w "$PWD/rel/endless-keeper.iss")"
+          cp rel/endless-keeper.7z "out/endless-keeper-$FILE.7z"
+          cp rel/commit.txt out/
+          ls -la out
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: endless-keeper-release
+          path: out/
+          retention-days: 7
+
+  publish:
+    needs: setup
+    if: ${{ !cancelled() && needs.setup.result == 'success' }}
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      NOTE: ${{ inputs.note }}
+      BASE: ${{ needs.setup.outputs.base }}
+      FILE: ${{ needs.setup.outputs.file }}
+      TAG: ${{ needs.setup.outputs.tag }}
+      TITLE: ${{ needs.setup.outputs.title }}
+      STAGE: ${{ needs.setup.outputs.stage }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          name: endless-keeper-release
+          path: out
+
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          git fetch -q origin main --tags
+          sha=$(cat out/commit.txt)
+          # a test run's commit may exist only on the runner that made it
+          git cat-file -e "$sha^{commit}" 2>/dev/null || sha=$GITHUB_SHA
+          echo "SHA=$sha" >> "$GITHUB_ENV"
+          prev=$(git tag -l --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-' | head -1 || true)
+          {
+            echo "# ⛏️ $TITLE"
+            echo
+            [ -z "$NOTE" ] || { echo "$NOTE"; echo; }
+            echo "> [!IMPORTANT]"
+            echo "> **Requires KeeperFX $BASE (stable).** Endless Keeper is built on it. The setup downloads it for you from"
+            echo "> KeeperFX's own GitHub release, so you need an internet connection while installing. You also need your own"
+            echo "> copy of Dungeon Keeper (GOG, Steam, EA/Origin or CD), or an existing KeeperFX installation to take the"
+            echo "> original game files from."
+            echo
+            echo "## 📥 Install"
+            echo
+            echo "Download **\`EndlessKeeperSetup-$FILE.exe\`** below and run it. Windows may warn that the setup is from an"
+            echo "unknown publisher (it isn't code-signed yet): choose *More info*, then *Run anyway*. Updating keeps your saves"
+            echo "and settings."
+            echo
+            echo "\`endless-keeper-$FILE.7z\` is the same Endless Keeper package for installing by hand over KeeperFX $BASE."
+            echo
+            if [ -n "$prev" ]; then
+              echo "## 📝 Changes since ${prev#v}"
+              echo
+              git log --no-merges --format='- %s' "$prev..$sha" -- . ':(exclude)*.md' ':(exclude)docs' | head -80
+            fi
+          } > notes.md
+          cat notes.md
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          flags=()
+          [ "$STAGE" = Stable ] || flags+=(--prerelease)
+          if [ "$DRY_RUN" = true ]; then
+            url=$(gh release create "$TAG" out/EndlessKeeperSetup-*.exe out/endless-keeper-*.7z --draft --target "$SHA" \
+              --title "$TITLE (test run)" --notes-file notes.md "${flags[@]}")
+            echo "Test run: made the draft $url"
+            gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft and .tag_name == \"$TAG\") | \"\(.id) \(.assets | map(.name + \" \" + (.size|tostring)) | join(\", \"))\""
+            for id in $(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id"); do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            done
+            echo "Test run: the draft is deleted again."
+          else
+            gh release create "$TAG" out/EndlessKeeperSetup-*.exe out/endless-keeper-*.7z --target "$SHA" \
+              --title "$TITLE" --notes-file notes.md "${flags[@]}"
+          fi
