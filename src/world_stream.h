@@ -143,6 +143,9 @@ void world_parchment_view_origin(MapSlabCoord *slb_x, MapSlabCoord *slb_y);
 void world_parchment_scroll(int dx_slabs, int dy_slabs);
 /** Centres the view on the player's Dungeon Heart. */
 void world_parchment_home(void);
+/** Test hook KFX_WORLD_MAPEDGE: true while it puts the game's mouse at the window's edges (the system cursor is
+ *  elsewhere, so the window check would say the mouse is outside). */
+TbBool world_test_mouse_in_window(void);
 /** Engine slab of the player's Dungeon Heart, also while its chunk is dropped (then outside the window). */
 TbBool world_parchment_heart(MapSlabCoord *slb_x, MapSlabCoord *slb_y);
 /** PckA_ZoomFromMap for a subtile outside the loaded window: moves the window there, in the game turn, and

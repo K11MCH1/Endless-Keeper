@@ -4784,6 +4784,62 @@ static void world_mapdrag_hook(void)
         lbDisplay.MLeftButton = 0;
 }
 
+static TbBool test_mouse_in_window = false;
+
+TbBool world_test_mouse_in_window(void)
+{
+    return test_mouse_in_window;
+}
+
+/** Test hook KFX_WORLD_MAPEDGE=T (local only): at T-60 the full-screen map opens; from T the game's mouse sits at
+ *  the right edge for 20 turns, then at the top left corner for 20 turns, then in the middle. The view origin is
+ *  logged at each step: the right edge must scroll right, the corner left and up, the middle not at all. */
+static void world_mapedge_hook(void)
+{
+    static long at = -2;
+    if (at == -2)
+    {
+        const char *v = getenv("KFX_WORLD_MAPEDGE");
+        at = (v != NULL) ? atol(v) : -1;
+    }
+    if (at < 0)
+        return;
+    const long now = (long)game.play_gameturn;
+    if (now == at - 60)
+        zoom_to_parchment_map();
+    if ((now < at) || (now > at + 60))
+        return;
+    if ((now == at) || (now == at + 20) || (now == at + 40) || (now == at + 41) || (now == at + 60))
+    {
+        MapSlabCoord vx = 0, vy = 0;
+        const TbBool open = (get_local_view_type() == PVT_MapScreen);
+        if (open)
+            world_parchment_view_origin(&vx, &vy);
+        SYNCLOG("World map edge: turn %ld, map %s, view origin (%ld,%ld)", now, open ? "open" : "closed", (long)vx, (long)vy);
+    }
+    long mx, my;
+    if (now < at + 20)
+    {
+        mx = (MyScreenWidth - 1) / pixel_size; /* the right edge */
+        my = (MyScreenHeight / 2) / pixel_size;
+    }
+    else if (now < at + 40)
+    {
+        mx = 0; /* the top left corner */
+        my = 0;
+    }
+    else
+    {
+        mx = (MyScreenWidth / 2) / pixel_size; /* the middle */
+        my = (MyScreenHeight / 2) / pixel_size;
+    }
+    lbDisplay.MMouseX = mx;
+    lbDisplay.MMouseY = my;
+    lbDisplay.MouseX = mx;
+    lbDisplay.MouseY = my;
+    test_mouse_in_window = (now < at + 60);
+}
+
 /** Test hook KFX_WORLD_ASSIST (network tests). */
 static void world_assist_hook(void)
 {
@@ -5430,6 +5486,7 @@ void world_process_turn(void)
     world_progress_present();
     world_shots_hook();
     world_mapdrag_hook();
+    world_mapedge_hook();
     world_progress_turn();
     server_admin_turn(); /* a dedicated server's console: play time, status */
     world_open_hook();

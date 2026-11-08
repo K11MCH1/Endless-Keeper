@@ -2387,7 +2387,7 @@ static void get_overhead_view_nonaction_inputs(void)
         TbBool right = is_game_key_pressed(Gkey_MoveRight, false, true);
         TbBool up = is_game_key_pressed(Gkey_MoveUp, false, true);
         TbBool down = is_game_key_pressed(Gkey_MoveDown, false, true);
-        if (IsMouseInsideWindow() && !is_feature_on(Ft_DisableCursorCameraPanning))
+        if ((IsMouseInsideWindow() || world_test_mouse_in_window()) && !is_feature_on(Ft_DisableCursorCameraPanning))
         {
             const int32_t edge_scrolling_border = max(4, scale_fixed_DK_value(4));
             const int32_t mouse_x = GetMouseX();
