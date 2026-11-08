@@ -232,7 +232,8 @@ jobs:
     if: needs.merge.outputs.merged == 'true'
     uses: ./.github/workflows/endless-release.yml
     with:
-      prebuilt: true
+      # the release builds the package again with its number (a test run's commit isn't pushed: it reuses this one)
+      prebuilt: ${{ inputs.dry_run == true }}
       sha: ${{ needs.merge.outputs.sha }}
       dry_run: ${{ inputs.dry_run == true }}
       note: ${{ needs.merge.outputs.note }}

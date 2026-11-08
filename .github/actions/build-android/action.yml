@@ -1,0 +1,112 @@
+name: Build the Endless Keeper Android app
+description: >
+  Builds the engine for Android (android/scripts/build_engine.py: the KeeperFX source with the Android seams, compiled
+  with the NDK against the prebuilt libraries in android/prebuilt) and the APK around it (android/scripts/build_apk.py:
+  the launcher and the game activity in android/). Without a key the APK is signed with a new throwaway key, which
+  can't update an installed app.
+inputs:
+  release:
+    description: Endless Keeper's release number, for the main menu (empty = "dev")
+    default: ''
+  stage:
+    description: The release's stage (Alpha, Beta, Stable; empty = Alpha)
+    default: ''
+  version-name:
+    description: The version the phone shows (empty = the build's)
+    default: ''
+  version-code:
+    description: The APK's version code (empty = minutes since 1970)
+    default: ''
+  output:
+    description: Where the APK goes
+    default: pkg/EndlessKeeper.apk
+  keystore-base64:
+    description: The signing key (a Java keystore, base64)
+    default: ''
+  keystore-password:
+    description: Its password
+    default: ''
+  require-key:
+    description: Fail without a signing key
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Android SDK and NDK
+      shell: bash
+      run: |
+        set -euo pipefail
+        sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+        yes | "$sdkmanager" --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.3.13750724" > /dev/null
+        echo "ANDROID_NDK=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+
+    - name: Engine
+      shell: bash
+      env:
+        R: ${{ inputs.release }}
+        S: ${{ inputs.stage }}
+      run: |
+        set -euo pipefail
+        build=$(tr -d '\r\n ' < installer/keeperfx-build.txt)
+        tree="$RUNNER_TEMP/ek-src"
+        mkdir -p "$tree"
+        cp -r src deps res version.mk ver_defs.h.in "$tree/"
+        rm -f "$tree/src/ver_defs.h"
+        python3 android/scripts/build_engine.py --src "$tree" --build-number "$build" \
+          --revision "$(git rev-parse --short HEAD)-android" --suffix Alpha \
+          --define "ENDLESS_RELEASE=${R:-dev}" --define "ENDLESS_STAGE=${S:-Alpha}" \
+          --work "$RUNNER_TEMP/ek-engine" --kit android/kit/engine-kit.zip --libs android/prebuilt/arm64-v8a \
+          --native android/native --skip-seams 29 --extra-seams android/kit/seams-5593.json --ndk "$ANDROID_NDK"
+        mkdir -p "$RUNNER_TEMP/ek-native"
+        cp android/prebuilt/arm64-v8a/*.so "$RUNNER_TEMP/ek-engine/libkeeperfx.so" "$RUNNER_TEMP/ek-native/"
+        major=$(sed -n 's/^VER_MAJOR=//p' version.mk); minor=$(sed -n 's/^VER_MINOR=//p' version.mk)
+        rel=$(sed -n 's/^VER_RELEASE=//p' version.mk)
+        echo "KFX_VERSION=$major.$minor.$rel.$build" >> "$GITHUB_ENV"
+
+    - name: APK
+      shell: bash
+      env:
+        R: ${{ inputs.release }}
+        S: ${{ inputs.stage }}
+        VNAME: ${{ inputs.version-name }}
+        VCODE: ${{ inputs.version-code }}
+        OUT: ${{ inputs.output }}
+        KEY_B64: ${{ inputs.keystore-base64 }}
+        KEY_PASS: ${{ inputs.keystore-password }}
+        REQUIRE_KEY: ${{ inputs.require-key }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json, os, subprocess
+        r, s = os.environ.get('R') or 'dev', os.environ.get('S') or 'Alpha'
+        info = {
+            'version': os.environ['KFX_VERSION'],
+            'commit': subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], text=True).strip() + '-android',
+            'title': f'Endless Keeper {r} - {s}',
+            'abi': 'arm64-v8a', 'min_api': 35, 'android_patches': True,
+        }
+        path = os.path.join(os.environ['RUNNER_TEMP'], 'engine.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(info, f, indent=4)
+        print(json.dumps(info))
+        PY
+        key=()
+        if [ -n "$KEY_B64" ]; then
+          printf '%s' "$KEY_B64" | base64 -d > "$RUNNER_TEMP/endless-keeper.keystore"
+          key=(--keystore "$RUNNER_TEMP/endless-keeper.keystore" --keystore-password "${KEY_PASS:-android}")
+        elif [ "$REQUIRE_KEY" = true ]; then
+          echo "::error::No signing key: add the repository secret ANDROID_KEYSTORE_BASE64"
+          exit 1
+        else
+          echo "::warning::No signing key: this APK is signed with a throwaway key and can't update an installed app"
+        fi
+        version=()
+        [ -z "$VNAME" ] || version+=(--version-name "$VNAME")
+        [ -z "$VCODE" ] || version+=(--version-code "$VCODE")
+        mkdir -p "$(dirname "$OUT")"
+        python3 android/scripts/build_apk.py --output "$OUT" --debuggable --package-id org.keeperrecomped.endlesskeeper \
+          --label "Endless Keeper" --no-engine-compiler --native-dir "$RUNNER_TEMP/ek-native" \
+          --engine-info "$RUNNER_TEMP/engine.json" --sdk "$ANDROID_HOME" --ndk "$ANDROID_NDK" --jdk "$JAVA_HOME_17_X64" \
+          "${version[@]}" "${key[@]}"
+        rm -f "$RUNNER_TEMP/endless-keeper.keystore"
+        ls -la "$OUT"

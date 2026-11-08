@@ -6,6 +6,12 @@ inputs:
   output:
     description: Where the package (.7z) goes
     default: pkg/endless-keeper.7z
+  release:
+    description: Endless Keeper's release number, for the main menu (empty = "dev")
+    default: ''
+  stage:
+    description: The release's stage (Alpha, Beta, Stable; empty = Alpha)
+    default: ''
 runs:
   using: composite
   steps:
@@ -29,4 +35,7 @@ runs:
       run: python3 "${{ github.action_path }}/prefetch.py"
     - name: Package
       shell: bash
+      env:
+        ENDLESS_RELEASE: ${{ inputs.release }}
+        ENDLESS_STAGE: ${{ inputs.stage }}
       run: installer/make-package.sh "${{ inputs.output }}"

@@ -35,6 +35,8 @@ WINDRES  = $(CROSS_COMPILE)windres
 DOXYTOOL = doxygen
 BUILD_NUMBER ?= $(VER_BUILD)
 PACKAGE_SUFFIX ?= Prototype
+ENDLESS_RELEASE ?= dev
+ENDLESS_STAGE ?= Alpha
 $(if $(WSL_DISTRO_NAME),$(shell git ls-files -z | xargs -0r -n 128 sh -c 'find -- "$$@" -maxdepth 0 -type f -newermt now -exec touch {} +' sh 2> /dev/null))
 BUILD_START := $(shell date +%s.%N)
 PNGTOICO = tools/png2ico/png2ico$(CROSS_EXEEXT)
@@ -347,6 +349,8 @@ src/ver_defs.h: FORCE version.mk Makefile
 		'#define VER_STRING "$(VER_STRING)"' \
 		'#define PACKAGE_SUFFIX "$(PACKAGE_SUFFIX)"' \
 		"#define GIT_REVISION \"$$(git describe --always)\"" \
+		'#define ENDLESS_RELEASE "$(ENDLESS_RELEASE)"' \
+		'#define ENDLESS_STAGE "$(ENDLESS_STAGE)"' \
 		> "$@.tmp"
 	@cmp -s "$@.tmp" "$@" || $(MV) "$@.tmp" "$@"; $(RM) "$@.tmp"
 tests: $(TEST_BIN) $(TEST_BIN:%.exe=%.map)

@@ -11,16 +11,22 @@ OUTPUT=${1:-pkg/endless-keeper.7z}
 # The KeeperFX build Endless Keeper is built on (the version the game reports; it must match the game data).
 BUILD_NUMBER=${BUILD_NUMBER:-$(cat installer/keeperfx-build.txt)}
 SUFFIX=Alpha
-echo "KeeperFX build $BUILD_NUMBER"
+# Endless Keeper's own release number and stage, on the main menu over the KeeperFX version (the release workflow
+# sets them; any other build says "dev")
+ENDLESS_RELEASE=${ENDLESS_RELEASE:-dev}
+ENDLESS_STAGE=${ENDLESS_STAGE:-Alpha}
+VER=(BUILD_NUMBER=$BUILD_NUMBER PACKAGE_SUFFIX=$SUFFIX ENDLESS_RELEASE=$ENDLESS_RELEASE ENDLESS_STAGE=$ENDLESS_STAGE)
+echo "KeeperFX build $BUILD_NUMBER, Endless Keeper $ENDLESS_RELEASE - $ENDLESS_STAGE"
 
 echo "== engine graphics"
-make BUILD_NUMBER=$BUILD_NUMBER PACKAGE_SUFFIX=$SUFFIX pkg-enginegfx > /dev/null
+make "${VER[@]}" pkg-enginegfx > /dev/null
 echo "== game"
 cmake -S . -B out -G Ninja -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchains/mingw32.cmake \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_NUMBER=$BUILD_NUMBER -DPACKAGE_SUFFIX=$SUFFIX > /dev/null
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_NUMBER=$BUILD_NUMBER -DPACKAGE_SUFFIX=$SUFFIX \
+  -DENDLESS_RELEASE=$ENDLESS_RELEASE -DENDLESS_STAGE=$ENDLESS_STAGE > /dev/null
 cmake --build out --target keeperfx keeperfx_hvlog > /dev/null
 echo "== game data"
-make BUILD_NUMBER=$BUILD_NUMBER PACKAGE_SUFFIX=$SUFFIX pkg-assemble > /dev/null
+make "${VER[@]}" pkg-assemble > /dev/null
 
 echo "== Unicode fonts"
 ( cd tools/fxfontmaker
