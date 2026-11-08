@@ -1201,7 +1201,10 @@ void world_add_player_xp(PlayerNumber plyr_idx, uint32_t xp)
     const int after = wpl_level_of(wpl_xp[plyr_idx]);
     SYNCLOG("World: player %d was given %u XP: %u XP, level %d", (int)plyr_idx, (unsigned)xp, (unsigned)wpl_xp[plyr_idx], after);
     if (after > before)
+    {
         server_admin_log("level", "%s reached level %d", server_admin_player_name(plyr_idx), after);
+        world_perks_level_reached(plyr_idx, after);
+    }
 }
 
 void world_player_portal_captured(PlayerNumber plyr_idx, int biome)
@@ -1215,6 +1218,72 @@ void world_player_portal_captured(PlayerNumber plyr_idx, int biome)
     SYNCLOG("World: player %d captured a portal (%d so far)", (int)plyr_idx, (int)wps[plyr_idx].portals);
     server_admin_log("portal", "%s captured a portal (%s)", server_admin_player_name(plyr_idx),
         ((biome >= 0) && (biome < WgB_COUNT)) ? wg_biome_name(biome) : "?");
+}
+
+void world_progress_seat_reset(PlayerNumber plyr_idx)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
+        return;
+    wpl_xp[plyr_idx] = 0;
+    memset(&wps[plyr_idx], 0, sizeof(wps[plyr_idx]));
+    memset(&wpr_players[plyr_idx], 0, sizeof(wpr_players[plyr_idx]));
+    pmask_del(&wpr_kit_players, plyr_idx); /* the kit is given again when it starts */
+    SYNCLOG("World: player %d's level, XP, records and research progress start again from zero", (int)plyr_idx);
+}
+
+/******************************************************************************/
+/* passive upgrades, kept by player (see world_progress.h) */
+#define WORLD_PERKS_MAX 256
+static struct WorldPerks wpk[WORLD_PERKS_MAX];
+static int wpk_count;
+
+struct WorldPerks *world_perks_of(uint64_t token, TbBool create)
+{
+    for (int i = 0; i < wpk_count; i++)
+        if (wpk[i].token == token)
+            return &wpk[i];
+    if (!create || (wpk_count >= WORLD_PERKS_MAX))
+        return NULL;
+    struct WorldPerks *pk = &wpk[wpk_count++];
+    memset(pk, 0, sizeof(*pk));
+    pk->token = token;
+    return pk;
+}
+
+void world_perks_seat_started(PlayerNumber plyr_idx)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
+        return;
+    const struct WorldPerks *pk = world_perks_of(world_seat_token(plyr_idx), false);
+    if (pk == NULL)
+        return;
+    int had = 0;
+    for (int s = 0; s < WORLD_PERK_SLOTS; s++)
+        had += (pk->level[s] != 0) ? 1 : 0;
+    /* no upgrade exists yet: each one, when made, takes effect on the seat's dungeon here */
+    SYNCLOG("World: player %d keeps %d passive upgrade%s", (int)plyr_idx, had, (had == 1) ? "" : "s");
+}
+
+void world_perks_level_reached(PlayerNumber plyr_idx, int level)
+{
+    (void)plyr_idx;
+    (void)level; /* no upgrade is given for a level yet */
+}
+
+int world_perks_count(void)
+{
+    return wpk_count;
+}
+
+const struct WorldPerks *world_perks_entry(int i)
+{
+    return ((i >= 0) && (i < wpk_count)) ? &wpk[i] : NULL;
+}
+
+void world_perks_reset(void)
+{
+    memset(wpk, 0, sizeof(wpk));
+    wpk_count = 0;
 }
 
 void world_levels_reset(void)
@@ -1302,7 +1371,10 @@ void world_heart_destroyed(const struct Thing *heartng)
             server_admin_log("defeat", "%s defeated the enemy keeper %s", server_admin_player_name(by), server_admin_player_name(victim));
     }
     if (after > before)
+    {
         server_admin_log("level", "%s reached level %d", server_admin_player_name(by), after);
+        world_perks_level_reached(by, after);
+    }
 }
 
 void world_progress_present(void)

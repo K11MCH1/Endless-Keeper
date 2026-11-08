@@ -15,6 +15,7 @@
 #include "globals.h"
 #include "bflib_datetm.h"
 #include "bflib_fileio.h"
+#include "net_diag.h"
 #include "post_inc.h"
 
 char (*consoleLogArray)[MAX_TEXT_LENGTH] = NULL;
@@ -143,6 +144,17 @@ int LbNetLog(const char *format, ...)
     }
     va_list val;
     va_start(val, format);
+    {
+        /* the network log (net_diag.c) gets it too, with the real addresses */
+        va_list copy;
+        va_copy(copy, val);
+        char *text = NULL;
+        if (SDL_vasprintf(&text, format, copy) >= 0) {
+            net_log_file_write(text);
+            SDL_free(text);
+        }
+        va_end(copy);
+    }
     int result = LbLog(&error_log, "Net: ", format, val);
     va_end(val);
     return result;

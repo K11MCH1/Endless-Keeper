@@ -847,6 +847,11 @@ TbBool process_user_global_packet_action(NetUserId user)
       world_after_zoom_from_map(user);
 
   switch (pckt->action) {
+  case PckA_WorldRespawn:
+      /* "Start again": game state, so the thin-client server (or every machine of a lockstep game) does it */
+      if (!netstate_thin_mode() || network_is_host())
+          world_seat_respawn(plyr_idx);
+      return 1;
   case PckA_QuitToMainMenu:
       if ((user == get_local_user()) && !replay.load_enable)
       {

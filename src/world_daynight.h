@@ -38,6 +38,8 @@ size_t world_raids_save_size(void);
 void world_raids_save(uint8_t *buf);
 TbBool world_raids_load(const uint8_t *buf, size_t len);
 void world_raids_reset(void);
+/** Start again: the raid on that player (if any) goes home now. */
+void world_raids_player_retreat(PlayerNumber plyr_idx);
 
 /** Draws the day/night icon in the top right corner (endless levels only; from the in-game UI). */
 void world_daynight_draw(void);

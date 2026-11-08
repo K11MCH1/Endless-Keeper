@@ -110,6 +110,27 @@ void world_player_played_turn(PlayerNumber plyr_idx);
 /** XP from the server's admin (give <name> XP <amount>): levels follow. */
 void world_add_player_xp(PlayerNumber plyr_idx, uint32_t xp);
 void world_player_portal_captured(PlayerNumber plyr_idx, int biome);
+/** Start again: the seat's XP (player level), records and research-book progression from zero; the kit is given
+ *  again when the seat next starts. */
+void world_progress_seat_reset(PlayerNumber plyr_idx);
+
+/* Passive upgrades from levelling up (the rogue-like part, to come): kept by player (the seat's owner, its reconnect
+   token; 0 in a single-player run), not by seat, so a player keeps them through "Start again". None exist yet: the
+   store, its save section (PRK1) and the hooks are ready for them. */
+#define WORLD_PERK_SLOTS 32
+struct WorldPerks {
+    uint64_t token;                   /* whose (0: the single-player keeper) */
+    uint8_t level[WORLD_PERK_SLOTS];  /* each upgrade's level (0: not had) */
+};
+/** A player's upgrades (NULL when there are none and create is false). */
+struct WorldPerks *world_perks_of(uint64_t token, TbBool create);
+/** A seat starts (joins, or starts again): its player's upgrades take effect on its dungeon. */
+void world_perks_seat_started(PlayerNumber plyr_idx);
+/** A seat's player reached a level: where an upgrade will be given. */
+void world_perks_level_reached(PlayerNumber plyr_idx, int level);
+int world_perks_count(void);
+const struct WorldPerks *world_perks_entry(int i);
+void world_perks_reset(void);
 
 #ifdef __cplusplus
 }

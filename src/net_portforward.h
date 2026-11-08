@@ -18,6 +18,7 @@
 #ifndef NET_PORTFORWARD_H
 #define NET_PORTFORWARD_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -25,6 +26,8 @@ extern "C" {
 #endif
 
 void port_forward_set_mapping(uint16_t port);
+/** What the last forwarding try gave, in words ("" before any); returns a number that changes with it. */
+uint32_t port_forward_status(char *text, size_t size, int *forwarded);
 
 #ifdef __cplusplus
 }

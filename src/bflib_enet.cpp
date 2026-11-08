@@ -24,6 +24,8 @@
 #include "net_matchmaking.h"
 #include "game_legacy.h"
 #include "player_data.h"
+#include "net_diag.h"
+#include "server_admin.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -72,6 +74,76 @@ namespace
     TbClockMSec host_punch_deadline = 0;
     int peer_punch_reported = 0;
     int punch_phase_active = 0;
+
+    /* the last thing known of each peer: ENet resets a peer before it reports the drop, so why it dropped is
+       told from these */
+    struct PeerSeen {
+        enet_uint32 rtt;
+        enet_uint32 loss;       /* of ENET_PEER_PACKET_LOSS_SCALE */
+        enet_uint32 last_heard; /* enet time of its last packet; 0: none yet */
+    };
+#define PEER_SEEN_MAX 256
+    PeerSeen peer_seen[PEER_SEEN_MAX];
+    char last_drop_detail[256] = "";
+    char server_drop_detail[256] = ""; /* a client: why the server dropped (kept for the message after) */
+
+    PeerSeen *peer_seen_of(const ENetPeer *peer)
+    {
+        if (!host || peer < host->peers || peer >= &host->peers[host->peerCount])
+            return nullptr;
+        const size_t index = (size_t)(peer - host->peers);
+        return (index < PEER_SEEN_MAX) ? &peer_seen[index] : nullptr;
+    }
+
+    void note_peer_seen(const ENetPeer *peer)
+    {
+        PeerSeen *seen = peer_seen_of(peer);
+        if (seen == nullptr)
+            return;
+        seen->rtt = peer->roundTripTime;
+        seen->loss = peer->packetLoss;
+        if (peer->lastReceiveTime != 0)
+            seen->last_heard = peer->lastReceiveTime;
+    }
+
+    /** Why a peer dropped, in words: "timed out (nothing heard for 10.0 s; ping 85 ms, packet loss 3%)". */
+    void describe_drop(const ENetPeer *peer, enet_uint32 data, enum NetDropReason drop_reason, char *out, size_t size)
+    {
+        const PeerSeen *seen = peer_seen_of(peer);
+        char stats[128] = "";
+        if ((seen != nullptr) && (seen->last_heard != 0)) {
+            const enet_uint32 silent = ENET_TIME_DIFFERENCE(enet_time_get(), seen->last_heard);
+            snprintf(stats, sizeof(stats), "nothing heard for %.1f s; ping %u ms, packet loss %.0f%%", silent / 1000.0, (unsigned)seen->rtt,
+                seen->loss * 100.0 / (double)ENET_PEER_PACKET_LOSS_SCALE);
+        }
+        if (drop_reason == NETDROP_TIMEOUT) {
+            snprintf(out, size, "timed out (%s)", (stats[0] != '\0') ? stats : "it never answered");
+        } else if ((data != 0) && (data < NetJoin_Count)) {
+            snprintf(out, size, "disconnected: %s", net_join_reason_text((int)data));
+        } else {
+            snprintf(out, size, "disconnected (it left)");
+        }
+    }
+
+    /** "[::ffff:1.2.3.4]:5556" or "1.2.3.4:5556" to "1.2.3.4" (an IPv4 peer on a dual-stack socket has the prefix). */
+    void bare_address(char *buf)
+    {
+        if (buf[0] == '[') {
+            char *end = strchr(buf, ']');
+            if (end != NULL) {
+                *end = 0;
+            }
+            memmove(buf, buf + 1, strlen(buf + 1) + 1);
+        } else {
+            char *colon = strchr(buf, ':');
+            if ((colon != NULL) && (strchr(colon + 1, ':') == NULL)) {
+                *colon = 0;
+            }
+        }
+        if (strncmp(buf, "::ffff:", 7) == 0) {
+            memmove(buf, buf + 7, strlen(buf + 7) + 1);
+        }
+    }
 
     void log_peer_connection(const ENetPeer *peer, NetUserId user_id, const char *status)
     {
@@ -379,6 +451,7 @@ namespace
         const char *join_type, const char *ip_version)
     {
         LbNetLog("Join: connected successfully via %s (%s)\n", join_type, ip_version);
+        server_drop_detail[0] = '\0';
         net_join_rejection = NetJoin_Accepted;
         punch_phase_active = 0;
         enet_peer_timeout(next_peer, PEER_TIMEOUT_LIMIT, peer_timeout_ms, peer_timeout_ms);
@@ -730,13 +803,16 @@ namespace
         if (data >= NetJoin_MapMismatch && data < NetJoin_Count) {
             netstate.users_leave_reason[user_id] = (enum NetJoinRejection)data;
         }
-        const char *disconnect_reason = "timed out";
-        if (drop_reason == NETDROP_DISCONNECT) {
-            disconnect_reason = "disconnected (clean)";
-        }
+        describe_drop(peer, data, drop_reason, last_drop_detail, sizeof(last_drop_detail));
+        if (user_id == SERVER_ID)
+            snprintf(server_drop_detail, sizeof(server_drop_detail), "%s", last_drop_detail);
         destroy_incoming_queue(user_id);
-        log_peer_connection(peer, user_id, disconnect_reason);
+        log_peer_connection(peer, user_id, last_drop_detail);
         g_drop_callback(user_id, drop_reason);
+        last_drop_detail[0] = '\0';
+        PeerSeen *seen = peer_seen_of(peer);
+        if (seen != nullptr)
+            memset(seen, 0, sizeof(*seen));
     }
 
     /*
@@ -749,6 +825,9 @@ namespace
         }
         for (size_t peer_index = 0; peer_index < host->peerCount; peer_index++) {
             ENetPeer *peer = &host->peers[peer_index];
+            if (peer->state == ENET_PEER_STATE_CONNECTED) {
+                note_peer_seen(peer);
+            }
             if (peer->state == ENET_PEER_STATE_CONNECTED && peer->earliestTimeout != 0 && ENET_TIME_DIFFERENCE(host->serviceTime, peer->earliestTimeout) >= peer_timeout_ms) {
                 enet_peer_reset(peer);
                 report_dropped_peer(peer, NetJoin_Accepted, NETDROP_TIMEOUT);
@@ -814,13 +893,25 @@ namespace
                         reason = new_user(&user_id, role);
                     }
                 }
+                if (PeerSeen *seen = peer_seen_of(enet_event.peer)) {
+                    memset(seen, 0, sizeof(*seen));
+                    seen->last_heard = enet_time_get();
+                }
                 if (reason == NetJoin_Accepted) {
                     log_peer_connection(enet_event.peer, user_id, "accepted");
                     enet_peer_timeout(enet_event.peer, PEER_TIMEOUT_LIMIT, peer_timeout_ms, peer_timeout_ms);
                     enet_event.peer->data = reinterpret_cast<void *>(user_id);
                 } else {
                     log_peer_connection(enet_event.peer, INVALID_USER_ID, "rejected");
-                    LbNetLog("ENet: rejecting peer, reason %d\n", (int)reason);
+                    LbNetLog("ENet: rejecting peer, reason %d (%s)\n", (int)reason, net_join_reason_text((int)reason));
+                    /* "the game had already started" is the first step of every thin-client join (it comes back as a
+                       spectator): only the network log has it */
+                    if (!client_peer && server_admin_enabled() && (reason != NetJoin_InGame)) {
+                        char address[ENET_ADDRESS_BUFFER_SIZE] = {0};
+                        enet_address_get_host_ip(&enet_event.peer->address, address, sizeof(address));
+                        bare_address(address);
+                        server_admin_log("net", "%s was turned away: %s", address, net_join_reason_text((int)reason));
+                    }
                     enet_peer_disconnect_now(enet_event.peer, reason);
                 }
                 break;
@@ -1274,6 +1365,18 @@ unsigned int GetDownloadRateBytesPerSecond()
         return 0;
     }
     return sample_transfer_bytes_per_second(&download_rate_tracker, &host->totalReceivedData);
+}
+
+/** A client: why its server dropped, in words ("" when it has not). */
+const char *enet_server_drop_detail(void)
+{
+    return server_drop_detail;
+}
+
+/** Why the user being dropped right now dropped (only during the drop callback; "" otherwise). */
+const char *enet_last_drop_detail(void)
+{
+    return last_drop_detail;
 }
 
 uint16_t enet_get_bound_port(void)

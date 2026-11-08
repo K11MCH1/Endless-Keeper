@@ -1061,6 +1061,20 @@ void world_raids_reset(void)
     memset(dn_inv, 0, sizeof(dn_inv));
 }
 
+void world_raids_player_retreat(PlayerNumber plyr_idx)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
+        return;
+    struct DnInvasion *inv = &dn_inv[plyr_idx];
+    if (!inv->active || inv->retreating)
+        return;
+    inv->retreating = 1;
+    inv->retreat_turn = game.play_gameturn;
+    for (int s = 0; s < inv->nspots; s++)
+        world_load_chunks_round_world(inv->spot_x[s], inv->spot_y[s], 1);
+    SYNCLOG("World: the heroes raiding player %d go home (its keeper starts again)", (int)plyr_idx);
+}
+
 void world_daynight_level_end(void)
 {
     dn_dawn_save = false;

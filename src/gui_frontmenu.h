@@ -79,6 +79,7 @@ enum GUI_Menus {
   GMnu_FEENDLESS          = 50,
   GMnu_FEENDLESS_LOAD     = 51,
   GMnu_FEWORLD_LIST       = 52,
+  GMnu_WORLD_RESPAWN      = 53, /* endless world: "Start again" or "Quit" after a defeat */
 };
 
 #define MENU_INVALID_ID -1

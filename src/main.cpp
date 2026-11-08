@@ -157,6 +157,7 @@
 #include "world_stream.h"
 #include "world_menu.h"
 #include "server_admin.h"
+#include "net_diag.h"
 #include "post_inc.h"
 
 #ifdef _MSC_VER
@@ -2171,6 +2172,18 @@ static short process_command_line(unsigned short argc, char *argv[])
   return (bad_param==0);
 }
 
+/** A dedicated endless-world server (-dedicated): it runs next to the player's own game in the same folder. */
+static TbBool command_line_is_dedicated(unsigned short argument_count, char *argument_values[])
+{
+    for (int argument_index = 1; argument_index < argument_count; argument_index++) {
+        if (argument_values[argument_index] && (argument_values[argument_index][0] == '-' || argument_values[argument_index][0] == '/')) {
+            if (strcasecmp(argument_values[argument_index] + 1, "dedicated") == 0)
+                return true;
+        }
+    }
+    return false;
+}
+
 static const char* determine_log_filename(unsigned short argument_count, char *argument_values[])
 {
     for (int argument_index = 1; argument_index < argument_count; argument_index++) {
@@ -2182,6 +2195,9 @@ static const char* determine_log_filename(unsigned short argument_count, char *a
             }
         }
     }
+    /* a dedicated server has its own log: the player's game in the same folder would write over keeperfx.log */
+    if (command_line_is_dedicated(argument_count, argument_values))
+        return "keeperfx_server.log";
     return log_file_name;
 }
 
@@ -2254,6 +2270,13 @@ int LbBullfrogMain(unsigned short argc, char *argv[])
     // Determine correct log file based on command line flags
     const char* selected_log_file_name = determine_log_filename(argc, argv);
     LbErrorLogSetup("/", selected_log_file_name, 5);
+    {
+        /* the network log: appended (it keeps earlier runs), with real addresses and the time of every line */
+        const TbBool dedicated = command_line_is_dedicated(argc, argv);
+        char net_log_path[DISKPATH_SIZE];
+        if (LbFileMakeFullPath(1, "/", dedicated ? "keeperfx_server_net.log" : "keeperfx_net.log", net_log_path, sizeof(net_log_path)) == 1)
+            net_log_file_setup(net_log_path, dedicated ? "dedicated server" : "game");
+    }
 
     retval = process_command_line(argc,argv);
     if (retval < 1)

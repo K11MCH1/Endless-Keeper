@@ -51,6 +51,10 @@ uint16_t enet_get_bound_ipv6_port(void);
 int enet_user_ms_since_receive(int user);
 /** A connected user's IP address as text (a dedicated server's console and bans); 0 when there is one. */
 int enet_user_address(int user, char *buf, size_t len);
+/** Why the user being dropped right now dropped, in words (during the drop callback only). */
+const char *enet_last_drop_detail(void);
+/** A client: why its server dropped, in words ("" when it has not). */
+const char *enet_server_drop_detail(void);
 
 #ifdef __cplusplus
 }

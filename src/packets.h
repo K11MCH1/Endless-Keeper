@@ -204,6 +204,7 @@ enum TbPacketAction {
         PckA_CheatApplySpell,
         PckA_CheatKillCreature,
         PckA_SetTimestamp,
+        PckA_WorldRespawn,       /* endless world: a defeated keeper starts again (2026-11-08) */
 };
 
 /** Packet flags for non-action player operation. **/

@@ -55,6 +55,13 @@ void world_imp_mined_gold(struct Thing *creatng);
 void world_set_seat_token(PlayerNumber plyr_idx, uint64_t token);
 /** A player joined the running world (server): a new start dungeon, gold, the kit, and the view on the heart. */
 void world_seat_joined(PlayerNumber plyr_idx);
+/** Start again (2026-11-08): may this defeated keeper's seat start again (an endless world's human seat)? */
+TbBool world_seat_can_respawn(PlayerNumber plyr_idx);
+/** Frees the defeated keeper's seat (its leftovers nobody's, its records from zero) and gives it to the same player
+ *  again with a new start dungeon at the next spawn point. Game state: the server, or the one machine, does it. */
+TbBool world_seat_respawn(PlayerNumber plyr_idx);
+/** This machine's camera to its keeper's heart (false while the heart isn't known here yet). */
+TbBool world_local_camera_to_heart(void);
 /** After each game turn, once game.play_gameturn has moved on (between turns, like a save from the menu). */
 void world_after_turn(void);
 /** When the level ends or another level is loaded: frees the world. */

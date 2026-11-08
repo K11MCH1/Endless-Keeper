@@ -510,7 +510,9 @@ static void thin_seat_joiners(void)
             /* its own seat: by its token; a seat from before the tokens, by the name */
             const TbBool mine = ((token != 0) && (world_seat_token(p) == token))
                 || ((world_seat_token(p) == 0) && (strcmp(player->player_name, spectator->name) == 0));
-            if (player_exists(player) && player_is_placeholder(player) && (player->victory_state == VicS_Undecided)
+            /* a defeated seat too (2026-11-08): its player comes back to it, and can start again from there */
+            if (player_exists(player) && player_is_placeholder(player)
+             && ((player->victory_state == VicS_Undecided) || (player->victory_state == VicS_LostLevel))
              && (get_player_primary_user(player) < 0) && mine) {
                 seat = p;
                 returning = true;

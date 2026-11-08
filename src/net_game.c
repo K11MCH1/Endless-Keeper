@@ -61,6 +61,7 @@
 #include "thing_creature.h"
 #include "gui_frontmenu.h"
 #include "server_admin.h"
+#include "net_diag.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -972,7 +973,19 @@ TbBool network_thin_client_server_gone(void)
     const char *why = server_farewell_text();
     if ((why == NULL) && (net_join_rejection >= NetJoin_Kicked) && (net_join_rejection <= NetJoin_BannedJoin))
         why = net_join_error_text(net_join_rejection);
-    world_menu_return_to_list((why != NULL) ? why : (timed_out ? "The connection to the world's server was lost." : "The world's server has closed."));
+    char lost[320];
+    if ((why == NULL) && timed_out)
+    {
+        /* why, as ENet saw it: how long nothing came, the ping and the packet loss before */
+        const char *detail = enet_server_drop_detail();
+        if (detail[0] != '\0')
+            snprintf(lost, sizeof(lost), "The connection to the world's server was lost: %s.", detail);
+        else
+            snprintf(lost, sizeof(lost), "The connection to the world's server was lost.");
+        why = lost;
+    }
+    LbNetLog("Thin client: back to the World List: %s\n", (why != NULL) ? why : "the server closed the world");
+    world_menu_return_to_list((why != NULL) ? why : "The world's server has closed.");
     server_farewell_set(NULL);
     turn_off_all_menus();
     free_swipe_graphic();
@@ -1137,7 +1150,12 @@ TbBool network_open_running_game(void)
     if (netstate_dedicated() && !wnet_hub_off)
     {
         if (wnet_hub_start(wnet_hub_port_wanted))
-            server_admin_log("world", "World List hub on TCP port %d (ws://<this PC>:%d/hub)", wnet_hub_port_wanted, wnet_hub_port_wanted);
+        {
+            char lan[64];
+            if (!net_local_ipv4(lan, sizeof(lan)))
+                snprintf(lan, sizeof(lan), "<this PC>");
+            server_admin_log("world", "World List hub on TCP port %d (ws://%s:%d/hub)", wnet_hub_port_wanted, lan, wnet_hub_port_wanted);
+        }
         else
             server_admin_log("warn", "The World List hub could not start on TCP port %d (in use?)", wnet_hub_port_wanted);
     }

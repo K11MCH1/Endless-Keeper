@@ -218,6 +218,7 @@ struct GuiMenu *menu_list[] = {
     &world_endless_menu,//50
     &world_endless_load_menu,
     &world_list_menu,
+    &world_respawn_menu, //53
     NULL,
 };
 
@@ -2120,6 +2121,7 @@ short is_toggleable_menu(short mnu_idx)
   case GMnu_FEENDLESS:
   case GMnu_FEENDLESS_LOAD:
   case GMnu_FEWORLD_LIST:
+  case GMnu_WORLD_RESPAWN:
       return false;
   default:
       return true;

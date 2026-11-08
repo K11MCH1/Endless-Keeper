@@ -37,7 +37,13 @@
 #include "world_progress.h"
 #include "world_daynight.h"
 #include "world_menu.h"
+#include "world_net.h"
+#include "net_diag.h"
+#include "net_portforward.h"
 #include "ver_defs.h"
+#ifndef _WIN32
+#include <sys/socket.h>
+#endif
 #include "post_inc.h"
 
 #define ADMIN_IN_MAX      8192
@@ -68,6 +74,10 @@ static struct {
     NetUserId dropping;        /* the user a kick or ban is dropping (its leave is logged by the kick) */
     uint16_t heroes_seen[PLAYERS_MAX];
     TbBool heroes_known[PLAYERS_MAX];
+    unsigned long seq;         /* the number of the last log event (Keeper Server skips the ones it has seen) */
+    char drop_why[224];        /* why this side dropped the last admin connection ("" when it didn't) */
+    unsigned long drops;       /* admin connections this side dropped */
+    char net_sent[512];        /* the network facts last sent (a new "net" line when they change) */
 } A;
 
 /* bans and mutes: a token (0 when not known), an address ("" when not known) and a name */
@@ -150,10 +160,20 @@ static void emit(const char *json)
     out_append(json);
 }
 
-static void drop_admin(void)
+/** Closes the admin connection; why (and the socket error, 0 for none) goes to the network log, and to Keeper
+    Server when it connects again. */
+static void drop_admin(const char *why, int err)
 {
     if (A.c != ENET_SOCKET_NULL)
+    {
+        if (err != 0)
+            snprintf(A.drop_why, sizeof(A.drop_why), "%s: %s", why, net_socket_error_text(err));
+        else
+            snprintf(A.drop_why, sizeof(A.drop_why), "%s", why);
+        A.drops++;
+        LbNetLog("Server admin: dropped the admin connection (%s); %lu dropped so far\n", A.drop_why, A.drops);
         enet_socket_destroy(A.c);
+    }
     A.c = ENET_SOCKET_NULL;
     A.authed = false;
     A.inlen = 0;
@@ -165,16 +185,43 @@ static long uptime_s(void)
     return (long)(time(NULL) - A.started);
 }
 
+/* the admin socket is read and written with the system's calls, which tell "nothing yet" from a real error
+   (ENet's own calls give 0 for both) */
+static int admin_send(const char *data, size_t len)
+{
+#ifdef _WIN32
+    return send(A.c, data, (int)min(len, (size_t)65536), 0);
+#else
+    int flags = 0;
+#ifdef MSG_NOSIGNAL
+    flags |= MSG_NOSIGNAL;
+#endif
+    return (int)send(A.c, data, min(len, (size_t)65536), flags);
+#endif
+}
+
+static int admin_recv(char *data, size_t len)
+{
+#ifdef _WIN32
+    return recv(A.c, data, (int)len, 0);
+#else
+    return (int)recv(A.c, data, len, 0);
+#endif
+}
+
 static void flush_out(int tries)
 {
     for (int k = 0; (k < tries) && (A.outlen > 0) && (A.c != ENET_SOCKET_NULL); k++)
     {
-        ENetBuffer b = {.data = A.out, .dataLength = A.outlen};
-        const int n = enet_socket_send(A.c, NULL, &b, 1);
+        const int n = admin_send(A.out, A.outlen);
         if (n < 0)
         {
-            drop_admin();
-            return;
+            const int err = net_socket_error();
+            if (!net_socket_would_block(err))
+            {
+                drop_admin("sending to Keeper Server failed", err);
+                return;
+            }
         }
         if (n > 0)
         {
@@ -417,11 +464,14 @@ void server_admin_log(const char *kind, const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(text, sizeof(text), fmt, ap);
     va_end(ap);
+    if (strcmp(kind, "net") == 0)
+        LbNetLog("Console: %s\n", text); /* the network log keeps the network's console lines too */
     char tj[ADMIN_LINE_MAX / 2 + 64], kj[48];
     json_str(tj, sizeof(tj), text);
     json_str(kj, sizeof(kj), kind);
     char line[ADMIN_LINE_MAX];
-    snprintf(line, sizeof(line), "{\"t\":\"log\",\"kind\":%s,\"turn\":%lu,\"time\":%ld,\"text\":%s}", kj,
+    A.seq++;
+    snprintf(line, sizeof(line), "{\"t\":\"log\",\"kind\":%s,\"seq\":%lu,\"turn\":%lu,\"time\":%ld,\"text\":%s}", kj, A.seq,
         (unsigned long)game.play_gameturn, uptime_s(), tj);
     emit(line);
 }
@@ -434,9 +484,10 @@ void server_admin_chat(int user, int plyr_idx, const char *name, const char *msg
     json_str(nj, sizeof(nj), name);
     json_str(mj, sizeof(mj), msg);
     char line[ADMIN_LINE_MAX];
+    A.seq++;
     snprintf(line, sizeof(line),
-        "{\"t\":\"log\",\"kind\":\"chat\",\"turn\":%lu,\"time\":%ld,\"name\":%s,\"seat\":%d,\"user\":%d,\"text\":%s}",
-        (unsigned long)game.play_gameturn, uptime_s(), nj, plyr_idx, user, mj);
+        "{\"t\":\"log\",\"kind\":\"chat\",\"seq\":%lu,\"turn\":%lu,\"time\":%ld,\"name\":%s,\"seat\":%d,\"user\":%d,\"text\":%s}",
+        A.seq, (unsigned long)game.play_gameturn, uptime_s(), nj, plyr_idx, user, mj);
     emit(line);
 }
 
@@ -493,11 +544,27 @@ void server_admin_user_left(int user, int how)
         return;
     if (netstate.users[user].progress == USER_UNUSED)
         return;
+    const char *detail = enet_last_drop_detail(); /* why ENet dropped it ("" for a drop this side asked for) */
     const PlayerNumber p = get_user_state(user)->player_id;
     if ((p < 0) || (p >= PLAYERS_COUNT))
+    {
+        /* gone before it had a seat: a join that failed */
+        const char *name = (netstate.users[user].name[0] != '\0') ? netstate.users[user].name : "a joiner";
+        if (detail[0] != '\0')
+            server_admin_log("net", "%s (user %d) dropped before it had a seat: %s", name, user, detail);
+        else
+            server_admin_log("net", "%s (user %d) was dropped before it had a seat", name, user);
         return;
-    static const char *hows[] = {"left the world", "timed out", "was dropped (it reconnected)"};
-    server_admin_log("leave", "%s %s", server_admin_player_name(p), hows[((how >= 0) && (how < 3)) ? how : 0]);
+    }
+    if ((how == 1) && (strncmp(detail, "timed out", 9) == 0))
+        server_admin_log("leave", "%s %s", server_admin_player_name(p), detail);
+    else if ((how == 0) && (strncmp(detail, "disconnected: ", 14) == 0))
+        server_admin_log("leave", "%s left the world (%s)", server_admin_player_name(p), detail + 14);
+    else
+    {
+        static const char *hows[] = {"left the world", "timed out", "was dropped (it reconnected)"};
+        server_admin_log("leave", "%s %s", server_admin_player_name(p), hows[((how >= 0) && (how < 3)) ? how : 0]);
+    }
 }
 
 void server_admin_shutdown(TbBool restart)
@@ -793,9 +860,57 @@ static void admin_hello(void)
     const PlayerNumber *seats = NULL;
     const int n = world_seat_players(&seats);
     char line[512];
-    snprintf(line, sizeof(line), "{\"t\":\"hello\",\"turn\":%lu,\"time\":%ld,\"version\":\"%s\",\"seed\":%s,\"max\":%d}",
-        (unsigned long)game.play_gameturn, uptime_s(), VER_STRING, sj, n);
+    /* run: this process (the event numbers start again in a new one); seq: the last event's number */
+    snprintf(line, sizeof(line),
+        "{\"t\":\"hello\",\"turn\":%lu,\"time\":%ld,\"version\":\"%s\",\"seed\":%s,\"max\":%d,\"run\":%ld,\"seq\":%lu}",
+        (unsigned long)game.play_gameturn, uptime_s(), VER_STRING, sj, n, (long)A.started, A.seq);
     out_append(line);
+}
+
+/** The network facts Keeper Server shows: the game's UDP port, this PC's address on its network, the address the
+    internet sees (STUN), the router's port forwarding, the World List hub's port. */
+static void net_facts(char *buf, size_t size, char *lan, size_t lan_size, char *fwd, size_t fwd_size, int *forwarded)
+{
+    net_local_ipv4(lan, lan_size);
+    *forwarded = 0;
+    port_forward_status(fwd, fwd_size, forwarded);
+    char lj[80], pj[80], fj[400];
+    json_str(lj, sizeof(lj), lan);
+    json_str(pj, sizeof(pj), external_ipv4_address);
+    json_str(fj, sizeof(fj), fwd);
+    snprintf(buf, size, "{\"t\":\"net\",\"port\":%d,\"lan\":%s,\"public\":%s,\"public_port\":%d,\"forward\":%s,\"forwarded\":%s,\"hub\":%d}",
+        (int)enet_get_bound_port(), lj, pj, (int)external_ipv4_port, fj, (*forwarded != 0) ? "true" : "false", wnet_hub_port());
+}
+
+/** A new "net" line when the facts change (checked every second), and a console line when the addresses do. */
+static void net_facts_update(void)
+{
+    char line[512], lan[64], fwd[192];
+    int forwarded;
+    net_facts(line, sizeof(line), lan, sizeof(lan), fwd, sizeof(fwd), &forwarded);
+    if (strcmp(line, A.net_sent) == 0)
+        return;
+    snprintf(A.net_sent, sizeof(A.net_sent), "%s", line);
+    out_append(line); /* not kept: a fresh one goes to each admin that connects */
+    static char logged[512];
+    char what[512];
+    const int port = (int)enet_get_bound_port();
+    if (port <= 0)
+        return;
+    snprintf(what, sizeof(what), "%s|%s|%d|%s", lan, external_ipv4_address, (int)external_ipv4_port, fwd);
+    if ((strcmp(what, logged) == 0) || (strncmp(fwd, "asking", 6) == 0))
+        return;
+    snprintf(logged, sizeof(logged), "%s", what);
+    char here[96], there[128];
+    if (lan[0] != '\0')
+        snprintf(here, sizeof(here), "%s:%d on this network", lan, port);
+    else
+        snprintf(here, sizeof(here), "UDP port %d (this PC's address is unknown)", port);
+    if (external_ipv4_address[0] != '\0')
+        snprintf(there, sizeof(there), "%s:%d from the internet", external_ipv4_address, (external_ipv4_port > 0) ? (int)external_ipv4_port : port);
+    else
+        snprintf(there, sizeof(there), "the internet address is unknown (STUN didn't answer)");
+    server_admin_log("net", "Hosting at %s; %s%s%s", here, there, (fwd[0] != '\0') ? "; " : "", fwd);
 }
 
 static void admin_lines(void)
@@ -817,14 +932,25 @@ static void admin_lines(void)
         {
             if ((strncmp(cmd, "auth ", 5) != 0) || (A.token[0] == '\0') || (strcmp(cmd + 5, A.token) != 0))
             {
-                SYNCLOG("Server admin: a connection without the token");
-                drop_admin();
+                drop_admin("a connection without the right token", 0);
                 return;
             }
             A.authed = true;
+            LbNetLog("Server admin: Keeper Server connected\n");
             admin_hello();
             for (int i = 0; i < A.events_count; i++)
                 out_append(A.events[(A.events_head + i) % ADMIN_EVENTS_KEPT]);
+            if (A.drop_why[0] != '\0')
+            {
+                /* why this side dropped the last connection */
+                char wj[300], line[400];
+                json_str(wj, sizeof(wj), A.drop_why);
+                snprintf(line, sizeof(line), "{\"t\":\"dropped\",\"why\":%s,\"drops\":%lu}", wj, A.drops);
+                out_append(line);
+                A.drop_why[0] = '\0';
+            }
+            if (A.net_sent[0] != '\0')
+                out_append(A.net_sent);
             continue;
         }
         run_command(cmd);
@@ -885,7 +1011,7 @@ void server_admin_poll(void)
     if (s != ENET_SOCKET_NULL)
     {
         if (A.c != ENET_SOCKET_NULL)
-            drop_admin(); /* a new admin takes over */
+            drop_admin("another Keeper Server connection took over", 0);
         enet_socket_set_option(s, ENET_SOCKOPT_NONBLOCK, 1);
         A.c = s;
         A.authed = false;
@@ -896,19 +1022,23 @@ void server_admin_poll(void)
         return;
     for (;;)
     {
-        enet_uint32 wait = ENET_SOCKET_WAIT_RECEIVE;
-        if ((enet_socket_wait(A.c, &wait, 0) < 0) || !(wait & ENET_SOCKET_WAIT_RECEIVE))
-            break;
         if (A.inlen >= ADMIN_IN_MAX - 1)
         {
-            drop_admin();
+            drop_admin("a command longer than 8 KB", 0);
             return;
         }
-        ENetBuffer b = {.data = A.in + A.inlen, .dataLength = ADMIN_IN_MAX - 1 - A.inlen};
-        const int n = enet_socket_receive(A.c, NULL, &b, 1);
-        if (n <= 0)
+        const int n = admin_recv(A.in + A.inlen, ADMIN_IN_MAX - 1 - A.inlen);
+        if (n == 0)
         {
-            drop_admin();
+            drop_admin("Keeper Server closed the connection", 0);
+            return;
+        }
+        if (n < 0)
+        {
+            const int err = net_socket_error();
+            if (net_socket_would_block(err))
+                break; /* nothing more to read now */
+            drop_admin("reading from Keeper Server failed", err);
             return;
         }
         A.inlen += (size_t)n;
@@ -958,6 +1088,7 @@ void server_admin_turn(void)
     }
     if ((game.play_gameturn % tps) != 0)
         return;
+    net_facts_update();
     double sim_ms = 0, stream_ms = 0;
     netstate_server_timing(&sim_ms, &stream_ms);
     char line[512];

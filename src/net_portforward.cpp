@@ -41,9 +41,11 @@
 #endif
 
 #include <atomic>
+#include <cstdarg>
 #include <cstdio>
 #include <ctime>
 #include <future>
+#include <mutex>
 #ifdef __WIN32__
 #include <winsock2.h>
 #include <iphlpapi.h>
@@ -64,6 +66,36 @@ static enum PortForwardMethod active_method = PORT_FORWARD_NONE;
 static uint16_t mapped_port = 0;
 static std::future<void> mapping_task;
 static std::atomic<uint32_t> mapping_generation = 0;
+
+/* what the last try gave, for the server's admin (read on the game thread, written on the mapping thread) */
+static std::mutex status_mutex;
+static char status_text[192] = "";
+static int status_forwarded = 0;
+static std::atomic<uint32_t> status_generation = 0;
+
+static void set_status(int forwarded, const char *format, ...)
+{
+    char text[sizeof(status_text)];
+    va_list val;
+    va_start(val, format);
+    vsnprintf(text, sizeof(text), format, val);
+    va_end(val);
+    {
+        std::lock_guard<std::mutex> lock(status_mutex);
+        snprintf(status_text, sizeof(status_text), "%s", text);
+        status_forwarded = forwarded;
+    }
+    status_generation++;
+}
+
+uint32_t port_forward_status(char *text, size_t size, int *forwarded)
+{
+    std::lock_guard<std::mutex> lock(status_mutex);
+    snprintf(text, size, "%s", status_text);
+    if (forwarded != NULL)
+        *forwarded = status_forwarded;
+    return status_generation;
+}
 
 static struct UPNPUrls upnp_urls;
 static struct IGDdatas upnp_data;
@@ -192,6 +224,7 @@ static int natpmp_add_port_mapping(uint16_t port) {
         }
     }
     LbNetLog("NAT-PMP: port forwarding active on port %u\n", port);
+    set_status(1, "UDP port %u forwarded by the router (NAT-PMP)", port);
     mapped_port = port;
     active_method = PORT_FORWARD_NATPMP;
     closenatpmp(&natpmp);
@@ -202,6 +235,7 @@ static void port_forward_add_mapping_internal(uint16_t port)
 {
     if (is_cgnat_detected()) {
         LbNetLog("CGNAT detected, automatic port forwarding unavailable\n");
+        set_status(0, "no port forwarding: the internet provider shares one address between many homes (CGNAT)");
         return;
     }
     if (natpmp_add_port_mapping(port)) {
@@ -211,6 +245,7 @@ static void port_forward_add_mapping_internal(uint16_t port)
     struct UPNPDev *device_list = upnpDiscover(UPNP_TIMEOUT_MS, NULL, NULL, 0, 0, 2, &error);
     if (!device_list) {
         LbNetLog("UPnP: no devices found, port forwarding unavailable, UDP hole punching will be used\n");
+        set_status(0, "no port forwarding: no router answered UPnP or NAT-PMP (forward UDP port %u by hand)", port);
         return;
     }
 #if (MINIUPNPC_API_VERSION >= 18)
@@ -221,6 +256,7 @@ static void port_forward_add_mapping_internal(uint16_t port)
     freeUPNPDevlist(device_list);
     if (internet_gateway_device_result == 0) {
         LbNetLog("UPnP: router found but no valid IGD, port forwarding unavailable, UDP hole punching will be used\n");
+        set_status(0, "no port forwarding: the router doesn't offer it (UPnP off?); forward UDP port %u by hand", port);
         FreeUPNPUrls(&upnp_urls);
         return;
     }
@@ -234,11 +270,14 @@ static void port_forward_add_mapping_internal(uint16_t port)
         result = UPNP_AddPortMapping(upnp_urls.controlURL, upnp_data.first.servicetype, port_string, port_string, upnp_lanaddr, "KeeperFX", "UDP", "", "3600");
         if (result != UPNPCOMMAND_SUCCESS) {
             LbNetLog("UPnP: failed to add port mapping (error %d), UDP hole punching will be used\n", result);
+            set_status(0, "no port forwarding: the router refused it (UPnP error %d, %s); forward UDP port %u by hand", result,
+                strupnperror(result), port);
             FreeUPNPUrls(&upnp_urls);
             return;
         }
     }
     LbNetLog("UPnP: port forwarding active on port %u\n", port);
+    set_status(1, "UDP port %u forwarded by the router (UPnP, to %s)", port, upnp_lanaddr);
     mapped_port = port;
     active_method = PORT_FORWARD_UPNP;
 }
@@ -302,7 +341,10 @@ void port_forward_set_mapping(uint16_t port)
 #endif
         port_forward_remove_mapping();
         if (port != 0 && generation == mapping_generation) {
+            set_status(0, "asking the router to forward UDP port %u", port);
             port_forward_add_mapping_internal(port);
+        } else if (port == 0) {
+            set_status(0, "%s", "");
         }
 #ifdef _WIN32
         WSACleanup();

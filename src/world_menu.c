@@ -56,6 +56,8 @@
 #include "config_settings.h"
 #include "server_admin.h"
 #include "net_state.h"
+#include "packets.h"
+#include "observer.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -179,7 +181,7 @@ TbBool world_menu_mp_host = false;
  *  while one of the menus (main, Endless Mode, endless saves, World List) is up: E Endless Mode, M main menu,
  *  L Load Game, N New Run, C Continue, R<n> the n-th row of the save list (0 = newest), H Host (a new run
  *  open to the network), J Join (the World List), W the World List, P<n> a screenshot of the frame, T<n> a chat
- *  line, G<n> join the n-th world of the list, A join 127.0.0.1:5556, D<n>/U<n> scroll the list, K<n> the name becomes Tester<n>, anything else
+ *  line, G<n> join the n-th world of the list, A join 127.0.0.1:5556, X<port> join 127.0.0.1:<port> (a failed join), D<n>/U<n> scroll the list, K<n> the name becomes Tester<n>, anything else
  *  waits. The steps carry on after a game, so one string can drive a whole session. */
 void world_menu_test_tick(void)
 {
@@ -230,6 +232,14 @@ void world_menu_test_tick(void)
     }
     case 'G': wl_join_server(arg); break;
     case 'A': wl_join("127.0.0.1:5556"); break;
+    case 'X':
+    {
+        /* a join that fails (nothing listens on that port): its box must come up over the list */
+        char addr[32];
+        snprintf(addr, sizeof(addr), "127.0.0.1:%d", (arg > 0) ? arg : 5599);
+        wl_join(addr);
+        break;
+    }
     case 'D': wl_test_scroll(max(arg, 1)); break;
 
     case 'U': wl_test_scroll(-max(arg, 1)); break;
@@ -571,7 +581,7 @@ void world_menu_load_setup(void)
 #define WL_CHAT_LINES  5
 /* a thin client left its world: the menu after the game is the World List, with why (empty: it chose to leave) */
 static TbBool wl_return_pending = false;
-static char wl_return_message[160] = "";
+static char wl_return_message[320] = "";
 static int wl_scroll = 0;
 static int wl_selected = -1;
 static char wl_selected_key[WNET_HOST_MAX + 16];
@@ -654,11 +664,17 @@ static void wl_draw_status(struct GuiButton *gbtn)
 }
 
 
+/* the columns, in thousandths of a row: players, ping, the world's name, and its address on the right */
+#define WL_COL_PING   120
+#define WL_COL_WORLD  225
+#define WL_COL_ADDR   630
+
 static void wl_draw_header(struct GuiButton *gbtn)
 {
-    wl_text_in(gbtn, 0, 140, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_LEFT, "Players");
-    wl_text_in(gbtn, 140, 140, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_LEFT, "Ping");
-    wl_text_in(gbtn, 280, 720, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_LEFT, "World");
+    wl_text_in(gbtn, 0, WL_COL_PING, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_LEFT, "Players");
+    wl_text_in(gbtn, WL_COL_PING, WL_COL_WORLD - WL_COL_PING, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_LEFT, "Ping");
+    wl_text_in(gbtn, WL_COL_WORLD, WL_COL_ADDR - WL_COL_WORLD, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_LEFT, "World");
+    wl_text_in(gbtn, WL_COL_ADDR, 1000 - WL_COL_ADDR, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_RIGHT, "Address");
 }
 
 static int wl_row_index(const struct GuiButton *gbtn)
@@ -681,9 +697,15 @@ static void wl_row_draw(struct GuiButton *gbtn)
         snprintf(ping, sizeof(ping), "%d ms", sv->ping_ms);
     else
         snprintf(ping, sizeof(ping), "-");
-    wl_text_in(gbtn, 0, 140, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_LEFT, players);
-    wl_text_in(gbtn, 140, 140, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_LEFT, ping);
-    wl_text_in(gbtn, 280, 720, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_LEFT, sv->title);
+    char addr[WNET_HOST_MAX + 16];
+    if (strchr(sv->host, ':') != NULL)
+        snprintf(addr, sizeof(addr), "[%s]:%d", sv->host, sv->port); /* IPv6 */
+    else
+        snprintf(addr, sizeof(addr), "%s:%d", sv->host, sv->port);
+    wl_text_in(gbtn, 0, WL_COL_PING, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_LEFT, players);
+    wl_text_in(gbtn, WL_COL_PING, WL_COL_WORLD - WL_COL_PING, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_LEFT, ping);
+    wl_text_in(gbtn, WL_COL_WORLD, WL_COL_ADDR - WL_COL_WORLD, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_LEFT, sv->title);
+    wl_text_in(gbtn, WL_COL_ADDR, 1000 - WL_COL_ADDR, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_RIGHT, addr);
 }
 
 static void wl_row_maintain(struct GuiButton *gbtn)
@@ -692,6 +714,19 @@ static void wl_row_maintain(struct GuiButton *gbtn)
         gbtn->flags |= LbBtnF_Enabled;
     else
         gbtn->flags &= ~LbBtnF_Enabled;
+}
+
+/** Back to the World List after a join that didn't work. The join's own error box ("Unable to join game") was
+ *  opened before the list's menu, which would then be drawn over it: it is closed, and opened again on top once the
+ *  list is up (wl_title_maintain, as for a world that ended). */
+static void wl_back_to_list(void)
+{
+    if (menu_id_to_number(GMnu_FEERROR_BOX) >= 0)
+    {
+        snprintf(wl_return_message, sizeof(wl_return_message), "%s", gui_message_text);
+        frontend_close_error_box(NULL);
+    }
+    frontend_set_state(FeSt_WORLD_LIST);
 }
 
 /** Joins the world at host[:port], the -connect way. */
@@ -710,7 +745,7 @@ static void wl_join(const char *address)
     LbNetwork_InitSessionsFromCmdLine(addr);
     if (!setup_network_service(FrontendNetSvc_Online))
     {
-        frontend_set_state(FeSt_WORLD_LIST);
+        wl_back_to_list();
         return;
     }
     frontnet_service_setup();
@@ -726,7 +761,7 @@ static void wl_join(const char *address)
     if (frontend_menu_state == FeSt_NET_SESSION)
     {
         LbNetwork_Stop();
-        frontend_set_state(FeSt_WORLD_LIST);
+        wl_back_to_list();
     }
 }
 
@@ -1147,3 +1182,106 @@ void world_autosave(const char *why)
 #ifdef __cplusplus
 }
 #endif
+
+/******************************************************************************/
+/* Start again (2026-11-08): 5 seconds after this machine's keeper is defeated in an endless world, a box asks
+   "Start again" (the seat is freed and the player gets a new start dungeon at the next spawn point: the start's gold
+   and kit, level 1) or "Quit". The request goes to the server as a packet; the box comes back if nothing happened
+   after a while (no place for a new start, a lost packet). */
+#define WR_PROMPT_MS 5000   /* after the defeat */
+#define WR_RETRY_MS 15000   /* asked again when the keeper hasn't started again by then */
+static Uint64 wr_defeat_seen = 0;   /* when this machine saw its keeper defeated (0: it isn't) */
+static Uint64 wr_asked_at = 0;      /* when "Start again" was clicked (0: not yet) */
+static TbBool wr_shown = false;     /* the box was shown for this defeat */
+static Uint64 wr_camera_until = 0;  /* started again: the camera goes to the new heart once it is here (until then) */
+static char wr_title[] = "You have been defeated";
+static char wr_again[] = "Start again";
+static char wr_quit_text[] = "Quit";
+
+static void wr_start_again(struct GuiButton *gbtn)
+{
+    (void)gbtn;
+    struct PlayerInfo *player = get_my_player();
+    SYNCLOG("World: this keeper asks to start again");
+    wr_asked_at = SDL_GetTicks();
+    set_players_packet_action(player, PckA_WorldRespawn, 0, 0, 0, 0);
+}
+
+static void wr_quit(struct GuiButton *gbtn)
+{
+    SYNCLOG("World: this defeated keeper quits");
+    gui_quit_game(gbtn);
+}
+
+static struct GuiButtonInit world_respawn_buttons[] = {
+  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 0, NULL,           NULL, NULL, 0, 999, 12, 999, 12, 260, 32, gui_area_text, 2, GUIStr_Empty, 0, {.str = wr_title},     0, NULL },
+  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 1, wr_start_again, NULL, NULL, 0,  18, 58,  18, 58, 140, 32, gui_area_text, 1, GUIStr_Empty, 0, {.str = wr_again},     0, NULL },
+  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 1, wr_quit,        NULL, NULL, 0, 172, 58, 172, 58, 110, 32, gui_area_text, 1, GUIStr_Empty, 0, {.str = wr_quit_text}, 0, NULL },
+  {              -1, BID_DEFAULT, 0, 0, NULL,           NULL, NULL, 0,   0,  0,   0,  0,   0,  0, NULL,          0, 0,            0, {0},                 0, NULL },
+};
+
+struct GuiMenu world_respawn_menu =
+ { GMnu_WORLD_RESPAWN, 0, 1, world_respawn_buttons, POS_GAMECTR, POS_GAMECTR, 300, 104, gui_pretty_background, 0, NULL, NULL, 0, 1, 0,};
+
+void world_respawn_prompt_turn(void)
+{
+    if (!world_mode_active() || netstate_dedicated() || replay.load_enable || observer_is_active())
+        return;
+    struct PlayerInfo *player = get_my_player();
+    const TbBool lost = player_exists(player) && (player->victory_state == VicS_LostLevel);
+    const Uint64 now = SDL_GetTicks();
+    if (!lost)
+    {
+        if (wr_defeat_seen != 0)
+        {
+            /* started again (or a load): the box goes, the panel comes back */
+            if (menu_is_active(GMnu_WORLD_RESPAWN))
+                turn_off_menu(GMnu_WORLD_RESPAWN);
+            if (wr_shown)
+            {
+                SYNCLOG("World: this keeper has started again");
+                set_gui_visible(true);
+                turn_on_menu(GMnu_MAIN);
+                turn_on_menu(GMnu_ROOM);
+                wr_camera_until = now + 10000;
+            }
+        }
+        wr_defeat_seen = 0;
+        wr_asked_at = 0;
+        wr_shown = false;
+        /* the new heart may come a turn or two after the news (a thin client): the camera goes when it is here */
+        if ((wr_camera_until != 0) && ((now > wr_camera_until) || world_local_camera_to_heart()))
+            wr_camera_until = 0;
+        return;
+    }
+    if (wr_defeat_seen == 0)
+        wr_defeat_seen = now;
+    if (menu_is_active(GMnu_WORLD_RESPAWN))
+    {
+        /* test hook KFX_WORLD_RESPAWN=<ms>: "Start again" clicks itself that long after the box came up */
+        static Uint64 shown_at = 0;
+        const char *auto_ms = getenv("KFX_WORLD_RESPAWN");
+        if (shown_at == 0)
+            shown_at = now;
+        if ((auto_ms != NULL) && (now - shown_at >= (Uint64)atoi(auto_ms)) && (wr_asked_at == 0))
+        {
+            SYNCLOG("World test: \"Start again\" clicks itself");
+            shown_at = 0;
+            turn_off_menu(GMnu_WORLD_RESPAWN);
+            wr_start_again(NULL);
+        }
+        return;
+    }
+    if (now - wr_defeat_seen < WR_PROMPT_MS)
+        return;
+    if ((wr_asked_at != 0) && (now - wr_asked_at < WR_RETRY_MS))
+        return; /* waiting for the server */
+    if (wr_asked_at != 0)
+        SYNCLOG("World: still defeated %d s after asking to start again: asking again", (int)((now - wr_asked_at) / 1000));
+    else
+        SYNCLOG("World: this keeper was defeated: \"Start again\" or \"Quit\"");
+    wr_asked_at = 0;
+    wr_shown = true;
+    turn_on_menu(GMnu_WORLD_RESPAWN);
+}
+/******************************************************************************/
