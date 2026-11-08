@@ -883,7 +883,9 @@ static void wl_draw_address_label(struct GuiButton *gbtn)
 
 static void wl_address_done(struct GuiButton *gbtn)
 {
-    wl_join(wl_address);
+    /* the address is kept, nothing more: only Connect (or Join) connects. Ending the entry also came from a tap
+       anywhere else on a touch screen, which then tried to connect (2026-11-08) */
+    (void)gbtn;
 }
 
 static void wl_draw_connect(struct GuiButton *gbtn)

@@ -1235,6 +1235,24 @@ void draw_map_level_name(void)
 {
     if (world_mode_active())
     {
+#ifdef KFX_ANDROID
+        {
+            /* touch: no keys to name, the two-finger tap takes the map home */
+            static const char hint[] = "Two finger tap: Dungeon Heart";
+            LbTextSetFont(winfont);
+            RendererSetDrawFlags(0);
+            const int w = RendererPhysicalWidth();
+            const int hint_units_per_px = (14 * units_per_pixel) / LbTextLineHeight();
+            LbTextSetWindow(0, 0, w, RendererPhysicalHeight() / 4);
+            LbTextDrawResized((w - LbTextStringWidth(hint) * hint_units_per_px / 16) / 2, 8 * units_per_pixel / 16, hint_units_per_px, hint);
+            if ((pmap_note[0] != '\0') && (get_time_tick_ns() < pmap_note_until))
+            {
+                LbTextDrawResized((w - LbTextStringWidth(pmap_note) * hint_units_per_px / 16) / 2, 30 * units_per_pixel / 16,
+                    hint_units_per_px, pmap_note);
+            }
+            return;
+        }
+#endif
         // Endless world: no title over the full-screen map, only its shortcuts (and for a moment which battle it
         // shows): "H = Dungeon Heart   [ = Previous battle   ] = Next battle"
         static const struct { char key; const char *text; } shortcuts[] = {

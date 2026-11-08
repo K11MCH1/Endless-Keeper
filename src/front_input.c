@@ -2261,6 +2261,15 @@ static short get_map_action_inputs(void)
     }
     if (right_button_released) {
         right_button_released = 0;
+#ifdef KFX_ANDROID
+        if (world_mode_active())
+        {
+            /* touch: a two-finger tap (the touch layer's right click) takes the map to the heart; the back key or a
+               tap on a place leaves it */
+            world_parchment_home();
+            return true;
+        }
+#endif
         zoom_from_parchment_map();
         return true;
     }

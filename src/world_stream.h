@@ -60,6 +60,10 @@ TbBool world_seat_can_respawn(PlayerNumber plyr_idx);
 /** Frees the defeated keeper's seat (its leftovers nobody's, its records from zero) and gives it to the same player
  *  again with a new start dungeon at the next spawn point. Game state: the server, or the one machine, does it. */
 TbBool world_seat_respawn(PlayerNumber plyr_idx);
+/** Dungeon reset (2026-11-09, Keeper Server's /reset): the keeper's dungeon is wiped (its ground made again from the
+ *  generator) and the same seat starts elsewhere with a new start dungeon, keeping level, XP, research and upgrades.
+ *  False (and why) when it can't. Game state: the server, or the one machine, does it. */
+TbBool world_seat_reset(PlayerNumber plyr_idx, char *why, size_t why_len);
 /** This machine's camera to its keeper's heart (false while the heart isn't known here yet). */
 TbBool world_local_camera_to_heart(void);
 /** After each game turn, once game.play_gameturn has moved on (between turns, like a save from the menu). */

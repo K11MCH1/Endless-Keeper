@@ -62,6 +62,7 @@
 #include "gui_frontmenu.h"
 #include "server_admin.h"
 #include "net_diag.h"
+#include "world_caretaker.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -758,6 +759,20 @@ void resolve_placeholders(void)
 
 void hand_waiting_placeholders_to_ai(void)
 {
+    if (world_mode_active()) {
+        /* an endless world: a caretaker keeps an away player's dungeon (defends, trains, researches; no digging or
+           building), on a server too. This used to run only while a server's network was still starting, and gave
+           every away player a full computer keeper that dug its dungeon out for the whole session */
+        for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_COUNT; plyr_idx++) {
+            struct PlayerInfo *player = get_player(plyr_idx);
+            if (!player_exists(player) || !player_is_placeholder(player)
+                || (player->victory_state != VicS_Undecided) || flag_is_set(player->allocflags, PlaF_CompCtrl)) {
+                continue;
+            }
+            world_caretaker_start(plyr_idx);
+        }
+        return;
+    }
     if (netstate_thin_mode()) {
         return; /* a server: a departed player's dungeon stays as it is until they come back */
     }
@@ -779,6 +794,7 @@ void seat_network_user(NetUserId user, PlayerNumber plyr_idx, const UserPreferen
     if ((get_players_dungeon(player)->computer_enabled & 0x01) != 0) {
         toggle_computer_player(plyr_idx);
     }
+    world_caretaker_end(plyr_idx); /* an endless world: the player is back */
     init_user_state(user, plyr_idx);
     UserPreferences prefs;
     if (!get_startup_user_preferences(user, prefs)) {

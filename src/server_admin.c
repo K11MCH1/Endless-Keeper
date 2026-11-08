@@ -777,6 +777,26 @@ static void cmd_give(const char *name, const char *what, const char *amount_text
         server_admin_notice(u, msg);
 }
 
+static void cmd_reset(const char *name)
+{
+    const PlayerNumber p = seat_by_name(name);
+    if (p < 0)
+    {
+        server_admin_log("warn", "No player named %s", name);
+        return;
+    }
+    char why[96] = "";
+    if (!world_seat_reset(p, why, sizeof(why)))
+    {
+        server_admin_log("warn", "%s's dungeon was not reset: %s", seat_name(p), why);
+        return;
+    }
+    server_admin_log("admin", "%s's dungeon was reset: a new start dungeon elsewhere (level and upgrades kept)", seat_name(p));
+    const NetUserId u = seat_user(p);
+    if (u > SERVER_ID)
+        server_admin_notice(u, "The server reset your dungeon. You start again elsewhere.");
+}
+
 static void say(const char *text)
 {
     char msg[300];
@@ -832,6 +852,8 @@ static void run_command(char *line)
         cmd_mute(args[1], false);
     else if ((strcasecmp(cmd, "give") == 0) && (nargs >= 4))
         cmd_give(args[1], args[2], args[3]);
+    else if ((strcasecmp(cmd, "reset") == 0) && (nargs >= 2))
+        cmd_reset(args[1]);
     else if ((strcasecmp(cmd, "say") == 0) && (rest != NULL))
         say(rest);
     else if (strcasecmp(cmd, "save") == 0)

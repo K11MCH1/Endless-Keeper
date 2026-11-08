@@ -475,6 +475,7 @@ void packet_set_camera_position(struct Packet *pckt, MapCoord x, MapCoord y)
     {
         pckt->cam_x = wrap_paged_camera_coord(x);
         pckt->cam_y = wrap_paged_camera_coord(y);
+        netstate_client_sent_camera(x, y);
         return;
     }
     const int shift = camera_position_shift();
@@ -616,7 +617,18 @@ static void process_dungeon_camera_controls(NetUserId user, const struct Packet 
     // Iso and front share a position; any other camera's position isn't the dungeon camera's.
     if (is_dungeon_camera_index(packet_camera_context(pckt)) && is_dungeon_camera_index(get_user_active_camera_index(user))
      && !player_instance_controls_camera(ustate->instance_num) && packet_get_camera_position(pckt, &x, &y))
+    {
+        if (world_paged && netstate_is_server())
+        {
+            const long jump = labs((long)x - (long)dcam->x) + labs((long)y - (long)dcam->y);
+            if (jump > 12 * STL_PER_SLB * COORD_PER_STL)
+                SYNCLOG("Server: user %d's camera moves %ld slabs in one packet, slab (%d,%d) to (%d,%d) (action %d, flags 0x%lx, cam %u,%u)",
+                    (int)user, jump / (STL_PER_SLB * COORD_PER_STL), (int)coord_slab(dcam->x), (int)coord_slab(dcam->y),
+                    (int)coord_slab(x), (int)coord_slab(y), (int)pckt->action, (unsigned long)pckt->control_flags,
+                    (unsigned)pckt->cam_x, (unsigned)pckt->cam_y);
+        }
         set_view_position(&dcam->x, &dcam->y, x, y);
+    }
     if (!front_view)
     {
         if ((pckt->control_flags & PCtr_ViewTiltUp) != 0)

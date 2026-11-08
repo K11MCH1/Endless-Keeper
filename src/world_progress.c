@@ -1131,7 +1131,7 @@ TbBool world_progress_load(const uint8_t *buf, size_t len)
 #define WPL_XP_PER_HEART 1000
 #define WPL_HITS 32
 #define WPL_WATCH_TURNS 64 /* what a machine sees in its first turns of a world (a load, a join) is not news */
-kfx_rewindable static uint32_t wpl_xp[PLAYERS_MAX];
+#define wpl_xp game.world_player_xp /* in struct Game: replays rewind it, thin clients on any platform get it */
 
 /* who hit each heart last (the simulating machine) */
 static struct {

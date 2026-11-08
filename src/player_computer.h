@@ -431,7 +431,9 @@ struct Computer2 { // sizeof = 5322
   uint32_t click_rate;
   int32_t dig_stack_size; // seems to be signed long
   uint32_t sim_before_dig;
-  struct Dungeon *dungeon;
+  /* an 8-byte slot on every platform, so struct Game (where this lives) has one layout on a 32-bit PC and a 64-bit
+     phone: a thin client on either takes the other's state (2026-11-08) */
+  union { struct Dungeon *dungeon; uint64_t dungeon_slot_; };
   uint32_t model;
   uint32_t turn_begin;
   uint32_t max_room_build_tasks;

@@ -1937,6 +1937,38 @@ void netstate_server_after_turn(void)
     }
     const int64_t t0 = get_time_tick_ns();
     const NetUserMask clients = client_mask();
+    {
+        /* diagnostics (2026-11-08, cameras jumping on far dig orders): a player's camera that moved more than 16
+           slabs since the last turn (a minimap click, or something wrong), with what this turn's packet held */
+        static MapCoord cam_x[MAX_NET_USERS], cam_y[MAX_NET_USERS];
+        static TbBool cam_known[MAX_NET_USERS];
+        for (NetUserId u = SERVER_ID + 1; u < MAX_NET_USERS; u++)
+        {
+            if (!numask_has(clients, u))
+            {
+                cam_known[u] = false;
+                continue;
+            }
+            const struct UserState *ustate = get_user_state(u);
+            const MapCoord x = ustate->dungeon_camera.x, y = ustate->dungeon_camera.y;
+            if (cam_known[u])
+            {
+                const long jump = labs((long)x - (long)cam_x[u]) + labs((long)y - (long)cam_y[u]);
+                if (jump > 16 * STL_PER_SLB * COORD_PER_STL)
+                {
+                    const struct Packet *pk = get_packet(u);
+                    SYNCLOG("Server: user %d's camera moved %ld slabs this turn, slab (%d,%d) to (%d,%d); packet action %d (%d,%d), "
+                            "flags 0x%lx, cam %u,%u, view type %d, instance %d", (int)u, jump / (STL_PER_SLB * COORD_PER_STL),
+                        (int)coord_slab(cam_x[u]), (int)coord_slab(cam_y[u]), (int)coord_slab(x), (int)coord_slab(y),
+                        (int)pk->action, (int)pk->actn_par1, (int)pk->actn_par2, (unsigned long)pk->control_flags,
+                        (unsigned)pk->cam_x, (unsigned)pk->cam_y, (int)get_user_view_type(u), (int)ustate->instance_num);
+                }
+            }
+            cam_x[u] = x;
+            cam_y[u] = y;
+            cam_known[u] = true;
+        }
+    }
     if (!server_started)
     {
         skips_setup();
@@ -2148,10 +2180,19 @@ void netstate_server_take_input(NetUserId user, struct Packet *out)
         return;
     }
     /* nothing new: the user keeps still (movement goes on for half a second, to ride out jitter) */
+    const TbBool had_camera = packet_action_has_camera_position((enum TbPacketAction)last_input[user].action);
     *out = last_input[user];
     out->action = PckA_None;
     out->actn_par1 = 0;
     out->actn_par2 = 0;
+    if (!had_camera)
+    {
+        /* its par3/par4 sit where the camera position goes (a union): kept with no action, they read as a camera
+           position (2026-11-08: a dig mark's previous slab and untag mode threw the camera up to 85 slabs away and
+           back, turn after turn, while a dig mark was dragged) */
+        out->actn_par3 = 0;
+        out->actn_par4 = 0;
+    }
     out->control_flags &= ~(uint32_t)(PCtr_LBtnClick | PCtr_RBtnClick | PCtr_LBtnRelease | PCtr_RBtnRelease);
     if (++idle_turns[user] > 10)
     {
@@ -2437,6 +2478,10 @@ static void client_keyframe_mem(int region, const uint8_t *src, size_t len)
 }
 
 static uint32_t keyframe_pass;
+/* the server's rewindable statics are laid out by its compiler and linker: another platform's (a PC server and a
+   phone) can't be applied here, so they are left out (what clients show of them is in struct Game) */
+static TbBool statics_foreign = false;
+static TbBool layout_warned = false;
 
 /* the chunk page a record is changing, gathered once */
 static struct WorldPage *cache_pg;
@@ -2497,12 +2542,57 @@ static void client_rebuild_local(void)
     }
     for (ThingIndex i = 1; i < THINGS_COUNT; i++)
     {
-        if (on_map[i])
-            place_thing_in_mapwho(thing_get(i));
+        if (!on_map[i])
+            continue;
+        struct Thing *thing = thing_get(i);
+        if (world_paged && map_block_invalid(get_map_block_at(thing->mappos.x.stl.num, thing->mappos.y.stl.num)))
+        {
+            /* on ground this machine hasn't got (yet): not placed, but its flag stays as the server has it. The server
+               sends a flag again only when it changes there, so clearing it here hid the thing for good, even once
+               the ground came (2026-11-08: imps an offline keeper had sent far away stayed invisible) */
+            thing->alloc_flags |= TAlF_IsInMapWho;
+            continue;
+        }
+        place_thing_in_mapwho(thing);
     }
 }
 
 static void client_play_events(struct NsReader *r);
+
+/* the camera positions this client sent lately (a change each), to tell its own moves coming back from the server
+   from moves the server made (a new heart after "Start again", a zoom to an event) */
+#define NS_SENT_CAMS 512
+static MapCoord sent_cam_x[NS_SENT_CAMS], sent_cam_y[NS_SENT_CAMS];
+static int sent_cam_head, sent_cam_count;
+
+void netstate_client_sent_camera(MapCoord x, MapCoord y)
+{
+    if (!netstate_is_client())
+        return;
+    if (sent_cam_count > 0)
+    {
+        const int last = (sent_cam_head + NS_SENT_CAMS - 1) % NS_SENT_CAMS;
+        if ((sent_cam_x[last] == x) && (sent_cam_y[last] == y))
+            return;
+    }
+    sent_cam_x[sent_cam_head] = x;
+    sent_cam_y[sent_cam_head] = y;
+    sent_cam_head = (sent_cam_head + 1) % NS_SENT_CAMS;
+    if (sent_cam_count < NS_SENT_CAMS)
+        sent_cam_count++;
+}
+
+static TbBool camera_sent_recently(MapCoord x, MapCoord y)
+{
+    const long near = 2 * COORD_PER_STL; /* the packet carries it to 2 map units; the server may clamp it */
+    for (int i = 0; i < sent_cam_count; i++)
+    {
+        const int k = (sent_cam_head + NS_SENT_CAMS - 1 - i) % NS_SENT_CAMS;
+        if ((labs((long)sent_cam_x[k] - (long)x) <= near) && (labs((long)sent_cam_y[k] - (long)y) <= near))
+            return true;
+    }
+    return false;
+}
 
 #define NS_TOUCHED_MAX 512
 static int32_t touched_cx[NS_TOUCHED_MAX], touched_cy[NS_TOUCHED_MAX];
@@ -2551,6 +2641,11 @@ static void client_apply(const uint8_t *data, size_t len)
             uint32_t page;
             rd_get(&r, &region, 1);
             rd_get(&r, &page, 4);
+            if (!r.bad && (region == NsR_Statics) && statics_foreign)
+            {
+                apply_lines(&r, tmp, NS_PAGE); /* another platform's statics: read past them */
+                break;
+            }
             if (r.bad || (region >= NsR_Count) || (regions[region].base == NULL) ||
                 ((size_t)page * NS_PAGE >= regions[region].len))
             {
@@ -2579,6 +2674,19 @@ static void client_apply(const uint8_t *data, size_t len)
                 r.bad = true;
                 break;
             }
+            if ((region < NsR_Count) && (regions[region].base != NULL) && (n != regions[region].len))
+            {
+                if (region == NsR_Statics)
+                    statics_foreign = true;
+                if (!layout_warned || (region == NsR_Game))
+                {
+                    layout_warned = true;
+                    WARNLOG("Thin client: the server's %s are %u bytes, here %u: %s", (region == NsR_Game) ? "game state" : "statics",
+                        (unsigned)n, (unsigned)regions[region].len, (region == NsR_Game) ? "a different version: its state can't be used"
+                        : "another platform: left out");
+                }
+            } else if (region == NsR_Statics)
+                statics_foreign = false;
             client_keyframe_mem(region, r.p, n);
             r.p += n;
             break;
@@ -2702,8 +2810,15 @@ static void client_apply(const uint8_t *data, size_t len)
         static TbBool last_cam_valid = false;
         const struct DungeonCamera *cam = &get_user_state(get_my_user())->dungeon_camera;
         const long jump = labs((long)cam->x - last_cam.x) + labs((long)cam->y - last_cam.y);
-        if (!keyframe && last_cam_valid && (jump > 6 * STL_PER_SLB * COORD_PER_STL))
+        /* a jump this client's own packets made (its panning, a minimap click, coming back a few turns later) is not
+           followed: following it threw the view back to where it was those turns ago, a rubber band while panning */
+        if (!keyframe && last_cam_valid && (jump > 6 * STL_PER_SLB * COORD_PER_STL) && !camera_sent_recently(cam->x, cam->y))
+        {
+            SYNCLOG("Thin client: the server moved this player's camera %ld slabs, from slab (%d,%d) to (%d,%d): the view follows",
+                jump / (STL_PER_SLB * COORD_PER_STL), (int)coord_slab(last_cam.x), (int)coord_slab(last_cam.y),
+                (int)coord_slab(cam->x), (int)coord_slab(cam->y));
             sync_local_camera_pose(get_my_user(), cam);
+        }
         last_cam = *cam;
         last_cam_valid = true;
     }

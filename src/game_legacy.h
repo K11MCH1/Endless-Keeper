@@ -383,6 +383,9 @@ struct Game {
 
     struct DesyncChecksums host_checksums;
     struct LogDetailedSnapshot log_snapshot;
+    /** Endless worlds: each player's XP (player levels; saved with the world). Here, not with the rewindable
+     *  statics, so that a thin client on another platform gets it too (2026-11-08). */
+    uint32_t world_player_xp[PLAYERS_MAX];
 };
 
 #pragma pack()

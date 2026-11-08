@@ -38,9 +38,10 @@ extern "C" {
 struct Thing;
 
 struct SoundSettings {
-  char *sound_data_path;
-  char *music_data_path;
-  char *dir3;
+  /* 8-byte slots on every platform: struct Game (where these live) has one layout on a 32-bit PC and a 64-bit phone */
+  union { char *sound_data_path; uint64_t sound_data_path_slot_; };
+  union { char *music_data_path; uint64_t music_data_path_slot_; };
+  union { char *dir3; uint64_t dir3_slot_; };
   unsigned short sound_type;
   unsigned short flags;
   unsigned char max_number_of_samples;

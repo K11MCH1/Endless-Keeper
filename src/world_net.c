@@ -49,6 +49,13 @@ TbBool wnet_hub_off = false;
 #define PING_EVERY_MS     2000
 #define PING_MAGIC        "KFXWPING"
 #define PONG_MAGIC        "KFXWPONG"
+/* the World List looking for worlds on its own network (2026-11-08): a broadcast to the usual game port, answered
+   by each endless world's server on it with its title (a phone's list can't reach a hub at 127.0.0.1) */
+#define FIND_MAGIC        "KFXWFIND"
+#define FOUND_MAGIC       "KFXWFOUN"
+#define LAN_GAME_PORT     5556
+#define LAN_FORGET_MS     7000
+#define LAN_MAX           16
 
 static Uint32 now_ms(void)
 {
@@ -310,6 +317,11 @@ static struct {
     char status[160];
     /* pings: one UDP socket, a request to each server every 2 s */
     ENetSocket udp;
+    /* worlds found on this network: kept apart, merged into servers[] after each change (id "lan") */
+    struct { struct WnetServer sv; Uint32 seen; } lan[LAN_MAX];
+    int lan_count;
+    uint32_t find_seq;
+    Uint32 find_sent;
     Uint32 last_ping_round;
     uint32_t ping_seq;
     struct { char host[WNET_HOST_MAX]; int port; ENetAddress addr; TbBool resolved; uint32_t seq; Uint32 sent; } pinged[WNET_SERVERS_MAX];
@@ -334,6 +346,26 @@ static int menu_ping_slot(const char *host, int port)
         if (WM.pinged[i].port == port && strcmp(WM.pinged[i].host, host) == 0)
             return i;
     return -1;
+}
+
+/** The worlds found on this network go after the hub's (one the hub lists by title and port isn't added again). */
+static void menu_merge_lan(void)
+{
+    int n = 0;
+    for (int s = 0; s < WM.server_count; s++)
+        if (strcmp(WM.servers[s].id, "lan") != 0)
+            WM.servers[n++] = WM.servers[s];
+    WM.server_count = n;
+    for (int k = 0; (k < WM.lan_count) && (WM.server_count < WNET_SERVERS_MAX); k++)
+    {
+        const struct WnetServer *l = &WM.lan[k].sv;
+        TbBool listed = false;
+        for (int s = 0; (s < WM.server_count) && !listed; s++)
+            listed = (WM.servers[s].port == l->port) && ((strcmp(WM.servers[s].host, l->host) == 0) ||
+                (strcmp(WM.servers[s].title, l->title) == 0));
+        if (!listed)
+            WM.servers[WM.server_count++] = *l;
+    }
 }
 
 static void menu_read_servers(const VALUE *msg)
@@ -364,6 +396,7 @@ static void menu_read_servers(const VALUE *msg)
                 sv->ping_ms = old[k].ping_ms;
         WM.server_count++;
     }
+    menu_merge_lan();
 }
 
 static void menu_handle(const char *text, size_t len)
@@ -424,6 +457,7 @@ static void menu_pings(void)
         if (WM.udp == ENET_SOCKET_NULL)
             return;
         enet_socket_set_option(WM.udp, ENET_SOCKOPT_NONBLOCK, 1);
+        enet_socket_set_option(WM.udp, ENET_SOCKOPT_BROADCAST, 1);
         ENetAddress any;
         enet_address_build_any(&any, ENET_ADDRESS_TYPE_IPV4);
         any.port = 0;
@@ -441,6 +475,51 @@ static void menu_pings(void)
         const int n = enet_socket_receive(WM.udp, &from, &b, 1);
         if (n <= 0)
             break;
+        if ((n >= 19) && (memcmp(buf, FOUND_MAGIC, 8) == 0))
+        {
+            /* a world on this network: seq(4) players(1) max(1) port(2) title(0-terminated) */
+            struct WnetServer found;
+            memset(&found, 0, sizeof(found));
+            snprintf(found.id, sizeof(found.id), "lan");
+            if (enet_address_get_host_ip(&from, found.host, sizeof(found.host)) < 0)
+                continue;
+            {
+                /* the address alone: "a.b.c.d:port" or "[::ffff:a.b.c.d]:port" */
+                char *h = found.host;
+                if (h[0] == '[')
+                {
+                    char *e = strchr(h, ']');
+                    if (e != NULL)
+                        *e = '\0';
+                    memmove(h, h + 1, strlen(h + 1) + 1);
+                }
+                if (strncmp(h, "::ffff:", 7) == 0)
+                    memmove(h, h + 7, strlen(h + 7) + 1);
+                char *colon = strchr(h, ':');
+                if ((colon != NULL) && (strchr(colon + 1, ':') == NULL))
+                    *colon = '\0';
+            }
+            found.players = buf[12];
+            found.max = buf[13];
+            found.port = buf[14] | (buf[15] << 8);
+            buf[sizeof(buf) - 1] = 0;
+            snprintf(found.title, sizeof(found.title), "%s", (const char *)buf + 16);
+            found.ping_ms = (WM.find_sent != 0) ? (int)(now_ms() - WM.find_sent) : -1;
+            int k = 0;
+            while ((k < WM.lan_count) && !((WM.lan[k].sv.port == found.port) && (strcmp(WM.lan[k].sv.host, found.host) == 0)))
+                k++;
+            if (k == WM.lan_count)
+            {
+                if (WM.lan_count == LAN_MAX)
+                    continue;
+                WM.lan_count++;
+                LbNetLog("World list: found \"%s\" on this network at %s:%d\n", found.title, found.host, found.port);
+            }
+            WM.lan[k].sv = found;
+            WM.lan[k].seen = now_ms();
+            menu_merge_lan();
+            continue;
+        }
         if ((n < 16) || (memcmp(buf, PONG_MAGIC, 8) != 0))
             continue;
         uint32_t seq;
@@ -466,6 +545,30 @@ static void menu_pings(void)
     if ((int32_t)(now_ms() - WM.last_ping_round) < PING_EVERY_MS)
         return;
     WM.last_ping_round = now_ms();
+    {
+        /* worlds on this network: the ones not heard from for a while go, then a new broadcast */
+        int n = 0;
+        for (int k = 0; k < WM.lan_count; k++)
+            if ((int32_t)(now_ms() - WM.lan[k].seen) < LAN_FORGET_MS)
+                WM.lan[n++] = WM.lan[k];
+        if (n != WM.lan_count)
+        {
+            WM.lan_count = n;
+            menu_merge_lan();
+        }
+        unsigned char req[12];
+        memcpy(req, FIND_MAGIC, 8);
+        WM.find_seq++;
+        memcpy(req + 8, &WM.find_seq, 4);
+        ENetAddress all;
+        if (enet_address_set_host_ip(&all, "255.255.255.255") == 0)
+        {
+            all.port = LAN_GAME_PORT;
+            ENetBuffer b = {.data = req, .dataLength = sizeof(req)};
+            WM.find_sent = now_ms();
+            enet_socket_send(WM.udp, &all, &b, 1);
+        }
+    }
     for (int s = 0; s < WM.server_count; s++)
     {
         int i = menu_ping_slot(WM.servers[s].host, WM.servers[s].port);
@@ -1402,6 +1505,25 @@ void wnet_hub_poll(void)
 int wnet_game_port_intercept(void *enet_host)
 {
     ENetHost *host = (ENetHost *)enet_host;
+    if ((host != NULL) && (host->receivedDataLength == 12) && (memcmp(host->receivedData, FIND_MAGIC, 8) == 0))
+    {
+        if (!WS.on)
+            return 0;
+        /* a World List on this network looking for worlds: seq, players, max, port, title */
+        unsigned char reply[16 + WNET_TITLE_MAX];
+        memcpy(reply, FOUND_MAGIC, 8);
+        memcpy(reply + 8, host->receivedData + 8, 4);
+        reply[12] = (unsigned char)((status_players < 0) ? 0 : (status_players > 255) ? 255 : status_players);
+        reply[13] = (unsigned char)((status_max < 0) ? 0 : (status_max > 255) ? 255 : status_max);
+        reply[14] = (unsigned char)(WS.port & 0xFF);
+        reply[15] = (unsigned char)((WS.port >> 8) & 0xFF);
+        const size_t tl = strnlen(WS.title, WNET_TITLE_MAX - 1);
+        memcpy(reply + 16, WS.title, tl);
+        reply[16 + tl] = 0;
+        ENetBuffer b = {.data = reply, .dataLength = 16 + tl + 1};
+        enet_socket_send(host->socket, &host->receivedAddress, &b, 1);
+        return 1;
+    }
     if ((host == NULL) || (host->receivedDataLength != 12) || (memcmp(host->receivedData, PING_MAGIC, 8) != 0))
         return 0;
     if (!WS.on)

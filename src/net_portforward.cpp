@@ -42,6 +42,10 @@
 
 #include <atomic>
 #include <cstdarg>
+#include <cstdlib>
+#ifndef _WIN32
+#include <arpa/inet.h>
+#endif
 #include <cstdio>
 #include <ctime>
 #include <future>
@@ -103,7 +107,21 @@ static char upnp_lanaddr[64];
 
 static natpmp_t natpmp;
 
+/** An address (network byte order) in 100.64.0.0/10, the space internet providers share between homes (CGNAT). */
+static int ip_in_shared_space(unsigned long ip)
+{
+    if ((ip == INADDR_NONE) || (ip == 0)) {
+        return 0;
+    }
+    const unsigned char first_octet = ip & 0xFF;
+    const unsigned char second_octet = (ip >> 8) & 0xFF;
+    return (first_octet == 100) && (second_octet >= 64) && (second_octet <= 127);
+}
+
 #ifdef __WIN32__
+/** CGNAT seen from this PC: an adapter that leads to the internet (it has a default gateway) has an address or a
+ *  gateway in the shared space. VPN adapters without a gateway don't count: Tailscale gives each PC a 100.64.0.0/10
+ *  address of its own (2026-11-08: that made a home router with UPnP look like CGNAT, so nothing was forwarded). */
 static int is_cgnat_detected() {
     ULONG buffer_size = 0;
     if (GetAdaptersInfo(NULL, &buffer_size) != ERROR_BUFFER_OVERFLOW) {
@@ -117,28 +135,25 @@ static int is_cgnat_detected() {
         free(adapter_info);
         return 0;
     }
-    for (IP_ADAPTER_INFO *adapter = adapter_info; adapter; adapter = adapter->Next) {
-        unsigned long local_ip = inet_addr(adapter->IpAddressList.IpAddress.String);
-        if (local_ip != INADDR_NONE && local_ip != 0) {
-            unsigned char first_octet = local_ip & 0xFF;
-            unsigned char second_octet = (local_ip >> 8) & 0xFF;
-            if (first_octet == 100 && second_octet >= 64 && second_octet <= 127) {
-                free(adapter_info);
-                return 1;
+    int found = 0;
+    for (IP_ADAPTER_INFO *adapter = adapter_info; adapter && !found; adapter = adapter->Next) {
+        const unsigned long local_ip = inet_addr(adapter->IpAddressList.IpAddress.String);
+        const unsigned long gateway_ip = inet_addr(adapter->GatewayList.IpAddress.String);
+        if ((gateway_ip == INADDR_NONE) || (gateway_ip == 0)) {
+            if (ip_in_shared_space(local_ip)) {
+                LbNetLog("Port forwarding: %s (%s) is in the shared address space but leads nowhere (a VPN such as Tailscale): not CGNAT\n",
+                    adapter->Description, adapter->IpAddressList.IpAddress.String);
             }
+            continue;
         }
-        unsigned long gateway_ip = inet_addr(adapter->GatewayList.IpAddress.String);
-        if (gateway_ip != INADDR_NONE && gateway_ip != 0) {
-            unsigned char first_octet = gateway_ip & 0xFF;
-            unsigned char second_octet = (gateway_ip >> 8) & 0xFF;
-            if (first_octet == 100 && second_octet >= 64 && second_octet <= 127) {
-                free(adapter_info);
-                return 1;
-            }
+        if (ip_in_shared_space(local_ip) || ip_in_shared_space(gateway_ip)) {
+            LbNetLog("Port forwarding: %s has %s, gateway %s: CGNAT\n", adapter->Description,
+                adapter->IpAddressList.IpAddress.String, adapter->GatewayList.IpAddress.String);
+            found = 1;
         }
     }
     free(adapter_info);
-    return 0;
+    return found;
 }
 #else
 static int is_cgnat_detected() {
@@ -238,6 +253,12 @@ static void port_forward_add_mapping_internal(uint16_t port)
         set_status(0, "no port forwarding: the internet provider shares one address between many homes (CGNAT)");
         return;
     }
+    if (getenv("KFX_PORTFORWARD_DRYRUN") != NULL) {
+        /* test hook: the decision only, the router is left alone */
+        LbNetLog("Port forwarding: not CGNAT; would ask the router (NAT-PMP, then UPnP) for UDP port %u (dry run)\n", port);
+        set_status(0, "dry run: the router would be asked to forward UDP port %u", port);
+        return;
+    }
     if (natpmp_add_port_mapping(port)) {
         return;
     }
@@ -259,6 +280,19 @@ static void port_forward_add_mapping_internal(uint16_t port)
         set_status(0, "no port forwarding: the router doesn't offer it (UPnP off?); forward UDP port %u by hand", port);
         FreeUPNPUrls(&upnp_urls);
         return;
+    }
+    {
+        char wan[64] = "";
+        if ((UPNP_GetExternalIPAddress(upnp_urls.controlURL, upnp_data.first.servicetype, wan) == UPNPCOMMAND_SUCCESS) &&
+            (wan[0] != '\0')) {
+            LbNetLog("UPnP: the router's internet address is %s\n", wan);
+            if (ip_in_shared_space(inet_addr(wan))) {
+                LbNetLog("UPnP: that address is shared between homes (CGNAT): a forward on this router can't reach this PC\n");
+                set_status(0, "no port forwarding: the router's internet address %s is shared between many homes (CGNAT)", wan);
+                FreeUPNPUrls(&upnp_urls);
+                return;
+            }
+        }
     }
     char port_string[16];
     snprintf(port_string, sizeof(port_string), "%u", port);

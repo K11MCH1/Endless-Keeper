@@ -28,6 +28,7 @@
 #include "spdigger_stack.h"
 #include "frontmenu_ingame_map.h"
 #include "dungeon_data.h"
+#include "local_camera.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -54,6 +55,9 @@ static MapSlabCoord room_drag_start_slb_y;
 /* a thin client's own dig marks: its dungeon's dig tasks on the server, by slab (the map's mark bits are the
    server's own player's) */
 static unsigned char thin_marks[MAX_TILES_X * MAX_TILES_Y];
+/* the slab each entry is for: the index repeats every 170 slabs in an endless world, so a dig task far away (an
+   offline keeper's) showed as a mark nearby that no untag could take away (2026-11-08) */
+static SlabCodedCoords thin_mark_owner[MAX_TILES_X * MAX_TILES_Y];
 static SlabCodedCoords thin_mark_list[MAPTASKS_COUNT];
 static SlabCodedCoords thin_mark_slabs[MAPTASKS_COUNT];
 static int thin_mark_count = 0;
@@ -85,9 +89,30 @@ static void rebuild_thin_marks(void)
             const MapSlabCoord slb_y = subtile_slab(stl_num_decode_y(mtask->coords));
             const SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
             const SlabCodedCoords idx = dig_pred_index(slb_num);
-            if (thin_marks[idx] || (thin_mark_count >= MAPTASKS_COUNT))
+            if (thin_marks[idx])
+            {
+                /* two tasks on one entry: the one nearer the view is shown */
+                const struct Camera *cam = get_local_active_camera();
+                if (cam != NULL)
+                {
+                    const MapSlabCoord vx = coord_slab(cam->mappos.x.val), vy = coord_slab(cam->mappos.y.val);
+                    const SlabCodedCoords was = thin_mark_owner[idx];
+                    const long d_new = labs((long)slb_x - vx) + labs((long)slb_y - vy);
+                    const long d_was = labs((long)slb_num_decode_x(was) - vx) + labs((long)slb_num_decode_y(was) - vy);
+                    if (d_new < d_was)
+                    {
+                        thin_mark_owner[idx] = slb_num;
+                        for (int k = 0; k < thin_mark_count; k++)
+                            if (thin_mark_list[k] == idx)
+                                thin_mark_slabs[k] = slb_num;
+                    }
+                }
+                continue;
+            }
+            if (thin_mark_count >= MAPTASKS_COUNT)
                 continue;
             thin_marks[idx] = 1;
+            thin_mark_owner[idx] = slb_num;
             thin_mark_list[thin_mark_count] = idx;
             thin_mark_slabs[thin_mark_count] = slb_num;
             thin_mark_count++;
@@ -95,8 +120,11 @@ static void rebuild_thin_marks(void)
     }
     /* the minimap: the slabs that gained or lost a mark */
     for (int i = 0; i < old_count; i++)
-        if (!thin_marks[dig_pred_index(old_slabs[i])])
+    {
+        const SlabCodedCoords idx = dig_pred_index(old_slabs[i]);
+        if (!thin_marks[idx] || (thin_mark_owner[idx] != old_slabs[i]))
             thin_marks_changed(old_slabs[i]);
+    }
     for (int i = 0; i < thin_mark_count; i++)
     {
         TbBool had = false;
@@ -400,7 +428,9 @@ unsigned char get_dig_prediction_render_flags(MapSubtlCoord stl_x, MapSubtlCoord
     if (netstate_is_client()) {
         /* the map's mark bits are the server's own player's: this player's marks are its dig tasks */
         base_map_flags &= ~(SlbAtFlg_TaggedValuable | SlbAtFlg_Unexplored);
-        if (thin_marks[dig_pred_index(get_slab_number(slb_x, slb_y))])
+        const SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
+        const SlabCodedCoords idx = dig_pred_index(slb_num);
+        if (thin_marks[idx] && (thin_mark_owner[idx] == slb_num))
             predicted_dig_tag_mode = DigTagMode_Tag;
     }
     if (dig_input_is_enabled() && (dig_tags.slab_tag_modes[dig_pred_index(get_slab_number(slb_x, slb_y))] != 0)) {

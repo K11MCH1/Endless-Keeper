@@ -104,6 +104,20 @@ void camera_packet_set_state(struct Packet *pckt)
     }
     const struct Camera *cam = &local_state.camera.destination[cam_idx];
     const TbBool front_view = (cam_idx == CamIV_FrontView);
+    if (world_paged && network_is_active() && !network_is_host())
+    {
+        /* diagnostics (2026-11-08, cameras jumping on far dig orders): the view this machine sends jumping far */
+        static MapCoord last_x, last_y;
+        static TbBool last_known = false;
+        const long jump = labs((long)cam->mappos.x.val - (long)last_x) + labs((long)cam->mappos.y.val - (long)last_y);
+        if (last_known && (jump > 16 * STL_PER_SLB * COORD_PER_STL))
+            SYNCLOG("Thin client: this machine's view moved %ld slabs since the last packet, slab (%d,%d) to (%d,%d) (action %d)",
+                jump / (STL_PER_SLB * COORD_PER_STL), (int)coord_slab(last_x), (int)coord_slab(last_y),
+                (int)coord_slab(cam->mappos.x.val), (int)coord_slab(cam->mappos.y.val), (int)pckt->action);
+        last_x = cam->mappos.x.val;
+        last_y = cam->mappos.y.val;
+        last_known = true;
+    }
 
     // Correct the dungeon camera's angle whenever the action slot is free. The local camera ignores this correction,
     // so it's safe to send mid-rotation.
@@ -752,6 +766,13 @@ void set_local_camera_destination(NetUserId user)
 static void sync_local_camera_leaving_map(const struct Packet *pckt)
 {
     struct DungeonCamera pose = get_local_user_state()->dungeon_camera;
+    /* the zoom, turn and tilt as this machine's view has them: a touch pinch or twist (Android) changes only the local
+       camera, and taking them from the user's camera here undid the pinch every time the map was left (2026-11-08) */
+    pose.zoom[false] = local_state.camera.destination[CamIV_Isometric].zoom;
+    pose.zoom[true] = local_state.camera.destination[CamIV_FrontView].zoom;
+    pose.yaw[false] = local_state.camera.destination[CamIV_Isometric].rotation_angle_x;
+    pose.yaw[true] = local_state.camera.destination[CamIV_FrontView].rotation_angle_x;
+    pose.pitch = local_state.camera.destination[CamIV_Isometric].rotation_angle_y;
     if (pckt->action == PckA_ZoomFromMap)
     {
         set_view_position(&pose.x, &pose.y, subtile_coord_center(pckt->actn_par1), subtile_coord_center(pckt->actn_par2));

@@ -53,6 +53,7 @@
 #include "front_simple.h"
 #include "game_legacy.h"
 #include "world_pages.h"
+#include "world_caretaker.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1147,6 +1148,8 @@ long check_out_undug_place(struct Thing *creatng)
 
 long get_random_mining_undug_area_position_for_digger_drop(PlayerNumber plyr_idx, MapSubtlCoord *retstl_x, MapSubtlCoord *retstl_y)
 {
+    if (world_caretaker_active(plyr_idx))
+        return 0; /* an endless world's away player: nothing is dug until they are back */
     struct Dungeon *dungeon;
     dungeon = get_dungeon(plyr_idx);
     long i;
@@ -1186,6 +1189,8 @@ long get_random_mining_undug_area_position_for_digger_drop(PlayerNumber plyr_idx
 #define UNDUG_MAX_DIST 24
 long get_nearest_undug_area_position_for_digger(struct Thing *thing, MapSubtlCoord *retstl_x, MapSubtlCoord *retstl_y)
 {
+    if (world_caretaker_active(thing->owner))
+        return 0; /* an endless world's away player: nothing is dug until they are back */
     struct CreatureControl *cctrl;
     struct Dungeon *dungeon;
     dungeon = get_dungeon(thing->owner);
@@ -1247,6 +1252,8 @@ long get_nearest_undug_area_position_for_digger(struct Thing *thing, MapSubtlCoo
 
 long check_out_undug_area(struct Thing *thing)
 {
+    if (world_caretaker_active(thing->owner))
+        return 0; /* an endless world's away player: nothing is dug until they are back */
     SYNCDBG(19,"Starting");
     MapSubtlCoord stl_x;
     MapSubtlCoord stl_y;
@@ -1284,6 +1291,8 @@ enum DigTaskStackFilter {
 static int add_dig_tasks_to_imp_stack(struct Thing *anchor_imp, struct Dungeon *dungeon, int max_tasks, enum DigTaskStackFilter filter)
 {
     SYNCDBG(18,"Starting");
+    if (world_caretaker_active(dungeon->owner))
+        return 0; /* an endless world's away player: nothing is dug until they are back */
     int32_t task_limit;
     int32_t tasks_added;
     int32_t last_distance;

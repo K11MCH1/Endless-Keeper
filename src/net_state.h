@@ -57,6 +57,8 @@ void netstate_server_sim_time(int64_t ns);
 void netstate_server_take_input(NetUserId user, struct Packet *out);
 /** A client asked for a keyframe (it joined, fell too far behind, or its check failed). */
 void netstate_server_request_keyframe(NetUserId user);
+/** A thin client: a camera position it put in a packet (its own moves coming back from the server aren't followed). */
+void netstate_client_sent_camera(MapCoord x, MapCoord y);
 /** A user slot gets a new occupant: its inputs start afresh. */
 void netstate_server_user_reset(NetUserId user);
 
