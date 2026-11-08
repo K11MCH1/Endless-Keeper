@@ -24,6 +24,9 @@ runs:
         printf '#!/bin/sh\nexec /usr/bin/curl --retry 12 --retry-delay 20 --retry-connrefused "$@"\n' > "$RUNNER_TEMP/curl-retry/curl"
         chmod +x "$RUNNER_TEMP/curl-retry/curl"
         echo "$RUNNER_TEMP/curl-retry" >> "$GITHUB_PATH"
+    - name: CMake dependencies (fetched first, with retries)
+      shell: bash
+      run: python3 "${{ github.action_path }}/prefetch.py"
     - name: Package
       shell: bash
       run: installer/make-package.sh "${{ inputs.output }}"
