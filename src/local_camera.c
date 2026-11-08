@@ -126,6 +126,16 @@ void camera_packet_set_state(struct Packet *pckt)
     {
         set_packet_action(pckt, PckA_SetMapRotation, cam->rotation_angle_x, 0, 0, 0);
     }
+#ifdef KFX_ANDROID
+    /* A touch pinch zooms only this machine's view. The user's camera (a server's copy of it too) catches up the same
+       way as the angle: otherwise every view reset from it - leaving the map or a creature, a server following the
+       view - put the old zoom back (2026-11-09) */
+    if ((pckt->action == PckA_None) && (cam->zoom > 0)
+     && (cam->zoom != get_local_user_state()->dungeon_camera.zoom[front_view]))
+    {
+        set_packet_action(pckt, PckA_SetMapZoom, cam->zoom, 0, 0, 0);
+    }
+#endif
     packet_set_camera_position(pckt, cam->mappos.x.val, cam->mappos.y.val);
 }
 

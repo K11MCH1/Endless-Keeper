@@ -748,6 +748,11 @@ static void process_dungeon_camera_action(NetUserId user, const struct Packet *p
         if (is_dungeon_camera_index(packet_camera_context(pckt)))
             dcam->yaw[packet_camera_context(pckt) == CamIV_FrontView] = pckt->actn_par1 & ANGLE_MASK;
         break;
+    case PckA_SetMapZoom:
+        /* a touch pinch's zoom (sent only by touch builds) */
+        if (is_dungeon_camera_index(packet_camera_context(pckt)) && (pckt->actn_par1 > 0) && (pckt->actn_par1 <= 0x100000))
+            dcam->zoom[packet_camera_context(pckt) == CamIV_FrontView] = pckt->actn_par1;
+        break;
     case PckA_ZoomFromMap:
         dcam->x = subtile_coord_center(pckt->actn_par1);
         dcam->y = subtile_coord_center(pckt->actn_par2);

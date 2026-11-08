@@ -7180,8 +7180,16 @@ static void sync_camera_after_zoom(void)
         return;
     zoom_camera_sync = false;
     struct UserState *ustate = get_user_state(get_my_user());
-    if (ustate != NULL)
-        sync_local_camera_pose(get_my_user(), &ustate->dungeon_camera);
+    if (ustate == NULL)
+        return;
+    /* the place from the user's camera, the zoom as this machine's view has it (a touch pinch the server may not
+       have yet) */
+    struct DungeonCamera pose = ustate->dungeon_camera;
+    if (local_state.camera.destination[CamIV_Isometric].zoom > 0)
+        pose.zoom[false] = local_state.camera.destination[CamIV_Isometric].zoom;
+    if (local_state.camera.destination[CamIV_FrontView].zoom > 0)
+        pose.zoom[true] = local_state.camera.destination[CamIV_FrontView].zoom;
+    sync_local_camera_pose(get_my_user(), &pose);
 }
 
 /******************************************************************************/
