@@ -69,6 +69,8 @@
 #include "world_stream.h"
 #include "world_colours.h"
 #include "roomspace_input.h"
+#include "front_input.h"
+#include "creature_battle.h"
 #include "post_inc.h"
 
 /** The full-screen map's view in slabs: the map, or in paged mode (chunked endless world, no fixed map size) a
@@ -81,6 +83,20 @@ static MapSlabCoord parchment_tiles_x(void)
 static MapSlabCoord parchment_tiles_y(void)
 {
     return world_paged ? (MapSlabCoord)WORLD_WINDOW_SLABS : game.map_tiles_y;
+}
+
+/* Endless world: the full-screen map's zoom levels, in pixels per slab on a 1080 pixel high screen (in proportion
+ * on others). Local presentation only, kept while the game runs. */
+static const unsigned char pmap_zoom_levels[] = {4, 5, 6, 8, 10, 12, 16, 20, 24, 32};
+#define PMAP_ZOOM_DEFAULT 2
+static int pmap_zoom = PMAP_ZOOM_DEFAULT;
+/* The unexplored world under the full-screen map: the dark brown of the old map's marble (palette index) */
+#define PMAP_BACKGROUND 2
+
+static long pmap_block_of(int level)
+{
+    const long block = ((long)pmap_zoom_levels[level] * RendererPhysicalHeight() + 540) / 1080;
+    return max(block, 1L);
 }
 
 /******************************************************************************/
@@ -165,6 +181,15 @@ long get_parchment_background_area_rect(struct TbRect *bkgnd_area)
 
 long get_parchment_map_area_rect(struct TbRect *map_area)
 {
+    if (world_mode_active())
+    {
+        /* Endless world: the map fills the screen; the block size is the zoom */
+        map_area->left = 0;
+        map_area->top = 0;
+        map_area->right = RendererPhysicalWidth();
+        map_area->bottom = RendererPhysicalHeight();
+        return pmap_block_of(pmap_zoom);
+    }
     struct TbRect bkgnd_area;
     get_parchment_background_area_rect(&bkgnd_area);
     long bkgnd_width = bkgnd_area.right - bkgnd_area.left;
@@ -176,6 +201,18 @@ long get_parchment_map_area_rect(struct TbRect *map_area)
     map_area->right = map_area->left + block_size*parchment_tiles_x();
     map_area->bottom = map_area->top + block_size*parchment_tiles_y();
     return block_size;
+}
+
+/* Endless world: the engine subtile under a point of the full-screen map */
+static void pmap_point_to_subtile(long screen_x, long screen_y, MapSubtlCoord *stl_x, MapSubtlCoord *stl_y)
+{
+    struct TbRect area;
+    const long block = get_parchment_map_area_rect(&area);
+    MapSlabCoord view_x, view_y;
+    long off_x, off_y;
+    world_parchment_view(area.right - area.left, area.bottom - area.top, block, &view_x, &view_y, &off_x, &off_y);
+    *stl_x = STL_PER_SLB * view_x + (MapSubtlCoord)((screen_x - area.left + off_x) * STL_PER_SLB / block);
+    *stl_y = STL_PER_SLB * view_y + (MapSubtlCoord)((screen_y - area.top + off_y) * STL_PER_SLB / block);
 }
 
 TbBool point_to_overhead_map(const struct Camera *camera, const long screen_x, const long screen_y, int32_t *map_x, int32_t *map_y)
@@ -193,10 +230,10 @@ TbBool point_to_overhead_map(const struct Camera *camera, const long screen_x, c
         *map_y = COORD_PER_STL * STL_PER_SLB * (screen_y-map_area.top)  / block_size + COORD_PER_STL/2;
         if (world_mode_active())
         {
-            MapSlabCoord view_x, view_y;
-            world_parchment_view_origin(&view_x, &view_y);
-            *map_x += COORD_PER_STL * STL_PER_SLB * view_x;
-            *map_y += COORD_PER_STL * STL_PER_SLB * view_y;
+            MapSubtlCoord stl_x, stl_y;
+            pmap_point_to_subtile(screen_x, screen_y, &stl_x, &stl_y);
+            *map_x = COORD_PER_STL * stl_x + COORD_PER_STL/2;
+            *map_y = COORD_PER_STL * stl_y + COORD_PER_STL/2;
         }
         return ((*map_x >= 0) && (*map_x < (game.map_subtiles_x+1)<<8) && (*map_y >= 0) && (*map_y < (game.map_subtiles_y+1)<<8));
     }
@@ -211,11 +248,13 @@ TbBool parchment_point_to_subtile(const long screen_x, const long screen_y, MapS
     long block_size = get_parchment_map_area_rect(&map_area);
     if ((screen_x < map_area.left) || (screen_x >= map_area.right) || (screen_y < map_area.top) || (screen_y >= map_area.bottom))
         return false;
-    MapSlabCoord view_x = 0, view_y = 0;
     if (world_mode_active())
-        world_parchment_view_origin(&view_x, &view_y);
-    *stl_x = STL_PER_SLB * ((screen_x - map_area.left) / block_size + view_x) + 1;
-    *stl_y = STL_PER_SLB * ((screen_y - map_area.top) / block_size + view_y) + 1;
+    {
+        pmap_point_to_subtile(screen_x, screen_y, stl_x, stl_y);
+        return true;
+    }
+    *stl_x = STL_PER_SLB * ((screen_x - map_area.left) / block_size) + 1;
+    *stl_y = STL_PER_SLB * ((screen_y - map_area.top) / block_size) + 1;
     return true;
 }
 
@@ -223,8 +262,9 @@ TbBool parchment_point_to_subtile(const long screen_x, const long screen_y, MapS
 static struct {
     TbBool active;          /* the left button went down on the map */
     TbBool dragging;        /* it has moved further than a click may */
-    long start_x, start_y;  /* where it went down */
-    long moved_x, moved_y;  /* whole slabs this drag has scrolled the view */
+    long start_x, start_y;  /* where it went down (or where it was when the zoom changed) */
+    long block;             /* the zoom since then */
+    int64_t moved_x, moved_y; /* 1/256 slabs the view has scrolled since then */
 } pdrag;
 
 TbBool parchment_drag(enum ParchmentDrag what, long screen_x, long screen_y)
@@ -238,6 +278,7 @@ TbBool parchment_drag(enum ParchmentDrag what, long screen_x, long screen_y)
         pdrag.dragging = false;
         pdrag.start_x = screen_x;
         pdrag.start_y = screen_y;
+        pdrag.block = block_size;
         pdrag.moved_x = 0;
         pdrag.moved_y = 0;
         return false;
@@ -251,7 +292,16 @@ TbBool parchment_drag(enum ParchmentDrag what, long screen_x, long screen_y)
     }
     if (!pdrag.active)
         return false;
-    /* the content follows the mouse: moving it right shows what lies further left */
+    if (pdrag.block != block_size)
+    {
+        /* zoomed while dragging: go on from here */
+        pdrag.start_x = screen_x;
+        pdrag.start_y = screen_y;
+        pdrag.block = block_size;
+        pdrag.moved_x = 0;
+        pdrag.moved_y = 0;
+    }
+    /* the content follows the mouse, pixel for pixel: moving it right shows what lies further left */
     const long dx = pdrag.start_x - screen_x;
     const long dy = pdrag.start_y - screen_y;
     const long slack = max(3L, (long)(6 * units_per_pixel / 16)); /* a click may wobble this far */
@@ -259,14 +309,139 @@ TbBool parchment_drag(enum ParchmentDrag what, long screen_x, long screen_y)
         pdrag.dragging = true;
     if (pdrag.dragging)
     {
-        const long tx = dx / block_size;
-        const long ty = dy / block_size;
+        const int64_t tx = (int64_t)dx * 256 / block_size;
+        const int64_t ty = (int64_t)dy * 256 / block_size;
         if ((tx != pdrag.moved_x) || (ty != pdrag.moved_y))
-            world_parchment_scroll((int)(tx - pdrag.moved_x), (int)(ty - pdrag.moved_y));
+            world_parchment_scroll_fine(tx - pdrag.moved_x, ty - pdrag.moved_y);
         pdrag.moved_x = tx;
         pdrag.moved_y = ty;
     }
     return pdrag.dragging;
+}
+
+void parchment_zoom(int dir, long screen_x, long screen_y)
+{
+    if (!world_mode_active())
+        return;
+    struct TbRect area;
+    const long old_block = get_parchment_map_area_rect(&area);
+    int level = pmap_zoom;
+    long new_block;
+    do
+    {
+        /* the next level that changes the size (small screens round some of them to the same) */
+        level += (dir > 0) ? 1 : -1;
+        if ((level < 0) || (level >= (int)(sizeof(pmap_zoom_levels) / sizeof(pmap_zoom_levels[0]))))
+            return;
+        new_block = pmap_block_of(level);
+    } while (new_block == old_block);
+    /* the world point under the given screen point stays there */
+    const int64_t rx = screen_x - (area.left + area.right) / 2;
+    const int64_t ry = screen_y - (area.top + area.bottom) / 2;
+    const int64_t dx = rx * 256 / old_block - rx * 256 / new_block;
+    const int64_t dy = ry * 256 / old_block - ry * 256 / new_block;
+    if ((dx != 0) || (dy != 0))
+        world_parchment_scroll_fine(dx, dy);
+    pmap_zoom = level;
+}
+
+long parchment_zoom_block(void)
+{
+    return pmap_block_of(pmap_zoom);
+}
+
+/* Endless world: a short note over the full-screen map (which battle it shows) */
+static char pmap_note[64];
+static int64_t pmap_note_until;
+
+static void pmap_set_note(const char *text)
+{
+    snprintf(pmap_note, sizeof(pmap_note), "%s", text);
+    pmap_note_until = get_time_tick_ns() + 2500000000LL;
+}
+
+void parchment_cycle_battles(int dir)
+{
+    static BattleIndex shown = 0;
+    if (!world_mode_active())
+        return;
+    const PlayerNumber plyr_idx = my_player_number;
+    const BattleIndex battle_id = (dir < 0) ? find_previous_battle_of_mine(plyr_idx, shown) : find_next_battle_of_mine(plyr_idx, shown);
+    if ((battle_id <= 0) || !creature_battle_exists(battle_id))
+    {
+        shown = 0;
+        pmap_set_note("No battles right now");
+        return;
+    }
+    shown = battle_id;
+    const struct CreatureBattle *battle = creature_battle_get(battle_id);
+    const struct Thing *thing = thing_get(battle->first_creatr);
+    if (thing_exists(thing))
+        world_parchment_glide_to_subtile(thing->mappos.x.stl.num, thing->mappos.y.stl.num);
+    /* which one of how many (in the order find_next_battle_of_mine goes: by index) */
+    int number = 0;
+    int total = 0;
+    for (BattleIndex i = 1; i < BATTLES_COUNT; i++)
+    {
+        if (!creature_battle_exists(i) || (find_next_battle_of_mine(plyr_idx, i - 1) != i))
+            continue;
+        total++;
+        if (i == battle_id)
+            number = total;
+    }
+    char text[64];
+    snprintf(text, sizeof(text), "Battle %d of %d", number, total);
+    pmap_set_note(text);
+    SYNCLOG("World map: battle %d (%d of %d)", (int)battle_id, number, total);
+}
+
+/* Endless world: the full-screen map moves every frame by the time that passed (smoothly, not a step per game
+ * turn): the drag, the move keys, the mouse at the screen's edge, and a glide to a battle or the heart. */
+static void parchment_world_frame(void)
+{
+    static int64_t last_ns = 0;
+    static float carry_x = 0.0f;
+    static float carry_y = 0.0f;
+    const int64_t now = get_time_tick_ns();
+    float seconds = (last_ns != 0) ? (float)(now - last_ns) / 1000000000.0f : 0.0f;
+    last_ns = now;
+    if ((seconds < 0.0f) || (seconds > 0.25f))
+    {
+        /* the map was just opened (or the game stalled): nothing carries over */
+        seconds = 0.0f;
+        pdrag.active = false;
+        pdrag.dragging = false;
+    }
+    else if (seconds > 0.05f)
+        seconds = 0.05f;
+    struct TbRect area;
+    const long block = get_parchment_map_area_rect(&area);
+    if (lbDisplay.MLeftButton)
+        parchment_drag(PDrag_Move, GetMouseX() / pixel_size, GetMouseY() / pixel_size);
+    int dir_x = 0;
+    int dir_y = 0;
+    TbBool fast = false;
+    get_world_map_scroll(&dir_x, &dir_y, &fast);
+    if ((dir_x != 0) || (dir_y != 0))
+    {
+        /* 0.6 screen heights a second, 1.5 with the speed key, whatever the zoom */
+        const float pixels = (float)(area.bottom - area.top) * (fast ? 1.5f : 0.6f) * seconds;
+        const float fine = pixels * 256.0f / (float)block;
+        carry_x += fine * (float)dir_x;
+        carry_y += fine * (float)dir_y;
+        const int64_t step_x = (int64_t)carry_x;
+        const int64_t step_y = (int64_t)carry_y;
+        carry_x -= (float)step_x;
+        carry_y -= (float)step_y;
+        if ((step_x != 0) || (step_y != 0))
+            world_parchment_scroll_fine(step_x, step_y);
+    }
+    else
+    {
+        carry_x = 0.0f;
+        carry_y = 0.0f;
+    }
+    world_parchment_glide(seconds);
 }
 
 TbBool parchment_copy_background_at(const struct TbRect *bkgnd_area, int units_per_px)
@@ -348,6 +523,22 @@ static TbPixel get_player_path_colour(unsigned short owner)
  * scroll offset; whatever falls outside the visible map area is left out. */
 static struct TbRect parchment_clip;
 static TbBool parchment_clip_on;
+
+/* A creature's dot: on the zoomed-in full-screen map as big as the subtile it stands on */
+static void draw_overhead_creature_dot(long pos_x, long pos_y, long block_size, TbPixel col)
+{
+    const long sub = block_size / STL_PER_SLB;
+    if (parchment_clip_on && (sub > 2))
+    {
+        UIRenderer_SubmitSolidBox(pos_x, pos_y, sub, sub, col);
+        return;
+    }
+    short pixel_end = get_pixels_scaled_and_zoomed(TWO_PIXELS);
+    for (int p = 0; p < pixel_end; p++)
+    {
+        UIRenderer_SubmitSolidBox(pos_x + draw_square[p].delta_x, pos_y + draw_square[p].delta_y, 1, 1, col);
+    }
+}
 
 static TbBool parchment_point_hidden(int x, int y)
 {
@@ -472,7 +663,7 @@ static int get_overhead_world_style(MapSlabCoord slb_x, MapSlabCoord slb_y, Play
 {
     /* the live map where it is loaded (the window inside its rock frame, or any loaded page); memory elsewhere */
     const TbBool live = world_paged ? (wp_page_of_slab(slb_x, slb_y) != NULL)
-        : ((slb_x >= 1) && (slb_y >= 1) && (slb_x < parchment_tiles_x() - 1) && (slb_y < parchment_tiles_y() - 1));
+        : ((slb_x >= 1) && (slb_y >= 1) && (slb_x < game.map_tiles_x - 1) && (slb_y < game.map_tiles_y - 1));
     if (live)
     {
         const struct Map* mapblk = get_map_block_at(slab_subtile_center(slb_x), slab_subtile_center(slb_y));
@@ -507,6 +698,74 @@ static int get_overhead_world_style(MapSlabCoord slb_x, MapSlabCoord slb_y, Play
     }
 }
 
+/** Draws one row of slabs (their styles) into an overhead-map scratch buffer of the given pitch. */
+static void draw_overhead_style_row(unsigned char* dstrow, int map_w, const int* styles, MapSlabCoord count, long block_size)
+{
+    unsigned char* dstblock = dstrow;
+    for (MapSlabCoord slb_x = 0; slb_x < count;) {
+        int style = styles[slb_x];
+        MapSlabCoord run = 1;
+        while ((slb_x + run < count) && (styles[slb_x + run] == style)) {
+            run++;
+        }
+        int32_t run_width = run * block_size;
+        if (style == OMapSt_Unchanged) {
+            slb_x += run;
+            dstblock += run_width;
+            continue;
+        }
+        // ghost_table_blend()'s table_offset for each style, or -1 for a
+        // literal colour write -- same table/formula the minimap uses
+        // (vidmode.h) for the identical categories. Abyss uses its own
+        // direct 256-entry LUT (pixmap.map_abyss) instead, since it isn't
+        // an offset into pixmap.ghost.
+        int table_offset = -1;
+        int shift = 0;
+        int add = 0;
+        const unsigned char* abyss_remap = NULL;
+        if (style == OMapSt_Tagged || style == OMapSt_TaggedGems) {
+            table_offset = 0x1A00;
+            if (style == OMapSt_TaggedGems) {
+                add = 2;
+            }
+        } else if (style == OMapSt_Gold) {
+            table_offset = 0x8C00;
+        } else if (style == OMapSt_Gems) {
+            table_offset = 0;
+            shift = 6;
+            add = 102;
+        } else if (style == OMapSt_Wall) {
+            table_offset = 0x1000;
+        } else if (style == OMapSt_Abyss) {
+            abyss_remap = pixmap.map_abyss;
+        }
+        unsigned char* dstline = dstblock;
+        for (int32_t y = 0; y < block_size; y++) {
+            if (abyss_remap != NULL) {
+                for (int32_t x = 0; x < run_width; x++) {
+                    dstline[x] = abyss_remap[dstline[x]];
+                }
+            } else if (table_offset < 0) {
+                if (run_width >= 16) {
+                    memset(dstline, style, run_width);
+                } else {
+                    volatile unsigned char* dstpixel = dstline;
+                    for (int32_t x = 0; x < run_width; x++) {
+                        dstpixel[x] = style;
+                    }
+                }
+            } else {
+                for (int32_t x = 0; x < run_width; x++) {
+                    dstline[x] = ghost_table_blend(dstline[x], table_offset, shift, add);
+                }
+            }
+            dstline += map_w;
+        }
+        slb_x += run;
+        dstblock += run_width;
+    }
+}
+
 void draw_overhead_map(const struct TbRect *map_area, long block_size, PlayerNumber plyr_idx)
 {
     int map_w = (int)(map_area->right - map_area->left);
@@ -527,84 +786,12 @@ void draw_overhead_map(const struct TbRect *map_area, long block_size, PlayerNum
     int styles[MAX_TILES_X];
     const struct SlabMap* slb = get_slabmap_block(0, 0);
     unsigned char* dstrow = omap_scratch;
-    MapSlabCoord view_x = 0, view_y = 0;
-    const TbBool world_view = world_mode_active();
-    if (world_view)
-        world_parchment_view_origin(&view_x, &view_y);
     for (MapSlabCoord slb_y = 0; slb_y < parchment_tiles_y(); slb_y++, dstrow += block_stride) {
-        if (world_view) {
-            for (MapSlabCoord slb_x = 0; slb_x < parchment_tiles_x(); slb_x++) {
-                styles[slb_x] = get_overhead_world_style(view_x + slb_x, view_y + slb_y, plyr_idx, gui_frame, neutral_colour);
-            }
-        } else {
         const struct Map* mapblk = get_map_block_at(slab_subtile_center(0), slab_subtile_center(slb_y));
         for (MapSlabCoord slb_x = 0; slb_x < parchment_tiles_x(); slb_x++, slb++, mapblk += STL_PER_SLB) {
             styles[slb_x] = get_overhead_mapblock_style(mapblk, slb, slb_x, slb_y, plyr_idx, gui_frame, neutral_colour);
         }
-        }
-        unsigned char* dstblock = dstrow;
-        for (MapSlabCoord slb_x = 0; slb_x < parchment_tiles_x();) {
-            int style = styles[slb_x];
-            MapSlabCoord run = 1;
-            while ((slb_x + run < parchment_tiles_x()) && (styles[slb_x + run] == style)) {
-                run++;
-            }
-            int32_t run_width = run * block_size;
-            if (style == OMapSt_Unchanged) {
-                slb_x += run;
-                dstblock += run_width;
-                continue;
-            }
-            // ghost_table_blend()'s table_offset for each style, or -1 for a
-            // literal colour write -- same table/formula the minimap uses
-            // (vidmode.h) for the identical categories. Abyss uses its own
-            // direct 256-entry LUT (pixmap.map_abyss) instead, since it isn't
-            // an offset into pixmap.ghost.
-            int table_offset = -1;
-            int shift = 0;
-            int add = 0;
-            const unsigned char* abyss_remap = NULL;
-            if (style == OMapSt_Tagged || style == OMapSt_TaggedGems) {
-                table_offset = 0x1A00;
-                if (style == OMapSt_TaggedGems) {
-                    add = 2;
-                }
-            } else if (style == OMapSt_Gold) {
-                table_offset = 0x8C00;
-            } else if (style == OMapSt_Gems) {
-                table_offset = 0;
-                shift = 6;
-                add = 102;
-            } else if (style == OMapSt_Wall) {
-                table_offset = 0x1000;
-            } else if (style == OMapSt_Abyss) {
-                abyss_remap = pixmap.map_abyss;
-            }
-            unsigned char* dstline = dstblock;
-            for (int32_t y = 0; y < block_size; y++) {
-                if (abyss_remap != NULL) {
-                    for (int32_t x = 0; x < run_width; x++) {
-                        dstline[x] = abyss_remap[dstline[x]];
-                    }
-                } else if (table_offset < 0) {
-                    if (run_width >= 16) {
-                        memset(dstline, style, run_width);
-                    } else {
-                        volatile unsigned char* dstpixel = dstline;
-                        for (int32_t x = 0; x < run_width; x++) {
-                            dstpixel[x] = style;
-                        }
-                    }
-                } else {
-                    for (int32_t x = 0; x < run_width; x++) {
-                        dstline[x] = ghost_table_blend(dstline[x], table_offset, shift, add);
-                    }
-                }
-                dstline += map_w;
-            }
-            slb_x += run;
-            dstblock += run_width;
-        }
+        draw_overhead_style_row(dstrow, map_w, styles, parchment_tiles_x(), block_size);
     }
 
     // COMPOSITE, not OPAQUE: this rect sits inside the already-drawn parchment
@@ -624,12 +811,75 @@ void draw_overhead_map(const struct TbRect *map_area, long block_size, PlayerNum
     RendererSetDrawFlags(0);
 }
 
+/** Endless world: the full-screen map. The slabs are drawn into a buffer a little larger than the screen (whole
+ *  slabs), which is shown moved by the part of the top left slab that is scrolled out of sight. */
+static int64_t pmap_draw_ns;
+static long pmap_draw_count;
+
+long parchment_draw_micros(void)
+{
+    const long us = (pmap_draw_count > 0) ? (long)(pmap_draw_ns / pmap_draw_count / 1000) : -1;
+    pmap_draw_ns = 0;
+    pmap_draw_count = 0;
+    return us;
+}
+
+static void draw_overhead_world_map(const struct TbRect *map_area, long block_size, PlayerNumber plyr_idx)
+{
+    const int64_t draw_start = get_time_tick_ns();
+    const int map_w = (int)(map_area->right - map_area->left);
+    const int map_h = (int)(map_area->bottom - map_area->top);
+    if ((map_w <= 0) || (map_h <= 0))
+        return;
+    MapSlabCoord view_x, view_y;
+    long off_x, off_y;
+    world_parchment_view(map_w, map_h, block_size, &view_x, &view_y, &off_x, &off_y);
+    const MapSlabCoord tiles_x = (MapSlabCoord)((map_w + off_x + block_size - 1) / block_size);
+    const MapSlabCoord tiles_y = (MapSlabCoord)((map_h + off_y + block_size - 1) / block_size);
+    const int buf_w = (int)(tiles_x * block_size);
+    const int buf_h = (int)(tiles_y * block_size);
+    unsigned char* omap_scratch = (unsigned char*)KfxAlloc((size_t)buf_w * (size_t)buf_h);
+    int* styles = (int*)KfxAlloc(sizeof(int) * (size_t)tiles_x);
+    if ((omap_scratch == NULL) || (styles == NULL)) {
+        WARNLOG("Overhead map scratch buffer allocation failed; map not drawn");
+        KfxFree(omap_scratch);
+        KfxFree(styles);
+        return;
+    }
+    memset(omap_scratch, PMAP_BACKGROUND, (size_t)buf_w * (size_t)buf_h);
+    GameTurn turn = get_gameturn();
+    int gui_frame = (turn / gui_blink_rate) & 7;
+    TbPixel neutral_colour = player_room_colours[(turn / neutral_flash_rate) & 3];
+    for (MapSlabCoord ty = 0; ty < tiles_y; ty++) {
+        for (MapSlabCoord tx = 0; tx < tiles_x; tx++) {
+            styles[tx] = get_overhead_world_style(view_x + tx, view_y + ty, plyr_idx, gui_frame, neutral_colour);
+        }
+        draw_overhead_style_row(omap_scratch + (size_t)ty * block_size * buf_w, buf_w, styles, tiles_x, block_size);
+    }
+    struct RendererPresentImageDesc d = {0};
+    d.format = PRESENT_FORMAT_INDEXED8;
+    d.palette = PRESENT_PALETTE_GAME;
+    d.kind = PRESENT_KIND_COMPOSITE;
+    d.dst_x = map_area->left;   d.dst_y = map_area->top;
+    d.dst_w = map_w;            d.dst_h = map_h;
+    d.src = omap_scratch + (size_t)off_y * buf_w + off_x;
+    d.src_pitch = buf_w;
+    d.src_w = map_w;            d.src_h = map_h;
+    RendererPresentImage(&d);
+    KfxFree(styles);
+    KfxFree(omap_scratch);
+    RendererSetDrawFlags(0);
+    pmap_draw_ns += get_time_tick_ns() - draw_start;
+    pmap_draw_count++;
+}
+
 void draw_overhead_room_icons(const struct TbRect *map_area, long block_size, PlayerNumber plyr_idx)
 {
     int ps_units_per_px;
     {
         const struct TbSprite* spr = get_panel_sprite(GPS_room_treasury_std_s);//only for size, room irrelevant
-        ps_units_per_px = 32 * block_size * 4 / spr->SHeight;
+        const long icon_block = world_mode_active() ? min(block_size, pmap_block_of(PMAP_ZOOM_DEFAULT)) : block_size;
+        ps_units_per_px = 32 * icon_block * 4 / spr->SHeight;
     }
     long rkind_select = (get_gameturn() >> 1) % game.conf.slab_conf.room_types_count;
     for (struct Room* room = start_rooms; room < end_rooms; room++)
@@ -728,11 +978,7 @@ int draw_overhead_creatures(const struct TbRect *map_area, long block_size, Play
                 }
                 if (!parchment_point_hidden((int)pos_x, (int)pos_y))
                 {
-                    pixel_end = get_pixels_scaled_and_zoomed(TWO_PIXELS);
-                    for (p = 0; p < pixel_end; p++)
-                    {
-                        UIRenderer_SubmitSolidBox(pos_x + draw_square[p].delta_x, pos_y+draw_square[p].delta_y, 1, 1, col);
-                    }
+                    draw_overhead_creature_dot(pos_x, pos_y, block_size, col);
                     n++;
                 }
             } else
@@ -778,11 +1024,7 @@ int draw_overhead_creatures(const struct TbRect *map_area, long block_size, Play
                 long pos_y = map_area->top + block_size * (int)thing->mappos.y.stl.num / STL_PER_SLB;
                 if (!parchment_point_hidden((int)pos_x, (int)pos_y))
                 {
-                    pixel_end = get_pixels_scaled_and_zoomed(TWO_PIXELS);
-                    for (p = 0; p < pixel_end; p++)
-                    {
-                        UIRenderer_SubmitSolidBox(pos_x + draw_square[p].delta_x, pos_y + draw_square[p].delta_y, 1, 1, raid_col);
-                    }
+                    draw_overhead_creature_dot(pos_x, pos_y, block_size, raid_col);
                     n++;
                 }
             }
@@ -930,18 +1172,21 @@ void draw_2d_map(void)
     // Size of the parchment map on which we're drawing
     struct TbRect map_area;
     long block_size = get_parchment_map_area_rect(&map_area);
-    // Now draw
-    draw_overhead_map(&map_area, block_size, player->id_number);
     if (world_mode_active())
     {
-        // Endless world: the map can be scrolled past the loaded window
+        // Endless world: the map fills the screen, and scrolls and zooms
+        draw_overhead_world_map(&map_area, block_size, player->id_number);
         MapSlabCoord view_x, view_y;
-        world_parchment_view_origin(&view_x, &view_y);
+        long off_x, off_y;
+        world_parchment_view(map_area.right - map_area.left, map_area.bottom - map_area.top, block_size,
+            &view_x, &view_y, &off_x, &off_y);
+        const long shift_x = block_size * view_x + off_x;
+        const long shift_y = block_size * view_y + off_y;
         struct TbRect view_area = map_area;
-        view_area.left -= block_size * view_x;
-        view_area.right -= block_size * view_x;
-        view_area.top -= block_size * view_y;
-        view_area.bottom -= block_size * view_y;
+        view_area.left -= shift_x;
+        view_area.right -= shift_x;
+        view_area.top -= shift_y;
+        view_area.bottom -= shift_y;
         parchment_clip = map_area;
         parchment_clip_on = true;
         draw_overhead_things(&view_area, block_size, player->id_number);
@@ -962,12 +1207,80 @@ void draw_2d_map(void)
         parchment_clip_on = false;
         return;
     }
+    // Now draw
+    draw_overhead_map(&map_area, block_size, player->id_number);
     draw_overhead_things(&map_area, block_size, player->id_number);
     draw_overhead_room_icons(&map_area, block_size, player->id_number);
 }
 
+/* The game's font has no square brackets (it draws them round): they are drawn as the font would, from the top
+ * to the bottom of its capitals, in its face colour over its shadow colour */
+static void draw_map_bracket(int x, int top, int height, TbBool opening)
+{
+    const int stroke = max(1, height / 8);
+    const int serif = max(2, height / 3);
+    const int shade_off = max(1, stroke / 2);
+    for (int pass = 0; pass < 2; pass++)
+    {
+        const int o = (pass == 0) ? shade_off : 0; /* the shadow first, a little right and down */
+        const unsigned char col = (pass == 0) ? LbTextGetFontBackColor() : LbTextGetFontFaceColor();
+        const int bar_x = opening ? x : x + serif - stroke;
+        UIRenderer_SubmitSolidBox(bar_x + o, top + o, stroke, height, col);
+        UIRenderer_SubmitSolidBox(x + o, top + o, serif, stroke, col);
+        UIRenderer_SubmitSolidBox(x + o, top + height - stroke + o, serif, stroke, col);
+    }
+}
+
 void draw_map_level_name(void)
 {
+    if (world_mode_active())
+    {
+        // Endless world: no title over the full-screen map, only its shortcuts (and for a moment which battle it
+        // shows): "H = Dungeon Heart   [ = Previous battle   ] = Next battle"
+        static const struct { char key; const char *text; } shortcuts[] = {
+            {'H', " = Dungeon Heart"}, {'[', " = Previous battle"}, {']', " = Next battle"},
+        };
+        LbTextSetFont(winfont);
+        RendererSetDrawFlags(0);
+        const int w = RendererPhysicalWidth();
+        const int hint_units_per_px = (14 * units_per_pixel) / LbTextLineHeight();
+        LbTextSetWindow(0, 0, w, RendererPhysicalHeight() / 4);
+        const int line_h = LbTextLineHeight() * hint_units_per_px / 16;
+        const int caps_top = 8 * units_per_pixel / 16 + line_h / 4; /* the capitals: a quarter down, 16/28 high */
+        const int caps_h = line_h * 16 / 28;
+        const int bracket_w = max(2, caps_h / 3);
+        const int gap = LbTextStringWidth("      ") * hint_units_per_px / 16;
+        int total = 0;
+        for (int i = 0; i < (int)(sizeof(shortcuts) / sizeof(shortcuts[0])); i++)
+        {
+            const char key[2] = {shortcuts[i].key, '\0'};
+            total += (shortcuts[i].key == 'H') ? LbTextStringWidth(key) * hint_units_per_px / 16 : bracket_w;
+            total += LbTextStringWidth(shortcuts[i].text) * hint_units_per_px / 16 + ((i > 0) ? gap : 0);
+        }
+        int x = (w - total) / 2;
+        for (int i = 0; i < (int)(sizeof(shortcuts) / sizeof(shortcuts[0])); i++)
+        {
+            if (i > 0)
+                x += gap;
+            if (shortcuts[i].key == 'H')
+            {
+                LbTextDrawResized(x, 8 * units_per_pixel / 16, hint_units_per_px, "H");
+                x += LbTextStringWidth("H") * hint_units_per_px / 16;
+            } else
+            {
+                draw_map_bracket(x, caps_top, caps_h, shortcuts[i].key == '[');
+                x += bracket_w;
+            }
+            LbTextDrawResized(x, 8 * units_per_pixel / 16, hint_units_per_px, shortcuts[i].text);
+            x += LbTextStringWidth(shortcuts[i].text) * hint_units_per_px / 16;
+        }
+        if ((pmap_note[0] != '\0') && (get_time_tick_ns() < pmap_note_until))
+        {
+            LbTextDrawResized((w - LbTextStringWidth(pmap_note) * hint_units_per_px / 16) / 2, 30 * units_per_pixel / 16,
+                hint_units_per_px, pmap_note);
+        }
+        return;
+    }
     // Retrieving name
     const char* lv_name = NULL;
     LevelNumber lvnum = get_loaded_level_number();
@@ -999,14 +1312,6 @@ void draw_map_level_name(void)
         LbTextSetWindow(x, y, w, h);
         int tx_units_per_px = ( (MyScreenHeight < 400) && (dbc_initialized && dbc_enabled) ) ? scale_ui_value(32) : (22 * units_per_pixel) / LbTextLineHeight();
         LbTextDrawResized((w-LbTextStringWidth(lv_name)*units_per_pixel/16)/2, h/10 - 8*units_per_pixel/16, tx_units_per_px, lv_name);
-    }
-    if (world_mode_active())
-    {
-        const char *hint = "Mouse at the edge, drag or W A S D: scroll the map    Click: go there    H: your Dungeon Heart";
-        int hint_units_per_px = (14 * units_per_pixel) / LbTextLineHeight();
-        LbTextSetWindow(x, y, w, h + h / 2);
-        LbTextDrawResized((w - LbTextStringWidth(hint) * hint_units_per_px / 16) / 2, h / 10 + 24 * units_per_pixel / 16,
-            hint_units_per_px, hint);
     }
 }
 
@@ -1235,16 +1540,20 @@ void draw_zoom_box(void)
     int stl_y = STL_PER_SLB * (mouse_y / pixel_size - map_area.top) / block_size - draw_tiles_y / 2;
     if (world_mode_active())
     {
-        MapSlabCoord view_x, view_y;
-        world_parchment_view_origin(&view_x, &view_y);
-        stl_x += STL_PER_SLB * view_x;
-        stl_y += STL_PER_SLB * view_y;
-        const int cx = stl_x + draw_tiles_x / 2, cy = stl_y + draw_tiles_y / 2;
+        /* the full-screen map zoomed in past its default: the map shows enough, the box would only cover it */
+        if (pmap_zoom > PMAP_ZOOM_DEFAULT + 1)
+            return;
+        if ((mouse_x / pixel_size < map_area.left) || (mouse_x / pixel_size >= map_area.right)
+         || (mouse_y / pixel_size < map_area.top) || (mouse_y / pixel_size >= map_area.bottom))
+            return;
+        MapSubtlCoord cx, cy;
+        pmap_point_to_subtile(mouse_x / pixel_size, mouse_y / pixel_size, &cx, &cy);
+        stl_x = cx - draw_tiles_x / 2;
+        stl_y = cy - draw_tiles_y / 2;
         if ((cx < STL_PER_SLB) || (cy < STL_PER_SLB) || (cx >= game.map_subtiles_x - STL_PER_SLB) || (cy >= game.map_subtiles_y - STL_PER_SLB))
             return;
-        /* paged: only over the drawn map, and only where the world is loaded */
-        if (world_paged && ((mouse_x / pixel_size < map_area.left) || (mouse_x / pixel_size >= map_area.right)
-         || (mouse_y / pixel_size < map_area.top) || (mouse_y / pixel_size >= map_area.bottom) || (wp_page_of_subtile(cx, cy) == NULL)))
+        /* paged: only where the world is loaded */
+        if (world_paged && (wp_page_of_subtile(cx, cy) == NULL))
             return;
     }
     // Draw only on map area (do not allow zoom box to be empty)
@@ -1279,9 +1588,16 @@ void draw_zoom_box(void)
 void redraw_parchment_view(void)
 {
   SYNCDBG(5,"Starting");
-  // Load and draw background
-  load_parchment_file();
-  draw_map_parchment();
+  if (world_mode_active())
+  {
+      // Endless world: the map fills the screen (no background), and moves smoothly
+      parchment_world_frame();
+  } else
+  {
+      // Load and draw background
+      load_parchment_file();
+      draw_map_parchment();
+  }
   // Draw top view of the map
   draw_2d_map();
   // Draw on-screen GUIs and boxes
@@ -1295,7 +1611,8 @@ void redraw_parchment_view(void)
 
 void redraw_minimal_overhead_view(void)
 {
-    draw_map_parchment();
+    if (!world_mode_active())
+        draw_map_parchment();
     draw_2d_map();
 }
 

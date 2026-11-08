@@ -2155,6 +2155,70 @@ static void get_packet_control_mouse_clicks(void)
     }
 }
 
+/** Endless world, the full-screen map: the mouse wheel and the zoom keys zoom it (the wheel around the mouse), ']'
+ *  and '[' take it to the next and the previous battle of the player's creatures (round and round), the heart key
+ *  back home. */
+static void get_world_map_view_inputs(long mouse_x, long mouse_y)
+{
+    if ((wheel_scrolled_up || wheel_scrolled_down) && !wheel_reserved_by_menu() && !game_is_busy_doing_gui())
+        parchment_zoom(wheel_scrolled_up ? 1 : -1, mouse_x, mouse_y);
+    if ((get_local_user_state()->init_flags & (UsrIF_KeyboardInputDisabled | UsrIF_NewMPMessage)) != 0)
+        return;
+    struct TbRect area;
+    get_parchment_map_area_rect(&area);
+    if (is_game_key_pressed(Gkey_ZoomIn, true, false))
+        parchment_zoom(1, (area.left + area.right) / 2, (area.top + area.bottom) / 2);
+    if (is_game_key_pressed(Gkey_ZoomOut, true, false))
+        parchment_zoom(-1, (area.left + area.right) / 2, (area.top + area.bottom) / 2);
+    if (is_key_pressed(KC_RBRACKET, KMod_DONTCARE))
+    {
+        clear_key_pressed(KC_RBRACKET);
+        parchment_cycle_battles(1);
+    }
+    if (is_key_pressed(KC_LBRACKET, KMod_DONTCARE))
+    {
+        clear_key_pressed(KC_LBRACKET);
+        parchment_cycle_battles(-1);
+    }
+    if (is_game_key_pressed(Gkey_ZoomRoomHeart, true, true))
+        world_parchment_home();
+}
+
+void get_world_map_scroll(int *dir_x, int *dir_y, TbBool *fast)
+{
+    *dir_x = 0;
+    *dir_y = 0;
+    *fast = false;
+    if (!world_mode_active() || (get_local_view_type() != PVT_MapScreen) || (get_local_map_fade() != PVT_None))
+        return;
+    if (game_is_busy_doing_gui_string_input() || a_menu_window_is_active())
+        return;
+    const unsigned long flags = get_local_user_state()->init_flags;
+    TbBool left = false, right = false, up = false, down = false;
+    if (((flags & (UsrIF_KeyboardInputDisabled | UsrIF_NewMPMessage)) == 0) && !is_game_key_pressed(Gkey_RotateMod, false, true))
+    {
+        left = is_game_key_pressed(Gkey_MoveLeft, false, true);
+        right = is_game_key_pressed(Gkey_MoveRight, false, true);
+        up = is_game_key_pressed(Gkey_MoveUp, false, true);
+        down = is_game_key_pressed(Gkey_MoveDown, false, true);
+        *fast = (is_game_key_pressed(Gkey_SpeedMod, false, true) != 0);
+    }
+    if (((flags & UsrIF_MouseInputDisabled) == 0) && (IsMouseInsideWindow() || world_test_mouse_in_window()) &&
+        !is_feature_on(Ft_DisableCursorCameraPanning))
+    {
+        /* the mouse at the screen's edge, as in the dungeon view */
+        const int32_t edge_scrolling_border = max(4, scale_fixed_DK_value(4));
+        const int32_t mouse_x = GetMouseX();
+        const int32_t mouse_y = GetMouseY();
+        left |= (mouse_x <= edge_scrolling_border);
+        right |= (mouse_x >= MyScreenWidth - edge_scrolling_border);
+        up |= (mouse_y <= edge_scrolling_border);
+        down |= (mouse_y >= MyScreenHeight - edge_scrolling_border);
+    }
+    *dir_x = (right ? 1 : 0) - (left ? 1 : 0);
+    *dir_y = (down ? 1 : 0) - (up ? 1 : 0);
+}
+
 static short get_map_action_inputs(void)
 {
     struct PlayerInfo* player = get_my_player();
@@ -2167,14 +2231,13 @@ static short get_map_action_inputs(void)
     TbBool map_valid = point_to_overhead_map(camera, mouse_x / pixel_size, mouse_y / pixel_size, &map_x, &map_y);
     if (world_mode_active())
     {
-        /* Endless world: hold the left button on the map and move the mouse to scroll it; a click that doesn't move
-           still takes the camera there */
+        /* Endless world: hold the left button on the map and move the mouse to drag it (it follows the mouse every
+           frame, see parchment_world_frame); a click that doesn't move still takes the camera there */
         if (left_button_clicked)
             parchment_drag(PDrag_Press, mouse_x / pixel_size, mouse_y / pixel_size);
-        else if (left_button_held)
-            parchment_drag(PDrag_Move, mouse_x / pixel_size, mouse_y / pixel_size);
         if (left_button_released && parchment_drag(PDrag_Release, mouse_x / pixel_size, mouse_y / pixel_size))
             left_button_released = 0; /* the end of a drag, not a click */
+        get_world_map_view_inputs(mouse_x / pixel_size, mouse_y / pixel_size);
     }
     MapSubtlCoord world_stl_x = 0;
     MapSubtlCoord world_stl_y = 0;
@@ -2378,32 +2441,7 @@ static void get_overhead_view_nonaction_inputs(void)
     int rotate_pressed = is_game_key_pressed(Gkey_RotateMod, false, true);
     int speed_pressed = is_game_key_pressed(Gkey_SpeedMod, false, true);
     local_state.camera_speedup_pressed = false;
-    if (world_mode_active() && !rotate_pressed && ((get_local_user_state()->init_flags & UsrIF_KeyboardInputDisabled) == 0))
-    {
-        // Endless world: the move keys scroll the full-screen map, and so does the mouse at the window's edge (as in
-        // the dungeon view, unless cursor panning is turned off); the heart key brings it back home
-        const int step = speed_pressed ? 6 : 2;
-        TbBool left = is_game_key_pressed(Gkey_MoveLeft, false, true);
-        TbBool right = is_game_key_pressed(Gkey_MoveRight, false, true);
-        TbBool up = is_game_key_pressed(Gkey_MoveUp, false, true);
-        TbBool down = is_game_key_pressed(Gkey_MoveDown, false, true);
-        if ((IsMouseInsideWindow() || world_test_mouse_in_window()) && !is_feature_on(Ft_DisableCursorCameraPanning))
-        {
-            const int32_t edge_scrolling_border = max(4, scale_fixed_DK_value(4));
-            const int32_t mouse_x = GetMouseX();
-            const int32_t mouse_y = GetMouseY();
-            left |= (mouse_x <= edge_scrolling_border);
-            right |= (mouse_x >= MyScreenWidth - edge_scrolling_border);
-            up |= (mouse_y <= edge_scrolling_border);
-            down |= (mouse_y >= MyScreenHeight - edge_scrolling_border);
-        }
-        const int dx = (right ? step : 0) - (left ? step : 0);
-        const int dy = (down ? step : 0) - (up ? step : 0);
-        if ((dx != 0) || (dy != 0))
-            world_parchment_scroll(dx, dy);
-        if (is_game_key_pressed(Gkey_ZoomRoomHeart, false, true))
-            world_parchment_home();
-    }
+    // Endless world: the full-screen map scrolls every frame (get_world_map_scroll), not here once a turn
     if ((get_local_user_state()->init_flags & UsrIF_KeyboardInputDisabled) == 0)
     {
         local_state.camera_speedup_pressed = (speed_pressed != 0);

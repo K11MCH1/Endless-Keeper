@@ -59,6 +59,15 @@ enum ParchmentDrag {
 /** Feeds the drag; coordinates as for parchment_point_to_subtile. The map follows the mouse once it has moved
  *  further than a click may. Returns true for a release that ends a drag (it is no click). */
 TbBool parchment_drag(enum ParchmentDrag what, long screen_x, long screen_y);
+/** Endless world: zooms the full-screen map a level in (dir > 0) or out, keeping what is under the screen point
+ *  where it is. */
+void parchment_zoom(int dir, long screen_x, long screen_y);
+/** The full-screen map's pixels per slab at its zoom. */
+long parchment_zoom_block(void);
+/** Takes the full-screen map to the next (dir > 0) or the previous battle of the player's creatures. */
+void parchment_cycle_battles(int dir);
+/** Test hooks: the full-screen map's average draw time in microseconds since the last call (-1: not drawn). */
+long parchment_draw_micros(void);
 TbBool point_to_overhead_map(const struct Camera *camera, const long screen_x, const long screen_y, int32_t *map_x, int32_t *map_y);
 
 void zoom_from_parchment_map(void);

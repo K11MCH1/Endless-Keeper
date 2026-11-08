@@ -177,6 +177,9 @@ extern long old_my;
 void input(void);
 short get_screen_capture_inputs(void);
 int is_game_key_pressed(long key_id, TbBool clear_pressed, TbBool ignore_mods);
+/** Endless world: where the open full-screen map is to scroll (-1, 0 or 1 each way: the move keys and the mouse at
+ *  the screen's edge), and whether the speed key is down. Read every frame. */
+void get_world_map_scroll(int *dir_x, int *dir_y, TbBool *fast);
 short game_is_busy_doing_gui_string_input(void);
 short get_gui_inputs(short gameplay_on);
 extern unsigned short const zoom_key_room_order[];

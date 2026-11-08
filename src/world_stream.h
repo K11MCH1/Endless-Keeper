@@ -140,9 +140,19 @@ unsigned short world_minimap_code(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
  *  state. The view's top-left engine slab (outside 0..map_tiles when scrolled away); the view is centred
  *  on the camera again whenever the map is opened. */
 void world_parchment_view_origin(MapSlabCoord *slb_x, MapSlabCoord *slb_y);
+/** The same for a view of width x height pixels at block pixels per slab, and how many pixels of the top left
+ *  slab are scrolled out of sight (0..block-1): the view scrolls smoothly, a pixel at a time. */
+void world_parchment_view(long width, long height, long block, MapSlabCoord *slb_x, MapSlabCoord *slb_y,
+    long *off_x, long *off_y);
 void world_parchment_scroll(int dx_slabs, int dy_slabs);
-/** Centres the view on the player's Dungeon Heart. */
+/** Scrolls by 1/256 slabs (and stops a glide). */
+void world_parchment_scroll_fine(int64_t dx, int64_t dy);
+/** Glides the view to the player's Dungeon Heart. */
 void world_parchment_home(void);
+/** Glides the view to an engine subtile (a battle). */
+void world_parchment_glide_to_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+/** Moves a glide on by this much real time (each frame). */
+void world_parchment_glide(float seconds);
 /** Test hook KFX_WORLD_MAPEDGE: true while it puts the game's mouse at the window's edges (the system cursor is
  *  elsewhere, so the window check would say the mouse is outside). */
 TbBool world_test_mouse_in_window(void);

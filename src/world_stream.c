@@ -43,6 +43,7 @@
 #include "thing_factory.h"
 #include "creature_control.h"
 #include "creature_states.h"
+#include "creature_battle.h"
 #include "config_creature.h"
 #include "config_objects.h"
 #include "config_trapdoor.h"
@@ -4840,6 +4841,117 @@ static void world_mapedge_hook(void)
     test_mouse_in_window = (now < at + 60);
 }
 
+/** Test hook KFX_WORLD_MAPZOOM=T (local only): at T-120 two fights start (three of the player's trolls against
+ *  three archers at the heart, and again by the player's creature furthest from it); at T-60 the full-screen map
+ *  opens. Then it zooms in two levels, goes to the next battle with ']' three times (round and round) and back with
+ *  '[', zooms out all the way, glides home with the heart key and zooms in all the way. Each step is logged (the
+ *  zoom, the view, the battles, the draw time) and saved as scrshots/mapzoom_t<turn>.png just before the next. */
+static void mapzoom_fight(const struct Coord3d *where)
+{
+    const ThingModel mine = (ThingModel)get_id(creature_desc, "TROLL");
+    const ThingModel hero = (ThingModel)get_id(creature_desc, "ARCHER");
+    for (int i = 0; i < 3; i++)
+    {
+        struct Coord3d pos = *where;
+        pos.x.val += (i - 1) * COORD_PER_STL;
+        pos.z.val = 0;
+        create_creature(&pos, mine, my_player_number);
+        pos.y.val += 2 * COORD_PER_STL;
+        create_creature(&pos, hero, PLAYER_GOOD);
+    }
+}
+
+static void world_mapzoom_hook(void)
+{
+    static long at = -2;
+    if (at == -2)
+    {
+        const char *v = getenv("KFX_WORLD_MAPZOOM");
+        at = (v != NULL) ? atol(v) : -1;
+    }
+    if (at < 0)
+        return;
+    const long now = (long)game.play_gameturn;
+    if (now == at - 120)
+    {
+        const struct Thing *heartng = find_players_dungeon_heart(my_player_number);
+        if (!thing_exists(heartng))
+        {
+            SYNCLOG("World map zoom: no heart");
+            return;
+        }
+        struct Coord3d pos = heartng->mappos;
+        pos.x.val += 3 * COORD_PER_STL;
+        mapzoom_fight(&pos);
+        /* the player's creature furthest from the heart */
+        const struct Thing *far_thing = NULL;
+        long far_dist = 0;
+        const struct StructureList *slist = get_list_for_thing_class(TCls_Creature);
+        for (long i = slist->index, k = 0; (i != 0) && (k < THINGS_COUNT); k++)
+        {
+            const struct Thing *thing = thing_get(i);
+            i = thing->next_of_class;
+            if (thing->owner != my_player_number)
+                continue;
+            const long d = labs((long)thing->mappos.x.stl.num - heartng->mappos.x.stl.num) +
+                labs((long)thing->mappos.y.stl.num - heartng->mappos.y.stl.num);
+            if (d > far_dist)
+            {
+                far_dist = d;
+                far_thing = thing;
+            }
+        }
+        if ((far_thing != NULL) && (far_dist > 30))
+        {
+            pos = far_thing->mappos;
+            mapzoom_fight(&pos);
+        }
+        SYNCLOG("World map zoom: fights at the heart (%d,%d) and %ld subtiles away", (int)heartng->mappos.x.stl.num,
+            (int)heartng->mappos.y.stl.num, (far_dist > 30) ? far_dist : 0L);
+        return;
+    }
+    if (now == at - 60)
+        zoom_to_parchment_map();
+    if ((now < at) || (now > at + 90))
+        return;
+    struct TbRect area;
+    get_parchment_map_area_rect(&area);
+    const long cx = (area.left + area.right) / 2, cy = (area.top + area.bottom) / 2;
+    const long t = now - at;
+    if ((t % 10) == 9)
+    {
+        char fname[64];
+        snprintf(fname, sizeof(fname), "scrshots/mapzoom_t%03ld.png", t);
+        take_screenshot(fname);
+        return;
+    }
+    if ((t % 10) != 0)
+        return;
+    const char *step = "";
+    switch (t)
+    {
+    case 0: step = "opened"; break;
+    case 10: parchment_zoom(1, cx, cy); parchment_zoom(1, cx, cy); step = "zoom in x2"; break;
+    case 20: parchment_cycle_battles(1); step = "]"; break;
+    case 30: parchment_cycle_battles(1); step = "]"; break;
+    case 40: parchment_cycle_battles(1); step = "]"; break;
+    case 50: parchment_cycle_battles(-1); step = "["; break;
+    case 60: for (int i = 0; i < 12; i++) parchment_zoom(-1, cx, cy); step = "zoom out all the way"; break;
+    case 70: world_parchment_home(); step = "heart key"; break;
+    case 80: for (int i = 0; i < 12; i++) parchment_zoom(1, cx, cy); step = "zoom in all the way"; break;
+    default: step = "end"; break;
+    }
+    MapSlabCoord vx = 0, vy = 0;
+    long ox = 0, oy = 0;
+    const TbBool open = (get_local_view_type() == PVT_MapScreen);
+    const long block = get_parchment_map_area_rect(&area);
+    if (open)
+        world_parchment_view(area.right - area.left, area.bottom - area.top, block, &vx, &vy, &ox, &oy);
+    SYNCLOG("World map zoom: t+%ld %s: map %s %ldx%ld, %ld pixels per slab, view (%ld,%ld)+(%ld,%ld)px, battles %lu, "
+        "draw %ld us", t, step, open ? "open" : "closed", (long)(area.right - area.left), (long)(area.bottom - area.top),
+        block, (long)vx, (long)vy, ox, oy, count_active_battles(my_player_number), parchment_draw_micros());
+}
+
 /** Test hook KFX_WORLD_ASSIST (network tests). */
 static void world_assist_hook(void)
 {
@@ -5487,6 +5599,7 @@ void world_process_turn(void)
     world_shots_hook();
     world_mapdrag_hook();
     world_mapedge_hook();
+    world_mapzoom_hook();
     world_progress_turn();
     server_admin_turn(); /* a dedicated server's console: play time, status */
     world_open_hook();
@@ -5601,9 +5714,13 @@ unsigned short world_minimap_code(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 /******************************************************************************/
 /* Full-screen map */
 
-static int64_t pview_wx, pview_wy;     /* world slab at the centre of the full-screen map */
+/* The view's centre in world slabs times PVIEW_FINE (sub-slab steps: it scrolls smoothly, pixel by pixel) */
+#define PVIEW_FINE 256
+static int64_t pview_x, pview_y;
 static TbBool pview_valid;
 static TbClockMSec pview_last_used;
+static TbBool pview_gliding;            /* moving by itself towards pview_to_x/y (a battle, the heart) */
+static int64_t pview_to_x, pview_to_y;
 static TbBool zoom_jumped;
 
 static MapSlabCoord clamp_slab16(int64_t v)
@@ -5612,7 +5729,13 @@ static MapSlabCoord clamp_slab16(int64_t v)
     return (MapSlabCoord)max(-0x3FFFFFFF, min(v, 0x3FFFFFFF));
 }
 
-void world_parchment_view_origin(MapSlabCoord *slb_x, MapSlabCoord *slb_y)
+static int64_t pview_fine_of_slab(int64_t wslab)
+{
+    return wslab * PVIEW_FINE + PVIEW_FINE / 2; /* the slab's middle */
+}
+
+/** The view's centre, set up on the camera when the map was just opened (not used for a moment). */
+static void pview_check(void)
 {
     const TbClockMSec now = LbTimerClock();
     if (!pview_valid || (now - pview_last_used > 400))
@@ -5632,22 +5755,45 @@ void world_parchment_view_origin(MapSlabCoord *slb_x, MapSlabCoord *slb_y)
             ex = coord_slab(ustate->dungeon_camera.x);
             ey = coord_slab(ustate->dungeon_camera.y);
         }
-        pview_wx = world_slab_x_of(ex);
-        pview_wy = world_slab_y_of(ey);
+        pview_x = pview_fine_of_slab(world_slab_x_of(ex));
+        pview_y = pview_fine_of_slab(world_slab_y_of(ey));
         pview_valid = true;
+        pview_gliding = false;
     }
     pview_last_used = now;
-    /* the view is window-sized (in window mode the map is exactly that size) */
-    *slb_x = clamp_slab16(engine_slab_x(pview_wx) - WORLD_WINDOW_SLABS / 2);
-    *slb_y = clamp_slab16(engine_slab_y(pview_wy) - WORLD_WINDOW_SLABS / 2);
+}
+
+void world_parchment_view(long width, long height, long block, MapSlabCoord *slb_x, MapSlabCoord *slb_y,
+    long *off_x, long *off_y)
+{
+    pview_check();
+    if (block < 1)
+        block = 1;
+    /* the top left corner, width/2 and height/2 pixels from the centre */
+    const int64_t tl_x = pview_x - (int64_t)width * PVIEW_FINE / (2 * block);
+    const int64_t tl_y = pview_y - (int64_t)height * PVIEW_FINE / (2 * block);
+    const int64_t sx = floor_div(tl_x, PVIEW_FINE), sy = floor_div(tl_y, PVIEW_FINE);
+    *slb_x = clamp_slab16(engine_slab_x(sx));
+    *slb_y = clamp_slab16(engine_slab_y(sy));
+    *off_x = (long)((tl_x - sx * PVIEW_FINE) * block / PVIEW_FINE);
+    *off_y = (long)((tl_y - sy * PVIEW_FINE) * block / PVIEW_FINE);
+}
+
+void world_parchment_view_origin(MapSlabCoord *slb_x, MapSlabCoord *slb_y)
+{
+    struct TbRect area;
+    const long block = get_parchment_map_area_rect(&area);
+    long off_x, off_y;
+    world_parchment_view(area.right - area.left, area.bottom - area.top, block, slb_x, slb_y, &off_x, &off_y);
 }
 
 /** Test hook (KFX_WORLD_SHOTS "m"): the open parchment map shows this world slab (local view only). */
 static void world_parchment_look_at(int64_t wx, int64_t wy)
 {
-    pview_wx = wx;
-    pview_wy = wy;
+    pview_x = pview_fine_of_slab(wx);
+    pview_y = pview_fine_of_slab(wy);
     pview_valid = true;
+    pview_gliding = false;
     pview_last_used = LbTimerClock();
 }
 
@@ -5667,18 +5813,59 @@ static void local_home_slab(int64_t *wx, int64_t *wy)
     *wy = world_slab_y_of(coord_slab(heartng->mappos.y.val));
 }
 
+void world_parchment_scroll_fine(int64_t dx, int64_t dy)
+{
+    pview_check();
+    pview_x += dx;
+    pview_y += dy;
+    pview_gliding = false; /* the player took over */
+}
+
 void world_parchment_scroll(int dx_slabs, int dy_slabs)
 {
-    pview_wx += dx_slabs;
-    pview_wy += dy_slabs;
-    pview_last_used = LbTimerClock();
+    world_parchment_scroll_fine((int64_t)dx_slabs * PVIEW_FINE, (int64_t)dy_slabs * PVIEW_FINE);
+}
+
+static void pview_glide_to(int64_t fx, int64_t fy)
+{
+    pview_check();
+    pview_to_x = fx;
+    pview_to_y = fy;
+    pview_gliding = true;
 }
 
 void world_parchment_home(void)
 {
-    local_home_slab(&pview_wx, &pview_wy);
-    pview_valid = true;
-    pview_last_used = LbTimerClock();
+    int64_t hx, hy;
+    local_home_slab(&hx, &hy);
+    pview_glide_to(pview_fine_of_slab(hx), pview_fine_of_slab(hy));
+}
+
+void world_parchment_glide_to_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+{
+    const int64_t sx = floor_div(stl_x, STL_PER_SLB), sy = floor_div(stl_y, STL_PER_SLB);
+    const int64_t in_x = stl_x - sx * STL_PER_SLB, in_y = stl_y - sy * STL_PER_SLB; /* the subtile within its slab */
+    pview_glide_to(world_slab_x_of(sx) * PVIEW_FINE + (in_x * 2 + 1) * PVIEW_FINE / (2 * STL_PER_SLB),
+        world_slab_y_of(sy) * PVIEW_FINE + (in_y * 2 + 1) * PVIEW_FINE / (2 * STL_PER_SLB));
+}
+
+void world_parchment_glide(float seconds)
+{
+    if (!pview_gliding)
+        return;
+    pview_check();
+    /* most of the way in a fifth of a second, whatever the distance */
+    const float k = 1.0f - expf(-seconds / 0.06f);
+    const int64_t dx = pview_to_x - pview_x, dy = pview_to_y - pview_y;
+    if ((llabs(dx) <= 2) && (llabs(dy) <= 2))
+    {
+        pview_x = pview_to_x;
+        pview_y = pview_to_y;
+        pview_gliding = false;
+        return;
+    }
+    pview_x += (int64_t)((double)dx * k);
+    pview_y += (int64_t)((double)dy * k);
 }
 
 TbBool world_parchment_heart(MapSlabCoord *slb_x, MapSlabCoord *slb_y)
