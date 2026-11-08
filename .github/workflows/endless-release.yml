@@ -22,6 +22,10 @@ on:
         description: 'Test run: the release is made as a draft and deleted again'
         type: boolean
         default: false
+      draft:
+        description: 'Leave the release as a draft (to write its notes before publishing it)'
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       prebuilt:
@@ -151,6 +155,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       DRY_RUN: ${{ inputs.dry_run }}
+      DRAFT: ${{ inputs.draft }}
       NOTE: ${{ inputs.note }}
       BASE: ${{ needs.setup.outputs.base }}
       FILE: ${{ needs.setup.outputs.file }}
@@ -206,6 +211,7 @@ jobs:
           set -euo pipefail
           flags=()
           [ "$STAGE" = Stable ] || flags+=(--prerelease)
+          [ "$DRAFT" != true ] || flags+=(--draft)   # the tag is made when the draft is published
           if [ "$DRY_RUN" = true ]; then
             url=$(gh release create "$TAG" out/EndlessKeeperSetup-*.exe out/endless-keeper-*.7z --draft --target "$SHA" \
               --title "$TITLE (test run)" --notes-file notes.md "${flags[@]}")
