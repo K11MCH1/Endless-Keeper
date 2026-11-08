@@ -37,7 +37,9 @@ runs:
       run: |
         set -euo pipefail
         sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-        yes | "$sdkmanager" --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.3.13750724" > /dev/null
+        # yes ends on a broken pipe when sdkmanager is done: not a failure
+        { yes || true; } | "$sdkmanager" --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.3.13750724" > /dev/null
+        [ -d "$ANDROID_HOME/ndk/27.3.13750724/toolchains/llvm/prebuilt" ] || { echo "::error::NDK 27.3 missing"; exit 1; }
         echo "ANDROID_NDK=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
 
     - name: Engine
