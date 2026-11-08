@@ -15,6 +15,15 @@ runs:
         sudo apt-get update -q
         sudo apt-get install -y -q build-essential cmake ninja-build gcc-mingw-w64-i686 g++-mingw-w64-i686 \
           python3 libpng16-16t64 p7zip-full
+    - name: Downloads that retry
+      shell: bash
+      run: |
+        # the build fetches prebuilt tools from GitHub releases; those downloads sometimes answer 504 for a few
+        # minutes, so every curl the build runs retries (curl retries timeouts and 5xx answers by itself)
+        mkdir -p "$RUNNER_TEMP/curl-retry"
+        printf '#!/bin/sh\nexec /usr/bin/curl --retry 12 --retry-delay 20 --retry-connrefused "$@"\n' > "$RUNNER_TEMP/curl-retry/curl"
+        chmod +x "$RUNNER_TEMP/curl-retry/curl"
+        echo "$RUNNER_TEMP/curl-retry" >> "$GITHUB_PATH"
     - name: Package
       shell: bash
       run: installer/make-package.sh "${{ inputs.output }}"
