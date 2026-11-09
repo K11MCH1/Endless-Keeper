@@ -75,10 +75,6 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 | ⚔️ | **Heroes outposts** | Large, heavily trapped hero bases hidden in the world. Break the gate, fight through the guards and destroy the Heroes Heart for XP and a spellbook. |
 | 👑 | **Rival keepers** | Computer keepers sleep in their dungeons until you come close. Then they wake up and fight back. Defeat them for their research books. |
 
-<div align="center">
-<img src="docs/images/generator-closeups.png" alt="Close-ups of what the world generator builds" width="820">
-</div>
-
 ### 📈 Progression
 
 | | Feature | What it means |
@@ -105,12 +101,6 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 | 📋 | **World List** | Browse running worlds with their players and ping, chat with everyone in the menu, or join by address. |
 | 🚀 | **Built for many players** | The server runs the world and streams it to the players, so there are no desyncs and a lagging player never holds anyone up. Designed for up to 100 players in one world. |
 | 🚪 | **Come back any time** | A player who leaves keeps their dungeon in the world and gets it back when they return. |
-
-### ⚖️ Rule changes for an endless game
-
-- 🪨 **Cave-In** and ⚡ **Lightning Strike** can only be cast on your own claimed ground.
-- 🧱 **Destroy Walls** and ☄️ **Armageddon** are switched off.
-- 💀 You lose only when your own Dungeon Heart is destroyed. There is no "win": the world simply goes on.
 
 > [!NOTE]
 > **Multiplayer servers are not publicly available yet. They are coming soon!** Until then you can host a world
