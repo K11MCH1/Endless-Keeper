@@ -44,6 +44,9 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 ---
 
+> [!NOTE]
+> **AI assist is involved** We do however allow mistakes. They will just be fixed 😉
+
 ## ✨ Features
 
 > [!NOTE]
