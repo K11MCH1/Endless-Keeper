@@ -103,6 +103,7 @@
 #include "server_admin.h"
 #include "net_exchange_common.h"
 #include "world_caretaker.h"
+#include "kfx_deflate.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -1428,12 +1429,12 @@ static uint32_t rec_peek_u32(const struct RecReader *r)
 /** Compressed blob: u32 raw length, then the zlib stream. */
 static TbBool pack(const uint8_t *raw, uint32_t raw_len, uint8_t **out, uint32_t *out_len)
 {
-    uLongf zlen = compressBound(raw_len);
+    size_t zlen = kfx_zlib_bound(raw_len); /* libdeflate: zlib's format, about twice as fast (2026-11-09) */
     uint8_t *z = (uint8_t *)malloc(zlen + 4);
     if (z == NULL)
         return false;
     memcpy(z, &raw_len, 4);
-    if (compress2(z + 4, &zlen, raw, raw_len, 1) != Z_OK)
+    if (!kfx_zlib_compress(z + 4, &zlen, raw, raw_len, 1))
     {
         free(z);
         return false;
@@ -1454,8 +1455,8 @@ static TbBool unpack(const uint8_t *z, uint32_t zlen, uint8_t **out, uint32_t *o
     uint8_t *raw = (uint8_t *)malloc(raw_len ? raw_len : 1);
     if (raw == NULL)
         return false;
-    uLongf rl = raw_len;
-    if ((uncompress(raw, &rl, z + 4, zlen - 4) != Z_OK) || (rl != raw_len))
+    size_t rl = 0;
+    if (!kfx_zlib_uncompress(raw, raw_len, z + 4, zlen - 4, &rl) || (rl != raw_len))
     {
         free(raw);
         return false;

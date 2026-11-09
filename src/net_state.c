@@ -26,6 +26,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <zlib.h>
+#define XXH_INLINE_ALL
+#include "../deps/xxhash/xxhash.h"
 #include <SDL3/SDL.h>
 
 #include "bflib_basics.h"
@@ -56,6 +58,7 @@
 #include "world_net.h"
 #include "keeperfx.hpp"
 #include "gui_topmsg.h"
+#include "kfx_deflate.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -202,19 +205,9 @@ static uint8_t live_bits[(THINGS_COUNT + 7) / 8];
 
 static uint64_t hash_thing(const struct Thing *t)
 {
-    const uint8_t *p = (const uint8_t *)t;
-    uint64_t h = 0x9E3779B97F4A7C15ull ^ sizeof(struct Thing);
-    size_t i = 0;
-    for (; i + 8 <= sizeof(struct Thing); i += 8)
-    {
-        uint64_t v;
-        memcpy(&v, p + i, 8);
-        h = (h ^ v) * 0xFF51AFD7ED558CCDull;
-        h ^= h >> 32;
-    }
-    for (; i < sizeof(struct Thing); i++)
-        h = (h ^ p[i]) * 0x100000001B3ull;
-    return h ^ (h >> 29);
+    /* XXH3 (deps/xxhash): many times faster than the one-word-at-a-time hash it replaces, over every live thing
+       each turn (2026-11-09); only the server's "unchanged since the last turn" test reads it */
+    return XXH3_64bits(t, sizeof(struct Thing));
 }
 
 /** Before the clients' things: the highest live thing, and which things are the same as at the last turn. */
@@ -1191,23 +1184,12 @@ static void crec_put(const void *p, size_t n)
  *  stream up costs more than compressing a turn's record. */
 static TbBool ns_compress(uint8_t *dst, uLongf *dst_len, const uint8_t *src, size_t len)
 {
-    static __thread z_stream zs; /* each thread's own */
-    static __thread TbBool zs_ready = false;
-    if (!zs_ready)
-    {
-        memset(&zs, 0, sizeof(zs));
-        if (deflateInit(&zs, Z_BEST_SPEED) != Z_OK)
-            return compress2(dst, dst_len, src, len, Z_BEST_SPEED) == Z_OK;
-        zs_ready = true;
-    } else if (deflateReset(&zs) != Z_OK)
+    /* libdeflate at level 1: zlib's format (clients of any version read it), about twice as fast; each thread keeps
+       its own compressor (2026-11-09) */
+    size_t n = (size_t)*dst_len;
+    if (!kfx_zlib_compress(dst, &n, src, len, 1))
         return false;
-    zs.next_in = (Bytef *)src;
-    zs.avail_in = (uInt)len;
-    zs.next_out = dst;
-    zs.avail_out = (uInt)*dst_len;
-    if (deflate(&zs, Z_FINISH) != Z_STREAM_END)
-        return false;
-    *dst_len = zs.total_out;
+    *dst_len = (uLongf)n;
     return true;
 }
 
@@ -1224,7 +1206,7 @@ static void send_state_message(const char *msg, size_t total, NetUserId c)
 
 static void send_record(const uint8_t *buf, size_t len, NetUserId c)
 {
-    uLongf comp_len = compressBound(len);
+    uLongf comp_len = kfx_zlib_bound(len);
     char *msg = (char *)malloc(1 + sizeof(struct NsWire) + comp_len);
     if (msg == NULL)
         return;
@@ -1257,7 +1239,7 @@ static size_t shared_z_len, shared_z_cap, shared_z_raw;
 static TbBool compress_shared(const uint8_t *buf, size_t len)
 {
     const int64_t t0 = get_time_tick_ns();
-    uLongf comp_len = compressBound(len);
+    uLongf comp_len = kfx_zlib_bound(len);
     if (shared_z_cap < comp_len)
     {
         uint8_t *grown = (uint8_t *)realloc(shared_z, comp_len);
@@ -1310,14 +1292,14 @@ static struct {
 #define NS_KF_GAP 40
 static GameTurn kf_next_turn[MAX_NET_CONNECTIONS];
 
-/** zlib at Z_BEST_SPEED in a message; thread-safe (compress2 keeps no state between calls). */
+/** zlib's format at its fastest level in a message; thread-safe (each thread has its own compressor). */
 static char *make_state_message(const uint8_t *raw, size_t len, size_t *msg_len)
 {
-    uLongf comp_len = compressBound(len);
+    uLongf comp_len = kfx_zlib_bound(len);
     char *msg = (char *)malloc(1 + sizeof(struct NsWire) + comp_len);
     if (msg == NULL)
         return NULL;
-    if (compress2((Bytef *)(msg + 1 + sizeof(struct NsWire)), &comp_len, raw, len, Z_BEST_SPEED) != Z_OK)
+    if (!ns_compress((uint8_t *)(msg + 1 + sizeof(struct NsWire)), &comp_len, raw, len))
     {
         free(msg);
         return NULL;
@@ -1732,7 +1714,7 @@ static void job_run(struct NsClientJob *j)
     job_put(j, &end, 1);
     if (j->failed || j->held)
         return;
-    uLongf comp_len = compressBound(j->own_len);
+    uLongf comp_len = kfx_zlib_bound(j->own_len);
     if (j->z_cap < comp_len)
     {
         uint8_t *nz = (uint8_t *)realloc(j->z, comp_len);
@@ -2343,13 +2325,13 @@ TbError netstate_client_receive(const char *buffer, size_t size)
     if (raw == NULL)
         return Lb_OK;
     const Bytef *z = (const Bytef *)buffer + sizeof(w);
-    uLongf shared_len = w.shared_raw, own_len = w.raw_len - w.shared_raw;
+    size_t shared_len = 0, own_len = 0;
     TbBool ok = true;
     if (w.shared_raw > 0)
-        ok = (uncompress(raw, &shared_len, z, w.shared_comp) == Z_OK) && (shared_len == w.shared_raw);
+        ok = kfx_zlib_uncompress(raw, w.shared_raw, z, w.shared_comp, &shared_len) && (shared_len == w.shared_raw);
     if (ok)
-        ok = (uncompress(raw + w.shared_raw, &own_len, z + w.shared_comp, w.comp_len - w.shared_comp) == Z_OK) &&
-            (own_len == w.raw_len - w.shared_raw);
+        ok = kfx_zlib_uncompress(raw + w.shared_raw, w.raw_len - w.shared_raw, z + w.shared_comp, w.comp_len - w.shared_comp,
+            &own_len) && (own_len == w.raw_len - w.shared_raw);
     if (!ok)
     {
         free(raw);
