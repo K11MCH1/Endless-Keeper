@@ -50,9 +50,6 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 ## ✨ Features
 
-> [!NOTE]
-> **Multiplayer servers are not publicly available yet. They are coming soon!** Until then you can host a world
-> yourself and let friends join by address.
 
 ### 🌍 A world without an edge
 
@@ -114,6 +111,10 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 - 🪨 **Cave-In** and ⚡ **Lightning Strike** can only be cast on your own claimed ground.
 - 🧱 **Destroy Walls** and ☄️ **Armageddon** are switched off.
 - 💀 You lose only when your own Dungeon Heart is destroyed. There is no "win": the world simply goes on.
+
+> [!NOTE]
+> **Multiplayer servers are not publicly available yet. They are coming soon!** Until then you can host a world
+> yourself and let friends join by address.
 
 ---
 
