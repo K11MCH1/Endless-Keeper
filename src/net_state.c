@@ -59,6 +59,7 @@
 #include "keeperfx.hpp"
 #include "gui_topmsg.h"
 #include "kfx_deflate.h"
+#include "kfx_jobs.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -210,6 +211,29 @@ static uint64_t hash_thing(const struct Thing *t)
     return XXH3_64bits(t, sizeof(struct Thing));
 }
 
+static TbBool parcheck_turn(void);
+static void parcheck_note(const char *what, TbBool same, size_t a, size_t b);
+
+/* the hashes of things [start, end) (a job): the same per thing as hash_things' loop */
+static void hash_things_job(uint32_t start, uint32_t end, uint32_t thread, void *args)
+{
+    (void)thread;
+    (void)args;
+    for (uint32_t i = (start > 0) ? start : 1; i < end; i++)
+    {
+        const struct Thing *t = &game.things_data[i];
+        if ((t->alloc_flags & TAlF_Exists) == 0)
+        {
+            thing_same[i] = 0;
+            thing_hash[i] = 0;
+            continue;
+        }
+        const uint64_t h = hash_thing(t);
+        thing_same[i] = (h == thing_hash[i]);
+        thing_hash[i] = h;
+    }
+}
+
 /** Before the clients' things: the highest live thing, and which things are the same as at the last turn. */
 static void hash_things(void)
 {
@@ -221,6 +245,47 @@ static void hash_things(void)
             live_hi = i;
             break;
         }
+    }
+    if (kfx_job_threads() > 1)
+    {
+        /* the hashes on the job threads (2026-11-09); the list in index order after them, as below */
+        static uint64_t prev_hash[THINGS_COUNT];
+        const TbBool check = parcheck_turn();
+        if (check)
+            memcpy(prev_hash, thing_hash, sizeof(prev_hash));
+        kfx_parallel_for((uint32_t)live_hi + 1, 512, hash_things_job, NULL);
+        if (check)
+        {
+            TbBool same = true;
+            for (ThingIndex i = 1; (i <= live_hi) && same; i++)
+            {
+                const struct Thing *t = &game.things_data[i];
+                const TbBool live = ((t->alloc_flags & TAlF_Exists) != 0);
+                const uint64_t h = live ? hash_thing(t) : 0;
+                same = (thing_hash[i] == h) && ((thing_same[i] != 0) == (live && (h == prev_hash[i])));
+            }
+            parcheck_note("thing hashes", same, 0, 0);
+        }
+        live_count = 0;
+        memset(live_bits, 0, sizeof(live_bits));
+        for (ThingIndex i = 1; i < THINGS_COUNT; i++)
+        {
+            const struct Thing *t = &game.things_data[i];
+            if ((i > live_hi) || ((t->alloc_flags & TAlF_Exists) == 0))
+            {
+                thing_same[i] = 0;
+                thing_hash[i] = 0;
+                continue;
+            }
+            struct NsLive *li = &live_list[live_count++];
+            li->idx = i;
+            li->cx = t->mappos.x.stl.num / WP_CHUNK_STL;
+            li->cy = t->mappos.y.stl.num / WP_CHUNK_STL;
+            li->owner = t->owner;
+            li->limbo = (t->alloc_flags & TAlF_IsInLimbo) ? 1 : 0;
+            live_bits[i >> 3] |= (uint8_t)(1u << (i & 7));
+        }
+        return;
     }
     live_count = 0;
     memset(live_bits, 0, sizeof(live_bits));
@@ -866,6 +931,145 @@ static void diff_region(int r)
     }
 }
 
+/******************************************************************************/
+/* The shared part and the chunk pages on the job threads (2026-11-09): the entries (4 KB pages of the regions, loaded
+ * chunk pages) are cut into pieces of consecutive entries; each piece is written into its own writer by whichever
+ * thread takes it, and the pieces are joined in order, so the record is byte for byte the serial one. */
+#define NS_PIECES 64
+struct NsPiece {
+    struct NsWriter w;
+    uint32_t compared, changed;
+    uint64_t part[NsP_Count];
+};
+static struct NsPiece ns_piece[NS_PIECES];
+struct NsMemEntry {
+    uint8_t r;
+    uint32_t off;
+};
+static struct NsMemEntry *mem_entry;
+static uint32_t mem_entry_count, mem_entry_cap;
+static uint32_t piece_count, piece_size;
+
+static void mem_head_w(struct NsWriter *w, const void *ctx)
+{
+    const struct MemHeadCtx *c = (const struct MemHeadCtx *)ctx;
+    const uint8_t k = NsK_MemLines;
+    w_put(w, &k, 1);
+    w_put(w, &c->region, 1);
+    w_put(w, &c->page, 4);
+}
+
+/** One 4 KB page of region r into a piece: diff_region's loop body. */
+static void diff_region_page_w(struct NsPiece *pc, int r, size_t off)
+{
+    const struct NsRegionDef *rd = &regions[r];
+    const size_t n = (off + NS_PAGE <= rd->len) ? NS_PAGE : rd->len - off;
+    if (r == NsR_Game)
+    {
+        if (page_skipped(off, n))
+            return;
+        const size_t t1 = offsetof(struct Game, things_data), t2 = t1 + sizeof(game.things_data);
+        if ((off < t2) && (off + n > t1))
+        {
+            const size_t a = max(off, t1), b = min(off + n, t2);
+            memcpy(shadow[r] + a, rd->base + a, b - a);
+        }
+        if (page_elements_idle(rd->base, shadow[r], off, n, offsetof(struct Game, things_data), sizeof(struct Thing),
+                THINGS_COUNT, offsetof(struct Thing, alloc_flags), TAlF_Exists, sizeof(((struct Thing *)0)->alloc_flags)))
+            return;
+        if (page_elements_idle(rd->base, shadow[r], off, n, offsetof(struct Game, cctrl_data),
+                sizeof(struct CreatureControl), CREATURES_COUNT, offsetof(struct CreatureControl, creature_control_flags),
+                CCFlg_Exists, sizeof(((struct CreatureControl *)0)->creature_control_flags)))
+            return;
+        excl_copy_page(shadow[r], rd->base, off, n);
+    }
+    struct MemHeadCtx c = {(uint8_t)r, (uint32_t)(off / NS_PAGE)};
+    pc->compared++;
+    const size_t before = pc->w.len;
+    diff_page_w(&pc->w, shadow[r] + off, rd->base + off, n, mem_head_w, &c);
+    if (pc->w.len != before)
+        pc->changed++;
+    int part = NsP_Statics;
+    if (r == NsR_Game)
+    {
+        part = NsP_Game;
+        if ((off >= offsetof(struct Game, things_data)) && (off < offsetof(struct Game, things_data) + sizeof(game.things_data)))
+            part = NsP_Things;
+        else if ((off >= offsetof(struct Game, cctrl_data)) && (off < offsetof(struct Game, cctrl_data) + sizeof(game.cctrl_data)))
+            part = NsP_Cctrl;
+    }
+    pc->part[part] += pc->w.len - before;
+}
+
+static void pieces_reset(uint32_t entries, uint32_t per_piece)
+{
+    piece_count = min((uint32_t)NS_PIECES, max(1u, entries / per_piece));
+    piece_size = (entries + piece_count - 1) / max(1u, piece_count);
+    for (uint32_t p = 0; p < piece_count; p++)
+    {
+        ns_piece[p].w.len = 0;
+        ns_piece[p].w.failed = false;
+        ns_piece[p].compared = 0;
+        ns_piece[p].changed = 0;
+        memset(ns_piece[p].part, 0, sizeof(ns_piece[p].part));
+    }
+}
+
+static void diff_regions_job(uint32_t start, uint32_t end, uint32_t thread, void *args)
+{
+    (void)thread;
+    (void)args;
+    for (uint32_t p = start; p < end; p++)
+    {
+        const uint32_t e1 = p * piece_size, e2 = min(e1 + piece_size, mem_entry_count);
+        for (uint32_t e = e1; e < e2; e++)
+            diff_region_page_w(&ns_piece[p], mem_entry[e].r, mem_entry[e].off);
+    }
+}
+
+/** diff_region for every region, on the job threads; the same record and statistics. */
+static void diff_regions_parallel(void)
+{
+    mem_entry_count = 0;
+    for (int r = 0; r < NsR_Count; r++)
+    {
+        if ((regions[r].base == NULL) || (shadow[r] == NULL))
+            continue;
+        for (size_t off = 0; off < regions[r].len; off += NS_PAGE)
+        {
+            if (mem_entry_count >= mem_entry_cap)
+            {
+                const uint32_t cap = (mem_entry_cap == 0) ? 16384 : mem_entry_cap * 2;
+                struct NsMemEntry *grown = (struct NsMemEntry *)realloc(mem_entry, sizeof(struct NsMemEntry) * cap);
+                if (grown == NULL)
+                {
+                    rec_failed = true;
+                    return;
+                }
+                mem_entry = grown;
+                mem_entry_cap = cap;
+            }
+            mem_entry[mem_entry_count].r = (uint8_t)r;
+            mem_entry[mem_entry_count].off = (uint32_t)off;
+            mem_entry_count++;
+        }
+    }
+    pieces_reset(mem_entry_count, 16);
+    kfx_parallel_for(piece_count, 1, diff_regions_job, NULL);
+    for (uint32_t p = 0; p < piece_count; p++)
+    {
+        struct NsPiece *pc = &ns_piece[p];
+        if (pc->w.failed)
+            rec_failed = true;
+        if (pc->w.len > 0)
+            rec_put(pc->w.buf, pc->w.len);
+        stats_pages_compared += pc->compared;
+        stats_pages_changed += pc->changed;
+        for (int k = 0; k < NsP_Count; k++)
+            stats_part[k] += pc->part[k];
+    }
+}
+
 static struct NsPageShadow **page_slot(int32_t cx, int32_t cy)
 {
     const uint32_t h = ((uint32_t)cx * 73856093u) ^ ((uint32_t)cy * 19349663u);
@@ -979,6 +1183,311 @@ static void diff_pages(void)
             pp = &(*pp)->next;
         }
     }
+}
+
+struct NsPageWork {
+    struct WorldPage *pg;
+    struct NsPageShadow *ps;
+    uint32_t off, len;
+    uint8_t changed;
+};
+static struct NsPageWork *page_work;
+static uint32_t page_work_count, page_work_cap;
+static uint8_t *page_tmp_of[64]; /* a gather buffer for each job thread */
+
+static void page_head_w(struct NsWriter *w, const void *ctx)
+{
+    const struct PageHeadCtx *c = (const struct PageHeadCtx *)ctx;
+    const uint8_t k = NsK_PageLines;
+    w_put(w, &k, 1);
+    w_put(w, &c->cx, 4);
+    w_put(w, &c->cy, 4);
+    w_put(w, &c->page, 4);
+}
+
+static void diff_pages_job(uint32_t start, uint32_t end, uint32_t thread, void *args)
+{
+    (void)args;
+    uint8_t *tmp = page_tmp_of[thread];
+    for (uint32_t p = start; p < end; p++)
+    {
+        struct NsWriter *w = &ns_piece[p].w;
+        const uint32_t e1 = p * piece_size, e2 = min(e1 + piece_size, page_work_count);
+        for (uint32_t e = e1; e < e2; e++)
+        {
+            struct NsPageWork *pw = &page_work[e];
+            if (page_unchanged(pw->pg, pw->ps->data))
+                continue;
+            page_gather(pw->pg, tmp);
+            pw->off = (uint32_t)w->len;
+            for (size_t off = 0; off < NS_PG_SIZE; off += NS_PAGE)
+            {
+                struct PageHeadCtx c = {pw->pg->cx, pw->pg->cy, (uint32_t)(off / NS_PAGE)};
+                const size_t n = (off + NS_PAGE <= NS_PG_SIZE) ? NS_PAGE : NS_PG_SIZE - off;
+                diff_page_w(w, pw->ps->data + off, tmp + off, n, page_head_w, &c);
+            }
+            pw->len = (uint32_t)(w->len - pw->off);
+            pw->changed = 1;
+        }
+    }
+}
+
+/** diff_pages on the job threads: the same record, shadows and bookkeeping. */
+static void diff_pages_parallel(void)
+{
+    if (!world_paged)
+        return;
+    page_pass++;
+    const int threads = min(kfx_job_threads(), 64);
+    for (int t = 0; t < threads; t++)
+    {
+        if (page_tmp_of[t] == NULL)
+            page_tmp_of[t] = (uint8_t *)malloc(NS_PG_SIZE);
+        if (page_tmp_of[t] == NULL)
+        {
+            rec_failed = true;
+            return;
+        }
+    }
+    /* first, in list order: pages no client has, new pages (whole, no lines), and the work list */
+    page_work_count = 0;
+    for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+    {
+        struct NsPageShadow **pp = page_slot(pg->cx, pg->cy);
+        if ((*pp != NULL) && !numask_any((*pp)->known))
+        {
+            (*pp)->stale = 1;
+            (*pp)->seen = page_pass;
+            continue;
+        }
+        if (*pp == NULL)
+        {
+            struct NsPageShadow *ps = (struct NsPageShadow *)calloc(1, sizeof(struct NsPageShadow) + NS_PG_SIZE);
+            if (ps == NULL)
+            {
+                rec_failed = true;
+                return;
+            }
+            ps->cx = pg->cx;
+            ps->cy = pg->cy;
+            page_gather(pg, ps->data);
+            ps->seen = page_pass;
+            *pp = ps;
+            continue;
+        }
+        (*pp)->seen = page_pass;
+        if (page_work_count >= page_work_cap)
+        {
+            const uint32_t cap = (page_work_cap == 0) ? 1024 : page_work_cap * 2;
+            struct NsPageWork *grown = (struct NsPageWork *)realloc(page_work, sizeof(struct NsPageWork) * cap);
+            if (grown == NULL)
+            {
+                rec_failed = true;
+                return;
+            }
+            page_work = grown;
+            page_work_cap = cap;
+        }
+        struct NsPageWork *pw = &page_work[page_work_count++];
+        pw->pg = pg;
+        pw->ps = *pp;
+        pw->off = pw->len = 0;
+        pw->changed = 0;
+    }
+    /* the pages that may have changed, on the job threads; their lines joined in list order */
+    pieces_reset(page_work_count, 4);
+    kfx_parallel_for(piece_count, 1, diff_pages_job, NULL);
+    for (uint32_t p = 0; p < piece_count; p++)
+    {
+        struct NsPiece *pc = &ns_piece[p];
+        if (pc->w.failed)
+            rec_failed = true;
+        const size_t base = rec_len;
+        if (pc->w.len > 0)
+            rec_put(pc->w.buf, pc->w.len);
+        const uint32_t e1 = p * piece_size, e2 = min(e1 + piece_size, page_work_count);
+        for (uint32_t e = e1; e < e2; e++)
+        {
+            struct NsPageWork *pw = &page_work[e];
+            if (!pw->changed)
+                continue;
+            pw->ps->diff_off = (uint32_t)(base + pw->off);
+            pw->ps->diff_len = pw->len;
+            pw->ps->diff_pass = page_pass;
+        }
+    }
+    /* pages the server let go (as diff_pages) */
+    for (int b = 0; b < NS_PAGE_BUCKETS; b++)
+    {
+        struct NsPageShadow **pp = &page_shadows[b];
+        while (*pp != NULL)
+        {
+            if ((*pp)->seen != page_pass)
+            {
+                struct NsPageShadow *gone = *pp;
+                if (numask_any(gone->known) && (gone_count < NS_GONE_MAX))
+                {
+                    gone_pages[gone_count].cx = gone->cx;
+                    gone_pages[gone_count].cy = gone->cy;
+                    gone_pages[gone_count].known = gone->known;
+                    gone_count++;
+                }
+                *pp = gone->next;
+                free(gone);
+                continue;
+            }
+            pp = &(*pp)->next;
+        }
+    }
+}
+
+/******************************************************************************/
+/* Test hook KFX_NET_PARCHECK=n: every n turns the job threads' work is done twice, on the same state, by the job
+ * threads and by the serial code, and the two compared byte for byte (record, shadows, page bookkeeping, thing hashes);
+ * the serial result is kept. */
+static int parcheck_every = -1;
+static uint32_t parcheck_runs, parcheck_bad;
+
+static TbBool parcheck_turn(void)
+{
+    if (parcheck_every < 0)
+    {
+        const char *v = getenv("KFX_NET_PARCHECK");
+        parcheck_every = (v != NULL) ? max(1, atoi(v)) : 0;
+    }
+    return (parcheck_every > 0) && (kfx_job_threads() > 1) && ((game.play_gameturn % (GameTurn)parcheck_every) == 0);
+}
+
+static void parcheck_note(const char *what, TbBool same, size_t a, size_t b)
+{
+    parcheck_runs++;
+    if (!same)
+    {
+        parcheck_bad++;
+        WARNLOG("Thin-client server: parallel check at turn %lu: %s DIFFERENT (%u bytes on the job threads, %u serial)",
+            (unsigned long)game.play_gameturn, what, (unsigned)a, (unsigned)b);
+    }
+    if ((parcheck_runs % 30) == 0)
+        SYNCLOG("Thin-client server: parallel checks: %u done, %u different", (unsigned)parcheck_runs, (unsigned)parcheck_bad);
+}
+
+static void parcheck_shared(void)
+{
+    uint8_t *bk[NsR_Count] = {NULL};
+    for (int r = 0; r < NsR_Count; r++)
+    {
+        if ((regions[r].base == NULL) || (shadow[r] == NULL))
+            continue;
+        bk[r] = (uint8_t *)malloc(regions[r].len);
+        if (bk[r] == NULL)
+        {
+            for (int k = 0; k < r; k++)
+                free(bk[k]);
+            diff_regions_parallel();
+            return;
+        }
+        memcpy(bk[r], shadow[r], regions[r].len);
+    }
+    const size_t a0 = rec_len;
+    diff_regions_parallel();
+    const size_t a1 = rec_len;
+    uint64_t hp[NsR_Count] = {0};
+    for (int r = 0; r < NsR_Count; r++)
+    {
+        if (bk[r] == NULL)
+            continue;
+        hp[r] = XXH3_64bits(shadow[r], regions[r].len);
+        memcpy(shadow[r], bk[r], regions[r].len);
+        free(bk[r]);
+    }
+    for (int r = 0; r < NsR_Count; r++)
+        diff_region(r);
+    const size_t b1 = rec_len;
+    TbBool same = ((a1 - a0) == (b1 - a1)) && (memcmp(rec + a0, rec + a1, a1 - a0) == 0);
+    for (int r = 0; r < NsR_Count; r++)
+        if ((regions[r].base != NULL) && (shadow[r] != NULL))
+            same = same && (XXH3_64bits(shadow[r], regions[r].len) == hp[r]);
+    memmove(rec + a0, rec + a1, b1 - a1); /* the serial record, which the shadows now match */
+    rec_len = a0 + (b1 - a1);
+    parcheck_note("shared part", same, a1 - a0, b1 - a1);
+}
+
+static void free_shadow_list(struct NsPageShadow *n)
+{
+    while (n != NULL)
+    {
+        struct NsPageShadow *next = n->next;
+        free(n);
+        n = next;
+    }
+}
+
+static void parcheck_pages(void)
+{
+    static struct NsPageShadow *real[NS_PAGE_BUCKETS], *par[NS_PAGE_BUCKETS];
+    memcpy(real, page_shadows, sizeof(real));
+    /* the job threads work on a copy of the shadows */
+    TbBool ok = true;
+    for (int b = 0; (b < NS_PAGE_BUCKETS) && ok; b++)
+    {
+        struct NsPageShadow **tail = &page_shadows[b];
+        *tail = NULL;
+        for (struct NsPageShadow *n = real[b]; n != NULL; n = n->next)
+        {
+            struct NsPageShadow *c = (struct NsPageShadow *)malloc(sizeof(struct NsPageShadow) + NS_PG_SIZE);
+            if (c == NULL)
+            {
+                ok = false;
+                break;
+            }
+            memcpy(c, n, sizeof(struct NsPageShadow) + NS_PG_SIZE);
+            c->next = NULL;
+            *tail = c;
+            tail = &c->next;
+        }
+    }
+    if (!ok)
+    {
+        for (int b = 0; b < NS_PAGE_BUCKETS; b++)
+            free_shadow_list(page_shadows[b]);
+        memcpy(page_shadows, real, sizeof(real));
+        diff_pages_parallel();
+        return;
+    }
+    const int gone0 = gone_count;
+    const size_t a0 = rec_len;
+    diff_pages_parallel();
+    const size_t a1 = rec_len;
+    const uint32_t pass_par = page_pass;
+    memcpy(par, page_shadows, sizeof(par));
+    memcpy(page_shadows, real, sizeof(real));
+    gone_count = gone0;
+    diff_pages();
+    const size_t b1 = rec_len;
+    TbBool same = ((a1 - a0) == (b1 - a1)) && (memcmp(rec + a0, rec + a1, a1 - a0) == 0);
+    for (int b = 0; b < NS_PAGE_BUCKETS; b++)
+    {
+        const struct NsPageShadow *x = par[b], *y = page_shadows[b];
+        for (; (x != NULL) && (y != NULL); x = x->next, y = y->next)
+        {
+            same = same && (x->cx == y->cx) && (x->cy == y->cy) && (x->stale == y->stale) &&
+                (memcmp(&x->known, &y->known, sizeof(x->known)) == 0) && ((x->seen == pass_par) == (y->seen == page_pass)) &&
+                ((x->diff_pass == pass_par) == (y->diff_pass == page_pass)) &&
+                (memcmp(x->data, y->data, NS_PG_SIZE) == 0);
+            if ((x->diff_pass == pass_par) && (y->diff_pass == page_pass))
+                same = same && (x->diff_off - a0 == y->diff_off - a1) && (x->diff_len == y->diff_len);
+        }
+        same = same && (x == NULL) && (y == NULL);
+        free_shadow_list(par[b]);
+    }
+    /* the serial record, its pages' places moved with it */
+    memmove(rec + a0, rec + a1, b1 - a1);
+    rec_len = a0 + (b1 - a1);
+    for (int b = 0; b < NS_PAGE_BUCKETS; b++)
+        for (struct NsPageShadow *y = page_shadows[b]; y != NULL; y = y->next)
+            if (y->diff_pass == page_pass)
+                y->diff_off -= (uint32_t)(a1 - a0);
+    parcheck_note("chunk pages", same, a1 - a0, b1 - a1);
 }
 
 static void free_page_shadows(void)
@@ -1987,8 +2496,16 @@ void netstate_server_after_turn(void)
     /* the shared part of the turn: everything but the things, and the chunk pages' changes (kept per page) */
     rec_begin(0);
     int64_t tp = get_time_tick_ns();
-    for (int r = 0; r < NsR_Count; r++)
-        diff_region(r);
+    if (kfx_job_threads() > 1)
+    {
+        if (parcheck_turn())
+            parcheck_shared();
+        else
+            diff_regions_parallel(); /* on the job threads (2026-11-09) */
+    }
+    else
+        for (int r = 0; r < NsR_Count; r++)
+            diff_region(r);
     const size_t shared_end = rec_len;
     int64_t tn = get_time_tick_ns();
     stats_t[NsT_Shared] += tn - tp;
@@ -1997,8 +2514,33 @@ void netstate_server_after_turn(void)
         shared_z_raw = 0; /* each record is compressed whole then */
     tp = tn;
     gone_count = 0;
-    diff_pages();
+    if (kfx_job_threads() > 1)
+    {
+        if (parcheck_turn())
+            parcheck_pages();
+        else
+            diff_pages_parallel();
+    }
+    else
+        diff_pages();
     const size_t pages_end = rec_len;
+    {
+        /* test hook KFX_NET_STREAMHASH=1: a fingerprint of the shared part and the pages' lines, every 200 turns (the
+           same world run with KFX_NET_THREADS=1 and without must give the same ones) */
+        static int on = -1;
+        static uint64_t fp_shared, fp_pages;
+        if (on < 0)
+            on = (getenv("KFX_NET_STREAMHASH") != NULL) ? 1 : 0;
+        if (on && !rec_failed)
+        {
+            fp_shared = XXH3_64bits_withSeed(rec, shared_end, fp_shared);
+            fp_pages = XXH3_64bits_withSeed(rec + shared_end, pages_end - shared_end, fp_pages);
+            if ((game.play_gameturn % 200) == 0)
+                SYNCLOG("Thin-client server: stream fingerprint at turn %lu: shared %016llx, pages %016llx (%d job threads)",
+                    (unsigned long)game.play_gameturn, (unsigned long long)fp_shared, (unsigned long long)fp_pages,
+                    kfx_job_threads());
+        }
+    }
     if (rec_failed)
     {
         /* the shadows took changes that can't be sent: every client starts again from a keyframe */

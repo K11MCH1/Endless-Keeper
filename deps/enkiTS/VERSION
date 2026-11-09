@@ -1,0 +1,2 @@
+enkiTS v1.11 (https://github.com/dougbinks/enkiTS), src/ only
+Patched: #include <Windows.h> -> <windows.h> (case-sensitive cross-compilers).
