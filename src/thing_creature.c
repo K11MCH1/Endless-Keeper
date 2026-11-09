@@ -109,6 +109,7 @@
 #include "slab_data.h"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2559,6 +2560,41 @@ void creature_look_for_hidden_doors(struct Thing *creatng)
     }
 }
 
+/* the creature states' cost (KFX_WORLD_PROFILE=1): per state, every 200 turns, the 12 costliest */
+#define STATE_PROF_MAX 512
+static int64_t state_prof_ns[STATE_PROF_MAX];
+static uint32_t state_prof_calls[STATE_PROF_MAX];
+static GameTurn state_prof_from;
+
+static void state_prof_add(long state, int64_t ns)
+{
+    if ((state < 0) || (state >= STATE_PROF_MAX))
+        return;
+    state_prof_ns[state] += ns;
+    state_prof_calls[state]++;
+    if (game.play_gameturn < state_prof_from + 200)
+        return;
+    const GameTurn turns = max((GameTurn)1, game.play_gameturn - state_prof_from);
+    state_prof_from = game.play_gameturn;
+    char line[1600];
+    int n = snprintf(line, sizeof(line), "Creature states (ms a turn, calls a turn):");
+    for (int r = 0; (r < 12) && (n < (int)sizeof(line) - 80); r++)
+    {
+        int best = -1;
+        for (int s = 0; s < STATE_PROF_MAX; s++)
+            if ((state_prof_ns[s] > 0) && ((best < 0) || (state_prof_ns[s] > state_prof_ns[best])))
+                best = s;
+        if (best < 0)
+            break;
+        n += snprintf(line + n, sizeof(line) - n, " %s %.3f/%.0f", creature_state_code_name(best),
+            (double)state_prof_ns[best] / 1e6 / turns, (double)state_prof_calls[best] / turns);
+        state_prof_ns[best] = -state_prof_ns[best]; /* taken */
+    }
+    SYNCLOG("%s", line);
+    memset(state_prof_ns, 0, sizeof(state_prof_ns));
+    memset(state_prof_calls, 0, sizeof(state_prof_calls));
+}
+
 TngUpdateRet process_creature_state(struct Thing *thing)
 {
     KFX_C_ZONE_BEGIN_COLOR(ctx_process_creature_state, "process_creature_state", KFX_COLOR_CREATURE);
@@ -2667,11 +2703,15 @@ TngUpdateRet process_creature_state(struct Thing *thing)
             KFX_C_ZONE_NAME(ctx_state_dispatch, state_name, strlen(state_name));
         }
 #endif
+        const int64_t st_t0 = world_prof_now();
+        const long st_state = thing->active_state;
         if (stati->process_state > 0)
             k = process_func_list[stati->process_state](thing);
         else
             k = luafunc_crstate_func(stati->process_state, thing);
         KFX_C_ZONE_END(ctx_state_dispatch);
+        if (st_t0 != 0)
+            state_prof_add(st_state, world_prof_now() - st_t0);
 
         if (k == CrStRet_Deleted) {
             SYNCDBG(18,"Finished with creature deleted");
@@ -6559,7 +6599,9 @@ TngUpdateRet update_creature(struct Thing *thing)
         kill_creature(thing, INVALID_THING, -1, CrDed_NotReallyDying| CrDed_NoEffects);
         return TUFRet_Deleted;
     }
+    KFX_C_ZONE_BEGIN(z_arma, "Creature: armageddon");
     process_armageddon_influencing_creature(thing);
+    KFX_C_ZONE_END(z_arma);
 
     if (cctrl->frozen_on_hit > 0)
         cctrl->frozen_on_hit--;
@@ -6569,13 +6611,17 @@ TngUpdateRet update_creature(struct Thing *thing)
         cctrl->hand_blocked_turns--;
     if ((cctrl->stopped_for_hand_turns == 0) || (cctrl->instance_id == CrInst_EAT))
     {
+        KFX_C_ZONE_BEGIN(z_inst, "Creature: instance");
         process_creature_instance(thing);
+        KFX_C_ZONE_END(z_inst);
     }
     if (flag_is_set(thing->state_flags, TF1_FallingIntoAbyss)) {
         process_thing_spell_effects(thing);
         return TUFRet_Modified;
     }
+    KFX_C_ZONE_BEGIN(z_count, "Creature: count");
     update_creature_count(thing);
+    KFX_C_ZONE_END(z_count);
     if (flag_is_set(thing->alloc_flags,TAlF_IsControlled))
     {
         if ((cctrl->stateblock_flags == 0) || creature_state_cannot_be_blocked(thing))
@@ -6609,6 +6655,7 @@ TngUpdateRet update_creature(struct Thing *thing)
         }
     }
 
+    KFX_C_ZONE_BEGIN(z_move, "Creature: movement");
     if (update_creature_movements(thing))
     {
         SYNCDBG(19,"The %s index %d acceleration is (%d,%d,%d)",thing_model_name(thing),
@@ -6619,6 +6666,7 @@ TngUpdateRet update_creature(struct Thing *thing)
         thing->velocity.z.val += cctrl->moveaccel.z.val;
     }
     move_creature(thing);
+    KFX_C_ZONE_END(z_move);
     if (flag_is_set(thing->alloc_flags, TAlF_IsControlled))
     {
         slow_down_controlled_creature(cctrl);
@@ -6627,12 +6675,16 @@ TngUpdateRet update_creature(struct Thing *thing)
     {
         cctrl->move_speed = 0;
     }
+    KFX_C_ZONE_BEGIN(z_fx, "Creature: effects, landscape, disease");
     process_spells_affected_by_effect_elements(thing);
     process_magic_fall_effect(thing);
     process_landscape_affecting_creature(thing);
     process_disease(thing);
+    KFX_C_ZONE_END(z_fx);
+    KFX_C_ZONE_BEGIN(z_map, "Creature: map and graphic");
     move_thing_in_map(thing, &thing->mappos);
     set_creature_graphic(thing);
+    KFX_C_ZONE_END(z_map);
     if (cctrl->spell_aura)
     {
         process_keeper_spell_aura(thing);
@@ -6641,6 +6693,7 @@ TngUpdateRet update_creature(struct Thing *thing)
     if (thing->creature.health_bar_turns > 0)
         thing->creature.health_bar_turns--;
 
+    KFX_C_ZONE_BEGIN(z_group, "Creature: group");
     if (creature_is_group_member(thing))
     {
         if (creature_is_group_leader(thing)) {
@@ -6664,6 +6717,7 @@ TngUpdateRet update_creature(struct Thing *thing)
             }
         }
     }
+    KFX_C_ZONE_END(z_group);
 
     if (cctrl->dragtng_idx > 0)
     {
@@ -6680,16 +6734,21 @@ TngUpdateRet update_creature(struct Thing *thing)
             tngp->move_angle_xy = thing->move_angle_xy; //corpse gets rotated along with creature
         }
     }
-    if (update_creature_levels(thing) == -1)
+    KFX_C_ZONE_BEGIN(z_lvl, "Creature: levels");
+    const long level_ret = update_creature_levels(thing);
+    KFX_C_ZONE_END(z_lvl);
+    if (level_ret == -1)
     {
         return TUFRet_Deleted;
     }
 
+    KFX_C_ZONE_BEGIN(z_cast, "Creature: spell casting");
     if (!process_creature_self_spell_casting(thing))
     {
         // If this creature didn't cast anything to itself, try to help others.
         process_creature_ranged_buff_spell_casting(thing);
     }
+    KFX_C_ZONE_END(z_cast);
     // Reset acceleration.
     cctrl->moveaccel.x.val = 0;
     cctrl->moveaccel.y.val = 0;
@@ -6697,8 +6756,10 @@ TngUpdateRet update_creature(struct Thing *thing)
     // Clear flags and process spell effects.
     clear_flag(cctrl->creature_control_flags, CCFlg_MoveX | CCFlg_MoveY | CCFlg_MoveZ);
     clear_flag(cctrl->spell_flags, CSAfF_PoisonCloud | CSAfF_Wind);
+    KFX_C_ZONE_BEGIN(z_spells, "Creature: spell effects");
     process_timebomb(thing);
     process_thing_spell_effects(thing);
+    KFX_C_ZONE_END(z_spells);
     SYNCDBG(19,"Finished");
     return TUFRet_Modified;
 }

@@ -25,8 +25,20 @@ cmake -S . -B out -G Ninja -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchains/mingw32
   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_NUMBER=$BUILD_NUMBER -DPACKAGE_SUFFIX=$SUFFIX \
   -DENDLESS_RELEASE=$ENDLESS_RELEASE -DENDLESS_STAGE=$ENDLESS_STAGE > /dev/null
 cmake --build out --target keeperfx keeperfx_hvlog > /dev/null
+echo "== game, 64-bit"
+cmake -S . -B out64 -G Ninja -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchains/mingw64.cmake \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_NUMBER=$BUILD_NUMBER -DPACKAGE_SUFFIX=$SUFFIX \
+  -DENDLESS_RELEASE=$ENDLESS_RELEASE -DENDLESS_STAGE=$ENDLESS_STAGE > /dev/null
+cmake --build out64 --target keeperfx > /dev/null
 echo "== game data"
 make "${VER[@]}" pkg-assemble > /dev/null
+
+echo "== 64-bit game in x64 (with its SDL3 DLLs; started there, it plays from the game folder above)"
+mkdir -p pkg/x64
+cp out64/keeperfx.exe pkg/x64/
+cp out64/deps/sdl3/SDL3-*/x86_64-w64-mingw32/bin/SDL3.dll \
+   out64/deps/sdl3_mixer/SDL3_mixer-*/x86_64-w64-mingw32/bin/SDL3_mixer.dll \
+   out64/deps/sdl3_image/SDL3_image-*/x86_64-w64-mingw32/bin/SDL3_image.dll pkg/x64/
 
 echo "== Unicode fonts"
 ( cd tools/fxfontmaker

@@ -41,6 +41,7 @@
 #include "game_legacy.h"
 #include "frontmenu_ingame_map.h"
 #include "player_instances.h"
+#include "world_pages.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -284,7 +285,8 @@ long destroy_door(struct Thing *doortng)
     do_slab_efficiency_alteration(slb_x, slb_y);
     for (NetUserId user = 0; user < MAX_NET_USERS; user++)
     {
-        if (!player_exists(get_user_player(user)))
+        /* a user without a player is passed over before get_user_player logs an error for it */
+        if ((get_net_user_player_number(user) < 0) || !player_exists(get_user_player(user)))
             continue;
         struct Thing* thing = thing_get(get_user_state(user)->controlled_thing_idx);
         if (thing == INVALID_THING)
@@ -383,6 +385,13 @@ TbBool door_can_stand(struct Thing *thing)
         wall_flags *= 2;
         long slb_x = subtile_slab(thing->mappos.x.stl.num) + (int)small_around[i].delta_x;
         long slb_y = subtile_slab(thing->mappos.y.stl.num) + (int)small_around[i].delta_y;
+        if (world_paged && (wp_page_of_slab(slb_x, slb_y) == NULL))
+        {
+            /* endless worlds: a slab of a chunk that isn't loaded is as it was when it froze; a door beside it
+               isn't knocked down because that chunk froze first (2026-11-09) */
+            wall_flags |= 0x01;
+            continue;
+        }
         struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
         struct SlabConfigStats* slabst = get_slab_stats(slb);
         if ((slabst->category == SlbAtCtg_FortifiedWall) || (slb->kind == SlbT_ROCK) || (slabst->category == SlbAtCtg_FriableDirt) || (slb->kind == SlbT_GOLD) || (slb->kind == SlbT_DENSEGOLD) || (slb->kind == SlbT_GEMS))

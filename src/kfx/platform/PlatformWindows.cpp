@@ -512,10 +512,40 @@ LONG __stdcall Vex_handler(_EXCEPTION_POINTERS *ExceptionInfo)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// A build kept in a subfolder of the game (the 64-bit one in x64\, 2026-11-09): started from there (Explorer sets the
+// working folder to the exe's), it plays from the game's folder above it. Nothing changes when the working folder
+// already holds keeperfx.cfg.
+void game_folder_from_subfolder()
+{
+    if (GetFileAttributesA("keeperfx.cfg") != INVALID_FILE_ATTRIBUTES) {
+        return;
+    }
+    wchar_t path[MAX_PATH + 16];
+    const DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if ((n == 0) || (n >= MAX_PATH)) {
+        return;
+    }
+    for (int up = 0; up < 2; up++) {
+        wchar_t * slash = wcsrchr(path, L'\\');
+        if (slash == nullptr) {
+            return;
+        }
+        *slash = L'\0';
+    }
+    const size_t len = wcslen(path);
+    wcscat(path, L"\\keeperfx.cfg");
+    const bool found = (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES);
+    path[len] = L'\0';
+    if (found) {
+        SetCurrentDirectoryW(path);
+    }
+}
+
 } // namespace
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR pCmdLine, int nCmdShow) {
     AddVectoredExceptionHandler(0, &Vex_handler);
+    game_folder_from_subfolder();
     // Construct argc/argv from Unicode command line
     int argc = 0;
     auto szArglist = CommandLineToArgvW(GetCommandLineW(), &argc);

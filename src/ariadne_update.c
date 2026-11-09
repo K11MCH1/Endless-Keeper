@@ -1866,6 +1866,30 @@ int32_t init_navigation(void)
     return 1;
 }
 
+/* Endless worlds (2026-11-09): while a chunk freezes, its rooms' slabs go one by one and each re-triangulated the
+ * navigation mesh round it (up to 20 ms for a chunk with big rooms); the chunk and CM_MARGIN_STL round it are
+ * refreshed right after (nav_refresh_area). In between the navigation colours are kept up to date, the triangulation
+ * waits, and what fell outside the refreshed area is triangulated at the end. */
+static int nav_defer_depth;
+static TbBool nav_deferred_any;
+static long nav_dsx, nav_dsy, nav_dex, nav_dey;
+
+void nav_defer_begin(void)
+{
+    if (nav_defer_depth++ == 0)
+        nav_deferred_any = false;
+}
+
+void nav_defer_end(long refresh_sx, long refresh_sy, long refresh_ex, long refresh_ey)
+{
+    if ((nav_defer_depth <= 0) || (--nav_defer_depth > 0) || !nav_deferred_any)
+        return;
+    nav_deferred_any = false;
+    if ((nav_dsx >= refresh_sx) && (nav_dsy >= refresh_sy) && (nav_dex <= refresh_ex) && (nav_dey <= refresh_ey))
+        return;
+    nav_triangulate_paged(nav_dsx, nav_dsy, nav_dex, nav_dey);
+}
+
 long update_navigation_triangulation(long start_x, long start_y, long end_x, long end_y)
 {
     KFX_C_ZONE_BEGIN_COLOR(ctx_update_nav, "update_navigation_triangulation", KFX_COLOR_PATHFINDING);
@@ -1909,6 +1933,18 @@ long update_navigation_triangulation(long start_x, long start_y, long end_x, lon
     }
     if (changed) {
         game.map_changed_for_navigation = 1;
+        if (world_paged && (nav_defer_depth > 0))
+        {
+            if (!nav_deferred_any)
+            {
+                nav_dsx = sx; nav_dsy = sy; nav_dex = ex; nav_dey = ey;
+                nav_deferred_any = true;
+            } else
+            {
+                nav_dsx = min(nav_dsx, sx); nav_dsy = min(nav_dsy, sy);
+                nav_dex = max(nav_dex, ex); nav_dey = max(nav_dey, ey);
+            }
+        } else
         if (world_paged)
             nav_triangulate_paged(sx, sy, ex, ey);
         else

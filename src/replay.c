@@ -49,6 +49,7 @@
 #include "replay_rewind.h"
 #include "world_pages.h"
 #include "world_stream.h"
+#include "net_state.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1569,6 +1570,13 @@ TbBool open_new_packet_file_for_save(void)
         return false;
     }
     replay.head.flags = PSHF_Compressed;
+    if (replay.checksum_verify && netstate_dedicated())
+    {
+        /* a dedicated server's replay has no turn checksums (1.5 ms a turn with 100 keepers: 2026-11-09 profile);
+           it plays back without checking each turn, as any replay saved without them */
+        replay.checksum_verify = false;
+        SYNCLOG("Replay: a dedicated server saves its replay without turn checksums");
+    }
     if (replay.checksum_verify)
         set_flag(replay.head.flags, PSHF_Checksum);
     if (game.game_kind == GKind_MultiGame)

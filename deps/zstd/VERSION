@@ -1,0 +1,2 @@
+zstd v1.5.7 (https://github.com/facebook/zstd, BSD licence): build/single_file_libs/create_single_file_library.sh's
+zstd.c, lib/zstd.h and lib/zstd_errors.h. Patched: ZSTD_MULTITHREAD only without KFX_ZSTD_SINGLE_THREAD (the game's build defines it).

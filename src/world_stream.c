@@ -104,6 +104,7 @@
 #include "net_exchange_common.h"
 #include "world_caretaker.h"
 #include "kfx_deflate.h"
+#include "net_secure.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -139,6 +140,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_RAIDS_MAGIC 0x31534452u /* "RDS1": optional, after SMY1: the hero raids going on */
 #define WORLD_STATS_MAGIC 0x31545350u /* "PST1": optional, after PKY1 (last): the players' records (server console) */
 #define WORLD_PERKS_MAGIC 0x314B5250u /* "PRK1": optional, after PST1 (last): the players' passive upgrades, by token */
+#define WORLD_SKEY_MAGIC 0x3159454Bu /* "KEY1": optional, after PRK1 (last): the world's key, secret half (net_secure.c) */
 #define WORLD_MAX_PORTALS 65536
 /* The player's creature limit (imps don't count, as in stock): this many, plus this many per owned portal. */
 #define WORLD_BASE_CREATURES 10
@@ -2053,6 +2055,7 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
     cd->cy = W.origin_cy + lcy;
     const MapSlabCoord sx0 = window_chunk_slab(lcx), sy0 = window_chunk_slab(lcy);
     const MapSubtlCoord stl_x0 = sx0 * STL_PER_SLB, stl_y0 = sy0 * STL_PER_SLB;
+    KFX_C_ZONE_BEGIN(z_frz_map, "Freeze: record the map");
     /* slabs */
     for (int ly = 0; ly < WG_CHUNK; ly++)
     {
@@ -2109,6 +2112,8 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
         }
         free(codes);
     }
+    KFX_C_ZONE_END(z_frz_map);
+    KFX_C_ZONE_BEGIN(z_frz_things, "Freeze: record the things");
     /* things: everything standing in the chunk, except what is held in a hand */
     for (long i = 1; i < THINGS_COUNT; i++)
     {
@@ -2142,6 +2147,8 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
             }
         }
     }
+    KFX_C_ZONE_END(z_frz_things);
+    KFX_C_ZONE_BEGIN(z_frz_books, "Freeze: books and crates");
     /* spellbooks and workshop crates in the chunk's rooms: off the map now, out of their owners' totals (the thaw
        assimilates them again). Deleting the room slabs would move them onto room slabs outside the chunk, where they
        would stay while the frozen record also holds them. */
@@ -2171,6 +2178,8 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
         }
         delete_thing_structure(thing, 0);
     }
+    KFX_C_ZONE_END(z_frz_books);
+    KFX_C_ZONE_BEGIN(z_frz_rooms, "Freeze: delete the rooms");
     /* rooms first: the engine takes their contents (treasury gold, books, boxes) out of their owners' totals; the
        room slabs next to the chunk are re-placed meanwhile, so a heart there is guarded */
     struct HeartGuard guards[HEART_GUARDS_MAX];
@@ -2186,6 +2195,8 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
         }
     }
     unguard_hearts(guards, nguards);
+    KFX_C_ZONE_END(z_frz_rooms);
+    KFX_C_ZONE_BEGIN(z_frz_remove, "Freeze: remove the things");
     for (long i = 1; i < THINGS_COUNT; i++)
     {
         struct Thing *thing = thing_get(i);
@@ -2198,7 +2209,11 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
             continue; /* goes with its slab */
         remove_thing_quietly(thing);
     }
-    if (!store_chunk_record(cd))
+    KFX_C_ZONE_END(z_frz_remove);
+    KFX_C_ZONE_BEGIN(z_frz_store, "Freeze: store the record");
+    const TbBool record_stored = store_chunk_record(cd);
+    KFX_C_ZONE_END(z_frz_store);
+    if (!record_stored)
     {
         ERRORLOG("World: chunk (%d,%d) could not be stored", (int)cd->cx, (int)cd->cy);
         return false;
@@ -2206,14 +2221,45 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
     return true;
 }
 
-/** A slab's dig orders, for every keeper. Unlike all_players_untag_blocks_for_digging_in_area this also takes
- *  orders on slabs the player hasn't explored: left in the task list, the shift would clamp them onto the
- *  window's edge, and imps would dig there. */
-static void untag_slab_for_all_keepers(MapSlabCoord x, MapSlabCoord y)
+/** Every keeper's dig orders on a band of slabs. Unlike all_players_untag_blocks_for_digging_in_area this also takes
+ *  orders on slabs the player hasn't explored: left in the task list, the shift would clamp them onto the window's
+ *  edge, and imps would dig there. Slab by slab from one walk of each keeper's task list (2026-11-09: slab by
+ *  slab, 256 slabs a chunk times every keeper's list, was 1.8 ms a chunk). Each keeper's orders go in the band's row
+ *  order, as slab by slab; one keeper's untagging doesn't touch another's list. */
+static void untag_band_for_all_keepers(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSlabCoord y2)
 {
+    static int32_t keys[MAPTASKS_COUNT];
+    const int32_t w = x2 - x1 + 1;
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
-        if (player_is_keeper(p) && (find_from_task_list(p, get_subtile_number_at_slab_center(x, y)) != -1))
+    {
+        if (!player_is_keeper(p))
+            continue;
+        const struct Dungeon *dungeon = get_dungeon(p);
+        const long imax = min((long)dungeon->highest_task_number, (long)MAPTASKS_COUNT);
+        int n = 0;
+        for (long i = 0; i < imax; i++)
+        {
+            const SubtlCodedCoords c = dungeon->task_list[i].coords;
+            const MapSlabCoord bx = subtile_slab(stl_num_decode_x(c)), by = subtile_slab(stl_num_decode_y(c));
+            if ((bx < x1) || (bx > x2) || (by < y1) || (by > y2) || (c != get_subtile_number_at_slab_center(bx, by)))
+                continue;
+            const int32_t key = (by - y1) * w + (bx - x1);
+            int at = n++;
+            while ((at > 0) && (keys[at - 1] > key))
+            {
+                keys[at] = keys[at - 1];
+                at--;
+            }
+            keys[at] = key;
+        }
+        for (int k = 0; k < n; k++)
+        {
+            if ((k > 0) && (keys[k] == keys[k - 1]))
+                continue;
+            const MapSlabCoord x = x1 + keys[k] % w, y = y1 + keys[k] / w;
             untag_blocks_for_digging_in_area(slab_subtile(x, 0), slab_subtile(y, 0), p);
+        }
+    }
 }
 
 /** Takes the room slabs and dig tags of a band of slabs out of the game, and releases their columns. */
@@ -2223,6 +2269,7 @@ static void clear_band(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSla
     x2 = min(x2, game.map_tiles_x - 1); y2 = min(y2, game.map_tiles_y - 1);
     if ((x2 < x1) || (y2 < y1))
         return;
+    KFX_C_ZONE_BEGIN(z_clr_slabs, "Clear: rooms, dig tags, lights");
     for (MapSlabCoord y = y1; y <= y2; y++)
     {
         for (MapSlabCoord x = x1; x <= x2; x++)
@@ -2232,10 +2279,12 @@ static void clear_band(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSla
                 continue;
             if (slb->room_index > 0)
                 delete_room_slab(x, y, 0);
-            untag_slab_for_all_keepers(x, y);
             delete_attached_lights_on_slab(x, y);
         }
     }
+    untag_band_for_all_keepers(x1, y1, x2, y2);
+    KFX_C_ZONE_END(z_clr_slabs);
+    KFX_C_ZONE_BEGIN(z_clr_things, "Clear: things left");
     /* slab objects and lights left on those slabs */
     for (long i = 1; i < THINGS_COUNT; i++)
     {
@@ -2246,9 +2295,12 @@ static void clear_band(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSla
         if ((sx >= x1) && (sx <= x2) && (sy >= y1) && (sy <= y2))
             remove_thing_quietly(thing);
     }
+    KFX_C_ZONE_END(z_clr_things);
+    KFX_C_ZONE_BEGIN(z_clr_map, "Clear: map elements");
     for (MapSubtlCoord y = y1 * STL_PER_SLB; y < (y2 + 1) * STL_PER_SLB; y++)
         for (MapSubtlCoord x = x1 * STL_PER_SLB; x < (x2 + 1) * STL_PER_SLB; x++)
             remove_block_from_map_element(x, y);
+    KFX_C_ZONE_END(z_clr_map);
 }
 
 /******************************************************************************/
@@ -3475,6 +3527,85 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
     }
 }
 
+/* The dungeons' areas follow the chunks that come and go (2026-11-09: calculate_dungeon_area_scores walked every
+ * loaded slab after every change, 2.5 ms with 2,048 chunks). Around a chunk's load or freeze the areas are taken, and
+ * set after to those plus or minus the chunk's slabs (what a whole count would give; filling or clearing the chunk
+ * may itself add or take rooms' areas). A whole count every AREA_FULL_TURNS keeps them right; KFX_WORLD_AREACHECK=1
+ * counts the whole world after every change and says when the two differ. */
+#define AREA_FULL_TURNS 400 /* stock's own counting drifts a little (a room slab sold to claimed ground) */
+static long area_tot0[PLAYERS_MAX], area_room0[PLAYERS_MAX];
+static GameTurn area_next_full;
+
+static void area_take(void)
+{
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+    {
+        const struct Dungeon *dungeon = get_players_num_dungeon(p);
+        area_tot0[p] = dungeon_invalid(dungeon) ? 0 : (long)dungeon->total_area;
+        area_room0[p] = dungeon_invalid(dungeon) ? 0 : (long)dungeon->room_manage_area;
+    }
+}
+
+/** The areas taken, plus (sign 1) or minus (-1) the parts given. */
+static void area_set(const long *tot, const long *room, int sign)
+{
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+    {
+        struct Dungeon *dungeon = get_players_num_dungeon(p);
+        if (dungeon_invalid(dungeon))
+            continue;
+        dungeon->total_area = (unsigned short)max(0L, min(65535L, area_tot0[p] + sign * tot[p]));
+        dungeon->room_manage_area = (short)max(0L, min(32767L, area_room0[p] + sign * room[p]));
+    }
+}
+
+static void area_after_changes(void)
+{
+    static int check = -1;
+    if (check < 0)
+        check = (getenv("KFX_WORLD_AREACHECK") != NULL) ? 1 : 0;
+    if (!check && (game.play_gameturn < area_next_full))
+        return;
+    area_next_full = game.play_gameturn + AREA_FULL_TURNS;
+    area_take(); /* what the chunks' changes made of them */
+    calculate_dungeon_area_scores();
+    if (check)
+    {
+        static uint32_t counts, differ;
+        counts++;
+        for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+        {
+            const struct Dungeon *dungeon = get_players_num_dungeon(p);
+            if (dungeon_invalid(dungeon))
+                continue;
+            if ((area_tot0[p] != (long)dungeon->total_area) || (area_room0[p] != (long)dungeon->room_manage_area))
+            {
+                differ++;
+                if (differ <= 20)
+                    SYNCLOG("Area check: player %d by chunks %ld/%ld, counted %d/%d (turn %lu)", (int)p, area_tot0[p], area_room0[p],
+                        (int)dungeon->total_area, (int)dungeon->room_manage_area, (unsigned long)game.play_gameturn);
+            }
+        }
+        if ((counts % 50) == 0)
+            SYNCLOG("Area check: %u counts, %u players differed", (unsigned)counts, (unsigned)differ);
+    }
+}
+
+/* The gold veins (for the computer keepers' digging) are found again at most every GOLD_TURNS after chunks changed
+ * (2026-11-09: check_map_for_gold walked every loaded slab after every change, 3.9 ms with 2,048 chunks) */
+#define GOLD_TURNS 100
+static TbBool gold_dirty;
+static GameTurn gold_next;
+
+static void gold_tick(void)
+{
+    if (!gold_dirty || (game.play_gameturn < gold_next))
+        return;
+    gold_dirty = false;
+    gold_next = game.play_gameturn + GOLD_TURNS;
+    WORLD_PROF(WPS_CmGold, check_map_for_gold());
+}
+
 /** Navigation, ceilings, static light and the minimap round a chunk that was loaded or freed. */
 static void cm_refresh_chunk(int32_t ecx, int32_t ecy)
 {
@@ -3491,7 +3622,7 @@ static void cm_after_changes(void)
 {
     bind_hearts();
     setup_keepers();
-    WORLD_PROF(WPS_CmScores, calculate_dungeon_area_scores());
+    WORLD_PROF(WPS_CmScores, area_after_changes()); /* the areas followed each chunk; a whole count now and then */
     for (PlayerNumber p = 0; p < DUNGEONS_COUNT; p++)
     {
         struct Dungeon *dungeon = get_dungeon(p);
@@ -3512,7 +3643,8 @@ static void cm_after_changes(void)
         dungeon->digger_stack_length = 0;
         dungeon->digger_stack_update_turn = 0;
     }
-    WORLD_PROF(WPS_CmGold, check_map_for_gold());
+    gold_dirty = true; /* found again by gold_tick, at most every GOLD_TURNS */
+    gold_tick();
     {
         const struct StructureList *creatures = get_list_for_thing_class(TCls_Creature);
         long cguard = 0;
@@ -3559,8 +3691,14 @@ static TbBool cm_load_chunk(int64_t cx, int64_t cy, uint32_t now)
         wp_free(ecx, ecy);
         return false;
     }
+    area_take();
     WORLD_PROF(WPS_LdFill, fill_chunks(&fc, 1));
     free(fc.cd);
+    {
+        long tot[PLAYERS_MAX] = {0}, room[PLAYERS_MAX] = {0};
+        dungeon_area_of_page(wp_page(ecx, ecy), tot, room);
+        area_set(tot, room, 1);
+    }
     cm_refresh_chunk(ecx, ecy);
     if (W.lair_wait_count > 0)
         lair_waits_process();
@@ -3572,9 +3710,20 @@ static void cm_unload_chunk(int64_t cx, int64_t cy)
 {
     const int32_t ecx = engine_chunk_of(cx), ecy = engine_chunk_of(cy);
     TbBool stored;
+    long area_tot[PLAYERS_MAX] = {0}, area_room[PLAYERS_MAX] = {0};
+    area_take();
+    dungeon_area_of_page(wp_page(ecx, ecy), area_tot, area_room);
+    nav_defer_begin(); /* cm_refresh_chunk refreshes the chunk's navigation after */
     WORLD_PROF(WPS_FzRecord, stored = freeze_window_chunk((int)(cx - W.origin_cx), (int)(cy - W.origin_cy)));
     const MapSlabCoord sx0 = (MapSlabCoord)ecx * WORLD_CHUNK_SLABS, sy0 = (MapSlabCoord)ecy * WORLD_CHUNK_SLABS;
     WORLD_PROF(WPS_FzClear, clear_band(sx0, sy0, sx0 + WORLD_CHUNK_SLABS - 1, sy0 + WORLD_CHUNK_SLABS - 1));
+    {
+        /* the area cm_refresh_chunk triangulates (nav_refresh_area: x1 .. x2 + 1, clamped to the map) */
+        const long rx1 = max((long)ecx * CHUNK_STL - CM_MARGIN_STL, 2L), ry1 = max((long)ecy * CHUNK_STL - CM_MARGIN_STL, 2L);
+        const long rx2 = min((long)ecx * CHUNK_STL + CHUNK_STL - 1 + CM_MARGIN_STL, (long)game.map_subtiles_x - 2) + 1;
+        const long ry2 = min((long)ecy * CHUNK_STL + CHUNK_STL - 1 + CM_MARGIN_STL, (long)game.map_subtiles_y - 2) + 1;
+        nav_defer_end(rx1, ry1, rx2, ry2);
+    }
     if (!stored)
     {
         /* out of memory: the chunk goes back as it was (its record data is still in chunk_buf) and stays loaded */
@@ -3586,10 +3735,12 @@ static void cm_unload_chunk(int64_t cx, int64_t cy)
         struct WorldPage *pg = wp_page(ecx, ecy);
         if (pg != NULL)
             pg->wanted_turn = (uint32_t)max((long)game.play_gameturn, 1L);
+        area_set(area_tot, area_room, 0); /* the chunk is back as it was */
         cm_refresh_chunk(ecx, ecy);
         return;
     }
     wp_free(ecx, ecy);
+    area_set(area_tot, area_room, -1);
     cm_refresh_chunk(ecx, ecy);
 }
 
@@ -3683,13 +3834,26 @@ static void world_lair_test(void)
         before, frozen, n, count_creatures_with_lairs(), W.lair_wait_count);
 }
 
-static void chunk_manager_turn(void)
+/* A pass every CM_PERIOD turns decides what to load and freeze, as before (up to CM_LOAD_BUDGET loads, nearest the
+ * heart first; up to CM_UNLOAD_BUDGET freezes, one in a pass that loads); they are done that turn and the next ones,
+ * a turn stopping after CM_TURN_BUDGET_NS of them (2026-11-09 profile: a pass's three loads and a freeze in one turn
+ * took up to 46 ms). One no longer due when its turn comes (loaded meanwhile, wanted again) is passed over. */
+#define CM_TURN_BUDGET_NS 5000000
+static struct CmCandidate cm_load_q[CM_LOAD_BUDGET], cm_freeze_q[CM_UNLOAD_BUDGET];
+static int cm_load_n, cm_load_i, cm_freeze_n, cm_freeze_i, cm_last_ncand;
+
+/** Room for another chunk: up to WORLD_MAX_THINGS_PER_CHUNK things, and about 100 triangles and 50 points of the
+ *  navigation mesh (both fixed pools). */
+static TbBool cm_room_for_more(void)
 {
-    world_lair_test();
-    if ((game.play_gameturn % CM_PERIOD) != 0)
-        return;
-    const TbClockMSec started = LbTimerClock();
-    const uint32_t now = (uint32_t)max((long)game.play_gameturn, 1L);
+    return (game.synced_free_things_count > 2 * WORLD_MAX_THINGS_PER_CHUNK) &&
+        (count_Triangles < TRIANLGLES_COUNT - 4000) && (count_Points < POINTS_COUNT - 2000) &&
+        (game.thing_lists[TngList_Creatures].count < CREATURES_COUNT - WORLD_CREATURE_MARGIN);
+}
+
+static void cm_plan_pass(uint32_t now)
+{
+    cm_load_n = cm_load_i = cm_freeze_n = cm_freeze_i = 0;
     int64_t hcx, hcy;
     WORLD_PROF(WPS_CmCollect, cm_collect_wanted(&hcx, &hcy));
     /* wanted chunks: loaded ones are kept, the others are candidates, nearest the heart first */
@@ -3711,13 +3875,10 @@ static void chunk_manager_turn(void)
         cand[ncand].d = (s->cx - hcx) * (s->cx - hcx) + (s->cy - hcy) * (s->cy - hcy);
         ncand++;
     }
-    int loaded = 0;
     /* room for another chunk: up to WORLD_MAX_THINGS_PER_CHUNK things, and about 100 triangles and 50 points of the
        navigation mesh (both fixed pools). Short of room, nothing loads (creation would fail silently and those
        things would be gone at the next freeze); freezing goes on and makes room. */
-    const TbBool room_for_more = (game.synced_free_things_count > 2 * WORLD_MAX_THINGS_PER_CHUNK) &&
-        (count_Triangles < TRIANLGLES_COUNT - 4000) && (count_Points < POINTS_COUNT - 2000) &&
-        (game.thing_lists[TngList_Creatures].count < CREATURES_COUNT - WORLD_CREATURE_MARGIN);
+    const TbBool room_for_more = cm_room_for_more();
     if ((ncand > 0) && !room_for_more)
     {
         static GameTurn last_warned = 0;
@@ -3732,39 +3893,82 @@ static void chunk_manager_turn(void)
     if ((ncand > 0) && room_for_more)
     {
         qsort(cand, (size_t)ncand, sizeof(struct CmCandidate), cm_candidate_cmp);
-        for (int i = 0; (i < ncand) && (loaded < CM_LOAD_BUDGET); i++)
-        {
-            TbBool ok;
-            WORLD_PROF(WPS_CmLoad, ok = cm_load_chunk(cand[i].cx, cand[i].cy, now));
-            if (!ok)
-                break;
-            loaded++;
-        }
+        for (int i = 0; (i < ncand) && (cm_load_n < CM_LOAD_BUDGET); i++)
+            cm_load_q[cm_load_n++] = cand[i];
     }
     free(cand);
+    cm_last_ncand = ncand;
     /* chunks nobody has wanted for CM_UNLOAD_TURNS: freeze them (pages from a save or the level start count as
        wanted now) */
-    struct CmCandidate gone[CM_UNLOAD_BUDGET];
-    int ngone = 0;
     for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
     {
         if (pg->wanted_turn == 0)
             pg->wanted_turn = now;
         /* in a pass that loaded, one may still freeze: with several players exploring every pass loaded, nothing
            froze, and the world grew to the pools' limits (audit 2026-11-09) */
-        if ((ngone < ((loaded == 0) ? CM_UNLOAD_BUDGET : 1)) && (now - pg->wanted_turn >= CM_UNLOAD_TURNS))
+        if ((cm_freeze_n < ((cm_load_n == 0) ? CM_UNLOAD_BUDGET : 1)) && (now - pg->wanted_turn >= CM_UNLOAD_TURNS))
         {
-            gone[ngone].cx = page_world_cx(pg);
-            gone[ngone].cy = page_world_cy(pg);
-            ngone++;
+            cm_freeze_q[cm_freeze_n].cx = page_world_cx(pg);
+            cm_freeze_q[cm_freeze_n].cy = page_world_cy(pg);
+            cm_freeze_n++;
         }
     }
-    if (ngone > 0)
-        update_portals(); /* portal owners are remembered when their chunk freezes */
-    for (int i = 0; i < ngone; i++)
-        WORLD_PROF(WPS_CmFreeze, cm_unload_chunk(gone[i].cx, gone[i].cy));
-    if (loaded + ngone == 0)
+}
+
+static void cm_do_queued(uint32_t now, int *loaded, int *ngone)
+{
+    const int64_t t0 = get_time_tick_ns();
+    while ((cm_load_i < cm_load_n) || (cm_freeze_i < cm_freeze_n))
+    {
+        if ((*loaded + *ngone > 0) && (get_time_tick_ns() - t0 >= CM_TURN_BUDGET_NS))
+            break;
+        if (cm_load_i < cm_load_n)
+        {
+            const struct CmCandidate c = cm_load_q[cm_load_i++];
+            if (wp_page(engine_chunk_of(c.cx), engine_chunk_of(c.cy)) != NULL)
+                continue;
+            TbBool ok = cm_room_for_more();
+            if (ok)
+                WORLD_PROF(WPS_CmLoad, ok = cm_load_chunk(c.cx, c.cy, now));
+            if (!ok)
+            {
+                cm_load_i = cm_load_n; /* as a pass's loading stopped at a failure */
+                continue;
+            }
+            (*loaded)++;
+        } else
+        {
+            const struct CmCandidate c = cm_freeze_q[cm_freeze_i++];
+            struct WorldPage *pg = wp_page(engine_chunk_of(c.cx), engine_chunk_of(c.cy));
+            if ((pg == NULL) || (now - pg->wanted_turn < CM_UNLOAD_TURNS))
+                continue;
+            update_portals(); /* portal owners are remembered when their chunk freezes */
+            WORLD_PROF(WPS_CmFreeze, cm_unload_chunk(c.cx, c.cy));
+            (*ngone)++;
+        }
+    }
+}
+
+static void chunk_manager_turn(void)
+{
+    world_lair_test();
+    const TbBool pass = ((game.play_gameturn % CM_PERIOD) == 0);
+    if (!pass && (cm_load_i >= cm_load_n) && (cm_freeze_i >= cm_freeze_n))
+    {
+        gold_tick(); /* veins of changes before, when it is time */
         return;
+    }
+    const TbClockMSec started = LbTimerClock();
+    const uint32_t now = (uint32_t)max((long)game.play_gameturn, 1L);
+    if (pass)
+        cm_plan_pass(now);
+    int loaded = 0, ngone = 0;
+    cm_do_queued(now, &loaded, &ngone);
+    if (loaded + ngone == 0)
+    {
+        gold_tick(); /* veins of changes before, when it is time */
+        return;
+    }
     WORLD_PROF(WPS_CmAfter, cm_after_changes());
     long objects = -1, effgens = -1; /* counted with the profiler on (a scan of every thing slot) */
     if (world_prof_now() != 0)
@@ -3778,7 +3982,7 @@ static void chunk_manager_turn(void)
         }
     }
     SYNCLOG("World: chunks: %d loaded, %d frozen (%d wanted, %d to load), %d in memory, %lu stored, %ld ms; mesh %ld/%d triangles, %ld/%d points; %ld objects, %ld effect generators",
-        loaded, ngone, (int)cm_wanted.count, ncand - loaded, wp_count(), (unsigned long)W.store.count,
+        loaded, ngone, (int)cm_wanted.count, cm_last_ncand - loaded, wp_count(), (unsigned long)W.store.count,
         (long)(LbTimerClock() - started), (long)count_Triangles, TRIANLGLES_COUNT, (long)count_Points, POINTS_COUNT,
         objects, effgens);
 }
@@ -7053,6 +7257,10 @@ void world_process_turn(void)
 void world_level_end(void)
 {
     abilities_spread = false; /* the next world (or a load) spreads them again */
+    cm_load_n = cm_load_i = cm_freeze_n = cm_freeze_i = 0; /* the chunk manager's queued work was this world's */
+    area_next_full = 0;
+    gold_dirty = false;
+    gold_next = 0;
     memset(seat_tokens, 0, sizeof(seat_tokens)); /* a new world's seats have no owners yet (a load sets them after) */
     netstate_level_end();
     world_progress_level_end();
@@ -7383,6 +7591,32 @@ static TbBool unblob_table(struct RecReader *r, struct ChunkTable *t)
     return !r->bad;
 }
 
+/* the world's blob as a resync to other machines: without the seats' owners, their upgrades, the world's key */
+static TbBool blob_for_network, blob_resync;
+
+void world_blob_for_network(TbBool on)
+{
+    blob_for_network = on;
+}
+
+/** A save from before worlds had keys: its seats' owners and upgrades are by the players' secrets. The world takes
+ *  this machine's key, and they become its tokens (net_secure.h). */
+static void world_tokens_to_key(void)
+{
+    netsec_world_key_install();
+    int n = 0;
+    for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+    {
+        if (seat_tokens[p] != 0)
+        {
+            seat_tokens[p] = netsec_world_token(seat_tokens[p]);
+            n++;
+        }
+    }
+    n += world_perks_tokens_to_key();
+    SYNCLOG("World: the world had no key; it takes this machine's, %d owners' tokens made its own", n);
+}
+
 TbBool world_save_blob(unsigned char **data, uint32_t *len)
 {
     *data = NULL;
@@ -7556,8 +7790,8 @@ TbBool world_save_blob(unsigned char **data, uint32_t *len)
             free(rb);
         }
     }
-    /* the seats' owners: a save (single player, or a server); never a lockstep resync to the other machines */
-    if (!network_is_active() || netstate_is_server())
+    /* the seats' owners: a save (single player, or a server); never a resync to the other machines */
+    if (!blob_for_network && (!network_is_active() || netstate_is_server()))
     {
         uint32_t nkeys = 0;
         for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
@@ -7609,6 +7843,14 @@ TbBool world_save_blob(unsigned char **data, uint32_t *len)
                 rec_put(&w, &pk->token, 8);
                 rec_put(&w, pk->level, WORLD_PERK_SLOTS);
             }
+        }
+        /* the world's key (its owners' tokens are made with it): last */
+        uint8_t wsec[NETSEC_KEY_LEN];
+        if (netsec_world_key(NULL, wsec))
+        {
+            rec_u32(&w, WORLD_SKEY_MAGIC);
+            rec_put(&w, wsec, NETSEC_KEY_LEN);
+            memset(wsec, 0, sizeof(wsec));
         }
     }
     if ((w.buf == NULL) || w.err)
@@ -8029,6 +8271,20 @@ TbBool world_load_blob(const unsigned char *data, uint32_t len)
         }
         ok = !r.bad;
     }
+    TbBool had_key = false;
+    if (ok && (r.len - r.pos >= 4 + NETSEC_KEY_LEN) && (rec_peek_u32(&r) == WORLD_SKEY_MAGIC))
+    {
+        rec_get_u32(&r);
+        uint8_t wsec[NETSEC_KEY_LEN];
+        rec_get(&r, wsec, NETSEC_KEY_LEN);
+        if (!r.bad && !blob_resync)
+        {
+            netsec_world_key_set(wsec);
+            had_key = true;
+        }
+        memset(wsec, 0, sizeof(wsec));
+        ok = !r.bad;
+    }
     free(raw);
     if (!ok || !world_init_state())
     {
@@ -8038,6 +8294,8 @@ TbBool world_load_blob(const unsigned char *data, uint32_t len)
     }
     W.last_shift_turn = game.play_gameturn;
     W.rebind_hearts = true;
+    if (!blob_resync && !had_key)
+        world_tokens_to_key();
     server_admin_log("world", "Loaded world seed %s: %lu chunks explored, %d keepers, %d portals", W.seed_text,
         (unsigned long)W.store.count, W.keeper_count, W.portal_count);
     SYNCLOG("World: loaded seed %s at origin (%d,%d), %lu chunks stored, %d keepers, %d portals", W.seed_text,
@@ -8050,7 +8308,10 @@ TbBool world_load_blob(const unsigned char *data, uint32_t len)
 
 TbBool world_load_blob_for_resync(const unsigned char *data, uint32_t len)
 {
-    if (!world_load_blob(data, len))
+    blob_resync = true;
+    const TbBool ok = world_load_blob(data, len);
+    blob_resync = false;
+    if (!ok)
         return false;
     /* the host's game state already has the hearts bound and the ground explored */
     W.rebind_hearts = false;

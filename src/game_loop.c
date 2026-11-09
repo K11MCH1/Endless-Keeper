@@ -508,10 +508,11 @@ void gameplay_loop_draw()
         do_draw = false;
     if (netstate_dedicated() && network_is_active())
     {
-        /* a dedicated server draws once a second: it is watched now and then, not played */
+        /* a dedicated server draws every 10 s: it is watched now and then, not played (a frame cost the game turn
+           ~11 ms with 100 keepers: 2026-11-09 profile) */
         static TbClockMSec last_drawn = 0;
         const TbClockMSec now = LbTimerClock();
-        if (now - last_drawn < 1000)
+        if (now - last_drawn < 10000)
             do_draw = false;
         else if (do_draw)
             last_drawn = now;

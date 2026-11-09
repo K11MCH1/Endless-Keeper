@@ -526,6 +526,28 @@ static void area_score_slab(struct SlabMap *slb)
         dungeon->room_manage_area++;
 }
 
+/** A page's slabs' part of the dungeons' areas (per player: tot += total_area, room += room_manage_area). */
+void dungeon_area_of_page(const struct WorldPage *pg, long *tot, long *room)
+{
+    if (pg == NULL)
+        return;
+    for (int i = 0; i < WP_CHUNK_SLAB_CELLS; i++)
+    {
+        const struct SlabMap *slb = &pg->slab[i];
+        const struct SlabConfigStats *slabst = get_slab_stats(slb);
+        if ((slabst->category != SlbAtCtg_RoomInterior) && (slabst->category != SlbAtCtg_FortifiedGround))
+            continue;
+        const PlayerNumber owner = slabmap_owner(slb);
+        if ((owner == game.neutral_player_num) || (owner < 0) || (owner >= PLAYERS_COUNT) || (owner >= PLAYERS_MAX))
+            continue;
+        if (dungeon_invalid(get_players_num_dungeon(owner)))
+            continue;
+        tot[owner]++;
+        if (slabst->category == SlbAtCtg_RoomInterior)
+            room[owner]++;
+    }
+}
+
 void calculate_dungeon_area_scores(void)
 {
     // Zero dungeon areas

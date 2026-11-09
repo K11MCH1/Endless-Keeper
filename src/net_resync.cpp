@@ -441,7 +441,10 @@ char *build_resync_game_data(size_t *full_resync_len)
     // the endless world (chunk pages, store, keepers), after the navigation data
     unsigned char *world_data = NULL;
     uint32_t world_len = 0;
-    if (world_mode_active() && !world_save_blob(&world_data, &world_len)) {
+    world_blob_for_network(true);
+    const TbBool world_failed = world_mode_active() && !world_save_blob(&world_data, &world_len);
+    world_blob_for_network(false);
+    if (world_failed) {
         ERRORLOG("Resync world encode failed");
         save_buf_free(&game_buf);
         free(lua_data);

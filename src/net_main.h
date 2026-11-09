@@ -160,6 +160,9 @@ enum NetMessageType {
     NETMSG_LOBBY_SETTINGS,
     NETMSG_SPECTATOR_SEAT,
     NETMSG_STATE_TURN,       /* thin-client play: the server's state record for a turn (net_state.c) */
+    NETMSG_STATE_CAPS,       /* thin-client play: what a client reads (u32 NS_CAP_*), after each keyframe (2026-11-09) */
+    NETMSG_KEYREQ,           /* endless worlds: a joining client asks for the world's key (net_secure.c) */
+    NETMSG_KEYINFO,          /* the server's answer: its public key and a nonce for this login */
 };
 
 enum NetConnectionRole {

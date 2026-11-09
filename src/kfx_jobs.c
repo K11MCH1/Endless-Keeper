@@ -6,6 +6,7 @@
  */
 /******************************************************************************/
 #include "kfx_jobs.h"
+#include "kfx/profiling/KfxProfilingC.h"
 #include <stdlib.h>
 #include "../deps/enkiTS/src/TaskScheduler_c.h"
 
@@ -21,7 +22,17 @@ static int job_threads = -1;
 static void job_trampoline(uint32_t start, uint32_t end, uint32_t thread, void *args)
 {
     const struct KfxJobCall *c = (const struct KfxJobCall *)args;
+#ifdef TRACY_ENABLE
+    static __thread int named;
+    if (!named && (thread != 0)) /* 0: the thread that waits (the main one) */
+    {
+        named = 1;
+        TracyCSetThreadName("job thread");
+    }
+#endif
+    KFX_C_ZONE_BEGIN(z_job, "job range");
     c->fn(start, end, thread, c->args);
+    KFX_C_ZONE_END(z_job);
 }
 
 int kfx_job_threads(void)

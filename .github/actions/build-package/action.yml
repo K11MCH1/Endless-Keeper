@@ -20,7 +20,7 @@ runs:
       run: |
         sudo apt-get update -q
         sudo apt-get install -y -q build-essential cmake ninja-build gcc-mingw-w64-i686 g++-mingw-w64-i686 \
-          python3 libpng16-16t64 p7zip-full
+          gcc-mingw-w64-x86-64-win32 g++-mingw-w64-x86-64-win32 python3 libpng16-16t64 p7zip-full
     - name: Downloads that retry
       shell: bash
       run: |

@@ -44,6 +44,7 @@
 #ifndef _WIN32
 #include <sys/socket.h>
 #endif
+#include "net_secure.h"
 #include "post_inc.h"
 
 #define ADMIN_IN_MAX      8192
@@ -362,10 +363,16 @@ static size_t stats_json(char *buf, size_t cap, PlayerNumber p)
 }
 
 /******************************************************************************/
-/* bans and mutes on disk: token<TAB>address<TAB>name, "-" for none */
-static void list_load(const char *path, struct AdminEntry *list, int *count)
+/* bans and mutes on disk: token<TAB>address<TAB>name, "-" for none. Since the worlds have keys (net_secure.h) the
+   tokens are the world's: a first line "# tokens of a world key" says so; a list without it has the players' secrets
+   (from before), made the world's tokens when there is a world key */
+#define LIST_KEYED_LINE "# tokens of a world key"
+static TbBool bans_keyed, mutes_keyed;
+
+static void list_load(const char *path, struct AdminEntry *list, int *count, TbBool *keyed)
 {
     *count = 0;
+    *keyed = false;
     FILE *f = fopen(path, "r");
     if (f == NULL)
         return;
@@ -373,6 +380,8 @@ static void list_load(const char *path, struct AdminEntry *list, int *count)
     while ((*count < LIST_MAX) && (fgets(line, sizeof(line), f) != NULL))
     {
         char tok[32] = "", ip[64] = "", name[32] = "";
+        if (strncmp(line, LIST_KEYED_LINE, strlen(LIST_KEYED_LINE)) == 0)
+            *keyed = true;
         if ((line[0] == '#') || (sscanf(line, "%31[^\t\r\n]\t%63[^\t\r\n]\t%31[^\t\r\n]", tok, ip, name) < 1))
             continue;
         struct AdminEntry e;
@@ -394,6 +403,8 @@ static void list_save(const char *path, const struct AdminEntry *list, int count
         server_admin_log("error", "Can't write %s", path);
         return;
     }
+    if (netsec_world_key(NULL, NULL))
+        fprintf(f, "%s\n", LIST_KEYED_LINE);
     for (int i = 0; i < count; i++)
     {
         char tok[32];
@@ -406,13 +417,38 @@ static void list_save(const char *path, const struct AdminEntry *list, int count
     fclose(f);
 }
 
+/** A list from before the worlds had keys: its tokens (players' secrets) become the world's. */
+static void list_to_key(const char *path, struct AdminEntry *list, int count, TbBool *keyed)
+{
+    if (*keyed || !netsec_world_key(NULL, NULL))
+        return;
+    *keyed = true;
+    int n = 0;
+    for (int i = 0; i < count; i++)
+    {
+        if (list[i].token != 0)
+        {
+            list[i].token = netsec_world_token(list[i].token);
+            n++;
+        }
+    }
+    if (n > 0)
+    {
+        list_save(path, list, count);
+        server_admin_log("world", "%s: %d tokens made this world's", path, n);
+    }
+}
+
 static void lists_load(void)
 {
-    if (A.lists_loaded)
-        return;
-    A.lists_loaded = true;
-    list_load(BANS_FILE, bans, &bans_count);
-    list_load(MUTES_FILE, mutes, &mutes_count);
+    if (!A.lists_loaded)
+    {
+        A.lists_loaded = true;
+        list_load(BANS_FILE, bans, &bans_count, &bans_keyed);
+        list_load(MUTES_FILE, mutes, &mutes_count, &mutes_keyed);
+    }
+    list_to_key(BANS_FILE, bans, bans_count, &bans_keyed);
+    list_to_key(MUTES_FILE, mutes, mutes_count, &mutes_keyed);
 }
 
 static TbBool list_remove(struct AdminEntry *list, int *count, const char *name, uint64_t token)

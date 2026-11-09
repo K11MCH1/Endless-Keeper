@@ -37,6 +37,8 @@
 #include "config_keeperfx.h"
 #include "config_strings.h"
 #include "net_state.h"
+#include "net_secure.h"
+#include "world_stream.h"
 #include "server_admin.h"
 #include "gui_msgs.h"
 #include "post_inc.h"
@@ -168,6 +170,13 @@ static TbError handle_exchange_message(NetUserId source, void *server_buf, size_
 
 static TbError handle_chat_message(NetUserId source, char *read_pos, size_t message_size, enum NetMessageType expected_frame_type)
 {
+    if ((netstate.my_id == SERVER_ID) && (source != SERVER_ID) && (source < MAX_NET_USERS) && world_mode_active()
+     && ((NetUserId)(unsigned char)read_pos[0] != source)) {
+        /* an endless world: a client's chat is its own, whoever it names (as the host it could run commands); the
+           others get it so too */
+        NETMSG("User %d sent chat as user %d: it is user %d's", (int)source, (int)(unsigned char)read_pos[0], (int)source);
+        read_pos[0] = (char)source;
+    }
     NetUserId sender = (NetUserId)read_pos[0];
     const unsigned char sender_byte = (unsigned char)read_pos[0];
     read_pos += 1;
@@ -389,10 +398,10 @@ TbError process_network_message(NetUserId source, void *server_buf, size_t frame
     enum NetMessageType message_type = (enum NetMessageType)read_pos[0];
     read_pos += 1;
     size_t payload_size = message_size - 1;
-    if (netstate.my_id == SERVER_ID && source != SERVER_ID && !IsUserActive(source) && message_type != NETMSG_LOGIN) {
+    if (netstate.my_id == SERVER_ID && source != SERVER_ID && !IsUserActive(source) && message_type != NETMSG_LOGIN && message_type != NETMSG_KEYREQ) {
         return Lb_OK;
     }
-    if (netstate.my_id == SERVER_ID && source != SERVER_ID && network_user_is_spectator(source) && message_type != NETMSG_LOGIN && message_type != NETMSG_SPECTATOR_READY && message_type != NETMSG_SPECTATOR_CHAT) {
+    if (netstate.my_id == SERVER_ID && source != SERVER_ID && network_user_is_spectator(source) && message_type != NETMSG_LOGIN && message_type != NETMSG_SPECTATOR_READY && message_type != NETMSG_SPECTATOR_CHAT && message_type != NETMSG_STATE_CAPS && message_type != NETMSG_KEYREQ) {
         WARNLOG("Rejecting message type %d from spectator %d", (int)message_type, source);
         return Lb_OK;
     }
@@ -441,6 +450,18 @@ TbError process_network_message(NetUserId source, void *server_buf, size_t frame
         return process_lobby_settings_message(source, read_pos, payload_size);
     case NETMSG_SPECTATOR_SEAT:
         return process_network_spectator_seat(source, read_pos, payload_size);
+    case NETMSG_STATE_CAPS:
+        if (netstate_is_server())
+            netstate_server_caps(source, read_pos, payload_size);
+        return Lb_OK;
+    case NETMSG_KEYREQ:
+        if ((netstate.my_id == SERVER_ID) && (source != SERVER_ID))
+            netsec_server_keyreq(source, read_pos, payload_size);
+        return Lb_OK;
+    case NETMSG_KEYINFO:
+        if ((source == SERVER_ID) && (netstate.my_id != SERVER_ID))
+            netsec_client_keyinfo(read_pos, payload_size);
+        return Lb_OK;
     default:
         return Lb_OK;
     }

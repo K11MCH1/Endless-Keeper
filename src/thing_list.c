@@ -2221,6 +2221,194 @@ struct Thing* get_nearest_enemy_object_possible_to_attack_by(struct Thing* creat
     return retng;
 }
 
+/******************************************************************************/
+/* Endless worlds: searches for an enemy near the searcher (2026-11-09; with 100 keepers each search walked all of
+ * the world's ~1,550 creatures, 480 searches a turn, 12 ms of the 50 ms turn). Their filters turn down every thing
+ * farther than the distance asked (and, for creatures, than the searcher can hear or see), so only things near can be
+ * returned. Those are taken from a grid of the class's things by cell, in the order of the class list, and scored
+ * as get_nth_thing_of_class_with_filter does: the same thing comes back. The grid is made again each turn and when
+ * the list changed (a thing added goes to its head; one removed lowers its count). A thing that moved farther than
+ * NEAR_SLACK in the turn (teleported, dropped by a hand) is found from the next turn. KFX_WORLD_NEARCHECK=1 runs the
+ * whole-list search too and counts the differences. */
+#define NEAR_CELL_SHIFT 13 /* cells of 8192 (32 subtiles) */
+#define NEAR_SLACK 2048    /* half of two things' sizes, and more than a turn's movement */
+#define NEAR_CELLS_MAX 64
+struct NearEntry {
+    int64_t cell;
+    uint32_t ord;
+    ThingIndex idx;
+};
+struct NearGrid {
+    ThingClass class_id;
+    struct NearEntry *e;
+    int n, cap;
+    GameTurn turn;
+    long head, count;
+    TbBool made, ok;
+};
+static struct NearGrid near_grids[2] = {{TCls_Creature, NULL, 0, 0, 0, 0, 0, false, false},
+    {TCls_Trap, NULL, 0, 0, 0, 0, 0, false, false}};
+static ThingIndex near_cand_idx[THINGS_COUNT];
+static uint32_t near_cand_ord[THINGS_COUNT];
+static uint32_t near_checks, near_differ;
+
+static int64_t near_cell(int32_t cx, int32_t cy)
+{
+    return (int64_t)(((uint64_t)(uint32_t)cy << 32) | (uint32_t)cx);
+}
+
+static int near_cmp(const void *a, const void *b)
+{
+    const struct NearEntry *x = (const struct NearEntry *)a, *y = (const struct NearEntry *)b;
+    if (x->cell != y->cell)
+        return (x->cell < y->cell) ? -1 : 1;
+    return (x->ord < y->ord) ? -1 : (x->ord > y->ord);
+}
+
+static TbBool near_grid_ready(struct NearGrid *g)
+{
+    struct StructureList *slist = get_list_for_thing_class(g->class_id);
+    if (slist == NULL)
+        return false;
+    if (g->made && (g->turn == game.play_gameturn) && (g->head == (long)slist->index) && (g->count == (long)slist->count))
+        return g->ok;
+    g->made = true;
+    g->turn = game.play_gameturn;
+    g->head = (long)slist->index;
+    g->count = (long)slist->count;
+    g->ok = false;
+    g->n = 0;
+    if (g->cap < (int)slist->count + 1)
+    {
+        const int cap = (int)slist->count + 256;
+        struct NearEntry *e = (struct NearEntry *)realloc(g->e, sizeof(struct NearEntry) * (size_t)cap);
+        if (e == NULL)
+            return false;
+        g->e = e;
+        g->cap = cap;
+    }
+    uint32_t ord = 0;
+    for (long i = slist->index; i != 0;)
+    {
+        struct Thing *t = thing_get(i);
+        if (thing_is_invalid(t) || (g->n >= g->cap))
+            return false;
+        i = t->next_of_class;
+        g->e[g->n].cell = near_cell(t->mappos.x.val >> NEAR_CELL_SHIFT, t->mappos.y.val >> NEAR_CELL_SHIFT);
+        g->e[g->n].ord = ord++;
+        g->e[g->n].idx = t->index;
+        g->n++;
+        if (ord > slist->count)
+            return false; /* the list loops: the whole-list walk reports it */
+    }
+    qsort(g->e, (size_t)g->n, sizeof(struct NearEntry), near_cmp);
+    g->ok = true;
+    return true;
+}
+
+/** get_nth_thing_of_class_with_filter(filter, param, 0) for a filter that turns down every thing farther than reach
+ *  from the searcher. NULL: it can't be done here (the caller walks the whole list). */
+static struct Thing *near_scan(struct NearGrid *g, Thing_Maximizer_Filter filter, MaxTngFilterParam param,
+    const struct Thing *searcher, MapCoordDelta reach)
+{
+    if ((reach < 0) || (reach > (1 << 20)) || !near_grid_ready(g))
+        return NULL;
+    const int32_t d = (int32_t)reach + NEAR_SLACK;
+    const int32_t x0 = (searcher->mappos.x.val - d) >> NEAR_CELL_SHIFT, x1 = (searcher->mappos.x.val + d) >> NEAR_CELL_SHIFT;
+    const int32_t y0 = (searcher->mappos.y.val - d) >> NEAR_CELL_SHIFT, y1 = (searcher->mappos.y.val + d) >> NEAR_CELL_SHIFT;
+    if ((int64_t)(x1 - x0 + 1) * (y1 - y0 + 1) > NEAR_CELLS_MAX)
+        return NULL;
+    int nc = 0;
+    for (int32_t cy = y0; cy <= y1; cy++)
+    {
+        for (int32_t cx = x0; cx <= x1; cx++)
+        {
+            const int64_t key = near_cell(cx, cy);
+            int lo = 0, hi = g->n;
+            while (lo < hi)
+            {
+                const int mid = (lo + hi) / 2;
+                if (g->e[mid].cell < key)
+                    lo = mid + 1;
+                else
+                    hi = mid;
+            }
+            for (int k = lo; (k < g->n) && (g->e[k].cell == key); k++)
+            {
+                /* in list order: insertion by order (a handful each) */
+                int at = nc++;
+                while ((at > 0) && (near_cand_ord[at - 1] > g->e[k].ord))
+                {
+                    near_cand_ord[at] = near_cand_ord[at - 1];
+                    near_cand_idx[at] = near_cand_idx[at - 1];
+                    at--;
+                }
+                near_cand_ord[at] = g->e[k].ord;
+                near_cand_idx[at] = g->e[k].idx;
+            }
+        }
+    }
+    /* as get_nth_thing_of_class_with_filter with tngindex 0 */
+    creature_hostility_memo_begin_scan();
+    long maximizer = 0;
+    long curindex = 0;
+    struct Thing *retng = INVALID_THING;
+    for (int k = 0; k < nc; k++)
+    {
+        struct Thing *thing = thing_get(near_cand_idx[k]);
+        if (!thing_exists(thing) || (thing->class_id != g->class_id))
+            continue;
+        const long n = filter(thing, param, maximizer);
+        if (n > maximizer)
+        {
+            retng = thing;
+            maximizer = n;
+            curindex = 0;
+        } else
+        if (n == maximizer)
+        {
+            if (curindex <= 0)
+                retng = thing;
+            if ((maximizer == INT32_MAX) && (curindex >= 0))
+                break;
+            curindex++;
+        }
+    }
+    creature_hostility_memo_end_scan();
+    return retng;
+}
+
+/** The near search when it can be done (endless worlds), else the whole list; KFX_WORLD_NEARCHECK=1: both, compared. */
+static struct Thing *near_or_whole(struct NearGrid *g, Thing_Maximizer_Filter filter, MaxTngFilterParam param,
+    const struct Thing *searcher, MapCoordDelta reach)
+{
+    static int check = -1;
+    if (check < 0)
+        check = (getenv("KFX_WORLD_NEARCHECK") != NULL) ? 1 : 0;
+    struct Thing *near = world_mode_active() ? near_scan(g, filter, param, searcher, reach) : NULL;
+    if ((near != NULL) && !check)
+        return near;
+    struct Thing *whole = get_nth_thing_of_class_with_filter(filter, param, 0);
+    if (near != NULL)
+    {
+        near_checks++;
+        if (near->index != whole->index)
+        {
+            near_differ++;
+            if (near_differ <= 20)
+                SYNCLOG("Near search: %s %d found %d near, %d in the whole list (turn %lu)", thing_model_name(searcher),
+                    (int)searcher->index, (int)near->index, (int)whole->index, (unsigned long)game.play_gameturn);
+        }
+        static GameTurn last;
+        if (game.play_gameturn >= last + 200)
+        {
+            last = game.play_gameturn;
+            SYNCLOG("Near search check: %u searches, %u differ", (unsigned)near_checks, (unsigned)near_differ);
+        }
+    }
+    return whole;
+}
+
 struct Thing *get_highest_score_enemy_creature_within_distance_possible_to_attack_by(struct Thing *creatng, MapCoordDelta dist, long move_on_ground)
 {
     SYNCDBG(19,"Starting");
@@ -2232,6 +2420,13 @@ struct Thing *get_highest_score_enemy_creature_within_distance_possible_to_attac
     param.primary_number = creatng->index;
     param.secondary_number = dist;
     param.tertiary_number = move_on_ground;
+    if (thing_is_creature(creatng))
+    {
+        /* the filter turns down what is as far as dist, or farther than the creature hears and sees */
+        const struct CreatureModelConfig *crconf = creature_stats_get_from_thing(creatng);
+        const MapCoordDelta senses = max(subtile_coord(crconf->hearing, 0), subtile_coord(crconf->visual_range, 0));
+        return near_or_whole(&near_grids[0], filter, &param, creatng, min((MapCoordDelta)(dist - 1), senses));
+    }
     return get_nth_thing_of_class_with_filter(filter, &param, 0);
 }
 
@@ -2246,7 +2441,8 @@ struct Thing* get_highest_score_enemy_object_within_distance_possible_to_attack_
     param.primary_number = creatng->index;
     param.secondary_number = dist;
     param.tertiary_number = move_on_ground;
-    return get_nth_thing_of_class_with_filter(filter, &param, 0);
+    /* the filter turns down a trap as far as dist */
+    return near_or_whole(&near_grids[1], filter, &param, creatng, (MapCoordDelta)(dist - 1));
 }
 
 struct Thing *get_random_trap_of_model_owned_by_and_armed(ThingModel tngmodel, PlayerNumber plyr_idx, TbBool armed)
@@ -3618,11 +3814,13 @@ TbBool update_thing(struct Thing *thing)
         return false;
     }
     SYNCDBG(18,"Class function end ok");
+    KFX_C_ZONE_BEGIN(z_after, "Thing: physics, animation, sound, light");
     if (!falling && ((thing->movement_flags & TMvF_Immobile) == 0)) {
         apply_thing_drag_and_gravity(thing);
     }
     update_thing_animation(thing);
     update_thing_sound(thing);
+    KFX_C_ZONE_END(z_after);
     if ((do_lights) && (thing->light_id != 0))
     {
         if (light_is_light_allocated(thing->light_id))

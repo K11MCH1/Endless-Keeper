@@ -38,6 +38,7 @@
 #include <SDL3/SDL.h>
 #include "net_state.h"
 #include "server_admin.h"
+#include "net_secure.h"
 #include "post_inc.h"
 /******************************************************************************/
 
@@ -275,7 +276,10 @@ TbError process_login_message(NetUserId source, char *read_pos, const char *end_
         netstate.sp->drop_user(source, NetJoin_Accepted);
         return Lb_OK;
     }
-    if (netstate.password[0] != 0 && strncmp(password, netstate.password, sizeof(netstate.password)) != 0) {
+    /* an endless world's server: the password may come sealed with the token (net_secure.c), checked below */
+    const TbBool secure_server = netsec_server_ready();
+    const TbBool password_later = secure_server && (password[0] == '\0');
+    if (!password_later && netstate.password[0] != 0 && strncmp(password, netstate.password, sizeof(netstate.password)) != 0) {
         NETMSG("Peer chose wrong password");
         netstate.sp->drop_user(source, NetJoin_Locked);
         return Lb_OK;
@@ -308,8 +312,31 @@ TbError process_login_message(NetUserId source, char *read_pos, const char *end_
         netstate.sp->drop_user(source, NetJoin_Version);
         return Lb_OK;
     }
+    TbBool has_token_field = false;
     if (end_pos - read_pos >= 1 + sizeof(user->reconnect_token)) {
         memcpy(&user->reconnect_token, read_pos + 1, sizeof(user->reconnect_token));
+        has_token_field = true;
+    }
+    netsec_server_mark_raw(source, false);
+    if (secure_server) {
+        /* the token for this world: sealed by a newer client, else an older client's secret turned into it */
+        char sealed_password[sizeof(netstate.password)] = "";
+        uint64_t sealed_token = 0;
+        const int sealed = has_token_field ? netsec_server_login_ext(source, read_pos + 1 + sizeof(user->reconnect_token), end_pos,
+            &sealed_token, sealed_password, sizeof(sealed_password)) : 0;
+        if (sealed < 0) {
+            NETMSG("Peer %d sent a sealed login this server can't open", (int)source);
+            netstate.sp->drop_user(source, NetJoin_Accepted);
+            return Lb_OK;
+        }
+        user->reconnect_token = (sealed > 0) ? sealed_token : netsec_world_token(user->reconnect_token);
+        if (password_later && netstate.password[0] != 0 && strncmp(sealed_password, netstate.password, sizeof(netstate.password)) != 0) {
+            NETMSG("Peer chose wrong password");
+            netstate.sp->drop_user(source, NetJoin_Locked);
+            return Lb_OK;
+        }
+    } else if (user->reconnect_token != 0) {
+        netsec_server_mark_raw(source, true); /* an endless world started later from a lobby turns it then */
     }
     if (netstate_dedicated() && (source != SERVER_ID)) {
         /* a dedicated server's bans (save/server_bans.txt): the login's token, its name or its address */
@@ -415,7 +442,9 @@ uint64_t net_local_reconnect_token(void);
 static uint64_t local_reconnect_token(void)
 {
     if (settings.reconnect_token == 0) {
-        settings.reconnect_token = ((uint64_t)SDL_rand_bits() << 32) | SDL_rand_bits() | 1;
+        uint64_t secret = 0;
+        netsec_random(&secret, sizeof(secret)); /* the system's random bytes: it is this machine's secret */
+        settings.reconnect_token = secret | 1;
         save_settings();
     }
     return settings.reconnect_token;
@@ -427,17 +456,52 @@ uint64_t net_local_reconnect_token(void)
     return local_reconnect_token();
 }
 
+/** Before a login: the server's key, if it has one (an endless world's). 1: it came; 0: none (an older server, or not
+ *  an endless world: it doesn't answer); -1: the player cancelled. */
+static int fetch_server_key(void)
+{
+    netsec_client_reset();
+    char *wp = begin_net_message(NETMSG_KEYREQ);
+    const uint32_t magic = NETSEC_MAGIC;
+    memcpy(wp, &magic, 4);
+    send_message_buffer(SERVER_ID, wp + 4);
+    const TbClockMSec start = LbTimerClock();
+    while (!netsec_client_has_key() && (net_join_rejection == NetJoin_Accepted) && (LbTimerClock() - start < 1000)) {
+        if (attempting_to_join_cancel_requested()) {
+            return -1;
+        }
+        netstate.sp->update(NULL);
+        if (!netstate.sp->msgready(SERVER_ID, 0)) {
+            SDL_Delay(1);
+            continue;
+        }
+        if (process_network_message(SERVER_ID, &net_screen_packet, sizeof(struct ScreenPacket), NETMSG_FRONTEND, NULL) == Lb_FAIL) {
+            break;
+        }
+    }
+    return netsec_client_has_key() ? 1 : 0;
+}
+
 TbError LbNetwork_ExchangeLogin(char *player_name)
 {
     NETMSG("Logging in as %s", player_name);
-    const uint64_t reconnect_token = local_reconnect_token();
-    if (1 + strlen(netstate.password) + 1 + strlen(player_name) + 1 + sizeof(net_current_version) + 1 + sizeof(reconnect_token) >= sizeof(netstate.msg_buffer)) {
+    /* an endless world's server gets this machine's token for it and the password sealed to its key; an older
+       server, or one that isn't an endless world, gets the login as before */
+    const int secure = fetch_server_key();
+    if (secure < 0) {
+        return Lb_FAIL;
+    }
+    NETMSG("Login %s", (secure > 0) ? "sealed to the world's key" : "as before (the server has no key)");
+    const uint64_t secret = local_reconnect_token();
+    const uint64_t reconnect_token = (secure > 0) ? 0 : secret;
+    const char *plain_password = (secure > 0) ? "" : netstate.password;
+    if (1 + strlen(netstate.password) + 1 + strlen(player_name) + 1 + sizeof(net_current_version) + 1 + sizeof(reconnect_token) + 320 >= sizeof(netstate.msg_buffer)) {
         ERRORLOG("Login credentials too long");
         return Lb_FAIL;
     }
     char *write_pos = begin_net_message(NETMSG_LOGIN);
-    strcpy(write_pos, netstate.password);
-    write_pos += strlen(netstate.password) + 1;
+    strcpy(write_pos, plain_password);
+    write_pos += strlen(plain_password) + 1;
     strcpy(write_pos, player_name);
     write_pos += strlen(player_name) + 1;
     memcpy(write_pos, &net_current_version, sizeof(net_current_version));
@@ -445,6 +509,10 @@ TbError LbNetwork_ExchangeLogin(char *player_name)
     *write_pos++ = net_join_role;
     memcpy(write_pos, &reconnect_token, sizeof(reconnect_token));
     write_pos += sizeof(reconnect_token);
+    if (secure > 0) {
+        write_pos += netsec_client_login_ext(write_pos, sizeof(netstate.msg_buffer) - (size_t)(write_pos - netstate.msg_buffer),
+            secret, netstate.password);
+    }
     send_message_buffer(SERVER_ID, write_pos);
     TbClockMSec wait_start_time = LbTimerClock();
     while (net_join_rejection == NetJoin_Accepted && LbTimerClock() - wait_start_time < TIMEOUT_JOIN_LOBBY) {

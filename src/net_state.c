@@ -60,6 +60,9 @@
 #include "gui_topmsg.h"
 #include "kfx_deflate.h"
 #include "kfx_jobs.h"
+#include "../deps/zstd/zstd.h"
+#include "net_zdict.h"
+#include "kfx/profiling/KfxProfilingC.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -102,7 +105,7 @@ struct NsHeader {
     uint32_t flags;
 };
 struct NsWire {                 /* after the message type byte */
-    uint32_t raw_len;               /* the whole record */
+    uint32_t raw_len;               /* the whole record; NS_WIRE_ZSTD set: both parts are zstd with the dictionaries */
     uint32_t comp_len;              /* the bytes after this header */
     uint32_t shared_raw;            /* 0, or: the record's first shared_raw bytes come compressed apart, in the */
     uint32_t shared_comp;           /*   first shared_comp bytes (the turn's shared part, compressed once for all) */
@@ -312,8 +315,11 @@ static void hash_things(void)
 }
 static struct NsClientState ns_cl[MAX_NET_CONNECTIONS];
 
+static void cc_free(NetUserId c);
+
 static void cl_free(NetUserId c)
 {
+    cc_free(c);
     free(ns_cl[c].slot);
     free(ns_cl[c].pool);
     free(ns_cl[c].free_slots);
@@ -844,6 +850,7 @@ static void skips_setup(void)
     SKIP_FIELD(script);
     SKIP_FIELD(navigation_map);
     SKIP_FIELD(things_data); /* per client */
+    SKIP_FIELD(cctrl_data);  /* per client too (2026-11-09): its own creatures' and those of the things it has */
     if (world_paged)
     {
         /* the chunked world keeps its map in pages; the flat arrays are left behind */
@@ -1555,6 +1562,109 @@ static NetUserMask client_mask(void)
 static struct Thing *simcheck_things;
 static NetUserId simcheck_client = -1;
 static uint32_t simcheck_bad, simcheck_turns;
+/* the creature controls per client (below): the game region's pages wholly inside cctrl_data */
+#define NS_CC_OFF (offsetof(struct Game, cctrl_data))
+#define NS_CC_LEN (sizeof(game.cctrl_data))
+#define NS_CC_SIZE (sizeof(struct CreatureControl))
+#define NS_CC_PAGE_FIRST ((uint32_t)((NS_CC_OFF + NS_PAGE - 1) / NS_PAGE))
+#define NS_CC_PAGE_END ((uint32_t)((NS_CC_OFF + NS_CC_LEN) / NS_PAGE))
+#define NS_CC_PAGES (NS_CC_PAGE_END - NS_CC_PAGE_FIRST)
+/* KFX_NET_SIMCHECK: the creature controls as the checked client has them (from its keyframe and its lines) */
+static uint8_t *simcheck_cc;
+
+/* zstd with trained dictionaries (2026-11-09): only to clients that said they read it (NETMSG_STATE_CAPS after each
+   keyframe; a keyframe forgets it, so a client that reconnects in the slot starts on zlib); the others, and every
+   keyframe, zlib */
+#define NS_CAP_ZSTD1 0x1u           /* zstd with the dictionaries 17001 (shared part) and 17002 (own part) */
+#define NS_WIRE_ZSTD 0x80000000u    /* in NsWire.raw_len */
+#define NS_CAP_DUAL1 0x2u           /* takes each turn twice: reliably, and an unreliable copy (the first to come is used) */
+#define NS_WIRE_COPY 0x40000000u    /* in NsWire.raw_len: this is the unreliable copy of a turn */
+#define NS_ZSTD_LEVEL 3
+static uint32_t ns_caps[MAX_NET_CONNECTIONS];
+static ZSTD_CDict *ns_cdict_shared, *ns_cdict_own;
+static ZSTD_DDict *ns_ddict_shared, *ns_ddict_own;
+static __thread ZSTD_CCtx *ns_cctx;
+static __thread ZSTD_DCtx *ns_dctx;
+static uint8_t *shared_zs;                       /* the turn's shared part in zstd (when a client reads it) */
+static size_t shared_zs_len, shared_zs_cap, shared_zs_raw;
+static uint32_t stats_zstd_records, stats_zstd_bytes, stats_copy_bytes;
+
+static TbBool ns_zstd_ready(void)
+{
+    if (ns_cdict_shared == NULL)
+        ns_cdict_shared = ZSTD_createCDict(ns_zdict_shared, ns_zdict_shared_len, NS_ZSTD_LEVEL);
+    if (ns_cdict_own == NULL)
+        ns_cdict_own = ZSTD_createCDict(ns_zdict_own, ns_zdict_own_len, NS_ZSTD_LEVEL);
+    return (ns_cdict_shared != NULL) && (ns_cdict_own != NULL);
+}
+
+/** zstd with a dictionary (thread-safe: each thread its own context; the dictionaries are read only). */
+static TbBool ns_zstd_compress(uint8_t *dst, size_t *dst_len, const uint8_t *src, size_t len, const ZSTD_CDict *cdict)
+{
+    if ((cdict == NULL) || ((ns_cctx == NULL) && ((ns_cctx = ZSTD_createCCtx()) == NULL)))
+        return false;
+    const size_t n = ZSTD_compress_usingCDict(ns_cctx, dst, *dst_len, src, len, cdict);
+    if (ZSTD_isError(n))
+        return false;
+    *dst_len = n;
+    return true;
+}
+
+static TbBool ns_zstd_decompress(uint8_t *dst, size_t room, const uint8_t *src, size_t len, TbBool shared, size_t *out)
+{
+    if (shared && (ns_ddict_shared == NULL))
+        ns_ddict_shared = ZSTD_createDDict(ns_zdict_shared, ns_zdict_shared_len);
+    if (!shared && (ns_ddict_own == NULL))
+        ns_ddict_own = ZSTD_createDDict(ns_zdict_own, ns_zdict_own_len);
+    const ZSTD_DDict *dd = shared ? ns_ddict_shared : ns_ddict_own;
+    if ((dd == NULL) || ((ns_dctx == NULL) && ((ns_dctx = ZSTD_createDCtx()) == NULL)))
+        return false;
+    const size_t n = ZSTD_decompress_usingDDict(ns_dctx, dst, room, src, len, dd);
+    if (ZSTD_isError(n))
+        return false;
+    *out = n;
+    return true;
+}
+
+void netstate_server_caps(NetUserId source, const char *buffer, size_t size)
+{
+    if ((source <= SERVER_ID) || (source >= MAX_NET_CONNECTIONS) || (size < 4))
+        return;
+    uint32_t caps;
+    memcpy(&caps, buffer, 4);
+    if ((caps & NS_CAP_ZSTD1) && !ns_zstd_ready())
+        caps &= ~NS_CAP_ZSTD1;
+    if (ns_caps[source] != caps)
+        SYNCLOG("Thin-client server: user %d reads%s%s", (int)source, (caps & NS_CAP_ZSTD1) ? " zstd with the dictionaries" : " zlib only",
+            (caps & NS_CAP_DUAL1) ? ", and takes each turn's unreliable copy too" : "");
+    ns_caps[source] = caps;
+}
+
+/** The turn's shared part in zstd, when a streaming client reads it. */
+static void compress_shared_zstd(const uint8_t *buf, size_t len, NetUserMask clients)
+{
+    shared_zs_raw = 0;
+    TbBool any = false;
+    for (NetUserId c = 0; (c < MAX_NET_CONNECTIONS) && !any; c++)
+        any = numask_has(clients, c) && ((ns_caps[c] & NS_CAP_ZSTD1) != 0);
+    if (!any || (len == 0) || !ns_zstd_ready())
+        return;
+    const int64_t t0 = get_time_tick_ns();
+    size_t room = ZSTD_compressBound(len);
+    if (shared_zs_cap < room)
+    {
+        uint8_t *grown = (uint8_t *)realloc(shared_zs, room);
+        if (grown == NULL)
+            return;
+        shared_zs = grown;
+        shared_zs_cap = room;
+    }
+    if (!ns_zstd_compress(shared_zs, &room, buf, len, ns_cdict_shared))
+        return;
+    shared_zs_len = room;
+    shared_zs_raw = len;
+    stats_t[NsT_Compress] += get_time_tick_ns() - t0;
+}
 static void simcheck_apply(const uint8_t *from, const uint8_t *to);
 static void simcheck_compare(NetUserId c);
 
@@ -2082,6 +2192,7 @@ static void build_keyframe_for(NetUserId c)
 {
     struct NsInterest in;
     interest_of(c, &in);
+    ns_caps[c] = 0; /* it says again what it reads once it has this keyframe */
     if (!cl_init(c))
     {
         rec_failed = true;
@@ -2126,6 +2237,10 @@ static void build_keyframe_for(NetUserId c)
             if (simcheck_things != NULL)
             {
                 memcpy(simcheck_things, rec + game_at + offsetof(struct Game, things_data), sizeof(game.things_data));
+                if (simcheck_cc == NULL)
+                    simcheck_cc = (uint8_t *)malloc(NS_CC_LEN);
+                if (simcheck_cc != NULL)
+                    memcpy(simcheck_cc, rec + game_at + NS_CC_OFF, NS_CC_LEN);
                 simcheck_client = c;
                 SYNCLOG("Thin-client server: checking user %d's things against a client's", (int)c);
             }
@@ -2163,6 +2278,7 @@ struct NsClientJob {
     size_t z_len, z_cap;
     TbBool failed;                  /* out of memory: the client gets a keyframe instead */
     TbBool held;                    /* its keyframe is being compressed: the record waits, raw */
+    TbBool zstd;                    /* z is zstd with the own-part dictionary */
     uint32_t things_bytes;
 } __attribute__((aligned(64)));     /* a cache line or two each: the workers write them at the same time */
 static struct NsClientJob cjobs[MAX_NET_CONNECTIONS];
@@ -2199,7 +2315,187 @@ static void job_events(struct NsClientJob *j); /* below, after the event types *
 
 
 /** A client's own part: its things, its events, the end; compressed unless the record waits for its keyframe. */
+/******************************************************************************/
+/* Creature controls per client (2026-11-09). The shared part carried every creature's control to every client: 73% of
+ * it in a busy world, creatures thousands of slabs away included. Now each client gets the controls of its own
+ * creatures and of the creatures whose things it has, as MemLines of the game region's pages wholly inside cctrl_data
+ * (the pages at its two ends stay in the shared part), in its own part of the record. Clients of any version apply
+ * them as before. Per client, the server keeps what the client has of those pages (copies of 4 KB pages, made as they
+ * are needed) and which creatures' bytes it knows the client has; a creature it doesn't (never sent since the client's
+ * keyframe) is sent whole. */
+struct NsCcClient {
+    uint8_t known[(CREATURES_COUNT + 7) / 8]; /* the client has what the page copies hold of this creature's control */
+    uint8_t wanted[(CREATURES_COUNT + 7) / 8];
+    uint8_t **page;                           /* [NS_CC_PAGES]: what the client has of each page (NULL: none yet) */
+} __attribute__((aligned(64)));
+static struct NsCcClient ns_cc[MAX_NET_CONNECTIONS];
+static __thread uint8_t cc_target[NS_PAGE];
+static __thread uint8_t cc_pages_set[(NS_CC_PAGES + 7) / 8 + 1];
+
+static void cc_free(NetUserId c)
+{
+    if ((c < 0) || (c >= MAX_NET_CONNECTIONS))
+        return;
+    struct NsCcClient *cc = &ns_cc[c];
+    if (cc->page != NULL)
+    {
+        for (uint32_t p = 0; p < NS_CC_PAGES; p++)
+            free(cc->page[p]);
+        free(cc->page);
+    }
+    memset(cc, 0, sizeof(*cc));
+}
+
+/** excl_copy_page for buffers holding only the page at `off` of the game region. */
+static void excl_copy_local(uint8_t *dst, const uint8_t *src, size_t off, size_t n)
+{
+    const size_t end = off + n;
+    for (int i = 0; i < excl_count; i++)
+    {
+        const struct NsExcl *e = &excl[i];
+        const size_t stride = (e->count > 1) ? e->stride : 0;
+        const size_t last = e->off + (stride * (e->count - 1)) + e->len;
+        if ((end <= e->off) || (off >= last))
+            continue;
+        uint32_t k0 = 0, k1 = 0;
+        if (stride > 0)
+        {
+            k0 = (off >= e->off + e->len) ? (uint32_t)((off - e->off - e->len) / stride + 1) : 0;
+            k1 = (uint32_t)min((size_t)(e->count - 1), (end - 1 - e->off) / stride);
+        }
+        for (uint32_t k = k0; k <= k1; k++)
+        {
+            const size_t a = e->off + k * stride;
+            const size_t lo = max(a, off), hi = min(a + e->len, end);
+            if (lo < hi)
+                memcpy(dst + (lo - off), src + (lo - off), hi - lo);
+        }
+    }
+}
+
+static void cc_want_thing(struct NsCcClient *cc, const struct Thing *t)
+{
+    if ((t->class_id != TCls_Creature) || (t->ccontrol_idx <= 0) || (t->ccontrol_idx >= CREATURES_COUNT))
+        return;
+    cc->wanted[t->ccontrol_idx >> 3] |= (uint8_t)(1u << (t->ccontrol_idx & 7));
+}
+
+/** The client's creature-control lines of the turn, into w. */
+static void diff_client_cctrls(struct NsWriter *w, NetUserId c, const struct NsInterest *in)
+{
+    struct NsCcClient *cc = &ns_cc[c];
+    if (cc->page == NULL)
+    {
+        cc->page = (uint8_t **)calloc(NS_CC_PAGES, sizeof(uint8_t *));
+        if (cc->page == NULL)
+        {
+            w->failed = true;
+            return;
+        }
+    }
+    memset(cc->wanted, 0, sizeof(cc->wanted));
+    /* the creatures whose things it has */
+    for (int n = 0; n < live_count; n++)
+        if (cl_copy(c, live_list[n].idx) != NULL)
+            cc_want_thing(cc, &game.things_data[live_list[n].idx]);
+    /* its own creatures, wherever they are (its panel lists them) */
+    if (in->all)
+        memset(cc->wanted, 0xFF, sizeof(cc->wanted));
+    else if ((in->plyr >= 0) && (in->plyr < PLAYERS_COUNT))
+    {
+        const struct Dungeon *dungeon = get_players_num_dungeon(in->plyr);
+        if (!dungeon_invalid(dungeon))
+        {
+            const ThingIndex lists[2] = {dungeon->creatr_list_start, dungeon->digger_list_start};
+            for (int l = 0; l < 2; l++)
+            {
+                long guard = 0;
+                for (ThingIndex i = lists[l]; (i > 0) && (i < THINGS_COUNT) && (guard++ < CREATURES_COUNT);)
+                {
+                    const struct Thing *t = &game.things_data[i];
+                    if (((t->alloc_flags & TAlF_Exists) == 0) || (t->class_id != TCls_Creature) || (t->ccontrol_idx <= 0) ||
+                        (t->ccontrol_idx >= CREATURES_COUNT))
+                        break;
+                    cc_want_thing(cc, t);
+                    i = game.cctrl_data[t->ccontrol_idx].players_next_creature_idx;
+                }
+            }
+        }
+    }
+    cc->wanted[0] &= (uint8_t)~1u; /* control 0 is never a creature's */
+    /* the pages they touch; a creature the client doesn't have: its bytes in the copies made unlike the live ones, so
+       that they are all sent */
+    memset(cc_pages_set, 0, sizeof(cc_pages_set));
+    for (uint32_t k = 1; k < CREATURES_COUNT; k++)
+    {
+        if ((cc->wanted[k >> 3] & (1u << (k & 7))) == 0)
+            continue;
+        const size_t a = NS_CC_OFF + (size_t)k * NS_CC_SIZE, b = a + NS_CC_SIZE;
+        const TbBool known = (cc->known[k >> 3] & (1u << (k & 7))) != 0;
+        for (uint32_t p = (uint32_t)(a / NS_PAGE); p <= (uint32_t)((b - 1) / NS_PAGE); p++)
+        {
+            if ((p < NS_CC_PAGE_FIRST) || (p >= NS_CC_PAGE_END))
+                continue; /* an end page: in the shared part */
+            const uint32_t q = p - NS_CC_PAGE_FIRST;
+            if (cc->page[q] == NULL)
+            {
+                cc->page[q] = (uint8_t *)calloc(1, NS_PAGE);
+                if (cc->page[q] == NULL)
+                {
+                    w->failed = true;
+                    return;
+                }
+            }
+            cc_pages_set[q >> 3] |= (uint8_t)(1u << (q & 7));
+            if (!known)
+            {
+                const size_t lo = max(a, (size_t)p * NS_PAGE), hi = min(b, (size_t)(p + 1) * NS_PAGE);
+                const uint8_t *live = (const uint8_t *)&game + lo;
+                uint8_t *sh = cc->page[q] + (lo - (size_t)p * NS_PAGE);
+                for (size_t x = 0; x < hi - lo; x++)
+                    sh[x] = (uint8_t)~live[x];
+            }
+        }
+    }
+    /* each page: what the client has, with the wanted creatures' live bytes over it (its own bytes kept) */
+    for (uint32_t q = 0; q < NS_CC_PAGES; q++)
+    {
+        if ((cc_pages_set[q >> 3] & (1u << (q & 7))) == 0)
+            continue;
+        const uint32_t p = NS_CC_PAGE_FIRST + q;
+        const size_t off = (size_t)p * NS_PAGE;
+        uint8_t *sh = cc->page[q];
+        memcpy(cc_target, sh, NS_PAGE);
+        const size_t k_lo = (off - NS_CC_OFF) / NS_CC_SIZE, k_hi = min((size_t)CREATURES_COUNT - 1, (off + NS_PAGE - 1 - NS_CC_OFF) / NS_CC_SIZE);
+        for (size_t k = k_lo; k <= k_hi; k++)
+        {
+            if ((cc->wanted[k >> 3] & (1u << (k & 7))) == 0)
+                continue;
+            const size_t a = NS_CC_OFF + k * NS_CC_SIZE, b = a + NS_CC_SIZE;
+            const size_t lo = max(a, off), hi = min(b, off + NS_PAGE);
+            if (lo < hi)
+                memcpy(cc_target + (lo - off), (const uint8_t *)&game + lo, hi - lo);
+        }
+        excl_copy_local(cc_target, sh, off, NS_PAGE);
+        struct MemHeadCtx hc = {(uint8_t)NsR_Game, p};
+        diff_page_w(w, sh, cc_target, NS_PAGE, mem_head_w, &hc);
+    }
+    for (size_t b = 0; b < sizeof(cc->known); b++)
+        cc->known[b] |= cc->wanted[b];
+}
+
+static void simcheck_cc_apply_compare(NetUserId c, const uint8_t *from, const uint8_t *to);
+
+static void job_run_inner(struct NsClientJob *j);
+
 static void job_run(struct NsClientJob *j)
+{
+    KFX_C_ZONE_BEGIN(z_job, "stream: one client's record");
+    job_run_inner(j);
+    KFX_C_ZONE_END(z_job);
+}
+
+static void job_run_inner(struct NsClientJob *j)
 {
     /* the thing lines go to this thread's writer (the main thread's rec holds the turn's shared part) */
     struct NsWriter *w = &tl_writer;
@@ -2218,12 +2514,25 @@ static void job_run(struct NsClientJob *j)
         return;
     }
     job_put(j, w->buf, w->len);
+    /* its creature controls (2026-11-09) */
+    w->len = 0;
+    w->failed = false;
+    diff_client_cctrls(w, j->c, &j->in);
+    if (w->failed)
+    {
+        j->failed = true;
+        return;
+    }
+    if ((j->c == simcheck_client) && (simcheck_things != NULL))
+        simcheck_cc_apply_compare(j->c, w->buf, w->buf + w->len);
+    job_put(j, w->buf, w->len);
     job_events(j);
     const uint8_t end = NsK_End;
     job_put(j, &end, 1);
     if (j->failed || j->held)
         return;
-    uLongf comp_len = kfx_zlib_bound(j->own_len);
+    j->zstd = ((ns_caps[j->c] & NS_CAP_ZSTD1) != 0) && (ns_cdict_own != NULL);
+    uLongf comp_len = j->zstd ? (uLongf)ZSTD_compressBound(j->own_len) : kfx_zlib_bound(j->own_len);
     if (j->z_cap < comp_len)
     {
         uint8_t *nz = (uint8_t *)realloc(j->z, comp_len);
@@ -2234,6 +2543,16 @@ static void job_run(struct NsClientJob *j)
         }
         j->z = nz;
         j->z_cap = comp_len;
+    }
+    if (j->zstd)
+    {
+        size_t n = (size_t)comp_len;
+        if (ns_zstd_compress(j->z, &n, j->own, j->own_len, ns_cdict_own))
+        {
+            j->z_len = n;
+            return;
+        }
+        j->zstd = false; /* zlib then */
     }
     if (!ns_compress(j->z, &comp_len, j->own, j->own_len))
     {
@@ -2246,6 +2565,9 @@ static void job_run(struct NsClientJob *j)
 static int cworker_main(void *data)
 {
     (void)data;
+#ifdef TRACY_ENABLE
+    TracyCSetThreadName("stream client worker");
+#endif
     for (;;)
     {
         SDL_WaitSemaphore(cjob_go);
@@ -2283,8 +2605,120 @@ static void cworkers_start(void)
 }
 
 /** A client's record whose own part a job compressed: the shared part as compressed once, then that. */
+/** Test hook KFX_NET_DUMPREC=<folder>: the raw (uncompressed) records of every 5th turn from turn 600 to 3000: the
+ *  shared part once (shared_<turn>.bin) and each real client's own part (own_<user>_<turn>.bin), the data the
+ *  compressor sees, for trying other compressors and training dictionaries on. */
+static void dump_record_part(const char *kind, int user, const uint8_t *data, size_t len)
+{
+    static int on = -1;
+    static char dir[200];
+    if (on < 0)
+    {
+        const char *v = getenv("KFX_NET_DUMPREC");
+        on = ((v != NULL) && (v[0] != '\0')) ? 1 : 0;
+        if (on)
+            snprintf(dir, sizeof(dir), "%s", v);
+    }
+    if (!on || (len == 0) || (game.play_gameturn < 600) || (game.play_gameturn > 3000) || ((game.play_gameturn % 5) != 0))
+        return;
+    char path[300];
+    if (user < 0)
+        snprintf(path, sizeof(path), "%s/%s_%lu.bin", dir, kind, (unsigned long)game.play_gameturn);
+    else
+        snprintf(path, sizeof(path), "%s/%s_%d_%lu.bin", dir, kind, user, (unsigned long)game.play_gameturn);
+    FILE *f = fopen(path, "wb");
+    if (f == NULL)
+        return;
+    fwrite(data, 1, len, f);
+    fclose(f);
+}
+
+/** A turn's record to a client: reliably, and as an unreliable copy (marked so) to a client that takes one: a lost
+ *  datagram then holds that client up only when both copies are lost (2026-11-09). */
+static void send_turn_message(char *msg, size_t total, NetUserId c)
+{
+    if (sim_client(c))
+        return;
+    send_to_active_peers(1, NetSend_Reliable, msg, total, numask_of(c));
+    if ((ns_caps[c] & NS_CAP_DUAL1) == 0)
+        return;
+    struct NsWire w;
+    memcpy(&w, msg + 1, sizeof(w));
+    w.raw_len |= NS_WIRE_COPY;
+    memcpy(msg + 1, &w, sizeof(w));
+    send_to_active_peers(1, NetSend_Unsequenced, msg, total, numask_of(c));
+    stats_bytes += (uint32_t)total;
+    stats_copy_bytes += (uint32_t)total;
+}
+
 static void send_job_record(const struct NsClientJob *j, size_t shared_end)
 {
+    {
+        static GameTurn dumped_shared = 0;
+        if (dumped_shared != game.play_gameturn)
+        {
+            dumped_shared = game.play_gameturn;
+            dump_record_part("shared", -1, rec, shared_end);
+        }
+        if (!sim_client(j->c))
+            dump_record_part("own", (int)j->c, j->own, j->own_len);
+    }
+    const TbBool zstd = j->zstd && (shared_zs_raw == shared_end) && (shared_end > 0);
+    if (j->zstd && !zstd)
+    {
+        /* its own part is zstd but the shared part isn't: the whole record in zlib */
+        crec_len = 0;
+        crec_failed = false;
+        crec_put(rec, shared_end);
+        crec_put(j->own, j->own_len);
+        if (!crec_failed)
+            send_record(crec, crec_len, j->c);
+        return;
+    }
+    if (zstd)
+    {
+        const int64_t t0 = get_time_tick_ns();
+        char *msg = (char *)malloc(1 + sizeof(struct NsWire) + shared_zs_len + j->z_len);
+        if (msg == NULL)
+            return;
+        msg[0] = NETMSG_STATE_TURN;
+        struct NsWire w = {(uint32_t)(shared_zs_raw + j->own_len) | NS_WIRE_ZSTD, (uint32_t)(shared_zs_len + j->z_len),
+            (uint32_t)shared_zs_raw, (uint32_t)shared_zs_len};
+        memcpy(msg + 1, &w, sizeof(w));
+        memcpy(msg + 1 + sizeof(struct NsWire), shared_zs, shared_zs_len);
+        memcpy(msg + 1 + sizeof(struct NsWire) + shared_zs_len, j->z, j->z_len);
+        const size_t total = 1 + sizeof(struct NsWire) + shared_zs_len + j->z_len;
+        {
+            /* test hook KFX_NET_ZCHECK=1: each zstd record decompressed again here and compared with what was meant */
+            static int zcheck = -1;
+            static uint32_t zc_records, zc_bad;
+            if (zcheck < 0)
+                zcheck = (getenv("KFX_NET_ZCHECK") != NULL) ? 1 : 0;
+            if (zcheck)
+            {
+                uint8_t *back = (uint8_t *)malloc(shared_zs_raw + j->own_len + 1);
+                size_t n1 = 0, n2 = 0;
+                const TbBool ok = (back != NULL) &&
+                    ns_zstd_decompress(back, shared_zs_raw, shared_zs, shared_zs_len, true, &n1) && (n1 == shared_zs_raw) &&
+                    ns_zstd_decompress(back + shared_zs_raw, j->own_len, j->z, j->z_len, false, &n2) && (n2 == j->own_len) &&
+                    (memcmp(back, rec, shared_zs_raw) == 0) && (memcmp(back + shared_zs_raw, j->own, j->own_len) == 0);
+                free(back);
+                zc_records++;
+                if (!ok)
+                    zc_bad++;
+                if ((zc_records % 500) == 0)
+                    SYNCLOG("Thin-client server: zstd round trips: %u records, %u wrong", (unsigned)zc_records, (unsigned)zc_bad);
+            }
+        }
+        send_turn_message(msg, total, j->c);
+        stats_bytes += (uint32_t)total;
+        stats_records++;
+        stats_zstd_records++;
+        stats_zstd_bytes += (uint32_t)total;
+        free(msg);
+        stats_t[NsT_Send] += get_time_tick_ns() - t0;
+        return;
+    }
     if ((shared_z_raw == 0) || (shared_z_raw != shared_end))
     {
         /* the shared part wasn't compressed apart: the whole record, compressed here */
@@ -2307,8 +2741,7 @@ static void send_job_record(const struct NsClientJob *j, size_t shared_end)
     memcpy(msg + 1 + sizeof(struct NsWire), shared_z, shared_z_len);
     memcpy(msg + 1 + sizeof(struct NsWire) + shared_z_len, j->z, j->z_len);
     const size_t total = 1 + sizeof(struct NsWire) + shared_z_len + j->z_len;
-    if (!sim_client(j->c))
-        send_to_active_peers(1, NetSend_Reliable, msg, total, numask_of(j->c));
+    send_turn_message(msg, total, j->c);
     stats_bytes += (uint32_t)total;
     stats_records++;
     free(msg);
@@ -2492,10 +2925,14 @@ void netstate_server_after_turn(void)
         }
         if ((ns_cl[c].slot != NULL) && !numask_has(clients, c))
             cl_free(c);
+        if (!numask_has(clients, c))
+            ns_caps[c] = 0;
     }
     /* the shared part of the turn: everything but the things, and the chunk pages' changes (kept per page) */
     rec_begin(0);
+    KFX_C_PLOT("Stream: clients", numask_count(clients));
     int64_t tp = get_time_tick_ns();
+    KFX_C_ZONE_BEGIN(z_shared, "stream: shared diff");
     if (kfx_job_threads() > 1)
     {
         if (parcheck_turn())
@@ -2506,14 +2943,22 @@ void netstate_server_after_turn(void)
     else
         for (int r = 0; r < NsR_Count; r++)
             diff_region(r);
+    KFX_C_ZONE_END(z_shared);
     const size_t shared_end = rec_len;
     int64_t tn = get_time_tick_ns();
     stats_t[NsT_Shared] += tn - tp;
+    KFX_C_ZONE_BEGIN(z_scomp, "stream: shared compress");
     shared_z_raw = 0;
     if (!rec_failed && (shared_end > 0) && !compress_shared(rec, shared_end))
         shared_z_raw = 0; /* each record is compressed whole then */
+    if (!rec_failed)
+        compress_shared_zstd(rec, shared_end, clients);
+    else
+        shared_zs_raw = 0;
+    KFX_C_ZONE_END(z_scomp);
     tp = tn;
     gone_count = 0;
+    KFX_C_ZONE_BEGIN(z_pages, "stream: chunk page diffs");
     if (kfx_job_threads() > 1)
     {
         if (parcheck_turn())
@@ -2523,6 +2968,7 @@ void netstate_server_after_turn(void)
     }
     else
         diff_pages();
+    KFX_C_ZONE_END(z_pages);
     const size_t pages_end = rec_len;
     {
         /* test hook KFX_NET_STREAMHASH=1: a fingerprint of the shared part and the pages' lines, every 200 turns (the
@@ -2552,10 +2998,14 @@ void netstate_server_after_turn(void)
     stats_t[NsT_Pages] += tn - tp;
     /* each streaming client: the shared part, the pages of its area, the things near it, the events it can hear */
     tp = get_time_tick_ns();
+    KFX_C_ZONE_BEGIN(z_hash, "stream: hash things");
     hash_things();
+    KFX_C_ZONE_END(z_hash);
     stats_t[NsT_Things] += get_time_tick_ns() - tp;
+    KFX_C_ZONE_BEGIN(z_clients, "stream: clients' records");
     if (!rec_failed)
         stream_clients(clients, shared_end);
+    KFX_C_ZONE_END(z_clients);
     events_count = 0;
     events_len = 0;
     /* keyframes: the whole state as it is now, for the clients that asked */
@@ -2594,9 +3044,14 @@ void netstate_server_after_turn(void)
         last_stream_ms = (double)stats_ns / 200e6;
         last_sim_ms = (double)stats_sim_ns / 200e6;
         SYNCLOG("Thin-client server: %u records, %u bytes in the last 200 turns (%u bytes a turn per client), %.2f ms a turn"
-            " (%d clients, %d of them simulated)", (unsigned)stats_records, (unsigned)stats_bytes,
+            " (%d clients, %d of them simulated; %u records in zstd, %u bytes each; %u bytes of unreliable copies)",
+            (unsigned)stats_records, (unsigned)stats_bytes,
             (unsigned)(stats_bytes / max(1u, stats_records)), (double)stats_ns / 200e6, numask_count(clients),
-            numask_count(numask_and(sim_mask, clients)));
+            numask_count(numask_and(sim_mask, clients)), (unsigned)stats_zstd_records,
+            (unsigned)(stats_zstd_bytes / max(1u, stats_zstd_records)), (unsigned)stats_copy_bytes);
+        stats_zstd_records = 0;
+        stats_zstd_bytes = 0;
+        stats_copy_bytes = 0;
         SYNCLOG("Thin-client server: raw bytes a turn by part: things %u, creature controls %u, other game %u, statics %u, "
             "pages %u, events %u", (unsigned)(stats_part[NsP_Things] / 200), (unsigned)(stats_part[NsP_Cctrl] / 200),
             (unsigned)(stats_part[NsP_Game] / 200), (unsigned)(stats_part[NsP_Statics] / 200),
@@ -2851,12 +3306,80 @@ void netstate_event_player_sample(PlayerNumber plyr_idx, long smptbl_idx)
 
 /******************************************************************************/
 /* client */
+/* the turns that came early (unreliable copies ahead of a lost turn), until the turns before them come */
+#define NS_EARLY_MAX 64
+#define GAMETURN_MAX_ORDER ((GameTurn)-1)
+static struct { uint8_t *raw; size_t len; GameTurn turn; } order_early[NS_EARLY_MAX];
+static int order_early_count;
+static GameTurn order_next;
+static TbBool order_known;
+
+static void order_hold(uint8_t *raw, size_t len, GameTurn turn)
+{
+    for (int i = 0; i < order_early_count; i++)
+    {
+        if (order_early[i].turn == turn)
+        {
+            free(raw);
+            return;
+        }
+    }
+    if (order_early_count >= NS_EARLY_MAX)
+    {
+        free(raw); /* its reliable one will come */
+        return;
+    }
+    order_early[order_early_count].raw = raw;
+    order_early[order_early_count].len = len;
+    order_early[order_early_count].turn = turn;
+    order_early_count++;
+}
+
+/** The held turns before `turn` go (they can't be used any more). */
+static void order_drop_early(GameTurn turn)
+{
+    int k = 0;
+    for (int i = 0; i < order_early_count; i++)
+    {
+        if (order_early[i].turn < turn)
+            free(order_early[i].raw);
+        else
+            order_early[k++] = order_early[i];
+    }
+    order_early_count = k;
+}
+
+/** The held turns that are next now, into the queue in order. */
+static void order_release(void)
+{
+    for (TbBool found = true; found && (queue_count < NS_QUEUE_MAX);)
+    {
+        found = false;
+        for (int i = 0; i < order_early_count; i++)
+        {
+            if (order_early[i].turn != order_next)
+                continue;
+            const int at = (queue_head + queue_count) % NS_QUEUE_MAX;
+            queue[at].data = order_early[i].raw;
+            queue[at].len = order_early[i].len;
+            queue_count++;
+            order_next++;
+            order_early[i] = order_early[--order_early_count];
+            found = true;
+            break;
+        }
+    }
+}
+
 TbError netstate_client_receive(const char *buffer, size_t size)
 {
     if (size < sizeof(struct NsWire))
         return Lb_OK;
     struct NsWire w;
     memcpy(&w, buffer, sizeof(w));
+    const TbBool zstd = (w.raw_len & NS_WIRE_ZSTD) != 0;
+    const TbBool copy = (w.raw_len & NS_WIRE_COPY) != 0;
+    w.raw_len &= ~(NS_WIRE_ZSTD | NS_WIRE_COPY);
     if ((w.comp_len != size - sizeof(w)) || (w.raw_len < sizeof(struct NsHeader)) || (w.raw_len > (256u << 20)) ||
         (w.shared_raw > w.raw_len) || (w.shared_comp > w.comp_len) || ((w.shared_raw == 0) != (w.shared_comp == 0)))
     {
@@ -2869,11 +3392,22 @@ TbError netstate_client_receive(const char *buffer, size_t size)
     const Bytef *z = (const Bytef *)buffer + sizeof(w);
     size_t shared_len = 0, own_len = 0;
     TbBool ok = true;
-    if (w.shared_raw > 0)
-        ok = kfx_zlib_uncompress(raw, w.shared_raw, z, w.shared_comp, &shared_len) && (shared_len == w.shared_raw);
-    if (ok)
-        ok = kfx_zlib_uncompress(raw + w.shared_raw, w.raw_len - w.shared_raw, z + w.shared_comp, w.comp_len - w.shared_comp,
-            &own_len) && (own_len == w.raw_len - w.shared_raw);
+    if (zstd)
+    {
+        /* zstd with the trained dictionaries (a client says it reads them; 2026-11-09) */
+        if (w.shared_raw > 0)
+            ok = ns_zstd_decompress(raw, w.shared_raw, z, w.shared_comp, true, &shared_len) && (shared_len == w.shared_raw);
+        if (ok)
+            ok = ns_zstd_decompress(raw + w.shared_raw, w.raw_len - w.shared_raw, z + w.shared_comp, w.comp_len - w.shared_comp,
+                false, &own_len) && (own_len == w.raw_len - w.shared_raw);
+    } else
+    {
+        if (w.shared_raw > 0)
+            ok = kfx_zlib_uncompress(raw, w.shared_raw, z, w.shared_comp, &shared_len) && (shared_len == w.shared_raw);
+        if (ok)
+            ok = kfx_zlib_uncompress(raw + w.shared_raw, w.raw_len - w.shared_raw, z + w.shared_comp, w.comp_len - w.shared_comp,
+                &own_len) && (own_len == w.raw_len - w.shared_raw);
+    }
     if (!ok)
     {
         free(raw);
@@ -2899,6 +3433,26 @@ TbError netstate_client_receive(const char *buffer, size_t size)
             queue_count--;
         }
         client_keyframe_asked = false;
+        order_drop_early(GAMETURN_MAX_ORDER);
+        order_next = h.turn + 1;
+        order_known = true;
+    } else if (order_known)
+    {
+        /* each turn comes twice to a client that takes copies (2026-11-09): the first one is used, in turn order. A
+           reliable one is the next the server sent (turns it never sent are skipped); an unreliable copy that came
+           early waits for the turns before it */
+        if (h.turn < order_next)
+        {
+            free(raw);
+            return Lb_OK; /* had it already */
+        }
+        if (copy && (h.turn > order_next))
+        {
+            order_hold(raw, w.raw_len, h.turn);
+            return Lb_OK;
+        }
+        order_drop_early(h.turn); /* the held ones before it can't come any more (a reliable one came after them) */
+        order_next = h.turn + 1;
     }
     if (queue_count >= NS_QUEUE_MAX)
     {
@@ -2915,6 +3469,31 @@ TbError netstate_client_receive(const char *buffer, size_t size)
     queue[at].data = raw;
     queue[at].len = w.raw_len;
     queue_count++;
+    order_release();
+    {
+        /* how evenly the server's turns arrive (a turn every 50 ms when all is well): gaps and the longest, every 400
+           turns, once the client plays (a stall the player sees is a long gap) */
+        static TbClockMSec last_ms;
+        static uint32_t n, over150, over300, over500, over1000, longest;
+        const TbClockMSec now = LbTimerClock();
+        if (client_has_keyframe && (last_ms != 0))
+        {
+            const uint32_t gap = (uint32_t)(now - last_ms);
+            n++;
+            over150 += (gap > 150);
+            over300 += (gap > 300);
+            over500 += (gap > 500);
+            over1000 += (gap > 1000);
+            longest = max(longest, gap);
+            if (n == 400)
+            {
+                SYNCLOG("Thin client: turn arrivals: 400, gaps over 150 / 300 / 500 / 1000 ms: %u / %u / %u / %u, longest %u ms",
+                    (unsigned)over150, (unsigned)over300, (unsigned)over500, (unsigned)over1000, (unsigned)longest);
+                n = over150 = over300 = over500 = over1000 = longest = 0;
+            }
+        }
+        last_ms = now;
+    }
     return Lb_OK;
 }
 
@@ -3327,6 +3906,26 @@ static void client_apply(const uint8_t *data, size_t len)
     {
         client_has_keyframe = true;
         SYNCLOG("Thin client: keyframe applied at turn %lu", (unsigned long)h.turn);
+        {
+            /* what this client reads: zstd with the dictionaries (KFX_NET_NOZSTD=1: zlib only, as older clients) */
+            const uint32_t caps = ((getenv("KFX_NET_NOZSTD") != NULL) ? 0u : NS_CAP_ZSTD1) |
+                ((getenv("KFX_NET_NODUAL") != NULL) ? 0u : NS_CAP_DUAL1);
+            char *wp = begin_net_message(NETMSG_STATE_CAPS);
+            memcpy(wp, &caps, 4);
+            send_message_buffer(SERVER_ID, wp + 4);
+        }
+        {
+            /* test hook KFX_NET_TESTCHAT=<user>:<text>: once seated, one chat line naming that user as its sender
+               (an endless server makes it this client's own) */
+            static TbBool test_chat_sent;
+            const char *tc = getenv("KFX_NET_TESTCHAT");
+            const char *colon = (tc != NULL) ? strchr(tc, ':') : NULL;
+            if ((colon != NULL) && !test_chat_sent && !network_user_is_spectator(netstate.my_id))
+            {
+                test_chat_sent = true;
+                send_network_chat_message((NetUserId)atoi(tc), colon + 1);
+            }
+        }
     }
     client_rebuild_local();
     {
@@ -3369,6 +3968,24 @@ TbBool netstate_client_apply_next(void)
     struct NsQueued *q = &queue[queue_head];
     struct NsHeader h;
     memcpy(&h, q->data, sizeof(h));
+    {
+        /* the turns are applied one after another: a turn skipped or applied twice would be a fault (counted, with
+           the record arrival statistics) */
+        static GameTurn last_applied;
+        static uint32_t applied, out_of_step;
+        if ((h.flags & NsF_Keyframe) == 0)
+        {
+            if (client_has_keyframe && (h.turn != last_applied + 1))
+            {
+                out_of_step++;
+                if (out_of_step <= 5)
+                    WARNLOG("Thin client: turn %lu applied after turn %lu", (unsigned long)h.turn, (unsigned long)last_applied);
+            }
+            if ((++applied % 2000) == 0)
+                SYNCLOG("Thin client: %u turns applied, %u out of step", (unsigned)applied, (unsigned)out_of_step);
+        }
+        last_applied = h.turn;
+    }
     if (client_has_keyframe || (h.flags & NsF_Keyframe))
         client_apply(q->data, q->len);
     set_flag_value(game.operation_flags, GOF_SingleLevel, client_single_level);
@@ -3504,6 +4121,59 @@ static void simcheck_compare(NetUserId c)
             (int)c, (unsigned)simcheck_bad, (unsigned)simcheck_turns, ns_cl[c].used - ns_cl[c].nfree, (unsigned)stats_dropped_copies);
     }
 }
+
+static uint32_t simcheck_cc_bad, simcheck_cc_compared;
+
+static void simcheck_cc_apply_compare(NetUserId c, const uint8_t *from, const uint8_t *to)
+{
+    if (simcheck_cc == NULL)
+        return;
+    struct NsReader r = {from, to, false};
+    while ((r.p < r.end) && !r.bad)
+    {
+        uint8_t kind, region;
+        uint32_t page;
+        if (!rd_get(&r, &kind, 1) || (kind != NsK_MemLines) || !rd_get(&r, &region, 1) || !rd_get(&r, &page, 4) ||
+            (region != NsR_Game) || (page < NS_CC_PAGE_FIRST) || (page >= NS_CC_PAGE_END))
+        {
+            r.bad = true;
+            break;
+        }
+        const size_t off = (size_t)page * NS_PAGE - NS_CC_OFF;
+        apply_lines(&r, simcheck_cc + off, NS_CC_LEN - off);
+    }
+    if (r.bad)
+        simcheck_cc_bad += 1000000;
+    /* the wanted creatures, as the client has them, against the live ones (the client's own bytes aside), in the pages
+       wholly inside the controls */
+    const struct NsCcClient *cc = &ns_cc[c];
+    static uint8_t want[sizeof(struct CreatureControl)];
+    for (uint32_t k = 1; k < CREATURES_COUNT; k++)
+    {
+        if ((cc->wanted[k >> 3] & (1u << (k & 7))) == 0)
+            continue;
+        const size_t a = NS_CC_OFF + (size_t)k * NS_CC_SIZE;
+        if ((a < (size_t)NS_CC_PAGE_FIRST * NS_PAGE) || (a + NS_CC_SIZE > (size_t)NS_CC_PAGE_END * NS_PAGE))
+            continue;
+        memcpy(want, (const uint8_t *)&game + a, NS_CC_SIZE);
+        /* the client's own bytes: as the client has them */
+        for (int i = 0; i < excl_count; i++)
+        {
+            const struct NsExcl *e = &excl[i];
+            if ((e->count <= 1) || (e->off < NS_CC_OFF) || (e->off >= NS_CC_OFF + NS_CC_SIZE))
+                continue;
+            const size_t fo = e->off - NS_CC_OFF;
+            memcpy(want + fo, simcheck_cc + (a - NS_CC_OFF) + fo, e->len);
+        }
+        simcheck_cc_compared++;
+        if (memcmp(want, simcheck_cc + (a - NS_CC_OFF), NS_CC_SIZE) != 0)
+            simcheck_cc_bad++;
+    }
+    if ((simcheck_turns % 200) == 0)
+        SYNCLOG("Thin-client server: user %d's creature controls against a client's: %u mismatches in %u compared",
+            (int)c, (unsigned)simcheck_cc_bad, (unsigned)simcheck_cc_compared);
+}
+
 
 /******************************************************************************/
 void netstate_level_start(void)

@@ -33,6 +33,8 @@ struct Thing;
 
 /** True while an endless-world level is being played (after ENDLESS_WORLD was seen). */
 TbBool world_mode_active(void);
+/** The next world_save_blob is a resync for other machines: no seats' owners, upgrades or the world's key in it. */
+void world_blob_for_network(TbBool on);
 /** ENDLESS_WORLD script command, at script load: remembers the seed for world_level_start. */
 TbBool world_request(const char *seed_text);
 /** Endless Mode's New Run: the next ENDLESS_WORLD uses this seed instead of the script's (once). NULL clears it. */
@@ -131,7 +133,10 @@ int64_t world_prof_now(void);
 void world_prof_add(int section, int64_t t0);
 /** Adds the time since t0 to a section shown as a total a turn (many calls a turn). */
 void world_prof_sum(int section, int64_t t0);
-#define WORLD_PROF(section, stmt) do { const int64_t wp_t0_ = world_prof_now(); stmt; world_prof_add((section), wp_t0_); } while (0)
+#include "kfx/profiling/KfxProfilingC.h"
+/* each section is a Tracy zone too (KEEPERFX_TRACY builds), named by its statement */
+#define WORLD_PROF(section, stmt) do { KFX_C_ZONE_BEGIN(wp_zone_, #stmt); const int64_t wp_t0_ = world_prof_now(); stmt; \
+    world_prof_add((section), wp_t0_); KFX_C_ZONE_END(wp_zone_); } while (0)
 /** True when the endless level runs on the chunked (paged) world rather than the sliding window. */
 TbBool world_is_chunked(void);
 /** Slab kinds in a box of engine slabs, whether loaded or not: loaded chunks are read from the map, frozen ones

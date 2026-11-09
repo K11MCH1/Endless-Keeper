@@ -113,6 +113,10 @@ static void sample_count(uint32_t *addr, uint32_t *count, uint32_t a)
 static DWORD WINAPI sample_main(LPVOID arg)
 {
     (void)arg;
+#ifdef _WIN64
+    (void)sample_count;
+    return 0; /* the sampler walks 32-bit frames: not on 64-bit builds */
+#else
     for (;;)
     {
         Sleep(1);
@@ -159,6 +163,7 @@ static DWORD WINAPI sample_main(LPVOID arg)
         ResumeThread(sample_target);
     }
     return 0;
+#endif
 }
 
 static void sample_start(void)

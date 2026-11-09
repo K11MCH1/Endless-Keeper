@@ -549,6 +549,11 @@ void update(void)
         creature_stats_debug_dump();
 #endif
         world_prof_add(WPS_Turn, world_prof_turn);
+#ifdef TRACY_ENABLE
+        FrameMarkNamed("game turn");
+        TracyPlot("Things: creatures", (int64_t)game.thing_lists[TngList_Creatures].count);
+        TracyPlot("World: chunks loaded", (int64_t)world_loaded_chunk_count());
+#endif
         game.play_gameturn++;
         world_after_turn();
         if (replay.turns_packetoff == game.play_gameturn)

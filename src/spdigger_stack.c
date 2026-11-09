@@ -54,6 +54,7 @@
 #include "game_legacy.h"
 #include "world_pages.h"
 #include "world_caretaker.h"
+#include "kfx/profiling/KfxProfilingC.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -125,7 +126,17 @@ long find_in_dungeon_imp_stack_using_pos(SubtlCodedCoords stl_num, SpDiggerTaskT
     return find_in_imp_stack_using_pos(stl_num, task_type, dungeon->digger_stack, dungeon->digger_stack_length);
 }
 
+static long find_reachable_imp_tasks_excluding_start__impl(struct Thing *creatng, SpDiggerTaskType excl_task_type, long start_pos);
+
 long find_reachable_imp_tasks_excluding_start(struct Thing *creatng, SpDiggerTaskType excl_task_type, long start_pos)
+{
+    KFX_C_ZONE_BEGIN(z_imp, "Imp: find_reachable_imp_tasks_excluding_start");
+    const long r = find_reachable_imp_tasks_excluding_start__impl(creatng, excl_task_type, start_pos);
+    KFX_C_ZONE_END(z_imp);
+    return r;
+}
+
+static long find_reachable_imp_tasks_excluding_start__impl(struct Thing *creatng, SpDiggerTaskType excl_task_type, long start_pos)
 {
     long i;
     const struct Dungeon *dungeon = get_dungeon(creatng->owner);
@@ -416,7 +427,17 @@ struct Thing *check_for_empty_trap_for_imp_not_being_armed(struct Thing *digger,
     return INVALID_THING;
 }
 
+static long check_out_unprettied_or_unconverted_area__impl(struct Thing *thing);
+
 long check_out_unprettied_or_unconverted_area(struct Thing *thing)
+{
+    KFX_C_ZONE_BEGIN(z_imp, "Imp: check_out_unprettied_or_unconverted_area");
+    const long r = check_out_unprettied_or_unconverted_area__impl(thing);
+    KFX_C_ZONE_END(z_imp);
+    return r;
+}
+
+static long check_out_unprettied_or_unconverted_area__impl(struct Thing *thing)
 {
     struct Dungeon *dungeon;
     struct DiggerStack *dstack;
@@ -890,7 +911,17 @@ static int check_out_unreinforced_spiral(struct Thing *thing, int number_of_iter
     return 0;
 }
 
+static long check_out_unreinforced_place__impl(struct Thing *thing);
+
 static long check_out_unreinforced_place(struct Thing *thing)
+{
+    KFX_C_ZONE_BEGIN(z_imp, "Imp: check_out_unreinforced_place");
+    const long r = check_out_unreinforced_place__impl(thing);
+    KFX_C_ZONE_END(z_imp);
+    return r;
+}
+
+static long check_out_unreinforced_place__impl(struct Thing *thing)
 {
     SubtlCodedCoords working_stl;
     SubtlCodedCoords stl_num;
@@ -961,7 +992,17 @@ static long check_out_unreinforced_place(struct Thing *thing)
     }
 }
 
+static TbBool check_out_unreinforced_area__impl(struct Thing *spdigtng);
+
 static TbBool check_out_unreinforced_area(struct Thing *spdigtng)
+{
+    KFX_C_ZONE_BEGIN(z_imp, "Imp: check_out_unreinforced_area");
+    const TbBool r = check_out_unreinforced_area__impl(spdigtng);
+    KFX_C_ZONE_END(z_imp);
+    return r;
+}
+
+static TbBool check_out_unreinforced_area__impl(struct Thing *spdigtng)
 {
     long distance;
     struct Coord3d reinforce_pos;
@@ -1013,7 +1054,17 @@ static TbBool check_out_unreinforced_area(struct Thing *spdigtng)
     return true;
 }
 
+static TbBool check_out_unconverted_place__impl(struct Thing *thing);
+
 TbBool check_out_unconverted_place(struct Thing *thing)
+{
+    KFX_C_ZONE_BEGIN(z_imp, "Imp: check_out_unconverted_place");
+    const TbBool r = check_out_unconverted_place__impl(thing);
+    KFX_C_ZONE_END(z_imp);
+    return r;
+}
+
+static TbBool check_out_unconverted_place__impl(struct Thing *thing)
 {
     long stl_x;
     long stl_y;
@@ -1041,7 +1092,17 @@ TbBool check_out_unconverted_place(struct Thing *thing)
     return false;
 }
 
+static long check_out_unprettied_place__impl(struct Thing *thing);
+
 long check_out_unprettied_place(struct Thing *thing)
+{
+    KFX_C_ZONE_BEGIN(z_imp, "Imp: check_out_unprettied_place");
+    const long r = check_out_unprettied_place__impl(thing);
+    KFX_C_ZONE_END(z_imp);
+    return r;
+}
+
+static long check_out_unprettied_place__impl(struct Thing *thing)
 {
     long stl_x;
     long stl_y;
@@ -1097,7 +1158,17 @@ TbBool is_digging_indestructible_place(const struct Thing *creatng)
     return false;
 }
 
+static long check_out_undug_place__impl(struct Thing *creatng);
+
 long check_out_undug_place(struct Thing *creatng)
+{
+    KFX_C_ZONE_BEGIN(z_imp, "Imp: check_out_undug_place");
+    const long r = check_out_undug_place__impl(creatng);
+    KFX_C_ZONE_END(z_imp);
+    return r;
+}
+
+static long check_out_undug_place__impl(struct Thing *creatng)
 {
     struct CreatureControl *cctrl;
     MapSubtlCoord base_stl_x;
@@ -1250,7 +1321,17 @@ long get_nearest_undug_area_position_for_digger(struct Thing *thing, MapSubtlCoo
 }
 #undef UNDUG_MAX_DIST
 
+static long check_out_undug_area__impl(struct Thing *thing);
+
 long check_out_undug_area(struct Thing *thing)
+{
+    KFX_C_ZONE_BEGIN(z_imp, "Imp: check_out_undug_area");
+    const long r = check_out_undug_area__impl(thing);
+    KFX_C_ZONE_END(z_imp);
+    return r;
+}
+
+static long check_out_undug_area__impl(struct Thing *thing)
 {
     if (world_caretaker_active(thing->owner))
         return 0; /* an endless world's away player: nothing is dug until they are back */
@@ -1471,6 +1552,7 @@ enum SlabConnectedAreaOptions {
  * map has a cell per loaded slab (wp_cells_begin, wp_slab_cell); every slab of a chunk that isn't loaded shares one
  * extra cell at index slbopt_cells, marked as a processed border so the search never enters it. */
 static SlabCodedCoords slbopt_cells = 0;
+static TbBool imp_stack_updating; /* in imp_stack_update: the map doesn't change between its searches */
 
 /** Index of a slab in the slab options map: the slab number normally, its cell in paged mode. */
 static SlabCodedCoords slbopt_index(MapSlabCoord slb_x, MapSlabCoord slb_y)
@@ -1479,6 +1561,84 @@ static SlabCodedCoords slbopt_index(MapSlabCoord slb_x, MapSlabCoord slb_y)
         return get_slab_number(slb_x, slb_y);
     const int32_t cell = wp_slab_cell(slb_x, slb_y);
     return (cell < 0) ? slbopt_cells : (SlabCodedCoords)cell;
+}
+
+/* Paged mode (2026-11-09): a page of the slab options map is set up (as add_pretty_and_convert_to_imp_stack_prepare
+ * does) when the search first reaches it, and the walk for a dungeon's ground that isn't connected to its heart
+ * looks only at pages holding a slab of the dungeon's (the others add nothing to it). Setting up every loaded slab,
+ * twice a stack update, and walking them all again was 3 ms a stack update with 2,048 chunks loaded. The pages
+ * holding the dungeon's slabs are found once a stack update (nothing changes the map in between). */
+static uint32_t slbopt_gen;
+static uint32_t *slbopt_page_gen;
+static uint8_t *slbopt_page_owned;
+static int slbopt_pages, slbopt_page_cap;
+static TbBool slbopt_owned_ok;
+static PlayerNumber slbopt_owned_for = -1;
+
+static TbBool slbopt_lazy_begin(unsigned char *slbopt, int npages)
+{
+    if (npages > slbopt_page_cap)
+    {
+        uint32_t *g = (uint32_t *)realloc(slbopt_page_gen, sizeof(uint32_t) * (size_t)npages);
+        if (g == NULL)
+            return false;
+        slbopt_page_gen = g;
+        uint8_t *o = (uint8_t *)realloc(slbopt_page_owned, (size_t)npages);
+        if (o == NULL)
+            return false;
+        slbopt_page_owned = o;
+        memset(slbopt_page_gen + slbopt_page_cap, 0, sizeof(uint32_t) * (size_t)(npages - slbopt_page_cap));
+        slbopt_page_cap = npages;
+    }
+    if (++slbopt_gen == 0)
+    {
+        memset(slbopt_page_gen, 0, sizeof(uint32_t) * (size_t)slbopt_page_cap);
+        slbopt_gen = 1;
+    }
+    slbopt_pages = npages;
+    slbopt[slbopt_cells] = SlbCAOpt_Border|SlbCAOpt_Processed;
+    return true;
+}
+
+static void slbopt_page_ready(unsigned char *slbopt, SlabCodedCoords cell)
+{
+    if (!world_paged || (cell >= slbopt_cells))
+        return;
+    const int n = (int)(cell / WP_CHUNK_SLAB_CELLS);
+    if ((n >= slbopt_pages) || (slbopt_page_gen[n] == slbopt_gen))
+        return;
+    slbopt_page_gen[n] = slbopt_gen;
+    struct WorldPage *pg = wp_cells_page(n);
+    for (int i = 0; i < WP_CHUNK_SLAB_CELLS; i++)
+    {
+        SlabCodedCoords slb_num = (SlabCodedCoords)n * WP_CHUNK_SLAB_CELLS + i;
+        struct SlabConfigStats *slabst = get_slab_stats(&pg->slab[i]);
+        slbopt[slb_num] = 0;
+        if ((slabst->block_flags & (SlbAtFlg_Filled|SlbAtFlg_Digable|SlbAtFlg_Valuable)) != 0) {
+            slbopt[slb_num] |= SlbCAOpt_Border;
+        }
+    }
+}
+
+static void slbopt_find_owned_pages(PlayerNumber owner)
+{
+    if (slbopt_owned_ok && (slbopt_owned_for == owner))
+        return;
+    for (int n = 0; n < slbopt_pages; n++)
+    {
+        const struct WorldPage *pg = wp_cells_page(n);
+        slbopt_page_owned[n] = 0;
+        for (int i = 0; i < WP_CHUNK_SLAB_CELLS; i++)
+        {
+            if (slabmap_owner(&pg->slab[i]) == owner)
+            {
+                slbopt_page_owned[n] = 1;
+                break;
+            }
+        }
+    }
+    slbopt_owned_for = owner;
+    slbopt_owned_ok = imp_stack_updating;
 }
 
 /**
@@ -1547,6 +1707,7 @@ long add_pretty_and_convert_to_imp_stack_starting_from_pos(struct Dungeon *dunge
     MapSlabCoord base_slb_y = subtile_slab(start_pos->y.stl.num);
     struct SlabMap *slb;
     SlabCodedCoords slb_num = slbopt_index(base_slb_x, base_slb_y);
+    slbopt_page_ready(slbopt, slb_num);
     slbopt[slb_num] |= SlbCAOpt_Processed;
 
     TbBool extra_handle = false;
@@ -1562,6 +1723,7 @@ long add_pretty_and_convert_to_imp_stack_starting_from_pos(struct Dungeon *dunge
             slb_x = base_slb_x + (long)small_around[n].delta_x;
             slb_y = base_slb_y + (long)small_around[n].delta_y;
             slb_num = slbopt_index(slb_x, slb_y);
+            slbopt_page_ready(slbopt, slb_num);
             // Per around code
             if ((slbopt[slb_num] & SlbCAOpt_Border) != 0)
             {
@@ -1606,8 +1768,10 @@ long add_pretty_and_convert_to_imp_stack_starting_from_pos(struct Dungeon *dunge
             extra_handle = true;
             if (world_paged)
             {
-                // Paged mode: the loaded slabs in row-major order (pages sorted by chunk row, then column)
+                // Paged mode: the loaded slabs in row-major order (pages sorted by chunk row, then column); the
+                // pages holding none of the dungeon's slabs add nothing
                 const int npages = (int)(slbopt_cells / WP_CHUNK_SLAB_CELLS);
+                slbopt_find_owned_pages(dungeon->owner);
                 for (int g = 0; g < npages; )
                 {
                     int e = g + 1;
@@ -1618,6 +1782,9 @@ long add_pretty_and_convert_to_imp_stack_starting_from_pos(struct Dungeon *dunge
                         for (int k = g; k < e; k++)
                         {
                             struct WorldPage *pg = wp_cells_page(k);
+                            if ((k < slbopt_pages) && !slbopt_page_owned[k])
+                                continue; /* (no page list: every page is walked, as before) */
+                            slbopt_page_ready(slbopt, (SlabCodedCoords)k * WP_CHUNK_SLAB_CELLS);
                             for (int x = 0; x < WP_CHUNK_SLABS; x++)
                             {
                                 slb_num = (SlabCodedCoords)k * WP_CHUNK_SLAB_CELLS + y * WP_CHUNK_SLABS + x;
@@ -1714,7 +1881,12 @@ int add_pretty_and_convert_to_imp_stack(struct Dungeon *dungeon, int max_tasks)
         slblist = (struct SlabCoord *)(big_scratch + list_offs);
     } else
     slblist = (struct SlabCoord *)(big_scratch + game.map_tiles_x*game.map_tiles_y);
-    add_pretty_and_convert_to_imp_stack_prepare(dungeon, slbopt);
+    if (!world_paged || !slbopt_lazy_begin(slbopt, (int)(slbopt_cells / WP_CHUNK_SLAB_CELLS)))
+    {
+        if (world_paged)
+            slbopt_pages = 0; /* no memory for the page list: every page set up at once */
+        add_pretty_and_convert_to_imp_stack_prepare(dungeon, slbopt);
+    }
     add_pretty_and_convert_to_imp_stack_starting_from_pos(dungeon, slbopt, slblist, &start_pos, &remain_num);
     SYNCDBG(8,"Done, added %d tasks",(int)(max_tasks-remain_num));
     return (max_tasks-remain_num);
@@ -2804,7 +2976,17 @@ struct Thing *check_place_to_pickup_crate(const struct Thing *creatng, MapSubtlC
  * @param thing The digger creature.
  * @return Gives 1 if the digger was ordered to go into treasure room, 0 otherwise.
  */
+static long check_out_imp_has_money_for_treasure_room__impl(struct Thing *thing);
+
 long check_out_imp_has_money_for_treasure_room(struct Thing *thing)
+{
+    KFX_C_ZONE_BEGIN(z_imp, "Imp: check_out_imp_has_money_for_treasure_room");
+    const long r = check_out_imp_has_money_for_treasure_room__impl(thing);
+    KFX_C_ZONE_END(z_imp);
+    return r;
+}
+
+static long check_out_imp_has_money_for_treasure_room__impl(struct Thing *thing)
 {
     struct Room *room;
     SYNCDBG(8,"Starting for %s index %d",thing_model_name(thing),(int)thing->index);
@@ -2988,7 +3170,29 @@ long check_out_imp_last_did(struct Thing *creatng)
   return false;
 }
 //Create list of up to 64 tasks.
+static TbBool imp_stack_update__impl(struct Thing *creatng);
+
 TbBool imp_stack_update(struct Thing *creatng)
+{
+    KFX_C_ZONE_BEGIN(z_imp, "Imp: imp_stack_update");
+    const TbBool r = imp_stack_update__impl(creatng);
+    KFX_C_ZONE_END(z_imp);
+    return r;
+}
+
+static TbBool imp_stack_update__impl2(struct Thing *creatng);
+
+static TbBool imp_stack_update__impl(struct Thing *creatng)
+{
+    imp_stack_updating = true;
+    slbopt_owned_ok = false;
+    const TbBool r = imp_stack_update__impl2(creatng);
+    imp_stack_updating = false;
+    slbopt_owned_ok = false;
+    return r;
+}
+
+static TbBool imp_stack_update__impl2(struct Thing *creatng)
 {
     struct Dungeon *dungeon;
     SYNCDBG(18,"Starting");
@@ -2996,25 +3200,25 @@ TbBool imp_stack_update(struct Thing *creatng)
     if ((get_gameturn() - dungeon->digger_stack_update_turn) < 128)
         return 0;
     SYNCDBG(8,"Updating");
-    setup_imp_stack(dungeon);
+    { KFX_C_ZONE_BEGIN(z_st1, "Imp stack: setup_imp_stack"); setup_imp_stack(dungeon); KFX_C_ZONE_END(z_st1); }
     if (dungeon_invalid(dungeon)) {
         WARNLOG("Played %d has no dungeon",(int)creatng->owner);
         return false;
     }
-    add_unsaved_unconscious_creature_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT*5/8);
-    add_unclaimed_unconscious_bodies_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/4 - 1);
-    add_unclaimed_dead_bodies_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/4 - 1);
-    add_unclaimed_spells_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/4 - 1);
-    add_empty_traps_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/6);
-    add_pretty_and_convert_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/64);
-    add_dig_tasks_to_imp_stack(creatng, dungeon, DIGGER_TASK_MAX_COUNT/16 - 1, DigTaskStack_Undug);
-    add_unclaimed_gold_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/64);
-    add_dig_tasks_to_imp_stack(creatng, dungeon, DIGGER_TASK_MAX_COUNT*5/8, DigTaskStack_Gems);
-    add_unclaimed_traps_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/4);
-    add_dig_tasks_to_imp_stack(creatng, dungeon, DIGGER_TASK_MAX_COUNT*5/8, DigTaskStack_Undug);
-    add_pretty_and_convert_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT*5/8);
-    add_unclaimed_gold_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/3);
-    add_reinforce_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT);
+    { KFX_C_ZONE_BEGIN(z_st2, "Imp stack: add_unsaved_unconscious_creature_to_imp_stack"); add_unsaved_unconscious_creature_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT*5/8); KFX_C_ZONE_END(z_st2); }
+    { KFX_C_ZONE_BEGIN(z_st3, "Imp stack: add_unclaimed_unconscious_bodies_to_imp_stack"); add_unclaimed_unconscious_bodies_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/4 - 1); KFX_C_ZONE_END(z_st3); }
+    { KFX_C_ZONE_BEGIN(z_st4, "Imp stack: add_unclaimed_dead_bodies_to_imp_stack"); add_unclaimed_dead_bodies_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/4 - 1); KFX_C_ZONE_END(z_st4); }
+    { KFX_C_ZONE_BEGIN(z_st5, "Imp stack: add_unclaimed_spells_to_imp_stack"); add_unclaimed_spells_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/4 - 1); KFX_C_ZONE_END(z_st5); }
+    { KFX_C_ZONE_BEGIN(z_st6, "Imp stack: add_empty_traps_to_imp_stack"); add_empty_traps_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/6); KFX_C_ZONE_END(z_st6); }
+    { KFX_C_ZONE_BEGIN(z_st7, "Imp stack: add_pretty_and_convert_to_imp_stack"); add_pretty_and_convert_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/64); KFX_C_ZONE_END(z_st7); }
+    { KFX_C_ZONE_BEGIN(z_st8, "Imp stack: add_dig_tasks_to_imp_stack"); add_dig_tasks_to_imp_stack(creatng, dungeon, DIGGER_TASK_MAX_COUNT/16 - 1, DigTaskStack_Undug); KFX_C_ZONE_END(z_st8); }
+    { KFX_C_ZONE_BEGIN(z_st9, "Imp stack: add_unclaimed_gold_to_imp_stack"); add_unclaimed_gold_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/64); KFX_C_ZONE_END(z_st9); }
+    { KFX_C_ZONE_BEGIN(z_st10, "Imp stack: add_dig_tasks_to_imp_stack"); add_dig_tasks_to_imp_stack(creatng, dungeon, DIGGER_TASK_MAX_COUNT*5/8, DigTaskStack_Gems); KFX_C_ZONE_END(z_st10); }
+    { KFX_C_ZONE_BEGIN(z_st11, "Imp stack: add_unclaimed_traps_to_imp_stack"); add_unclaimed_traps_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/4); KFX_C_ZONE_END(z_st11); }
+    { KFX_C_ZONE_BEGIN(z_st12, "Imp stack: add_dig_tasks_to_imp_stack"); add_dig_tasks_to_imp_stack(creatng, dungeon, DIGGER_TASK_MAX_COUNT*5/8, DigTaskStack_Undug); KFX_C_ZONE_END(z_st12); }
+    { KFX_C_ZONE_BEGIN(z_st13, "Imp stack: add_pretty_and_convert_to_imp_stack"); add_pretty_and_convert_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT*5/8); KFX_C_ZONE_END(z_st13); }
+    { KFX_C_ZONE_BEGIN(z_st14, "Imp stack: add_unclaimed_gold_to_imp_stack"); add_unclaimed_gold_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/3); KFX_C_ZONE_END(z_st14); }
+    { KFX_C_ZONE_BEGIN(z_st15, "Imp stack: add_reinforce_to_imp_stack"); add_reinforce_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT); KFX_C_ZONE_END(z_st15); }
     return true;
 }
 
@@ -3531,7 +3735,17 @@ long check_out_worker_pickup_gold_pile(struct Thing *thing, struct DiggerStack *
     return 1;
 }
 
+static TbBool check_out_imp_stack__impl(struct Thing *creatng);
+
 TbBool check_out_imp_stack(struct Thing *creatng)
+{
+    KFX_C_ZONE_BEGIN(z_imp, "Imp: check_out_imp_stack");
+    const TbBool r = check_out_imp_stack__impl(creatng);
+    KFX_C_ZONE_END(z_imp);
+    return r;
+}
+
+static TbBool check_out_imp_stack__impl(struct Thing *creatng)
 {
     struct CreatureControl *cctrl;
     struct Dungeon *dungeon;

@@ -1,7 +1,11 @@
 # Platforms.cmake - platform detection + directory-scope compile definitions.
 
 if(WIN32)
-    kfx_status("PLATFORM" "Windows / MinGW-w64 (i686)")
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        kfx_status("PLATFORM" "Windows / MinGW-w64 (x86_64)")
+    else()
+        kfx_status("PLATFORM" "Windows / MinGW-w64 (i686)")
+    endif()
 elseif(UNIX AND NOT APPLE)
     kfx_status("PLATFORM" "Linux (x86_64)")
 else()

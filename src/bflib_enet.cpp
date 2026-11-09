@@ -1026,7 +1026,11 @@ namespace
      */
     void bf_enet_sendmsg_single_unsequenced(NetUserId destination, const char *buffer, size_t size)
     {
-        ENetPacket *packet = enet_packet_create(buffer, size, ENET_PACKET_FLAG_UNSEQUENCED);
+        /* a thin-client state turn's unreliable copy (2026-11-09): its fragments unreliable too (without this flag ENet
+           sends a packet over one datagram reliably, and a lost fragment holds the channel up) */
+        const enet_uint32 flags = ((size > 0) && ((uint8_t)buffer[0] == NETMSG_STATE_TURN)) ?
+            (ENET_PACKET_FLAG_UNSEQUENCED | ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT) : ENET_PACKET_FLAG_UNSEQUENCED;
+        ENetPacket *packet = enet_packet_create(buffer, size, flags);
         if (client_peer) // Just send to server
         {
             enet_peer_send(client_peer, ENET_CHANNEL_UNSEQUENCED, packet);

@@ -180,6 +180,8 @@ void world_perks_seat_started(PlayerNumber plyr_idx);
 /** A seat's player reached a level: where an upgrade will be given. */
 void world_perks_level_reached(PlayerNumber plyr_idx, int level);
 int world_perks_count(void);
+/** A save from before worlds had keys: the upgrades' tokens become the world's (how many). */
+int world_perks_tokens_to_key(void);
 const struct WorldPerks *world_perks_entry(int i);
 void world_perks_reset(void);
 

@@ -33,6 +33,10 @@ extern "C" {
 
 /******************************************************************************/
 long update_navigation_triangulation(long start_x, long start_y, long end_x, long end_y);
+/** Endless worlds: navigation updates wait (colours kept) until nav_defer_end, which triangulates what they touched
+ *  outside the area the caller refreshes next (start/end as nav_triangulate_paged takes them). */
+void nav_defer_begin(void);
+void nav_defer_end(long refresh_sx, long refresh_sy, long refresh_ex, long refresh_ey);
 int32_t init_navigation(void);
 void rebuild_navigation(void);
 size_t transfer_navigation_state(void *buffer, enum NavigationStateOperation operation);

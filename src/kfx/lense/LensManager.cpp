@@ -479,7 +479,7 @@ TbBool LensManager::AllocateBuffers()
     m_spare_screen_memory = (unsigned char*)calloc(buffer_size, sizeof(unsigned char));
     
     if (m_lens_memory == nullptr || m_spare_screen_memory == nullptr) {
-        ERRORLOG("Failed to allocate lens buffers (%lu bytes)", buffer_size * sizeof(uint32_t));
+        ERRORLOG("Failed to allocate lens buffers (%lu bytes)", (unsigned long)(buffer_size * sizeof(uint32_t)));
         FreeBuffers();
         return false;
     }

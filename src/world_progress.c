@@ -12,6 +12,7 @@
 #include <stdlib.h>
 
 #include "world_stream.h"
+#include "net_secure.h"
 #include "world_gen.h"
 #include "world_daynight.h"
 #include "game_legacy.h"
@@ -1858,6 +1859,13 @@ void world_progress_seat_reset(PlayerNumber plyr_idx)
 #define WORLD_PERKS_MAX 256
 static struct WorldPerks wpk[WORLD_PERKS_MAX];
 static int wpk_count;
+
+int world_perks_tokens_to_key(void)
+{
+    for (int i = 0; i < wpk_count; i++)
+        wpk[i].token = netsec_world_token(wpk[i].token);
+    return wpk_count;
+}
 
 struct WorldPerks *world_perks_of(uint64_t token, TbBool create)
 {

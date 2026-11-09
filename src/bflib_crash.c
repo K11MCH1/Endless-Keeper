@@ -173,19 +173,37 @@ _backtrace(int depth , LPCONTEXT context)
     STACKFRAME frame;
     memset(&frame,0,sizeof(frame));
 
+#ifdef _WIN64
+    /* 64-bit Windows (2026-11-09): dbghelp's StackWalk/STACKFRAME are the 64-bit ones there */
+    frame.AddrPC.Offset = context->Rip;
+#else
     frame.AddrPC.Offset = context->Eip;
+#endif
 
     frame.AddrPC.Mode = AddrModeFlat;
+#ifdef _WIN64
+    frame.AddrStack.Offset = context->Rsp;
+#else
     frame.AddrStack.Offset = context->Esp;
+#endif
     frame.AddrStack.Mode = AddrModeFlat;
+#ifdef _WIN64
+    frame.AddrFrame.Offset = context->Rbp;
+#else
     frame.AddrFrame.Offset = context->Ebp;
+#endif
     frame.AddrFrame.Mode = AddrModeFlat;
 
     HANDLE process = GetCurrentProcess();
     HANDLE thread = GetCurrentThread();
 
     // Loop through all traces in the stack
-    while (StackWalk(IMAGE_FILE_MACHINE_I386, process, thread, &frame, context, 0, SymFunctionTableAccess, SymGetModuleBase, 0))
+#ifdef _WIN64
+    const DWORD walk_machine = IMAGE_FILE_MACHINE_AMD64;
+#else
+    const DWORD walk_machine = IMAGE_FILE_MACHINE_I386;
+#endif
+    while (StackWalk(walk_machine, process, thread, &frame, context, 0, SymFunctionTableAccess, SymGetModuleBase, 0))
     {
         --depth;
         if (depth < 0)
@@ -195,7 +213,7 @@ _backtrace(int depth , LPCONTEXT context)
 
         // Get the base address in the module
         // This is where the address space of the functions start
-        DWORD module_base = SymGetModuleBase(process, frame.AddrPC.Offset);
+        DWORD_PTR module_base = SymGetModuleBase(process, frame.AddrPC.Offset);
 
         // Get the name of the module
         // The module will be the keeperfx bin or a library

@@ -55,6 +55,7 @@
 #include "keeperfx.hpp"
 #include "world_stream.h"
 #include "net_state.h"
+#include "net_secure.h"
 #include "world_pages.h"
 #include "world_net.h"
 #include "world_menu.h"
@@ -1162,8 +1163,9 @@ TbBool network_open_running_game(void)
     if (!netstate_dedicated())
     {
         /* the host's keeper is the host's, unless the seat is someone else's (a server's save played here) */
-        if ((world_seat_token(my_player_number) == 0) || (world_seat_token(my_player_number) == net_local_reconnect_token())) {
-            world_set_seat_token(my_player_number, net_local_reconnect_token());
+        const uint64_t mine = netsec_local_world_token(net_local_reconnect_token());
+        if ((world_seat_token(my_player_number) == 0) || (world_seat_token(my_player_number) == mine)) {
+            world_set_seat_token(my_player_number, mine);
         }
         /* a single-player world had no name on the host's keeper: the others see it by the host's nickname */
         struct PlayerInfo *host = get_my_player();
@@ -1210,7 +1212,7 @@ void network_after_save_loaded(void)
     game.game_kind = GKind_LocalGame;
     /* this machine's own seat, by its reconnect token (a server's save: player 0 is the server's first joiner,
        whoever that was); else the save's own player */
-    const uint64_t token = net_local_reconnect_token();
+    const uint64_t token = netsec_local_world_token(net_local_reconnect_token());
     PlayerNumber mine = PLAYER_NONE;
     const PlayerNumber *seats = NULL;
     const int seat_count = world_seat_players(&seats);
