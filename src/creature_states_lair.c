@@ -45,6 +45,7 @@
 
 #include "keeperfx.hpp"
 #include "world_colours.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -555,6 +556,17 @@ short creature_sleep(struct Thing *thing)
         if (((get_gameturn() + thing->index) % game.conf.rules[thing->owner].creature.recovery_frequency) == 0)
         {
             HitPoints recover = compute_creature_max_health(crconf->sleep_recovery, cctrl->exp_level);
+            /* endless: the Lair's level; its fraction of a point comes as an extra point that often (audit 2026-11-09) */
+            const int lair_bonus = world_room_bonus(thing->owner, WRB_LairHeal);
+            if (lair_bonus > 0)
+            {
+                const long scaled = (long)recover * (100 + lair_bonus);
+                recover = (HitPoints)(scaled / 100);
+                const long beat = (long)((get_gameturn() / game.conf.rules[thing->owner].creature.recovery_frequency +
+                    (GameTurn)thing->index * 37) % 100);
+                if ((scaled % 100) > beat)
+                    recover++;
+            }
             apply_health_to_thing_and_display_health(thing, recover);
         }
     }

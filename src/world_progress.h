@@ -31,6 +31,7 @@ struct WgStructRef;
 #define WORLD_BOOK_KIND_FIRST 136   /* 128 + 8 * grade + biome: grades 1-5, biomes 0-7 */
 #define WORLD_LORE_KIND_FIRST 200   /* 200 + item */
 #define WORLD_OUTPOST_BOOK_KIND 180 /* a heroes' spellbook, from an outpost's heart */
+#define WORLD_LEVELUP_KIND_FIRST 184 /* 184 + entry: a lore book that raises a room's or a spell's level (to 195) */
 
 /** ENDLESS_PROGRESSION(mode): mode 1 draft (choose 1 of 3), 2 automatic. For the level being loaded. */
 void world_progress_request(int mode);
@@ -69,6 +70,56 @@ void world_progress_book_shelved(struct Thing *thing, struct Room *room);
 /** Endless worlds: an Increase Level or Steal Hero box an imp puts in a Library fuses with one of the same kind
  *  there (up to WORLD_BOX_MAX_UPGRADES upgrades, then a second box starts). */
 #define WORLD_BOX_MAX_UPGRADES 10
+
+/** Room levels (2026-11-09): a book that would give a Lair, Hatchery, Library or Training Room the keeper already has
+ *  raises the level that room may reach (up to 3); the Library then researches it again, next in line, at twice and
+ *  three times the room's research. Level 2 / 3: Lair heals 10% / 20% faster; Hatchery: hunger comes 10% / 20% later
+ *  and food heals 5% / 10% more; Training Room +5% / +10% experience; Library researches 5% / 10% faster. */
+enum WorldRoomBonus {
+    WRB_LairHeal = 0,
+    WRB_HatcheryHunger,
+    WRB_HatcheryHeal,
+    WRB_TrainingXp,
+    WRB_LibraryResearch,
+};
+/** The percent a keeper's room level adds (0 outside endless worlds). */
+int world_room_bonus(PlayerNumber plyr_idx, enum WorldRoomBonus what);
+/** Spell levels (2026-11-09), from duplicate books like the rooms', researched at twice and four times the spell's
+ *  research. Level 2 / 3: Create Imp makes level 2 / 3 imps; Sight of Evil reaches 3% / 6% wider; Speed Monster 3% /
+ *  6% faster; Conceal Monster lasts 10 / 20 seconds longer; Heal's strongest cast heals 1150 / 1400 (830 at level
+ *  1, the others in proportion); Lightning Strike 2% / 5% more damage; Protect Monster 3% more armour, and at level
+ *  3 20 seconds longer too. Disease is off in endless worlds. */
+enum WorldPowerBonus {
+    WPB_ImpLevels = 0,  /* levels the new imp gets on top */
+    WPB_SightRadius,    /* percent */
+    WPB_SpeedEffect,    /* percent */
+    WPB_ConcealTurns,   /* game turns */
+    WPB_HealTop,        /* the strongest cast's healing (0: as configured) */
+    WPB_LightningDamage,/* percent */
+    WPB_ProtectArmour,  /* percent */
+    WPB_ProtectTurns,   /* game turns */
+    WPB_COUNT
+};
+int world_power_bonus(PlayerNumber plyr_idx, enum WorldPowerBonus what);
+/** The keeper whose power is being cast right now (-1 otherwise): Heal and the longer Conceal and Protect count only
+ *  for a keeper's own casts, not for creatures casting the same spells. */
+extern PlayerNumber world_power_caster;
+/** Extra game turns a keeper's spell level gives a spell cast with that keeper's power (Conceal, Protect). */
+int world_spell_extra_turns(PlayerNumber plyr_idx, int spell_idx);
+/** Heal: the healing of a cast at power_level, as the keeper's Heal level has it. */
+long world_heal_amount(PlayerNumber plyr_idx, long configured, const int32_t *strengths, int count);
+/** The Temple's "complete research": finishes the room or spell level the Library researches, if any. */
+TbBool world_room_level_sacrifice(PlayerNumber plyr_idx);
+/** The number on a spell's panel icon (as world_room_level_badge). */
+TbBool world_power_level_badge(PlayerNumber plyr_idx, int pwkind, int *number, TbBool *reached);
+/** The number on a room's panel icon: the next level, grey (allowed, not researched yet), or the level reached, white
+ *  (the last one allowed). False: no number. */
+TbBool world_room_level_badge(PlayerNumber plyr_idx, int rkind, int *number, TbBool *reached);
+/** The Library working on a room's next level (next in line after the research in progress): true while it does,
+ *  and the research of that turn is the level's. */
+TbBool world_room_level_research(PlayerNumber plyr_idx);
+/** The Library's research bar while it researches a room's level (false: none). */
+TbBool world_room_level_research_bar(PlayerNumber plyr_idx, int *required, int *progress);
 void world_progress_box_shelved(struct Thing *thing, struct Room *room);
 /** How many times a box works: 1 + its upgrades (endless worlds' Increase Level and Steal Hero boxes), else 1. */
 int world_progress_box_power(const struct Thing *thing);

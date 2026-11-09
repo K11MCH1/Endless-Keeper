@@ -330,6 +330,8 @@ void break_mapwho_infinite_chain(const struct Map *mapblk);
 TbBool update_thing(struct Thing *thing);
 short update_thing_sound(struct Thing *thing);
 struct Thing* find_players_dungeon_heart(PlayerNumber plyridx);
+/** The dungeon hearts by thing index, lowest first; -1 when there are too many to list. */
+int dungeon_hearts_by_index(ThingIndex *out, int max);
 struct Thing* find_players_backup_dungeon_heart(PlayerNumber plyridx);
 
 struct Thing *find_random_thing_in_room(ThingClass tngclass, ThingModel tngmodel,struct Room *room);

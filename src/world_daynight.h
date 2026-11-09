@@ -44,6 +44,9 @@ void world_raids_player_retreat(PlayerNumber plyr_idx);
 /** Draws the day/night icon in the top right corner (endless levels only; from the in-game UI). */
 void world_daynight_draw(void);
 
+/** The chunk manager: the chunks the day's raids keep loaded (retreating heroes' landings), as world slabs. */
+void world_daynight_want_chunks(void (*want)(int64_t wx, int64_t wy, int r));
+
 #ifdef __cplusplus
 }
 #endif

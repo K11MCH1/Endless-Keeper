@@ -81,6 +81,7 @@
 #include "sprites.h"
 #include "world_colours.h"
 #include "world_stream.h"
+#include "world_progress.h"
 #include "post_inc.h"
 #include "room_workshop.h"
 
@@ -752,6 +753,24 @@ void gui_go_to_next_spell(struct GuiButton *gbtn)
     gui_choose_spell(gbtn);
 }
 
+/** Endless worlds: a room's or spell's level on its panel icon, top right: the next level in grey (to research), or
+ *  the last level reached in white; a dark shadow under it so it reads over any icon. */
+static void draw_level_badge(struct GuiButton *gbtn, int number, TbBool reached)
+{
+    char level_text[8];
+    snprintf(level_text, sizeof(level_text), "%d", number);
+    LbTextSetFont(winfont);
+    RendererSetDrawFlags(Lb_TEXT_HALIGN_RIGHT | Lb_TEXT_ONE_COLOR);
+    const int tx_units_per_px = max(1, (gbtn->height * 16 * 2 / 5) / max(1, (int)LbTextLineHeight()));
+    const int shadow = max(1, gbtn->height / 40);
+    RendererSetDrawColour(colours[0][0][0]);
+    LbTextSetWindow(gbtn->scr_pos_x + shadow, gbtn->scr_pos_y + shadow, gbtn->width - gbtn->width / 9, gbtn->height);
+    LbTextDrawResized(0, gbtn->height / 16, tx_units_per_px, level_text);
+    RendererSetDrawColour(reached ? colours[15][15][15] : colours[10][10][10]);
+    LbTextSetWindow(gbtn->scr_pos_x, gbtn->scr_pos_y, gbtn->width - gbtn->width / 9, gbtn->height);
+    LbTextDrawResized(0, gbtn->height / 16, tx_units_per_px, level_text);
+}
+
 void gui_area_spell_button(struct GuiButton *gbtn)
 {
     unsigned short flg_mem = RendererGetDrawFlags();
@@ -792,6 +811,10 @@ void gui_area_spell_button(struct GuiButton *gbtn)
             {
                 draw_gui_panel_sprite_rmleft(gbtn->scr_pos_x, gbtn->scr_pos_y, ps_units_per_px, spr_idx, 44);
             }
+            int level_number = 0;
+            TbBool level_reached = false;
+            if (world_power_level_badge(my_player_number, pwkind, &level_number, &level_reached))
+                draw_level_badge(gbtn, level_number, level_reached);
         } else
         {
             if ((pwkind == PwrK_HOLDAUDNC) && (dungeon->magic_level[pwkind] > 0)) {
@@ -1689,6 +1712,11 @@ void gui_area_room_button(struct GuiButton *gbtn)
             } else {
                 draw_gui_panel_sprite_rmleft(gbtn->scr_pos_x, gbtn->scr_pos_y, ps_units_per_px, spr_idx, 44);
             }
+            /* endless worlds: the room's next level in grey (to research), or the level reached in white */
+            int level_number = 0;
+            TbBool level_reached = false;
+            if (world_room_level_badge(my_player_number, rkind, &level_number, &level_reached))
+                draw_level_badge(gbtn, level_number, level_reached);
         } else
         {
             // Draw a question mark over the button, to indicate it can be researched
@@ -2454,6 +2482,10 @@ void gui_area_research_bar(struct GuiButton *gbtn)
     int resrch_required;
     int resrch_progress;
     struct ResearchVal* rsrchval = get_players_current_research_val(my_player_number);
+    if (world_room_level_research_bar(my_player_number, &resrch_required, &resrch_progress))
+    {
+        /* endless world: a room's next level */
+    } else
     if (rsrchval != NULL)
     {
         resrch_required = rsrchval->req_amount;

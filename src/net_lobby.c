@@ -183,7 +183,6 @@ int32_t net_lobby_spectator_count(void)
     return count;
 }
 
-#define THIN_WATCHERS_MAX 8
 
 enum NetJoinRejection net_lobby_spectator_rejection(NetUserId reservation)
 {
@@ -206,10 +205,8 @@ enum NetJoinRejection net_lobby_spectator_rejection(NetUserId reservation)
         return NetJoin_SpectatorsFull;
     }
     /* a thin-client server (an endless world): joiners come in as spectators and take a seat; with every seat taken,
-       a few may stay and watch (each is sent the whole world every turn) */
-    if (netstate_is_server() && !network_spectator_seat_open(returning) && (count >= THIN_WATCHERS_MAX)) {
-        return NetJoin_SpectatorsFull;
-    }
+       a few may stay and watch. That cap is applied when a joiner is seated (thin_seat_joiners), where its own seat is
+       known: here a returning owner or joiners still loading would count (audit 2026-11-09) */
     return NetJoin_Accepted;
 }
 

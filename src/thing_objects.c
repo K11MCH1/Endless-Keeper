@@ -1541,6 +1541,7 @@ static TngUpdateRet object_update_power_sight(struct Thing *objtng)
     KeepPwrLevel sight_casted_power_level = dungeon->sight_casted_power_level;
     int max_time_active = powerst->strength[sight_casted_power_level];
     int strength = min(powerst->strength[sight_casted_power_level], (MAX_SOE_RADIUS * COORD_PER_STL / 4));
+    const int sight_wider = world_power_bonus(objtng->owner, WPB_SightRadius); /* endless: its level, percent */
 
     if ( get_gameturn() - objtng->creation_turn >= max_time_active
         && get_gameturn() - dungeon->sight_casted_gameturn < max_time_active )
@@ -1588,8 +1589,8 @@ static TngUpdateRet object_update_power_sight(struct Thing *objtng)
             const int anim_time = (get_gameturn() - dungeon->sight_casted_gameturn);
             const int anim_radius = 4 * anim_time;
             const int close_radius = 32 * (power_sight_close_instance_time[dungeon->sight_casted_power_level] - (anim_time - max_time_active));
-            const int max_duration_radius = max_time_active / 4;
-            const int strength_radius = strength/4;
+            const int max_duration_radius = max_time_active / 4 * (100 + sight_wider) / 100;
+            const int strength_radius = strength / 4 * (100 + sight_wider) / 100;
             const int radius = max(0, min(min(min(close_radius, max_duration_radius), anim_radius), strength_radius));
             for (int i = 0; i < 32; ++i) {
                 const int step = ((DEGREES_360) / 32);
@@ -1608,8 +1609,8 @@ static TngUpdateRet object_update_power_sight(struct Thing *objtng)
         // draw 32 particles in an expanding radial pattern, 4 at a time, exploring terrain as we go
         const int anim_time = (get_gameturn() - dungeon->sight_casted_gameturn);
         const int anim_radius = 4 * anim_time;
-        const int max_duration_radius = max_time_active / 4;
-        const int strength_radius = strength/4;
+        const int max_duration_radius = max_time_active / 4 * (100 + sight_wider) / 100;
+        const int strength_radius = strength / 4 * (100 + sight_wider) / 100;
         const int radius = max(0, min(min(max_duration_radius, anim_radius), strength_radius));
         for (int i = 0; i < 4; ++i) {
             const int step = ((DEGREES_360) / 32);

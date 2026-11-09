@@ -119,7 +119,9 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_REC_MAGIC_V2 0x324B4357u /* "WCK2": with slab textures */
 #define WORLD_REC_MAGIC_V3 0x334B4357u /* "WCK3": with slab textures and dig orders */
 #define WORLD_REC_MAGIC_V4 0x344B4357u /* "WCK4": revealed flags and dig orders, 16 bits (players 0-15) */
-#define WORLD_REC_MAGIC 0x354B4357u /* "WCK5": revealed flags and dig orders as player sets of n 32-bit words */
+#define WORLD_REC_MAGIC_V5 0x354B4357u /* "WCK5": revealed flags and dig orders as player sets of n 32-bit words */
+#define WORLD_REC_MAGIC 0x364B4357u /* "WCK6" (2026-11-09): as WCK5, owners coded for 104 players (humans 152 + player;
+                                       before: 0xF0 + player, which wrapped from player 16 on) */
 #define WORLD_BLOB_MAGIC 0x31444C57u /* "WLD1" */
 #define WORLD_PORTALS_MAGIC 0x31545250u /* "PRT1": optional section after the chunk tables */
 #define WORLD_PAGES_MAGIC 0x31534750u /* "PGS1": paged mode only, after the portals: the loaded chunk pages (raw) */
@@ -148,9 +150,11 @@ enum WorldOwner {
     WOwn_Neutral = 0,
     WOwn_Player  = 1, /* PLAYER0, the level's own player */
     WOwn_Heroes  = 2,
-    WOwn_Keeper0 = 3, /* WOwn_Keeper0 + index in the keeper list */
-    WOwn_HumanBase = 0xF0, /* WOwn_HumanBase + player number: other human players (network games) */
+    WOwn_Keeper0 = 3, /* WOwn_Keeper0 + index in the keeper list (keepers 0-148) */
+    WOwn_HumanBase = 152, /* WOwn_HumanBase + player number: other human players, 1-103 (network games) */
 };
+#define WOWN_HUMAN_BASE_V5 0xF0 /* records before WCK6: 0xF0 + player */
+#define WORLD_KEEPER_CODES (WOwn_HumanBase - WOwn_Keeper0) /* keepers an owner byte can name */
 
 enum WorldKeeperState {
     WKSt_Waiting = 0,  /* known, no colour (none was free) */
@@ -205,7 +209,7 @@ struct WorldStamp {
     int32_t plyr;
     int64_t dx, dy;
 };
-#define WORLD_MAX_STAMPS 256         /* every new seat and every "Start again" takes one (16 before 2026-11-08) */
+#define WORLD_MAX_STAMPS 2048        /* every new seat, "Start again" and reset takes one (256 before 2026-11-09) */
 #define WORLD_STAMP_RETIRED (-2)     /* a start whose seat started again elsewhere: ruins, nobody's (it still counts
                                         for the spacing of the next starts) */
 #define WORLD_STAMP_WIPED (-3)       /* a start wiped by a dungeon reset (2026-11-09): its ground was made again from the
@@ -508,8 +512,8 @@ static int keeper_register(const struct WgStructRef *ref)
     int k = keeper_index(&ref->id);
     if (k >= 0)
         return k;
-    if (W.keeper_count >= WORLD_MAX_KEEPERS)
-        return -1;
+    if (W.keeper_count >= WORLD_KEEPER_CODES)
+        return -1; /* an owner byte names keepers 0-148 (a world saved before kept more on record: those stay) */
     k = W.keeper_count++;
     struct WorldKeeper *wk = &W.keepers[k];
     memset(wk, 0, sizeof(*wk));
@@ -586,7 +590,7 @@ static PlayerNumber owner_to_engine(uint8_t wown)
     default:
         if ((wown > WOwn_HumanBase) && (wown < WOwn_HumanBase + PLAYERS_COUNT))
             return (PlayerNumber)(wown - WOwn_HumanBase);
-        if (wown - WOwn_Keeper0 < W.keeper_count)
+        if ((wown >= WOwn_Keeper0) && (wown < WOwn_HumanBase) && (wown - WOwn_Keeper0 < W.keeper_count))
             return keeper_take_slot(wown - WOwn_Keeper0);
         return game.neutral_player_num;
     }
@@ -598,10 +602,10 @@ static uint8_t owner_to_world(PlayerNumber plyr_idx)
         return WOwn_Player;
     if (plyr_idx == PLAYER_GOOD)
         return WOwn_Heroes;
-    for (int i = 0; i < W.keeper_count; i++)
+    for (int i = 0; (i < W.keeper_count) && (i < WORLD_KEEPER_CODES); i++)
         if ((W.keepers[i].slot == plyr_idx) && (W.keepers[i].state != WKSt_Destroyed))
             return (uint8_t)(WOwn_Keeper0 + i);
-    if (world_player_is_human(plyr_idx))
+    if (world_player_is_human(plyr_idx) && (plyr_idx > 0) && (plyr_idx < 256 - WOwn_HumanBase))
         return (uint8_t)(WOwn_HumanBase + plyr_idx);
     return WOwn_Neutral;
 }
@@ -693,7 +697,7 @@ static uint8_t wg_owner_to_world(uint8_t wgown, const struct WgStructId *keeper)
     case WgO_Keeper:
     {
         int k = keeper_index(keeper);
-        return (k >= 0) ? (uint8_t)(WOwn_Keeper0 + k) : WOwn_Neutral;
+        return ((k >= 0) && (k < WORLD_KEEPER_CODES)) ? (uint8_t)(WOwn_Keeper0 + k) : WOwn_Neutral;
     }
     default: return WOwn_Neutral;
     }
@@ -1047,20 +1051,17 @@ static void apply_stamps(int32_t cx, int32_t cy, struct WorldChunkData *cd)
 }
 
 /** The player starts (world slabs): the first player's, then every seat's start dungeon. */
-static int world_starts(int64_t *xs, int64_t *ys, int max_starts)
+/** World slab of player start s: 0 the level's own (the home), then each stamp's (1 + W.stamp_count in all). */
+static void world_start_at(const struct WgStructRef *start, int s, int64_t *x, int64_t *y)
 {
-    int n = 0;
-    xs[n] = W.home_x;
-    ys[n] = W.home_y;
-    n++;
-    struct WgStructRef start;
-    wg_start_ref(W.gen, &start);
-    for (int k = 0; (k < W.stamp_count) && (n < max_starts); k++, n++)
+    if (s == 0)
     {
-        xs[n] = start.heart_x + W.stamps[k].dx;
-        ys[n] = start.heart_y + W.stamps[k].dy;
+        *x = W.home_x;
+        *y = W.home_y;
+        return;
     }
-    return n;
+    *x = start->heart_x + W.stamps[s - 1].dx;
+    *y = start->heart_y + W.stamps[s - 1].dy;
 }
 
 /** Slabs from a world slab to the nearest player start: research books grade by it, so every player's books grow
@@ -1073,12 +1074,14 @@ double world_dist_to_nearest_start(int64_t x, int64_t y)
 
 static double dist_to_nearest_start(int64_t x, int64_t y)
 {
-    int64_t xs[WORLD_MAX_STAMPS + 1], ys[WORLD_MAX_STAMPS + 1];
-    const int n = world_starts(xs, ys, WORLD_MAX_STAMPS + 1);
+    struct WgStructRef start;
+    wg_start_ref(W.gen, &start);
     double best = 1e30;
-    for (int i = 0; i < n; i++)
+    for (int i = 0; i < 1 + W.stamp_count; i++)
     {
-        const double dx = (double)(x - xs[i]), dy = (double)(y - ys[i]);
+        int64_t sx, sy;
+        world_start_at(&start, i, &sx, &sy);
+        const double dx = (double)(x - sx), dy = (double)(y - sy);
         const double d = sqrt(dx * dx + dy * dy);
         if (d < best)
             best = d;
@@ -1089,10 +1092,17 @@ static double dist_to_nearest_start(int64_t x, int64_t y)
 /** Research books: the two reward caves nearest each player start always hold one. */
 static TbBool book_cave_guaranteed(const struct WgStructRef *ref)
 {
-    int64_t xs[WORLD_MAX_STAMPS + 1], ys[WORLD_MAX_STAMPS + 1];
-    const int starts = world_starts(xs, ys, WORLD_MAX_STAMPS + 1);
-    for (int s = 0; s < starts; s++)
+    struct WgStructRef start;
+    wg_start_ref(W.gen, &start);
+    int64_t xs[1], ys[1];
+    for (int st_i = 0; st_i < 1 + W.stamp_count; st_i++)
     {
+        const int s = 0;
+        world_start_at(&start, st_i, &xs[s], &ys[s]);
+        /* only a start within the search's reach can have this cave among its two (the box below is +-200) */
+        if ((ref->origin_x < xs[s] - 200) || (ref->origin_x > xs[s] + 200) || (ref->origin_y < ys[s] - 200) ||
+            (ref->origin_y > ys[s] + 200))
+            continue;
         struct WgStructRef near[32];
         const int n = min(wg_structures_in(W.gen, xs[s] - 200, ys[s] - 200, xs[s] + 200, ys[s] + 200,
             1u << WgT_Reward, near, 32), 32);
@@ -1579,6 +1589,16 @@ static TbBool store_chunk_record(const struct WorldChunkData *cd)
     return stored;
 }
 
+/** An owner in a record from before WCK6: humans were 0xF0 + player (players 1-15), keepers 3 + index. */
+static uint8_t owner_from_v5(uint8_t o)
+{
+    if (o > WOWN_HUMAN_BASE_V5)
+        return (uint8_t)(WOwn_HumanBase + (o - WOWN_HUMAN_BASE_V5));
+    if ((o >= WOwn_Keeper0) && (o - WOwn_Keeper0 >= WORLD_KEEPER_CODES))
+        return WOwn_Neutral;
+    return o;
+}
+
 static TbBool load_chunk_record(int32_t cx, int32_t cy, struct WorldChunkData *cd)
 {
     struct ChunkSlot *s = table_find(&W.store, cx, cy);
@@ -1594,9 +1614,10 @@ static TbBool load_chunk_record(int32_t cx, int32_t cy, struct WorldChunkData *c
     struct RecReader r = {raw, raw_len, 0, false};
     memset(cd, 0, sizeof(*cd));
     uint32_t magic = rec_get_u32(&r);
-    if ((magic != WORLD_REC_MAGIC) && (magic != WORLD_REC_MAGIC_V4) && (magic != WORLD_REC_MAGIC_V3) &&
-        (magic != WORLD_REC_MAGIC_V2) && (magic != WORLD_REC_MAGIC_V1))
+    if ((magic != WORLD_REC_MAGIC) && (magic != WORLD_REC_MAGIC_V5) && (magic != WORLD_REC_MAGIC_V4) &&
+        (magic != WORLD_REC_MAGIC_V3) && (magic != WORLD_REC_MAGIC_V2) && (magic != WORLD_REC_MAGIC_V1))
         r.bad = true;
+    const TbBool player_sets = (magic == WORLD_REC_MAGIC) || (magic == WORLD_REC_MAGIC_V5);
     rec_get(&r, &cd->cx, 4);
     rec_get(&r, &cd->cy, 4);
     rec_get(&r, cd->kind, sizeof(cd->kind));
@@ -1608,7 +1629,7 @@ static TbBool load_chunk_record(int32_t cx, int32_t cy, struct WorldChunkData *c
         rec_get(&r, cd->texture_initial, sizeof(cd->texture_initial));
     }
     uint32_t words = 0;
-    if (magic == WORLD_REC_MAGIC)
+    if (player_sets)
     {
         words = rec_get_u32(&r);
         if ((words < 1) || (words > 64))
@@ -1631,7 +1652,7 @@ static TbBool load_chunk_record(int32_t cx, int32_t cy, struct WorldChunkData *c
         r.bad = true;
     else
         rec_get(&r, cd->things, (uint32_t)(sizeof(struct WorldThing) * n));
-    if ((magic == WORLD_REC_MAGIC) && !r.bad)
+    if (player_sets && !r.bad)
         rec_get_masks(&r, cd->dig, WG_CHUNK_CELLS, words);
     else
     if ((magic == WORLD_REC_MAGIC_V4) || (magic == WORLD_REC_MAGIC_V3))
@@ -1653,6 +1674,14 @@ static TbBool load_chunk_record(int32_t cx, int32_t cy, struct WorldChunkData *c
     {
         ERRORLOG("World: stored chunk (%d,%d) is damaged", (int)cx, (int)cy);
         return false;
+    }
+    if (magic != WORLD_REC_MAGIC)
+    {
+        /* an older record: its owners in today's code (it is written as WCK6 at its next freeze) */
+        for (int i = 0; i < (int)sizeof(cd->owner); i++)
+            cd->owner[i] = owner_from_v5(cd->owner[i]);
+        for (int i = 0; i < cd->thing_count; i++)
+            cd->things[i].owner = owner_from_v5(cd->things[i].owner);
     }
     return true;
 }
@@ -2227,6 +2256,22 @@ static void clear_band(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSla
 /** A dungeon heart other than `except` within a subtile of (stl_x, stl_y). */
 static struct Thing *find_heart_near(MapSubtlCoord stl_x, MapSubtlCoord stl_y, const struct Thing *except)
 {
+    /* the lowest-index heart within a subtile, as the scan below finds it, from the list of hearts (a scan of every
+       thing slot ran once per heart, per pass; audit 2026-11-09) */
+    static ThingIndex hearts[512];
+    const int nh = dungeon_hearts_by_index(hearts, 512);
+    if (nh >= 0)
+    {
+        for (int h = 0; h < nh; h++)
+        {
+            struct Thing *thing = thing_get(hearts[h]);
+            if (!thing_exists(thing) || (thing == except) || (thing->class_id != TCls_Object) || !thing_is_dungeon_heart(thing))
+                continue;
+            if ((abs(thing->mappos.x.stl.num - stl_x) <= 1) && (abs(thing->mappos.y.stl.num - stl_y) <= 1))
+                return thing;
+        }
+        return INVALID_THING;
+    }
     for (long i = 1; i < THINGS_COUNT; i++)
     {
         struct Thing *thing = thing_get(i);
@@ -2566,7 +2611,8 @@ static void fill_chunks(struct FillChunk *list, int count)
                 }
             }
         }
-        explore_like_level_start(window_chunk_slab(list[c].lcx), window_chunk_slab(list[c].lcy));
+        if (cd->fresh)
+            explore_like_level_start(window_chunk_slab(list[c].lcx), window_chunk_slab(list[c].lcy));
     }
     /* 5. dig orders stored with the chunk, as the hand marks them */
     for (int c = 0; c < count; c++)
@@ -2623,8 +2669,12 @@ static struct WorldChunkData *chunk_data_for(int32_t cx, int32_t cy)
 /** Removes a second heart standing on a heart: older versions placed one over the heart the pedestal makes. */
 static void remove_duplicate_hearts(void)
 {
-    for (long i = 1; i < THINGS_COUNT; i++)
+    /* the hearts by index (the same order as the scan of every slot it was) */
+    static ThingIndex hearts[512];
+    const int nh = dungeon_hearts_by_index(hearts, 512);
+    for (long h = 0; h < ((nh >= 0) ? nh : THINGS_COUNT - 1); h++)
     {
+        const long i = (nh >= 0) ? hearts[h] : h + 1;
         struct Thing *heart = thing_get(i);
         if (!thing_exists(heart) || (heart->class_id != TCls_Object) || !thing_is_dungeon_heart(heart))
             continue;
@@ -2735,11 +2785,11 @@ static void setup_keepers(void)
 static TbBool human_creature_near_keeper(const struct WorldKeeper *wk, PlayerNumber plyr_idx);
 
 /** Is one of a human player's creatures within the keeper's threat radius of its heart? */
-static TbBool player_creature_near_keeper(const struct WorldKeeper *wk)
+static TbBool player_creature_near_keeper(const struct WorldKeeper *wk, PlayerBitFlags humans)
 {
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
-        if (world_player_is_human(p) && human_creature_near_keeper(wk, p))
+        if (owner_in_mask(p, humans) && human_creature_near_keeper(wk, p))
             return true;
     }
     return false;
@@ -2776,9 +2826,9 @@ static TbBool human_creature_near_keeper(const struct WorldKeeper *wk, PlayerNum
 /** Is anything of a human player's (a creature, or a slab) within the keeper's threat radius of its heart? */
 static TbBool player_near_keeper(const struct WorldKeeper *wk)
 {
-    if (player_creature_near_keeper(wk))
-        return true;
     const PlayerBitFlags humans = world_human_mask();
+    if (player_creature_near_keeper(wk, humans))
+        return true;
     int64_t hx = engine_slab_x(wk->heart_x), hy = engine_slab_y(wk->heart_y);
     int64_t r = wk->threat_radius;
     for (int64_t y = max(hy - r, 0); y <= min(hy + r, (int64_t)game.map_tiles_y - 1); y++)
@@ -3287,6 +3337,7 @@ static TbBool view_slab(MapSlabCoord *slb_x, MapSlabCoord *slb_y)
 #define CM_TERRITORY_RADIUS 1    /* round each chunk holding a slab the player owns: the ground ahead can be seen and dug */
 #define CM_UNLOAD_TURNS 200      /* a chunk nobody has wanted for this long is frozen */
 #define CM_LOAD_BUDGET 3         /* chunks loaded per pass */
+#define WORLD_CREATURE_MARGIN 96 /* creature slots kept free for a chunk's creatures (a keeper's base, an outpost) */
 #define CM_UNLOAD_BUDGET 2       /* chunks frozen per pass, and only in passes that loaded none (unloading can wait) */
 #define CM_MARGIN_STL 6          /* navigation, ceilings and the minimap are refreshed this far round a chunk */
 #define CM_LIGHT_MARGIN_STL 16   /* static light this far (the reach of the longest static light) */
@@ -3318,6 +3369,11 @@ static void cm_want(int64_t wcx, int64_t wcy, int r)
             table_insert(&cm_wanted, (int32_t)(wcx + dx), (int32_t)(wcy + dy));
 }
 
+static void cm_want_world(int64_t wx, int64_t wy, int r)
+{
+    cm_want(floor_div(wx, WORLD_CHUNK_SLABS), floor_div(wy, WORLD_CHUNK_SLABS), r);
+}
+
 static void cm_want_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y, int r)
 {
     cm_want(floor_div(world_slab_x_of(subtile_slab(stl_x)), WORLD_CHUNK_SLABS),
@@ -3333,6 +3389,9 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
     *home_cy = floor_div(W.home_y, WORLD_CHUNK_SLABS);
     cm_want(*home_cx, *home_cy, CM_HEART_RADIUS);
     const PlayerBitFlags humans = world_human_mask();
+    struct WgStructRef start;
+    if (W.gen != NULL)
+        wg_start_ref(W.gen, &start);
     /* the other human players' hearts (network games) */
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
@@ -3341,11 +3400,32 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
         struct Thing *heartng = find_players_dungeon_heart(p);
         if (thing_exists(heartng))
             cm_want_subtile(heartng->mappos.x.stl.num, heartng->mappos.y.stl.num, CM_HEART_RADIUS);
+        else if ((W.gen != NULL) && (get_player(p)->victory_state == VicS_Undecided))
+        {
+            /* no heart, not defeated: its start couldn't load when it was made (the pools were full); it comes
+               when there is room (nothing else would ever load it; audit 2026-11-09) */
+            for (int n = W.stamp_count - 1; n >= 0; n--)
+            {
+                if (W.stamps[n].plyr != p)
+                    continue;
+                cm_want(floor_div(start.heart_x + W.stamps[n].dx, WORLD_CHUNK_SLABS),
+                    floor_div(start.heart_y + W.stamps[n].dy, WORLD_CHUNK_SLABS), CM_HEART_RADIUS);
+                break;
+            }
+        }
     }
-    /* the human players' creatures and imps, and raid heroes */
-    for (long i = 1; i < THINGS_COUNT; i++)
+    /* retreating raiders' landings stay while they walk back (they were frozen and loaded again, 9 a landing) */
+    world_daynight_want_chunks(cm_want_world);
+    /* the human players' creatures and imps, and raid heroes (the creature list: the same set as a scan of every slot,
+       in another order, which a table of keys doesn't mind) */
+    const struct StructureList *creatures = get_list_for_thing_class(TCls_Creature);
+    long cguard = 0;
+    for (ThingIndex ci = creatures->index; (ci > 0) && (cguard++ <= (long)THINGS_COUNT);)
     {
-        struct Thing *thing = thing_get(i);
+        struct Thing *thing = thing_get(ci);
+        if (thing_is_invalid(thing))
+            break;
+        ci = thing->next_of_class;
         if (!thing_exists(thing) || (thing->class_id != TCls_Creature) || thing_is_picked_up(thing))
             continue;
         if (owner_in_mask(thing->owner, humans) || world_raid_hero(thing))
@@ -3358,7 +3438,7 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
         const struct WorldKeeper *wk = &W.keepers[k];
         if (wk->state == WKSt_Destroyed)
             continue;
-        if ((wk->state != WKSt_Active) && !player_creature_near_keeper(wk))
+        if ((wk->state != WKSt_Active) && !player_creature_near_keeper(wk, humans))
             continue;
         for (int64_t cy = floor_div(wk->bbox_y1, WG_CHUNK); cy <= floor_div(wk->bbox_y2, WG_CHUNK); cy++)
             for (int64_t cx = floor_div(wk->bbox_x1, WG_CHUNK); cx <= floor_div(wk->bbox_x2, WG_CHUNK); cx++)
@@ -3416,18 +3496,37 @@ static void cm_after_changes(void)
         struct Dungeon *dungeon = get_dungeon(p);
         if (dungeon_invalid(dungeon))
             continue;
+        /* a stack that points into ground that went is made again at once; new ground comes in at the next of the
+           usual rebuilds (every 128 turns). Every dungeon rebuilt after every chunk change, each rebuild walking every
+           loaded slab (audit 2026-11-09) */
+        TbBool stale = !world_paged;
+        for (int k = 0; (k < dungeon->digger_stack_length) && (k < DIGGER_TASK_MAX_COUNT) && !stale; k++)
+        {
+            const SubtlCodedCoords stl = dungeon->digger_stack[k].stl_num;
+            const MapSubtlCoord sx = stl_num_decode_x(stl), sy = stl_num_decode_y(stl);
+            stale = (wp_page((int32_t)(sx / CHUNK_STL), (int32_t)(sy / CHUNK_STL)) == NULL);
+        }
+        if (!stale)
+            continue;
         dungeon->digger_stack_length = 0;
         dungeon->digger_stack_update_turn = 0;
     }
     WORLD_PROF(WPS_CmGold, check_map_for_gold());
-    for (long i = 1; i < THINGS_COUNT; i++)
     {
-        struct Thing *thing = thing_get(i);
-        if (!thing_exists(thing) || (thing->class_id != TCls_Creature))
-            continue;
-        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
-        if (!creature_control_invalid(cctrl))
-            cctrl->arid.may_need_reroute = 1;
+        const struct StructureList *creatures = get_list_for_thing_class(TCls_Creature);
+        long cguard = 0;
+        for (ThingIndex ci = creatures->index; (ci > 0) && (cguard++ <= (long)THINGS_COUNT);)
+        {
+            struct Thing *thing = thing_get(ci);
+            if (thing_is_invalid(thing))
+                break;
+            ci = thing->next_of_class;
+            if (!thing_exists(thing) || (thing->class_id != TCls_Creature))
+                continue;
+            struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+            if (!creature_control_invalid(cctrl))
+                cctrl->arid.may_need_reroute = 1;
+        }
     }
     game.map_changed_for_navigation = 1;
     me_pointed_at = INVALID_MAP_BLOCK; /* it may point into a freed page; the next frame finds it again */
@@ -3616,7 +3715,8 @@ static void chunk_manager_turn(void)
        navigation mesh (both fixed pools). Short of room, nothing loads (creation would fail silently and those
        things would be gone at the next freeze); freezing goes on and makes room. */
     const TbBool room_for_more = (game.synced_free_things_count > 2 * WORLD_MAX_THINGS_PER_CHUNK) &&
-        (count_Triangles < TRIANLGLES_COUNT - 4000) && (count_Points < POINTS_COUNT - 2000);
+        (count_Triangles < TRIANLGLES_COUNT - 4000) && (count_Points < POINTS_COUNT - 2000) &&
+        (game.thing_lists[TngList_Creatures].count < CREATURES_COUNT - WORLD_CREATURE_MARGIN);
     if ((ncand > 0) && !room_for_more)
     {
         static GameTurn last_warned = 0;
@@ -3649,7 +3749,9 @@ static void chunk_manager_turn(void)
     {
         if (pg->wanted_turn == 0)
             pg->wanted_turn = now;
-        if ((loaded == 0) && (ngone < CM_UNLOAD_BUDGET) && (now - pg->wanted_turn >= CM_UNLOAD_TURNS))
+        /* in a pass that loaded, one may still freeze: with several players exploring every pass loaded, nothing
+           froze, and the world grew to the pools' limits (audit 2026-11-09) */
+        if ((ngone < ((loaded == 0) ? CM_UNLOAD_BUDGET : 1)) && (now - pg->wanted_turn >= CM_UNLOAD_TURNS))
         {
             gone[ngone].cx = page_world_cx(pg);
             gone[ngone].cy = page_world_cy(pg);
@@ -3702,7 +3804,8 @@ int world_load_chunks_round(MapSlabCoord slb_x, MapSlabCoord slb_y, int r)
             if (wp_page(engine_chunk_of(cx + dx), engine_chunk_of(cy + dy)) != NULL)
                 continue;
             if ((game.synced_free_things_count <= 2 * WORLD_MAX_THINGS_PER_CHUNK) ||
-                (count_Triangles >= TRIANLGLES_COUNT - 4000) || (count_Points >= POINTS_COUNT - 2000))
+                (count_Triangles >= TRIANLGLES_COUNT - 4000) || (count_Points >= POINTS_COUNT - 2000) ||
+                (game.thing_lists[TngList_Creatures].count >= CREATURES_COUNT - WORLD_CREATURE_MARGIN))
             {
                 WARNLOG("World: no room for more chunks (things or navigation): %d left unloaded round (%d,%d)",
                     (2 * r + 1) * (2 * r + 1) - loaded, (int)cx, (int)cy);
@@ -3783,9 +3886,8 @@ int world_peek_warm(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSlabCo
         {
             if (wp_page(engine_chunk_of(wcx), engine_chunk_of(wcy)) != NULL)
                 continue; /* loaded: read live */
-            if ((peek_cache != NULL) && peek_cache_slot(wcx, wcy)->valid && (peek_cache_slot(wcx, wcy)->cx == wcx) &&
-                (peek_cache_slot(wcx, wcy)->cy == wcy))
-                continue;
+            if ((peek_cache != NULL) && peek_cache_slot(wcx, wcy)->valid)
+                continue; /* cached, or its slot holds another chunk: warming doesn't evict (audit 2026-11-09) */
             peek_get(wcx, wcy, &cd, &stored, &generated);
             done++;
         }
@@ -4234,8 +4336,13 @@ static PlayerBitFlags make_seat_starts(void)
     wg_start_ref(W.gen, &start);
     for (PlayerNumber p = (respawn_seat == PLAYER0) ? PLAYER0 : 1; p < PLAYERS_COUNT; p++)
     {
-        if (!world_player_is_human(p) || thing_exists(find_players_dungeon_heart(p)) || (W.stamp_count >= WORLD_MAX_STAMPS))
+        if (!world_player_is_human(p) || thing_exists(find_players_dungeon_heart(p)))
             continue;
+        if (W.stamp_count >= WORLD_MAX_STAMPS)
+        {
+            WARNLOG("World: no start for player %d: the world's %d starts are used up", (int)p, WORLD_MAX_STAMPS);
+            continue;
+        }
         TbBool have = false;
         for (int n = 0; n < W.stamp_count; n++)
             have = have || (W.stamps[n].plyr == p);
@@ -4980,6 +5087,12 @@ TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
         snprintf(why, why_len, "no place for a new start dungeon");
         return false;
     }
+    if (W.stamp_count >= WORLD_MAX_STAMPS)
+    {
+        /* checked before anything is wiped (it was found only after the dungeon had gone; audit 2026-11-09) */
+        snprintf(why, why_len, "the world's %d start places are used up", WORLD_MAX_STAMPS);
+        return false;
+    }
     const uint8_t wown = (p == PLAYER0) ? (uint8_t)WOwn_Player : (uint8_t)(WOwn_HumanBase + p);
     const TbBool cared = world_caretaker_active(p);
     SYNCLOG("World: player %d (%s): the dungeon is reset (a new start at offset %ld,%ld)", (int)p, player->player_name,
@@ -5045,6 +5158,14 @@ TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
     for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
         for (int i = 0; i < WP_CHUNK_STL_CELLS; i++)
             pmask_del(&pg->map[i].revealed, p);
+    /* the powers it has, by level: spells researched in a Library are its books there, which go with the old ground
+       (audit 2026-11-09) */
+    uint16_t magic_had[POWER_TYPES_MAX];
+    {
+        const struct Dungeon *dungeon = get_players_num_dungeon(p);
+        for (int k = 0; k < POWER_TYPES_MAX; k++)
+            magic_had[k] = dungeon_invalid(dungeon) ? 0 : (uint16_t)dungeon->magic_level[k];
+    }
     /* 4. those chunks freeze into the store (its heart and rooms with them) */
     for (int k = 0; k < nloaded; k++)
         cm_unload_chunk(loaded[2 * k], loaded[2 * k + 1]);
@@ -5111,6 +5232,22 @@ TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
     respawn_seat = p;
     world_seat_joined(p);
     respawn_seat = PLAYER_NONE;
+    {
+        /* the spells it had come back (a reset keeps research) */
+        struct Dungeon *dungeon = get_players_num_dungeon(p);
+        int restored = 0;
+        for (int k = 1; (k < POWER_TYPES_MAX) && (k < game.conf.magic_conf.power_types_count) && !dungeon_invalid(dungeon); k++)
+        {
+            for (int guard = 0; (dungeon->magic_level[k] < magic_had[k]) && (guard < 16); guard++)
+            {
+                if (!add_power_to_player(k, p))
+                    break;
+                restored++;
+            }
+        }
+        if (restored > 0)
+            SYNCLOG("World: player %d's reset: %d spell level(s) researched in the Library given back", (int)p, restored);
+    }
     if (cared)
         world_caretaker_start(p); /* still away: the caretaker keeps the new dungeon */
     if (netstate_is_server())

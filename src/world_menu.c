@@ -58,6 +58,9 @@
 #include "net_state.h"
 #include "packets.h"
 #include "observer.h"
+#include "gui_parchment.h"
+#include "frontmenu_ingame_tabs.h"
+#include "local_camera.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -131,16 +134,39 @@ static void wm_list_saves(void)
         wm_scroll = 0;
 }
 
-/** The newest endless save that isn't known to be unloadable, or -1. */
-static int wm_continue_slot(void)
+/** A dedicated server's autosave ("Server <seed> dN (auto)"): the player's Continue leaves it alone. */
+static TbBool wm_is_server_save(const struct CatalogueEntry *centry)
 {
-    for (int i = 0; i < wm_saves_count; i++)
+    return (centry != NULL) && (strncmp(centry->textname, "Server ", 7) == 0);
+}
+
+/** The newest endless save that isn't known to be unloadable, or -1. The player's Continue skips a dedicated
+ *  server's autosaves (they share the save folder: Continue opened the server's world as its first joiner, and the
+ *  single-player copy overwrote the server's slot; audit 2026-11-09); a server's own takes its newest one first. */
+static int wm_continue_slot_for(TbBool server)
+{
+    for (int pass = 0; pass < 2; pass++)
     {
-        const struct CatalogueEntry *centry = SaveManager_Entry(wm_saves[i]);
-        if ((centry != NULL) && ((centry->flags & CEF_Unloadable) == 0))
+        for (int i = 0; i < wm_saves_count; i++)
+        {
+            const struct CatalogueEntry *centry = SaveManager_Entry(wm_saves[i]);
+            if ((centry == NULL) || ((centry->flags & CEF_Unloadable) != 0))
+                continue;
+            if (!server && wm_is_server_save(centry))
+                continue;
+            if (server && (pass == 0) && !wm_is_server_save(centry))
+                continue;
             return wm_saves[i];
+        }
+        if (!server)
+            break;
     }
     return -1;
+}
+
+static int wm_continue_slot(void)
+{
+    return wm_continue_slot_for(false);
 }
 
 /** Starts loading a save from the frontend, the way the stock Load Game menu does. */
@@ -166,6 +192,7 @@ static void wm_load_slot(int slot)
 
 static void wm_continue(struct GuiButton *gbtn);
 static void wm_new_run(struct GuiButton *gbtn);
+static TbBool wm_run_started = false; /* the last New Run got as far as starting the level */
 static void wl_join_server(int i);
 static void wl_join(const char *address);
 static const char *wl_player_name(void);
@@ -382,7 +409,7 @@ void world_menu_fresh_seed(char *seed, size_t len)
 int world_menu_newest_endless_slot(void)
 {
     wm_list_saves();
-    return wm_continue_slot();
+    return wm_continue_slot_for(true); /* -loadslot continue: a dedicated server's own world */
 }
 
 static void wm_host(struct GuiButton *gbtn)
@@ -390,7 +417,7 @@ static void wm_host(struct GuiButton *gbtn)
     /* a new run that opens to the network at once: others join it from the world list (no lobby) */
     SYNCLOG("Endless Mode: hosting a network run");
     wm_new_run(NULL);
-    world_menu_open_on_start = true;
+    world_menu_open_on_start = wm_run_started; /* a run that never started doesn't open the next one (audit) */
 }
 
 static void wm_join(struct GuiButton *gbtn)
@@ -414,6 +441,7 @@ TbBool world_menu_lobby_start(void)
 
 static void wm_new_run(struct GuiButton *gbtn)
 {
+    wm_run_started = false;
     if (!change_campaign(CampgnT_Mappack, ENDLESS_MAPPACK_FNAME))
     {
         ERRORLOG("Endless Mode: can't load the map pack levels/%s", ENDLESS_MAPPACK_FNAME);
@@ -432,6 +460,7 @@ static void wm_new_run(struct GuiButton *gbtn)
     world_menu_mp_host = false;
     SYNCLOG("Endless Mode: new run, seed %s", seed);
     game.selected_level_number = campaign.freeplay_levels[0];
+    wm_run_started = true;
     frontend_set_state(FeSt_START_KPRLEVEL);
 }
 
@@ -964,6 +993,8 @@ static void wl_draw_chat(struct GuiButton *gbtn)
 
 static void wl_say_done(struct GuiButton *gbtn)
 {
+    if (left_button_clicked || right_button_clicked)
+        return; /* a click elsewhere ended the typing: the line isn't sent, the box doesn't take the keys back */
     wnet_menu_say(wl_say);
     wl_say[0] = '\0';
     wl_say_reopen = true; /* keep typing: the box opens again */
@@ -1136,16 +1167,18 @@ void world_autosave(const char *why)
     if (network_is_active() && !network_is_host())
         return;
     struct PlayerInfo *player = get_my_player();
-    if (player->victory_state == VicS_LostLevel)
-        return;
+    if ((player->victory_state == VicS_LostLevel) && !network_is_active())
+        return; /* a lost single-player run; a defeated host still keeps the others' world (audit 2026-11-09) */
     const char *seed = world_seed_text();
     long day = world_day_number();
     if (day > 9999)
         day = 9999;
     char prefix[SAVE_TEXTNAME_LEN];
     char name[SAVE_TEXTNAME_LEN];
-    snprintf(prefix, sizeof(prefix), "Endless %.8s d", seed);
-    snprintf(name, sizeof(name), "Endless %.8s d%ld (auto)", seed, day);
+    /* a dedicated server's saves have their own name: the player's Continue leaves them alone */
+    const char *kind = netstate_dedicated() ? "Server" : "Endless";
+    snprintf(prefix, sizeof(prefix), "%s %.8s d", kind, seed);
+    snprintf(name, sizeof(name), "%s %.8s d%ld (auto)", kind, seed, day);
     SaveManager_LoadCatalogue();
     int slots = SaveManager_SlotCount();
     int slot = -1, free_slot = -1;
@@ -1243,6 +1276,7 @@ void world_respawn_prompt_turn(void)
             {
                 SYNCLOG("World: this keeper has started again");
                 set_gui_visible(true);
+                turn_off_all_panel_menus(); /* the lost player's spell panel goes */
                 turn_on_menu(GMnu_MAIN);
                 turn_on_menu(GMnu_ROOM);
                 wr_camera_until = now + 10000;
@@ -1284,6 +1318,9 @@ void world_respawn_prompt_turn(void)
         SYNCLOG("World: this keeper was defeated: \"Start again\" or \"Quit\"");
     wr_asked_at = 0;
     wr_shown = true;
+    /* on the full-screen map the box's buttons get no clicks (a click there zooms): back to the dungeon first */
+    if (get_local_view_type() == PVT_MapScreen)
+        zoom_from_parchment_map();
     turn_on_menu(GMnu_WORLD_RESPAWN);
 }
 /******************************************************************************/

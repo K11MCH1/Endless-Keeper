@@ -651,8 +651,11 @@ void food_eaten_by_creature(struct Thing *foodtng, struct Thing *creatng)
         if (cctrl->hunger_loss < 255) {
               cctrl->hunger_loss++;
         }
-        apply_health_to_thing_and_display_health(creatng, game.conf.rules[creatng->owner].health.food_health_gain);
-        cctrl->hunger_level = 0;
+        /* endless worlds: the Hatchery's level, as for food eaten the usual way (0 otherwise) */
+        apply_health_to_thing_and_display_health(creatng, game.conf.rules[creatng->owner].health.food_health_gain *
+            (100 + world_room_bonus(creatng->owner, WRB_HatcheryHeal)) / 100);
+        const struct CreatureModelConfig *fed_crconf = creature_stats_get_from_thing(creatng);
+        cctrl->hunger_level = -(int32_t)((long)fed_crconf->hunger_rate * world_room_bonus(creatng->owner, WRB_HatcheryHunger) / 100);
     }
     // Food is destroyed just below, so the sound must be made by creature
     thing_play_sample(creatng, 112+SOUND_RANDOM(3), NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
@@ -1210,7 +1213,9 @@ TbBool set_thing_spell_flags_f(struct Thing *thing, SpellKind spell_idx, GameTur
         }
         else
         {
-            healing_recovery = (thing->health + powerst->strength[spell_level]);
+            /* endless worlds: a keeper's Heal level raises the strongest cast to 1150 / 1400, the others in proportion */
+            healing_recovery = (thing->health + world_heal_amount(world_power_caster, powerst->strength[spell_level],
+                powerst->strength, POWER_MAX_LEVEL + 1)); /* a keeper casts at most power level 8 */
         }
         if (healing_recovery < 0)
         {
@@ -1482,6 +1487,8 @@ void first_apply_spell_effect_to_thing(struct Thing *thing, SpellKind spell_idx,
         spell_level = SPELL_MAX_LEVEL;
     }
     GameTurnDelta duration = get_spell_full_duration(spell_idx, spell_level);
+    if (duration > 0)
+        duration += world_spell_extra_turns(world_power_caster, spell_idx); /* endless: a keeper's Conceal and Protect levels */
     long i = get_free_spell_slot(thing);
     if (i != -1)
     {
@@ -1503,6 +1510,8 @@ void reapply_spell_effect_to_thing(struct Thing *thing, SpellKind spell_idx, Crt
         spell_level = SPELL_MAX_LEVEL;
     }
     GameTurnDelta duration = get_spell_full_duration(spell_idx, spell_level);
+    if (duration > 0)
+        duration += world_spell_extra_turns(world_power_caster, spell_idx); /* endless: a keeper's Conceal and Protect levels */
     // Reset the spell duration if the spell has a continuous effect.
     if (set_thing_spell_flags(thing, spell_idx, duration, spell_level)
     || spell_is_continuous(spell_idx, duration))
@@ -3291,7 +3300,8 @@ struct Thing* cause_creature_death(struct Thing *thing, CrDeathFlags flags)
     }
 
     creature_throw_out_gold(thing);
-    world_progress_creature_died(thing);
+    if (!flag_is_set(flags, CrDed_NotReallyDying))
+        world_progress_creature_died(thing); /* endless: a raid's book (not for a raider leaving or a freeze) */
     // Beyond this point, the creature thing is bound to be deleted
     if ((!flag_is_set(flags,CrDed_NotReallyDying)) || (flag_is_set(game.conf.rules[thing->owner].gameplay.classic_bugs_flags,ClscBug_ResurrectRemoved)))
     {

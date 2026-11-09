@@ -42,6 +42,7 @@
 #include "map_utils.h"
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -466,7 +467,7 @@ void process_creature_in_training_room(struct Thing *thing, struct Room *room)
                 {
                     cctrl->training.train_timeout = 1;
                 }
-                cctrl->exp_points += (room->efficiency * crconf->training_value);
+                cctrl->exp_points += (room->efficiency * crconf->training_value) * (100 + world_room_bonus(room->owner, WRB_TrainingXp)) / 100;
               }
             }
         } else
@@ -584,6 +585,7 @@ CrStateRet training(struct Thing *thing)
     if ((cctrl->instance_id != CrInst_NULL) || !check_experience_upgrade(thing))
     {
         long work_value = compute_creature_work_value_for_room_role(thing, RoRoF_CrTrainExp, room->efficiency);
+        work_value = work_value * (100 + world_room_bonus(room->owner, WRB_TrainingXp)) / 100; /* endless: its level */
         SYNCDBG(19,"The %s index %d produced %d training points",thing_model_name(thing),(int)thing->index,(int)work_value);
         cctrl->exp_points += work_value;
         dungeon->total_experience_creatures_gained += work_value;

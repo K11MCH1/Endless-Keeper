@@ -901,6 +901,11 @@ TbBool process_user_global_packet_action(NetUserId user)
       return 1;
   case PckA_FinishGame:
       {
+      if (netstate_thin_mode() && !is_local_user(user)) {
+          /* an endless world's server: a client can neither end nor win the world for everyone (the "Start again"
+             box is a defeated player's way on) (audit 2026-11-09) */
+          return 0;
+      }
       TbBool my_player = is_my_player(player);
       int32_t victory_state = pckt->actn_par1;
       if (my_player) {
@@ -958,6 +963,8 @@ TbBool process_user_global_packet_action(NetUserId user)
       }
       return 1;
   case PckA_TogglePause:
+      if (netstate_thin_mode() && !is_local_user(user))
+          return 1; /* an endless world's server: one player can't pause the world for everyone */
       process_pause_packet(pckt->actn_par1, 0);
       return 1;
   case PckA_SetPlyrState:
@@ -1002,6 +1009,8 @@ TbBool process_user_global_packet_action(NetUserId user)
       set_user_view_type(user, PVT_DungeonTop);
       return 0;
   case PckA_UpdatePause:
+      if (netstate_thin_mode() && !is_local_user(user))
+          return 1;
       process_pause_packet(pckt->actn_par1, pckt->actn_par2);
       return 1;
   case PckA_ZoomToEvent:

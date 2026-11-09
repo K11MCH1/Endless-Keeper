@@ -513,6 +513,19 @@ long update_dungeon_generation_speeds(void)
     return 1;
 }
 
+static void area_score_slab(struct SlabMap *slb)
+{
+    const struct SlabConfigStats* slabst = get_slab_stats(slb);
+    if ((slabst->category != SlbAtCtg_RoomInterior) && (slabst->category != SlbAtCtg_FortifiedGround))
+        return;
+    struct Dungeon *dungeon = (slabmap_owner(slb) != game.neutral_player_num) ? get_players_num_dungeon(slabmap_owner(slb)) : INVALID_DUNGEON;
+    if (dungeon_invalid(dungeon))
+        return;
+    dungeon->total_area++;
+    if (slabst->category == SlbAtCtg_RoomInterior)
+        dungeon->room_manage_area++;
+}
+
 void calculate_dungeon_area_scores(void)
 {
     // Zero dungeon areas
@@ -525,10 +538,16 @@ void calculate_dungeon_area_scores(void)
             dungeon->room_manage_area = 0;
         }
     }
-    // Compute new values for dungeon areas (paged mode: only the loaded chunks' bounding box)
-    MapSlabCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_tiles_x - 1, loop_y2 = game.map_tiles_y - 1;
+    // Compute new values for dungeon areas (paged mode: every slab of every loaded page; the same sums as the
+    // bounding box's walk, whose rows were mostly empty, at a fraction of the cost - audit 2026-11-09)
     if (world_paged)
-        map_loop_slab_bounds(&loop_x1, &loop_y1, &loop_x2, &loop_y2);
+    {
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+            for (int i = 0; i < WP_CHUNK_SLAB_CELLS; i++)
+                area_score_slab(&pg->slab[i]);
+        return;
+    }
+    MapSlabCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_tiles_x - 1, loop_y2 = game.map_tiles_y - 1;
     int32_t spans[2 * MAP_ROW_SPANS_MAX];
     for (MapSlabCoord slb_y = loop_y1; slb_y <= loop_y2; slb_y++)
     {

@@ -39,6 +39,7 @@
 #include "room_library.h"
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -176,6 +177,8 @@ struct ResearchVal *get_players_current_research_val(PlayerNumber plyr_idx)
 
 TbBool force_complete_current_research(PlayerNumber plyr_idx)
 {
+    if (world_room_level_sacrifice(plyr_idx))
+        return true; /* endless worlds: the level the Library researches */
     struct Dungeon* dungeon = get_dungeon(plyr_idx);
     struct ResearchVal* rsrchval = get_players_current_research_val(plyr_idx);
     if (rsrchval != NULL)
@@ -222,6 +225,7 @@ CrCheckRet process_research_function(struct Thing *creatng)
         return CrCkRet_Continue;
     }
     long work_value = compute_creature_work_value_for_room_role(creatng, RoRoF_Research, room->efficiency);
+    work_value = work_value * (100 + world_room_bonus(room->owner, WRB_LibraryResearch)) / 100; /* endless: its level */
     SYNCDBG(19,"The %s index %d produced %d research points",thing_model_name(creatng),(int)creatng->index,(int)work_value);
     dungeon->total_research_points += work_value;
     dungeon->research_progress += work_value;

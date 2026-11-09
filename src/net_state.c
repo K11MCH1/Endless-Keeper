@@ -2302,7 +2302,7 @@ void netstate_event_thing_sample(ThingIndex thing_idx, short smptbl_idx, unsigne
 /** A message for one player: recorded only when it is a client's (the host plays its own). */
 static void event_for_player(uint8_t kind, PlayerNumber plyr_idx, long a, long b)
 {
-    if ((events_suppressed > 0) || !netstate_is_server() || (plyr_idx == my_player_number) || (plyr_idx < 0) ||
+    if ((events_suppressed > 0) || !netstate_is_server() || (!netstate_dedicated() && (plyr_idx == my_player_number)) || (plyr_idx < 0) ||
         (plyr_idx >= PLAYERS_COUNT))
         return;
     struct NsEvPlayerMessage e = {kind, (int8_t)plyr_idx, (int32_t)a, (int32_t)b};

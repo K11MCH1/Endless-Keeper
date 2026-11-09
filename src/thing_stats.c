@@ -43,6 +43,7 @@
 #include "vidfade.h"
 #include "lua_triggers.h"
 
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -754,11 +755,17 @@ long calculate_correct_creature_armour(const struct Thing *thing)
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
     long max_param = compute_creature_max_armour(crconf->armour, cctrl->exp_level);
+    long armour_cap = 204;
     if (creature_under_spell_effect(thing, CSAfF_Armour))
-        max_param = (320 * max_param) / 256;
+    {
+        /* endless worlds: Protect Monster's level (0 otherwise), in one step so small armour keeps it too */
+        const int protect = world_power_bonus(thing->owner, WPB_ProtectArmour);
+        max_param = (320 * max_param * (100 + protect)) / (256 * 100);
+        armour_cap = armour_cap * (100 + protect) / 100;
+    }
     // This limit makes armour absorb up to 80% of damage even with the buff.
-    if (max_param > 204)
-        max_param = 204;
+    if (max_param > armour_cap)
+        max_param = armour_cap;
     if (max_param < 0)
         max_param = 0;
     // Apply modifier after the buff.
@@ -800,7 +807,10 @@ long calculate_correct_creature_maxspeed(const struct Thing *thing)
     if ((creature_affected_by_slap(thing)) || (creature_under_spell_effect(thing, CSAfF_Timebomb)))
         speed *= 2;
     if (creature_under_spell_effect(thing, CSAfF_Speed))
+    {
         speed *= 2;
+        speed = speed * (100 + world_power_bonus(thing->owner, WPB_SpeedEffect)) / 100; /* endless: its level */
+    }
     if (creature_under_spell_effect(thing, CSAfF_Slow))
         speed /= 2;
     // Apply modifier.

@@ -732,6 +732,7 @@ TbBool cmd_game_load(PlayerNumber plyr_idx, char * args)
     enum SaveCheckResult why;
     enum SaveLoadOutcome outcome = SaveManager_Load((int)slot_num, &why);
     if (outcome == SvLoad_Done) {
+        network_after_save_loaded(); /* a world saved by a server: this machine's own seat, playable */
         set_flag_value(game.operation_flags, GOF_Paused, Pause); // unpause, because games are saved whilst paused
         return true;
     }

@@ -70,6 +70,7 @@
 #include "kfx/save/SaveManager.h"
 #include "world_stream.h"
 #include "net_state.h"
+#include "world_caretaker.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -349,7 +350,11 @@ static void force_application_close()
     extern int frontend_menu_state;
 
     TbBool network_paused = network_is_active() && flag_is_set(game.operation_flags, GOF_Paused);
-    if ((frontend_menu_state == 0) && (get_my_player() != INVALID_PLAYER) && !network_paused) {
+    /* Endless world: a computer-controlled seat's packets are never processed, so its close request would be lost; in
+       single player also a seat that no longer exists or isn't this user's (audit 2026-11-09) */
+    const TbBool lost_request = world_mode_active() && (get_my_player() != INVALID_PLAYER) &&
+        (flag_is_set(get_my_player()->allocflags, PlaF_CompCtrl) || world_local_input_lost());
+    if ((frontend_menu_state == 0) && (get_my_player() != INVALID_PLAYER) && !network_paused && !lost_request) {
         set_players_packet_action(get_my_player(), PckA_ForceApplicationClose, 0, 0, 0, 0);
         return;
     }

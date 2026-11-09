@@ -832,6 +832,43 @@ static void run_command(char *line)
     }
     if (nargs == 0)
         return;
+    /* the name is the whole rest of the line (names have spaces: "Bob (2)"); for give, the last two words are what
+       and how much (audit 2026-11-09) */
+    char name[ADMIN_LINE_MAX] = "";
+    char give_what[32] = "", give_amount[32] = "", give_name[ADMIN_LINE_MAX] = "";
+    if (rest != NULL)
+    {
+        snprintf(name, sizeof(name), "%s", rest);
+        size_t n = strlen(name);
+        while ((n > 0) && ((name[n - 1] == ' ') || (name[n - 1] == '\t') || (name[n - 1] == '\r') || (name[n - 1] == '\n')))
+            name[--n] = '\0';
+    }
+    TbBool give_ok = false;
+    {
+        char tmp[ADMIN_LINE_MAX];
+        snprintf(tmp, sizeof(tmp), "%s", name);
+        char *sp2 = strrchr(tmp, ' ');
+        if (sp2 != NULL)
+        {
+            snprintf(give_amount, sizeof(give_amount), "%s", sp2 + 1);
+            *sp2 = '\0';
+            while ((sp2 > tmp) && (sp2[-1] == ' '))
+                *--sp2 = '\0';
+            char *sp1 = strrchr(tmp, ' ');
+            if (sp1 != NULL)
+            {
+                snprintf(give_what, sizeof(give_what), "%s", sp1 + 1);
+                *sp1 = '\0';
+                while ((sp1 > tmp) && (sp1[-1] == ' '))
+                    *--sp1 = '\0';
+                if (tmp[0] != '\0')
+                {
+                    give_ok = true;
+                    snprintf(give_name, sizeof(give_name), "%s", tmp); /* give only: other commands keep the whole name */
+                }
+            }
+        }
+    }
     const char *cmd = args[0];
     const TbBool quiet = (strcasecmp(cmd, "players") == 0) || (strcasecmp(cmd, "stats") == 0) || (strcasecmp(cmd, "say") == 0);
     if (!quiet)
@@ -839,21 +876,21 @@ static void run_command(char *line)
     if (strcasecmp(cmd, "players") == 0)
         cmd_players();
     else if ((strcasecmp(cmd, "stats") == 0) && (nargs >= 2))
-        cmd_stats(args[1]);
+        cmd_stats(name);
     else if ((strcasecmp(cmd, "kick") == 0) && (nargs >= 2))
-        cmd_kick(args[1]);
+        cmd_kick(name);
     else if ((strcasecmp(cmd, "ban") == 0) && (nargs >= 2))
-        cmd_ban(args[1], true);
+        cmd_ban(name, true);
     else if ((strcasecmp(cmd, "unban") == 0) && (nargs >= 2))
-        cmd_ban(args[1], false);
+        cmd_ban(name, false);
     else if ((strcasecmp(cmd, "mute") == 0) && (nargs >= 2))
-        cmd_mute(args[1], true);
+        cmd_mute(name, true);
     else if ((strcasecmp(cmd, "unmute") == 0) && (nargs >= 2))
-        cmd_mute(args[1], false);
-    else if ((strcasecmp(cmd, "give") == 0) && (nargs >= 4))
-        cmd_give(args[1], args[2], args[3]);
+        cmd_mute(name, false);
+    else if ((strcasecmp(cmd, "give") == 0) && give_ok)
+        cmd_give(give_name, give_what, give_amount);
     else if ((strcasecmp(cmd, "reset") == 0) && (nargs >= 2))
-        cmd_reset(args[1]);
+        cmd_reset(name);
     else if ((strcasecmp(cmd, "say") == 0) && (rest != NULL))
         say(rest);
     else if (strcasecmp(cmd, "save") == 0)

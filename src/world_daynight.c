@@ -378,14 +378,22 @@ static int dn_raids_on_day(long day)
 
 /** Time of day of raid i of n: one in each part of the day, at a time fixed by the seed. The first day's raid
  *  waits for its second half; no raid starts in the first or last twentieth of a day. */
-static GameTurnDelta dn_raid_time(long day, int i, int n)
+static uint64_t dn_player_salt(PlayerNumber plyr_idx);
+
+/** Time of raid i for a player: each player's at its own time in the slot (all of them landed in one turn, each
+ *  loading its landing chunks there; audit 2026-11-09). Player 0 keeps the time it always had. */
+static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_idx);
+
+static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_idx)
 {
     const GameTurnDelta edge = dn_day_turns / 20;
     const GameTurnDelta start = (day == 1) ? dn_day_turns / 2 : edge;
     GameTurnDelta slot = (dn_day_turns - edge - start) / n;
     if (slot < 1)
         slot = 1;
-    const uint64_t h = dn_mix(world_seed() ^ dn_mix((uint64_t)day * 0x632BE59BD9B4E019ULL + (uint64_t)i));
+    uint64_t h = dn_mix(world_seed() ^ dn_mix((uint64_t)day * 0x632BE59BD9B4E019ULL + (uint64_t)i));
+    if (plyr_idx != PLAYER0)
+        h = dn_mix(h ^ dn_player_salt(plyr_idx));
     return start + slot * i + (GameTurnDelta)(h % (uint64_t)slot);
 }
 
@@ -429,15 +437,16 @@ static int dn_line_blockers(const struct DnArea *a, MapSlabCoord x0, MapSlabCoor
     return blockers;
 }
 
-/** A player's best creature level (1-based), imps included. */
+/** A player's best creature level (1-based), imps not counted: mining imps and Create Imp's level 3 imps outgrew the
+ *  army and brought raids far above it (audit 2026-11-09). */
 static int dn_keeper_best_level(PlayerNumber plyr_idx)
 {
     struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
     int best = 1;
     if (dungeon_invalid(dungeon))
         return best;
-    ThingIndex lists[2] = {dungeon->creatr_list_start, dungeon->digger_list_start};
-    for (int l = 0; l < 2; l++)
+    ThingIndex lists[1] = {dungeon->creatr_list_start};
+    for (int l = 0; l < 1; l++)
     {
         long i = lists[l];
         long guard = 0;
@@ -749,7 +758,6 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
             (int)plyr_idx);
         return;
     }
-    world_progress_raid(plyr_idx, day, idx, world_seed());
     struct DnRng rng = {dn_mix(world_seed() ^ ((uint64_t)day << 8) ^ (uint64_t)idx ^ 0x5A1D5A1D5A1DULL ^
         dn_player_salt(plyr_idx))};
     struct Thing *heartng = find_players_dungeon_heart(plyr_idx);
@@ -969,6 +977,7 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
     }
     if (made_all == 0)
         return;
+    world_progress_raid(plyr_idx, day, idx, world_seed()); /* its book: only for a raid that came (audit 2026-11-09) */
     inv.active = 1;
     inv.day = (int32_t)day;
     dn_inv[plyr_idx] = inv;
@@ -1127,12 +1136,11 @@ void world_daynight_turn(void)
     const int n = dn_raids_on_day(day);
     for (int i = 0; i < n; i++)
     {
-        if (dn_raid_time(day, i, n) != t)
-            continue;
-        /* every human player gets the day's raids at the same times, each rolled on its own */
+        /* every human player gets the day's raids, each at its own time in the raid's part of the day, rolled on
+           its own */
         for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
         {
-            if (!world_player_is_human(p))
+            if (!world_player_is_human(p) || (dn_raid_time_for(day, i, n, p) != t))
                 continue;
             if (dn_raid_happens(day, i, p))
                 dn_raid(day, i, p);
@@ -1142,5 +1150,20 @@ void world_daynight_turn(void)
                 SYNCLOG("World: day %ld raid %d doesn't come for player %d (%d%% chance)", day, i + 1, (int)p,
                     dn_raid_chance);
         }
+    }
+}
+
+/** The chunks the day's raids keep loaded: the landings of raids whose heroes walk back to them. */
+void world_daynight_want_chunks(void (*want)(int64_t wx, int64_t wy, int r))
+{
+    if (!world_mode_active())
+        return;
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+    {
+        const struct DnInvasion *inv = &dn_inv[p];
+        if (!inv->active || !inv->retreating)
+            continue;
+        for (int s = 0; s < inv->nspots; s++)
+            want(inv->spot_x[s], inv->spot_y[s], 1);
     }
 }

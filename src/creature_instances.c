@@ -55,6 +55,7 @@
 
 #include "keeperfx.hpp"
 #include "world_colours.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -876,8 +877,11 @@ long instf_eat(struct Thing *creatng, int32_t *param)
     if (cctrl->hunger_loss < 255) {
         cctrl->hunger_loss++;
     }
-    apply_health_to_thing_and_display_health(creatng, game.conf.rules[creatng->owner].health.food_health_gain);
-    cctrl->hunger_level = 0;
+    /* endless worlds: the Hatchery's level heals more and keeps hunger away longer (0 otherwise) */
+    apply_health_to_thing_and_display_health(creatng, game.conf.rules[creatng->owner].health.food_health_gain *
+        (100 + world_room_bonus(creatng->owner, WRB_HatcheryHeal)) / 100);
+    const struct CreatureModelConfig *eat_crconf = creature_stats_get_from_thing(creatng);
+    cctrl->hunger_level = -(int32_t)((long)eat_crconf->hunger_rate * world_room_bonus(creatng->owner, WRB_HatcheryHunger) / 100);
     return 1;
 }
 

@@ -386,6 +386,12 @@ struct Game {
     /** Endless worlds: each player's XP (player levels; saved with the world). Here, not with the rewindable
      *  statics, so that a thin client on another platform gets it too (2026-11-08). */
     uint32_t world_player_xp[PLAYERS_MAX];
+    /** Endless worlds (2026-11-09): each player's rooms and spells with levels (Lair, Hatchery, Library, Training Room;
+     *  Create Imp, Sight of Evil, Speed Monster, Conceal Monster, Heal, Lightning Strike, Protect Monster): the level
+     *  researched and the level duplicate books allow (0 counts as 1; saved with the world's progress, PRG1). */
+    uint8_t world_room_level[PLAYERS_MAX][12];
+    uint8_t world_room_allowed[PLAYERS_MAX][12];
+    uint8_t world_room_researching[PLAYERS_MAX]; /* 1 + the entry whose next level the Library researches now, 0 none */
 };
 
 #pragma pack()

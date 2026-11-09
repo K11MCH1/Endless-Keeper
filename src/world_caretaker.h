@@ -25,6 +25,8 @@ TbBool world_caretaker_active(PlayerNumber plyr_idx);
 void world_caretaker_turn(void);
 /** A new world or a load: no caretakers yet. */
 void world_caretaker_reset(void);
+/** In single player, would this machine's packets be dropped (no player, not allocated, computer-controlled)? */
+TbBool world_local_input_lost(void);
 
 #ifdef __cplusplus
 }

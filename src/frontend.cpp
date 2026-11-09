@@ -99,6 +99,7 @@
 #include "net_state.h"
 #include "server_admin.h"
 #include "world_stream.h"
+#include "world_caretaker.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1150,6 +1151,14 @@ void gui_quit_game(struct GuiButton *gbtn)
 {
     if (replay.load_enable)
     {
+        turn_off_all_menus();
+        quit_game = 1;
+        return;
+    }
+    if (world_local_input_lost())
+    {
+        /* an endless world in single player whose packets would be dropped: quit directly (audit 2026-11-09) */
+        world_autosave("quit");
         turn_off_all_menus();
         quit_game = 1;
         return;

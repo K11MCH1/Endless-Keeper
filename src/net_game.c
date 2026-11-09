@@ -746,6 +746,9 @@ static TbBool host_already_won_level(void)
 // is settled, then they are deallocated
 void resolve_placeholders(void)
 {
+    if (world_mode_active()) {
+        return; /* an endless world keeps every seat for its player, a defeated one too (audit 2026-11-09) */
+    }
     for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_COUNT; plyr_idx++) {
         struct PlayerInfo *player = get_player(plyr_idx);
         if (!player_exists(player) || !player_is_placeholder(player)) {
@@ -821,12 +824,13 @@ static TbBool abandon_network_player(struct PlayerInfo *player, const char *anno
             message_add_fmt(MsgType_Blank, 0, announce_fmt, player->player_name);
         }
         JUSTLOG("p:%d player %s departed", player->id_number, player->player_name);
-        if (player->victory_state == VicS_Undecided) {
+        if ((player->victory_state == VicS_Undecided) || (world_mode_active() && (player->victory_state == VicS_LostLevel))) {
+            /* an endless world keeps a defeated seat too: its player comes back to it and can start again there */
             player->allocflags |= PlaF_Placeholder;
         }
     }
     resolve_placeholders();
-    if (player->victory_state != VicS_Undecided) {
+    if ((player->victory_state != VicS_Undecided) && !(world_mode_active() && player_is_placeholder(player))) {
         player->allocflags &= ~PlaF_Allocated;
         return false;
     }
@@ -1157,7 +1161,10 @@ TbBool network_open_running_game(void)
     netstate_level_start(); /* the state stream */
     if (!netstate_dedicated())
     {
-        world_set_seat_token(my_player_number, net_local_reconnect_token()); /* the host's keeper is the host's */
+        /* the host's keeper is the host's, unless the seat is someone else's (a server's save played here) */
+        if ((world_seat_token(my_player_number) == 0) || (world_seat_token(my_player_number) == net_local_reconnect_token())) {
+            world_set_seat_token(my_player_number, net_local_reconnect_token());
+        }
         /* a single-player world had no name on the host's keeper: the others see it by the host's nickname */
         struct PlayerInfo *host = get_my_player();
         snprintf(host->player_name, sizeof(host->player_name), "%s", net_player_name);
@@ -1201,7 +1208,33 @@ void network_after_save_loaded(void)
         return;
     }
     game.game_kind = GKind_LocalGame;
-    remap_user_to_solo(get_my_player(), get_local_user());
+    /* this machine's own seat, by its reconnect token (a server's save: player 0 is the server's first joiner,
+       whoever that was); else the save's own player */
+    const uint64_t token = net_local_reconnect_token();
+    PlayerNumber mine = PLAYER_NONE;
+    const PlayerNumber *seats = NULL;
+    const int seat_count = world_seat_players(&seats);
+    for (int s = 0; (s < seat_count) && (mine == PLAYER_NONE) && (token != 0); s++) {
+        if (world_seat_token(seats[s]) == token) {
+            mine = seats[s];
+        }
+    }
+    if ((mine != PLAYER_NONE) && (mine != my_player_number)) {
+        SYNCLOG("World: loaded in single player as this machine's own seat, player %d (the save's was %d)", (int)mine,
+            (int)my_player_number);
+        my_player_number = mine;
+        game.local_plyr_idx = mine;
+    }
+    /* the seat takes input again: one a server left defeated (de-allocated) or as a placeholder would have every
+       packet dropped (Quit, Alt+F4, the assistant). A caretaker's computer control is released by the caretaker's
+       next turn, which also turns its computer off (audit 2026-11-09) */
+    struct PlayerInfo *myplyr = get_my_player();
+    myplyr->id_number = my_player_number;
+    myplyr->allocflags |= PlaF_Allocated | PlaF_Seat;
+    if (!flag_is_set(myplyr->allocflags, PlaF_CompCtrl)) {
+        myplyr->allocflags &= ~PlaF_Placeholder;
+    }
+    remap_user_to_solo(myplyr, get_local_user());
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++) {
         struct PlayerInfo *player = get_player(p);
         if ((p != my_player_number) && player_exists(player) && flag_is_set(player->allocflags, PlaF_Seat)

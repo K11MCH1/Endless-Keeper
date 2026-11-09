@@ -37,6 +37,7 @@
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
 #include "api.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -290,6 +291,9 @@ static void process_player_research(PlayerNumber plyr_idx)
     struct Dungeon* dungeon = get_dungeon(plyr_idx);
     if (!player_has_room_of_role(plyr_idx, RoRoF_Research)) {
         return;
+    }
+    if (world_room_level_research(plyr_idx)) {
+        return; /* endless world: the Library works on a room's next level */
     }
     struct ResearchVal* rsrchval = get_players_current_research_val(plyr_idx);
     if (rsrchval == NULL)

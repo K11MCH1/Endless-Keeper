@@ -40,6 +40,7 @@
 #include "sprites.h"
 #include "keeperfx.hpp"
 #include "kfx/save/SaveManager.h"
+#include "net_game.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -85,6 +86,8 @@ void gui_load_game(struct GuiButton *gbtn)
     long slot_num = loadsave_row_slot(gbtn);
     enum SaveCheckResult why;
     enum SaveLoadOutcome outcome = SaveManager_Load((int)slot_num, &why);
+    if (outcome == SvLoad_Done)
+        network_after_save_loaded(); /* a world saved by a server: this machine's own seat, playable (audit 2026-11-09) */
     if (outcome == SvLoad_Refused)
     {
         // Nothing has been changed, so the current game carries on

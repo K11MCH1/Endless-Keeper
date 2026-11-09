@@ -35,6 +35,10 @@
 #include "server_admin.h"
 #include "post_inc.h"
 
+#define THIN_JOIN_LOAD_MS 120000
+#define THIN_WATCHERS_MAX 8 /* seatless watchers an endless server keeps (each is sent the whole world) */
+
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -533,6 +537,17 @@ static void thin_seat_joiners(void)
             }
         }
         if ((seat == PLAYER_NONE) || (user == INVALID_USER_ID)) {
+            int watchers = 0;
+            for (NetUserId w = MAX_NET_USERS; w < MAX_NET_CONNECTIONS; w++) {
+                if ((w != spectator_id) && IsUserActive(w) && numask_has(full_noted, w)) {
+                    watchers++;
+                }
+            }
+            if (watchers >= THIN_WATCHERS_MAX) {
+                SYNCLOG("Server: %s can't watch: no free seat and %d watch already", spectator->name, watchers);
+                netstate.sp->drop_user(spectator_id, NetJoin_SpectatorsFull);
+                continue;
+            }
             static NetUserMask told;
             if (!numask_has(told, spectator_id)) {
                 SYNCLOG("Server: %s watches for now (no free seat)", spectator->name);
@@ -730,7 +745,8 @@ void network_spectator_service(void)
         if (user->progress == USER_UNUSED || (user->progress == USER_LOGGEDIN && (id < MAX_NET_USERS || user->spectator_state == NetSpectator_Streaming))) {
             continue;
         }
-        if (LbTimerClock() - user->connected_at >= PEER_TIMEOUT_MS) {
+        /* an endless world's joiner loads the level first: a phone or a big world takes longer than 15 s */
+        if (LbTimerClock() - user->connected_at >= (netstate_thin_mode() ? THIN_JOIN_LOAD_MS : PEER_TIMEOUT_MS)) {
             netstate.sp->drop_user(id, NetJoin_Locked);
         }
     }
@@ -801,8 +817,8 @@ static TbBool user_can_become_spectator(NetUserId user)
 
 TbBool network_spectator_request_conversion(void)
 {
-    if (!network_is_active() || network_is_host() || !user_can_become_spectator(netstate.my_id)) {
-        return false;
+    if (!network_is_active() || network_is_host() || netstate_thin_mode() || !user_can_become_spectator(netstate.my_id)) {
+        return false; /* an endless world: a thin client never finished a conversion and froze (audit 2026-11-09) */
     }
     struct NetUser *user = &netstate.users[netstate.my_id];
     if (!user->spectator_conversion_requested) {
@@ -847,7 +863,7 @@ void network_spectator_convert_requested_users(void)
 TbError process_network_spectator_conversion(NetUserId source, const char *buffer, size_t size)
 {
     if (network_is_host()) {
-        if (size == 0) {
+        if ((size == 0) && !netstate_thin_mode()) { /* an endless server: a seat isn't given up this way */
             netstate.users[source].spectator_conversion_requested = true;
         }
         return Lb_OK;

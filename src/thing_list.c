@@ -1403,8 +1403,28 @@ void update_things(void)
     KFX_C_ZONE_END(ctx_update_things);
 }
 
+static TbBool heart_cache_refresh(void);
+static ThingIndex heart_cache_at(int h);
+static int heart_cache_size(void);
+
 struct Thing *find_players_dungeon_heart(PlayerNumber plyridx)
 {
+    /* the hearts among the objects, in the list's order: the first one of the player's is what the walk below finds
+       (a world has thousands of objects, and this is asked per player, per pass and per client; audit 2026-11-09) */
+    if (heart_cache_refresh())
+    {
+        TbBool stale = false;
+        for (int h = 0; (h < heart_cache_size()) && !stale; h++)
+        {
+            struct Thing *t = thing_get(heart_cache_at(h));
+            if (thing_is_invalid(t) || !thing_is_dungeon_heart(t))
+                stale = true;
+            else if (t->owner == plyridx)
+                return t;
+        }
+        if (!stale)
+            return INVALID_THING;
+    }
     int k = 0;
     int i = game.thing_lists[TngList_Objects].index;
     while (i != 0)
@@ -2095,6 +2115,29 @@ static int heart_cache_count = -1;
 static unsigned long heart_cache_made;
 static long heart_cache_objects, heart_cache_head;
 static GameTurn heart_cache_turn;
+
+static ThingIndex heart_cache_at(int h) { return heart_cache[h]; }
+static int heart_cache_size(void) { return heart_cache_count; }
+
+/** The dungeon hearts by thing index, lowest first (endless worlds); -1 when there are too many to list. */
+int dungeon_hearts_by_index(ThingIndex *out, int max)
+{
+    if (!heart_cache_refresh() || (heart_cache_count > max))
+        return -1;
+    const int n = heart_cache_count;
+    for (int i = 0; i < n; i++)
+    {
+        ThingIndex v = heart_cache[i];
+        int j = i;
+        while ((j > 0) && (out[j - 1] > v))
+        {
+            out[j] = out[j - 1];
+            j--;
+        }
+        out[j] = v;
+    }
+    return n;
+}
 
 static TbBool heart_cache_refresh(void)
 {

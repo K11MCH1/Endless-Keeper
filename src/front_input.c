@@ -1027,6 +1027,10 @@ static short get_global_inputs(void)
       return true;
   if (player->victory_state != VicS_Undecided && is_game_key_pressed(Gkey_FinishLevel, true, false))
       {
+        if (world_mode_active() && network_is_active())
+        {
+            return true; /* an endless world on the network: the "Start again" box is the way on (audit 2026-11-09) */
+        }
         if ((player->victory_state == VicS_LostLevel) && network_is_active() && (player->id_number == get_net_user_player_number(SERVER_ID)) && network_human_contenders_remain())
         {
             return true;
@@ -1085,7 +1089,8 @@ static TbBool get_level_lost_inputs(void)
         return true;
     if (get_screen_capture_inputs())
         return true;
-    if (is_game_key_pressed(Gkey_FinishLevel, true, false) && !network_spectator_request_conversion()) {
+    if (is_game_key_pressed(Gkey_FinishLevel, true, false) && !(world_mode_active() && network_is_active())
+     && !network_spectator_request_conversion()) {
         set_players_packet_action(player, PckA_FinishGame, player->victory_state, 0, 0, 0);
     }
     if (view_type == PVT_MapScreen)

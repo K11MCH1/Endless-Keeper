@@ -63,6 +63,7 @@
 #include "map_locations.h"
 #include "lua_triggers.h"
 #include "world_colours.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1323,6 +1324,12 @@ static TbResult magic_use_power_imp(PowerKind power_kind, PlayerNumber plyr_idx,
     {
         creature_change_multiple_levels(thing, powerst->strength[power_level]);
     }
+    {
+        /* endless worlds: Create Imp's level makes level 2 / 3 imps (0 otherwise) */
+        const int imp_levels = world_power_bonus(plyr_idx, WPB_ImpLevels);
+        if (imp_levels > 0)
+            creature_change_multiple_levels(thing, imp_levels);
+    }
     thing->veloc_push_add.x.val += THING_RANDOM(thing, 161) - 80;
     thing->veloc_push_add.y.val += THING_RANDOM(thing, 161) - 80;
     thing->veloc_push_add.z.val += 160;
@@ -1429,7 +1436,9 @@ static TbResult magic_use_power_apply_spell(PowerKind power_kind, PlayerNumber p
         create_used_effect_or_element(&effpos, powerst->effect_id, thing->owner, 0);
     }
     thing_play_sample(thing, powerst->select_sound_idx, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+    world_power_caster = plyr_idx; /* endless worlds: the keeper's spell levels count for this cast only */
     apply_spell_effect_to_thing(thing, powerst->spell_idx, power_level, plyr_idx);
+    world_power_caster = -1;
     // Special cases.
     if (flag_is_set(spconf->spell_flags, CSAfF_Disease))
     { // Set disease_caster_plyridx if spell_idx has 'CSAfF_Disease'.
@@ -1484,6 +1493,7 @@ static TbResult magic_use_power_lightning(PowerKind power_kind, PlayerNumber ply
     dungeon->camera_deviate_jump = 256;
     i = powerst->strength[power_level];
     max_damage = i * shotst->damage;
+    max_damage = max_damage * (100 + world_power_bonus(plyr_idx, WPB_LightningDamage)) / 100; /* endless: its level */
     range = (i << 8) / 2;
     if (power_sight_explored(stl_x, stl_y, plyr_idx))
         max_damage /= 4;

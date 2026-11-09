@@ -24,6 +24,7 @@
 #include "keeperfx.hpp"
 #include "world_stream.h"
 #include "server_admin.h"
+#include "net_game.h"
 #include "post_inc.h"
 
 /* what it keeps of a computer keeper, by name (the rest - building, digging, attacking, spells, money - is left out) */
@@ -158,10 +159,56 @@ void world_caretaker_end(PlayerNumber plyr_idx)
     SYNCLOG("World: player %d is back: the caretaker goes", (int)plyr_idx);
 }
 
+/** Is someone playing this seat on this machine or through it (the local player alone, unless a network game)? */
+static TbBool seat_played(PlayerNumber p)
+{
+    if (!network_is_active())
+        return (p == my_player_number);
+    for (NetUserId user = 0; user < MAX_NET_USERS; user++)
+        if (user_present(user) && (get_net_user_player_number(user) == p))
+            return true;
+    return false;
+}
+
+/** The caretaker's computer off and its seat a player's again. */
+static void caretaker_release(PlayerNumber p, struct PlayerInfo *player, struct Dungeon *dungeon)
+{
+    player->allocflags &= ~(PlaF_CompCtrl | PlaF_Placeholder);
+    if (!dungeon_invalid(dungeon) && ((dungeon->computer_enabled & 0x01) != 0))
+        toggle_computer_player(p);
+    pmask_del(&caretaker_on, p);
+}
+
 void world_caretaker_turn(void)
 {
     if (!world_mode_active())
         return;
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+    {
+        if (!world_player_is_human(p))
+            continue;
+        struct PlayerInfo *player = get_player(p);
+        struct Dungeon *dungeon = get_players_num_dungeon(p);
+        if (!player_exists(player) || dungeon_invalid(dungeon) || !flag_is_set(player->allocflags, PlaF_CompCtrl))
+            continue;
+        if (seat_played(p))
+        {
+            /* a world saved while a caretaker kept this seat (a server stopped with its player away) comes back with
+               the caretaker's computer on; the game ignores the input of a computer-controlled player - Quit, the
+               assist button, Alt+F4 - so a seat someone plays is never left like that (2026-11-09) */
+            caretaker_release(p, player, dungeon);
+            SYNCLOG("World: player %d is played here: the caretaker's computer control left from the save goes", (int)p);
+        } else
+        if (!pmask_has(caretaker_on, p) && flag_is_set(player->allocflags, PlaF_Placeholder) &&
+            ((dungeon->computer_enabled & 0x01) != 0) && (player->victory_state == VicS_Undecided))
+        {
+            /* the caretaker of a seat still away when the world was saved: it goes on (no digging, gold held) */
+            pmask_add(&caretaker_on, p);
+            caretaker_gold[p] = dungeon->total_money_owned;
+            SYNCLOG("World: player %d is still away: its caretaker goes on (gold held at %ld)", (int)p,
+                (long)dungeon->total_money_owned);
+        }
+    }
     for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
     {
         if (!pmask_has(caretaker_on, p))
@@ -186,3 +233,16 @@ void world_caretaker_reset(void)
     memset(caretaker_gold, 0, sizeof(caretaker_gold));
 }
 /******************************************************************************/
+
+/** In single player, can this machine's packets be processed? process_packets drops them when the local user maps
+ *  to no player, the player doesn't exist, or it is computer-controlled; Quit and Alt+F4 then quit directly. */
+TbBool world_local_input_lost(void)
+{
+    if (!world_mode_active() || network_is_active())
+        return false;
+    const PlayerNumber plyr = get_net_user_player_number(get_local_user());
+    if (plyr < 0)
+        return true;
+    const struct PlayerInfo *player = get_player(plyr);
+    return !player_exists(player) || flag_is_set(player->allocflags, PlaF_CompCtrl);
+}
