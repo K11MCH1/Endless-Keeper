@@ -120,7 +120,7 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 ## 🗺️ Roadmap
 
-**TBA.** Stay tuned on the [Keeper Klan Discord](https://discord.com/invite/hE4p7vy2Hb)!
+**TBA.** Stay tuned!
 
 ---
 
