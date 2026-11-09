@@ -168,23 +168,7 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 </details>
 
-| Endless Mode menu | |
-|---|---|
-| ▶️ **Continue** | Load your newest endless save. |
-| ✨ **New Run** | Start a brand new world with a random seed. |
-| 📂 **Load Game** | Pick one of your endless saves. |
-| 🏠 **Host Network Game** | Start a new world that others can join. |
-| 🤝 **Join Network Game** | Open the World List, or join a world by its address. |
-
-**🧙 Tips for your first run**
-
-- Your start has no gold close by: send your imps to the two gold seams just beyond it.
-- Claim the nearby portal early. More portals mean more and different creatures.
-- Click research books on your own ground with the Hand. The first one gives you a Library.
-- Build your defences before the first night, and keep an eye on the dial in the top right corner.
-
 > [!NOTE]
-> Endless Keeper has no launcher of its own and doesn't use KeeperFX's, so KeeperFX's updates never touch it.
 > Endless Keeper follows KeeperFX's stable releases with its own releases.
 
 ---
