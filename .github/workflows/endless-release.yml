@@ -29,6 +29,10 @@ on:
         description: 'Leave the release as a draft (to write its notes before publishing it)'
         type: boolean
         default: false
+      patch:
+        description: 'Patch number (e.g. 1 makes 1.4.0-5.1, a patch of the last release; empty: the next release)'
+        type: string
+        default: ''
   workflow_call:
     inputs:
       prebuilt:
@@ -63,6 +67,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       STAGE: ${{ inputs.stage }}
+      PATCH: ${{ inputs.patch }}
     outputs:
       base: ${{ steps.version.outputs.base }}
       file: ${{ steps.version.outputs.file }}
@@ -70,6 +75,7 @@ jobs:
       title: ${{ steps.version.outputs.title }}
       stage: ${{ steps.version.outputs.stage }}
       release: ${{ steps.version.outputs.release }}
+      release_num: ${{ steps.version.outputs.release_num }}
       apk_name: ${{ steps.version.outputs.apk_name }}
       apk_code: ${{ steps.version.outputs.apk_code }}
     steps:
@@ -93,6 +99,19 @@ jobs:
           tags=$(gh api "repos/$GITHUB_REPOSITORY/tags" --paginate --jq '.[].name' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-' || true)
           last=$(sed -E 's/^v[0-9.]+-([0-9]+)-.*/\1/' <<< "$tags" | sort -n | tail -1)
           n=$(( ${last:-0} + 1 ))
+          # a patch keeps the last release's number: 1.4.0-5.1, 1.4.0-5.2 ...
+          patch=${PATCH:-}
+          if [ -n "$patch" ]; then
+            [[ "$patch" =~ ^[1-9]$ ]] || { echo "the patch number is 1-9, not '$patch'"; exit 1; }
+            [ -n "${last:-}" ] || { echo "no release to patch"; exit 1; }
+            n=$last
+            label="$n.$patch"
+            kind=" Patch"
+          else
+            patch=0
+            label="$n"
+            kind=""
+          fi
           [ "$STAGE" != auto ] || STAGE=
           if [ -z "$STAGE" ]; then
             stage=$(grep -E -- "-${last:-x}-[a-z]+$" <<< "$tags" | head -1 | sed -E 's/.*-([a-z]+)$/\1/')
@@ -100,17 +119,19 @@ jobs:
             STAGE="${stage^}"
           fi
           IFS=. read -r major minor rel <<< "$base"
-          file="${base//./_}-$n-$STAGE"
+          file="${base//./_}-$label-$STAGE"
           {
             echo "base=$base"
             echo "file=$file"
-            echo "tag=v$base-$n-${STAGE,,}"
-            echo "title=Endless Keeper $base-$n $STAGE"
+            echo "tag=v$base-$label-${STAGE,,}"
+            echo "title=Endless Keeper $base-$label $STAGE$kind"
             echo "stage=$STAGE"
-            echo "release=$n"
-            echo "apk_name=$base-$n $STAGE"
-            # rises with every release and every KeeperFX version: 1.4.0-4 = 104000004
-            echo "apk_code=$(( major * 100000000 + minor * 1000000 + rel * 10000 + n ))"
+            echo "release=$label"
+            echo "release_num=$n"
+            echo "apk_name=$base-$label $STAGE"
+            # rises with every release, patch and KeeperFX version: 1.4.0-5 was 104000005 (n alone, before
+            # patches); since 1.4.0-5.1, n * 10 + patch: 1.4.0-5.1 = 104000051, 1.4.0-6 = 104000060
+            echo "apk_code=$(( major * 100000000 + minor * 1000000 + rel * 10000 + n * 10 + patch ))"
           } | tee -a "$GITHUB_OUTPUT"
 
   package:
@@ -181,6 +202,7 @@ jobs:
       - name: Setup
         env:
           N: ${{ needs.version.outputs.release }}
+          NUM: ${{ needs.version.outputs.release_num }}
           S: ${{ needs.version.outputs.stage }}
           FILE: ${{ needs.version.outputs.file }}
           MSYS_NO_PATHCONV: 1   # Git Bash would take ISCC's /D options for paths
@@ -188,7 +210,7 @@ jobs:
           set -euo pipefail
           "/c/Program Files/7-Zip/7z.exe" x -y -orel/stage rel/endless-keeper.7z > /dev/null
           mkdir -p out
-          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" /Q "/DRelease=$N" "/DStage=$S" \
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" /Q "/DRelease=$N" "/DReleaseNum=$NUM" "/DStage=$S" \
             "/DPackageDir=$(cygpath -w "$PWD/rel/stage")" "/DOutputDir=$(cygpath -w "$PWD/out")" "$(cygpath -w "$PWD/rel/endless-keeper.iss")"
           cp rel/endless-keeper.7z "out/endless-keeper-$FILE.7z"
           cp rel/commit.txt out/
@@ -235,7 +257,7 @@ jobs:
           # a test run's commit may exist only on the runner that made it
           git cat-file -e "$sha^{commit}" 2>/dev/null || sha=$GITHUB_SHA
           echo "SHA=$sha" >> "$GITHUB_ENV"
-          prev=$(git tag -l --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-' | head -1 || true)
+          prev=$(git tag -l --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+(\.[0-9]+)?-' | head -1 || true)
           # only the changes (the user's rule for the release notes)
           {
             echo "## Changes"

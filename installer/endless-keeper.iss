@@ -17,6 +17,9 @@
 #ifndef Release
   #define Release "0"
 #endif
+#ifndef ReleaseNum
+  #define ReleaseNum Release
+#endif
 #ifndef Stage
   #define Stage "Alpha"
 #endif
@@ -56,8 +59,8 @@ PrivilegesRequired=lowest
 UsedUserAreasWarning=no
 OutputDir={#OutputDir}
 OutputBaseFilename=EndlessKeeperSetup-{#FileVersion}
-VersionInfoVersion={#BaseVersion}.{#Release}
-VersionInfoProductVersion={#BaseVersion}.{#Release}
+VersionInfoVersion={#BaseVersion}.{#ReleaseNum}
+VersionInfoProductVersion={#BaseVersion}.{#ReleaseNum}
 VersionInfoTextVersion={#AppVersion}
 SetupIconFile=endless-keeper.ico
 UninstallDisplayIcon={app}\keeperfx.exe
