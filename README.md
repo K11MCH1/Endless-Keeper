@@ -127,7 +127,7 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 ## 🗺️ Roadmap
 
-**TBA.** Stay tuned!
+- **[Misdeeds](roadmap/MISDEEDS.md)**: creatures remember what they did, earn vices for it, and can be named.
 
 ---
 
