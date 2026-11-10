@@ -371,6 +371,11 @@ static int LbLog(struct TbLog *log, const char *prefix, const char *fmt_str, va_
                 release = "heavylog";
             }
             fprintf(log_file, PROGRAM_NAME " ver " VER_STRING " (%s release) git:%s\n", release, GIT_REVISION);
+#ifdef ENDLESS_RELEASE
+            /* the main menu's line (frontend_draw_product_version), so a log tells which release a build is */
+            fprintf(log_file, "Endless Keeper %d.%d.%d-%s %s\n", VER_MAJOR, VER_MINOR, VER_RELEASE,
+                (ENDLESS_RELEASE[0] != '\0') ? ENDLESS_RELEASE : "dev", (ENDLESS_STAGE[0] != '\0') ? ENDLESS_STAGE : "Alpha");
+#endif
             actn = "CREATED";
         } else {
             actn = "APPENDED";

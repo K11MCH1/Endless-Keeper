@@ -4198,11 +4198,12 @@ void frontend_draw_product_version(struct GuiButton *gbtn)
     LbTextSetFont(frontend_font[1]);
     int units_per_px = simple_frontend_sprite_height_units_per_px(gbtn, GFS_hugebutton_a05l, 100);
     int h = LbTextLineHeight() * units_per_px / 16;
-    /* Endless Keeper (2026-11-09): its own release over the KeeperFX version it is built on */
+    /* Endless Keeper (2026-11-09): its own release over the KeeperFX version it is built on, by its full name as the
+       release has it (the user, 2026-11-10): "Endless Keeper 1.4.0-6 Alpha" = KeeperFX base - release, stage */
     LbTextSetWindow(0, gbtn->scr_pos_y - h, gbtn->width, 2 * h);
     char text[128];
-    snprintf(text, sizeof(text), "Endless Keeper %s - %s", (ENDLESS_RELEASE[0] != '\0') ? ENDLESS_RELEASE : "dev",
-        (ENDLESS_STAGE[0] != '\0') ? ENDLESS_STAGE : "Alpha");
+    snprintf(text, sizeof(text), "Endless Keeper %d.%d.%d-%s %s", VER_MAJOR, VER_MINOR, VER_RELEASE,
+        (ENDLESS_RELEASE[0] != '\0') ? ENDLESS_RELEASE : "dev", (ENDLESS_STAGE[0] != '\0') ? ENDLESS_STAGE : "Alpha");
     LbTextDrawResized(0, 0, units_per_px, text);
     snprintf(text, sizeof(text), "%s %s", PRODUCT_NAME, PRODUCT_VERSION);
     LbTextDrawResized(0, h, units_per_px, text);

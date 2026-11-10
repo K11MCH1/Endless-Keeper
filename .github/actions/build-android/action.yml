@@ -84,7 +84,8 @@ runs:
         info = {
             'version': os.environ['KFX_VERSION'],
             'commit': subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], text=True).strip() + '-android',
-            'title': f'Endless Keeper {r} - {s}',
+            # the main menu's line: "Endless Keeper 1.4.0-6 Alpha" (KeeperFX base - release, stage)
+            'title': 'Endless Keeper {}-{} {}'.format('.'.join(os.environ['KFX_VERSION'].split('.')[:3]), r, s),
             'abi': 'arm64-v8a', 'min_api': 35, 'android_patches': True,
         }
         path = os.path.join(os.environ['RUNNER_TEMP'], 'engine.json')

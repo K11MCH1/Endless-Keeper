@@ -19,11 +19,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # the newest release's number and stage (tags v1.4.0-6-alpha, v1.4.0-5.3-alpha ...): these builds show it on the
+  # main menu as "Endless Keeper 1.4.0-6 Alpha" too, never "dev"
+  version:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      release: ${{ steps.newest.outputs.release }}
+      stage: ${{ steps.newest.outputs.stage }}
+    steps:
+      - name: Newest release
+        id: newest
+        run: |
+          set -euo pipefail
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/tags" --paginate --jq '.[].name' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+(\.[0-9]+)?-[a-z]+$' | sort -V | tail -1 || true)
+          release=$(sed -E 's/^v[0-9.]+-([0-9.]+)-[a-z]+$/\1/' <<< "$tag")
+          stage=$(sed -E 's/^.*-([a-z]+)$/\1/' <<< "$tag")
+          echo "newest release tag: ${tag:-none}"
+          { echo "release=$release"; echo "stage=${stage^}"; } | tee -a "$GITHUB_OUTPUT"
+
   build:
+    needs: version
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/build-package
+        with:
+          release: ${{ needs.version.outputs.release }}
+          stage: ${{ needs.version.outputs.stage }}
       - uses: actions/upload-artifact@v6
         with:
           name: endless-keeper-${{ github.sha }}
@@ -31,11 +56,14 @@ jobs:
           retention-days: 14
 
   android:
+    needs: version
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/build-android
         with:
+          release: ${{ needs.version.outputs.release }}
+          stage: ${{ needs.version.outputs.stage }}
           output: apk/EndlessKeeper-dev.apk
       - uses: actions/upload-artifact@v6
         with:

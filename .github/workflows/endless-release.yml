@@ -5,7 +5,7 @@
 # endless-keeper-1_4_0-4-Alpha.7z, EndlessKeeper-1_4_0-4-Alpha.apk (version 1.4.0-4 Alpha), tag v1.4.0-4-alpha. The
 # KeeperFX version is the setup's base (BaseVersion in installer/endless-keeper.iss); the release number is one more
 # than the highest so far; the stage stays what the last release had unless one is given. Alpha and Beta are
-# published as pre-releases. The game's main menu shows "Endless Keeper <release> - <stage>" over the KeeperFX
+# published as pre-releases. The game's main menu shows "Endless Keeper <base>-<release> <stage>" over the KeeperFX
 # version. The APK is signed with the repository secret ANDROID_KEYSTORE_BASE64 (password: ANDROID_KEYSTORE_PASSWORD,
 # default android), so each release installs over the last one.
 #

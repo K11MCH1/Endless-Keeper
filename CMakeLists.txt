@@ -31,7 +31,7 @@ if(NOT DEFINED BUILD_NUMBER)
 endif()
 set(PACKAGE_SUFFIX ""  CACHE STRING "Distribution suffix (e.g. Alpha, Release)")
 # Endless Keeper's own release number and stage, shown on the main menu over the KeeperFX version (the release
-# workflow sets them; other builds say "dev")
+# workflow sets them, the build workflow the newest release's; a build without them says "1.4.0-dev")
 set(ENDLESS_RELEASE "dev" CACHE STRING "Endless Keeper release number")
 set(ENDLESS_STAGE "Alpha" CACHE STRING "Endless Keeper stage (Alpha, Beta, Stable)")
 set(VER_STRING     "${VER_MAJOR}.${VER_MINOR}.${VER_RELEASE}.${BUILD_NUMBER} ${PACKAGE_SUFFIX}")
