@@ -29,6 +29,9 @@ extern struct GuiMenu world_endless_load_menu;
 void world_menu_draw_endless_button(struct GuiButton *gbtn);
 /** The main menu's "Endless Mode" button, every frame (runs the KFX_WORLD_MENU test hook). */
 void world_menu_endless_maintain(struct GuiButton *gbtn);
+/** The main menu's Continue: the newest Endless Mode save. */
+void world_menu_main_continue(struct GuiButton *gbtn);
+void world_menu_main_continue_maintain(struct GuiButton *gbtn);
 
 /** Frontend state set-up for the two Endless Mode screens. */
 void world_menu_setup(void);

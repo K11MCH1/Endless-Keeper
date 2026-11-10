@@ -63,7 +63,7 @@ VersionInfoVersion={#BaseVersion}.{#ReleaseNum}
 VersionInfoProductVersion={#BaseVersion}.{#ReleaseNum}
 VersionInfoTextVersion={#AppVersion}
 SetupIconFile=endless-keeper.ico
-UninstallDisplayIcon={app}\keeperfx.exe
+UninstallDisplayIcon={app}\EndlessKeeper.exe
 UninstallDisplayName=Endless Keeper
 Compression=lzma2/max
 SolidCompression=yes
@@ -114,12 +114,13 @@ Filename: "{app}\endless-keeper.ini"; Section: "install"; Key: "version"; String
 Filename: "{app}\endless-keeper.ini"; Section: "install"; Key: "base"; String: "{#BaseName}"
 
 [Icons]
-Name: "{group}\Endless Keeper"; Filename: "{app}\keeperfx.exe"; WorkingDir: "{app}"
+; (the launcher: it starts the game, 64-bit where Windows can run it, and keeps Endless Keeper up to date)
+Name: "{group}\Endless Keeper"; Filename: "{app}\EndlessKeeper.exe"; WorkingDir: "{app}"
 Name: "{group}\Uninstall Endless Keeper"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Endless Keeper"; Filename: "{app}\keeperfx.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\Endless Keeper"; Filename: "{app}\EndlessKeeper.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\keeperfx.exe"; WorkingDir: "{app}"; Description: "Play Endless Keeper"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\EndlessKeeper.exe"; WorkingDir: "{app}"; Description: "Start Endless Keeper"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const

@@ -267,7 +267,7 @@ TbBool creature_place_lair_totem(struct Thing *creatng, struct Room *room, const
     lairtng->lair.belongs_to = creatng->index;
     lairtng->lair.cssize = 1;
     // Lair size depends on creature level
-    lairtng->lair.spr_size = game.conf.crtr_conf.sprite_size + (game.conf.crtr_conf.sprite_size * game.conf.crtr_conf.exp.size_increase_on_exp * cctrl->exp_level) / 100;
+    lairtng->lair.spr_size = game.conf.crtr_conf.sprite_size + (game.conf.crtr_conf.sprite_size * game.conf.crtr_conf.exp.size_increase_on_exp * creature_size_exp_level(cctrl->exp_level)) / 100;
     struct ObjectConfigStats* objst = get_object_model_stats(lairtng->model);
     set_thing_draw(lairtng, objst->sprite_anim_idx, objst->anim_speed, lairtng->lair.cssize, 0, -1, objst->draw_class);
     anger_set_creature_anger(creatng, 0, AngR_NoLair);

@@ -2,7 +2,7 @@
 # (Inno Setup, on Windows), the Android app (android/, on Linux) and a GitHub release with all three.
 #
 # Names: <KeeperFX stable>-<Endless Keeper release> <stage>, e.g. 1.4.0-4 Alpha: EndlessKeeperSetup-1_4_0-4-Alpha.exe,
-# endless-keeper-1_4_0-4-Alpha.7z, EndlessKeeper-1_4_0-4-Alpha.apk (version 1.4.0-4 Alpha), tag v1.4.0-4-alpha. The
+# endless-keeper-1_4_0-4-Alpha-patch.zip and .7z (for an existing Endless Keeper folder), EndlessKeeper-1_4_0-4-Alpha.apk (version 1.4.0-4 Alpha), tag v1.4.0-4-alpha. The
 # KeeperFX version is the setup's base (BaseVersion in installer/endless-keeper.iss); the release number is one more
 # than the highest so far; the stage stays what the last release had unless one is given. Alpha and Beta are
 # published as pre-releases. The game's main menu shows "Endless Keeper <base>-<release> <stage>" over the KeeperFX
@@ -212,7 +212,10 @@ jobs:
           mkdir -p out
           "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" /Q "/DRelease=$N" "/DReleaseNum=$NUM" "/DStage=$S" \
             "/DPackageDir=$(cygpath -w "$PWD/rel/stage")" "/DOutputDir=$(cygpath -w "$PWD/out")" "$(cygpath -w "$PWD/rel/endless-keeper.iss")"
-          cp rel/endless-keeper.7z "out/endless-keeper-$FILE.7z"
+          # the patch: the same files, for a folder that already is Endless Keeper (never a KeeperFX one). The launcher
+          # updates with the zip (every Windows can unpack one); the 7z is the smaller download for doing it by hand
+          cp rel/endless-keeper.7z "out/endless-keeper-$FILE-patch.7z"
+          ( cd rel/stage && "/c/Program Files/7-Zip/7z.exe" a -tzip -mx=7 "../../out/endless-keeper-$FILE-patch.zip" . > /dev/null )
           cp rel/commit.txt out/
           ls -la out
 
@@ -273,7 +276,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          files=(out/EndlessKeeperSetup-*.exe out/endless-keeper-*.7z out/EndlessKeeper-*.apk)
+          files=(out/EndlessKeeperSetup-*.exe out/endless-keeper-*-patch.zip out/endless-keeper-*-patch.7z out/EndlessKeeper-*.apk)
           ls -la "${files[@]}"
           flags=()
           [ "$STAGE" = Stable ] || flags+=(--prerelease)

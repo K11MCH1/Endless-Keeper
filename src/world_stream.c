@@ -105,6 +105,7 @@
 #include "server_admin.h"
 #include "net_exchange_common.h"
 #include "world_caretaker.h"
+#include "world_attract.h"
 #include "kfx_deflate.h"
 #include "net_secure.h"
 #include "post_inc.h"
@@ -8197,6 +8198,7 @@ void world_process_turn(void)
     world_mapzoom_hook();
     world_progress_turn();
     world_caretaker_turn(); /* away players' dungeons: the gold held */
+    world_attract_turn(); /* the launcher's background: its battles and camera */
     coop_upkeep(); /* party dungeons: defeats, deleted seats freed, unplayed ones deleted */
     server_admin_turn(); /* a dedicated server's console: play time, status */
     world_open_hook();

@@ -482,7 +482,8 @@ struct Thing *create_dead_creature(const struct Coord3d *pos, ThingModel model, 
         long i = get_creature_anim(thing, CGI_DropDead);
         set_thing_draw(thing, i, 64, -1, 1, get_lifespan_of_animation(thing->anim_sprite, thing->anim_speed), ODC_Default);
     }
-    thing->sprite_size = (game.conf.crtr_conf.sprite_size * (long)thing->corpse.exp_level) / 20 + game.conf.crtr_conf.sprite_size;
+    /* (as the living creature: the size grows up to level 10, not further - a level 80 corpse was 5 times the size) */
+    thing->sprite_size = (game.conf.crtr_conf.sprite_size * (long)creature_size_exp_level(thing->corpse.exp_level)) / 20 + game.conf.crtr_conf.sprite_size;
     return thing;
 }
 

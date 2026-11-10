@@ -27,6 +27,23 @@ There is **no map edge**. Every run drops you into a fresh underworld generated 
 rival keepers, hero fortresses and treasure caves as far as your imps can dig. You start small, with a few rooms and
 spells. Then you explore, find research books, grow your dungeon day by day, and survive what the night brings.
 
+### 🧱 A standalone mod, next to KeeperFX
+
+Endless Keeper is a **standalone mod made on top of KeeperFX**. It installs into its own folder and lives **next to**
+KeeperFX: it never changes, replaces or updates a KeeperFX installation, and you can keep and play both.
+
+It is also only what its name says. KeeperFX's campaigns and its online multiplayer are the result of years of work
+by the KeeperFX team, and the place to play them is KeeperFX itself. So, out of respect for that work:
+
+- Endless Keeper's main menu has **no Campaign button**, and **Continue** takes you back to your Endless Mode world.
+- Endless Keeper **does not connect to KeeperFX's multiplayer servers**, so KeeperFX's lobbies don't show up here
+  and Endless Keeper players don't show up there.
+- Endless Keeper has **its own launcher**, and does not use or replace KeeperFX's.
+
+Endless Keeper adds one thing on top of KeeperFX, the endless world, and leaves the rest where it belongs. For Dungeon
+Keeper's campaign, the community's campaigns or a classic multiplayer match, please get
+[KeeperFX](https://keeperfx.net).
+
 ### 💭 The vision
 
 Dungeon Keeper is one of the most loved strategy games ever made, and there is still nothing quite like it. Endless
@@ -136,25 +153,29 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
    you can choose the folder. It copies the few original files the game needs (palettes, two texture files, three
    sound banks and, for digital copies, the music).
 4. **Wait a minute** while it downloads the KeeperFX base game and installs Endless Keeper on top of it.
-5. **Start Endless Keeper** from the Start menu (or the desktop) and choose **Endless Mode** in the main menu.
+5. **Start Endless Keeper** from the Start menu (or the desktop). Its launcher opens: press **Play**, then choose
+   **Endless Mode** in the main menu. The launcher's **Settings** hold the game's options.
 
 > [!TIP]
-> **Updating:** run the newer setup and keep the same folder. It only downloads what changed, and your saves and
-> settings stay. **Uninstalling** removes everything except your saved games.
+> **Updating:** the launcher tells you when a new release is out and installs it with one click; your saves and
+> settings stay. You can also run the newer setup and keep the same folder. **Uninstalling** removes everything
+> except your saved games.
 
 <details>
 <summary>Installing by hand instead</summary>
 
 1. Unpack KeeperFX's [`keeperfx_1_4_0_complete.7z`](https://github.com/dkfans/keeperfx/releases/tag/v1.4.0) into
    an empty folder.
-2. Unpack `endless-keeper-….7z` from the same release on the [Releases](https://github.com/K11MCH1/Endless-Keeper/releases)
-   page over it, replacing files.
+2. Unpack `endless-keeper-…-patch.7z` (or the `.zip`) from the [Releases](https://github.com/K11MCH1/Endless-Keeper/releases)
+   page over it, replacing files. The patch is only for a folder of Endless Keeper's own: never unpack it into your
+   KeeperFX installation.
 3. Copy `data\bluepal.dat`, `bluepall.dat`, `dogpal.pal`, `hitpall.dat`, `lightng.pal`, `redpal.col`, `redpall.dat`,
    `slab0-0.dat`, `slab0-1.dat`, `vampal.pal`, `whitepal.col` and `sound\atmos1.sbk`, `atmos2.sbk`, `bullfrog.sbk`
    from your Dungeon Keeper (or KeeperFX) folder into the same places, and the music (`keeper02.ogg` to
    `keeper07.ogg`) into `music\` if you have it.
 4. Delete `keeperfx-launcher-qt.exe` and `keeperfx-launcher-legacy.exe`: KeeperFX's launcher would update the folder
    to plain KeeperFX.
+5. Start `EndlessKeeper.exe`, Endless Keeper's launcher.
 
 </details>
 
@@ -206,7 +227,7 @@ Dungeon Keeper, there is a place for you.
 | 🎮 **Bullfrog Productions** | For creating *Dungeon Keeper* (1997), published by Electronic Arts. |
 | 🔥 **The KeeperFX team and contributors** | For [KeeperFX](https://github.com/dkfans/keeperfx), the open-source engine Endless Keeper is built on. None of this would exist without their years of work. |
 | 🔒 **Flip-FriendSpace** | For the Lua security fix, ported from [keeperfx-dx12](https://github.com/Flip-FriendSpace/keeperfx-dx12). |
-| 📦 **Open-source libraries** | SDL, SDL_mixer and SDL_image, LuaJIT, ENet, zlib, libspng, FFmpeg, OpenAL Soft, libcurl, miniupnpc, libnatpmp and the other libraries KeeperFX builds on. |
+| 📦 **Open-source libraries** | SDL, SDL_mixer and SDL_image, LuaJIT, ENet, zlib, libspng, FFmpeg, OpenAL Soft, libcurl, miniupnpc, libnatpmp and the other libraries KeeperFX builds on; Dear ImGui and stb_image in the launcher. |
 
 ---
 

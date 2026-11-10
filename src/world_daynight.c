@@ -19,6 +19,7 @@
 /******************************************************************************/
 #include "pre_inc.h"
 #include "world_daynight.h"
+#include "world_attract.h"
 #include "world_daynight_art.h"
 #include "world_stream.h"
 #include "world_gen.h"
@@ -265,6 +266,8 @@ static void dn_make_frame(int k)
 
 void world_daynight_draw(void)
 {
+    if (world_attract_active())
+        return; /* the launcher's background: the picture alone */
     if (!world_mode_active())
         return;
     dn_read_lengths();

@@ -1047,9 +1047,8 @@ static void load_string_configuration(const char *buf, int32_t len, const char *
           }
           else
           {
-              matchmaking_enabled = true;
               matchmaking_set_server(word_buf);
-              SYNCLOG("Matchmaking server: %s", matchmaking_ws_url);
+              SYNCLOG("Matchmaking server: %s", matchmaking_enabled ? matchmaking_ws_url : "none");
           }
           break;
       case 48: // MULTIPLAYER_PORT

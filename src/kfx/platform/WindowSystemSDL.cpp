@@ -6,6 +6,7 @@
  *     SDL3 desktop window-system implementation of IWindowSystem.
  */
 /******************************************************************************/
+#include "../../world_attract.h"
 #include "pre_inc.h"
 #include "kfx/platform/WindowSystemSDL.h"
 #include "kfx/platform/IPlatform.h"
@@ -440,6 +441,7 @@ bool WindowSystemSDL::CreateWindow(const char* title, int x, int y, int w, int h
         sdl3_flags |= SDL_WINDOW_FULLSCREEN;
     if (flags & KFX_WF_BORDERLESS) sdl3_flags |= SDL_WINDOW_BORDERLESS;
     if (flags & KFX_WF_HIDDEN)     sdl3_flags |= SDL_WINDOW_HIDDEN;
+    if (world_attract_active())    sdl3_flags |= SDL_WINDOW_HIDDEN; // the launcher's background: no window to see
 
     if (flags & KFX_WF_OPENGL)
     {
@@ -474,6 +476,8 @@ bool WindowSystemSDL::CreateWindow(const char* title, int x, int y, int w, int h
 
 void WindowSystemSDL::ShowWindow()
 {
+    if (world_attract_active())
+        return;
     if (m_window != nullptr)
         SDL_ShowWindow(m_window);
 }

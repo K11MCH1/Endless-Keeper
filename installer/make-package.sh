@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds the Endless Keeper package from this checkout: the game, its DLLs and game data, made the way KeeperFX
+# Builds the Endless Keeper package from this checkout: the launcher, the game, its DLLs and game data, made the way KeeperFX
 # makes its alpha patches, plus the Unicode fonts and the Endless Mode stub level's map files. The setup
 # (installer/endless-keeper.iss) carries this package and lays it over the KeeperFX base game.
 #
@@ -32,6 +32,10 @@ cmake -S . -B out64 -G Ninja -DCMAKE_TOOLCHAIN_FILE=build/cmake/toolchains/mingw
 cmake --build out64 --target keeperfx > /dev/null
 echo "== game data"
 make "${VER[@]}" pkg-assemble > /dev/null
+
+echo "== launcher (EndlessKeeper.exe: what players start)"
+launcher/build.sh out/launcher > /dev/null
+cp out/launcher/EndlessKeeper.exe pkg/
 
 echo "== 64-bit game in x64 (with its SDL3 DLLs; started there, it plays from the game folder above)"
 mkdir -p pkg/x64

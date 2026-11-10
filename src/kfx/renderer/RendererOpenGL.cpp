@@ -1,3 +1,4 @@
+#include "../../world_attract.h"
 #include "pre_inc.h"
 #include "kfx/renderer/RendererOpenGL.h"
 #include "bflib_basics.h"
@@ -263,7 +264,8 @@ bool RendererOpenGL::Init()
         return false;
     }
 
-    ws->ShowWindow();
+    if (!world_attract_active()) // (the launcher's background has no window to see)
+        ws->ShowWindow();
 
     if (!m_gl_context->ReleaseCurrent())
     {
@@ -642,6 +644,19 @@ bool RendererOpenGL::ScheduleScreenshot(const char* path, int fmt)
 
 void RendererOpenGL::FGCaptureScreenshot()
 {
+    if (world_attract_active())
+    {
+        /* the launcher's background: every frame goes to the launcher */
+        GLFrameData& afd = m_impl->frames[m_impl->render_idx];
+        if (afd.screen_w > 0 && afd.screen_h > 0)
+        {
+            static std::vector<unsigned char> attract_pixels;
+            attract_pixels.resize((size_t)afd.screen_w * (size_t)afd.screen_h * 4);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, m_impl->resource_mapper.GetScreenFramebuffer());
+            glReadPixels(0, 0, afd.screen_w, afd.screen_h, GL_RGBA, GL_UNSIGNED_BYTE, attract_pixels.data());
+            world_attract_frame(attract_pixels.data(), afd.screen_w, afd.screen_h, 1);
+        }
+    }
     if (m_impl->screenshot_path.empty())
         return;
 
@@ -683,7 +698,8 @@ void RendererOpenGL::FGExecuteCursor()
     GLFrameData& fd = m_impl->frames[m_impl->render_idx];
     m_impl->world.DrawCursorKeeperSprites();
     m_impl->ui.DrawFromIR(fd.tooltip_ui_cmds, fd.tooltip_text_cmds, &m_impl->text);
-    m_impl->cursor.DrawSnapshot(fd.cursor_snapshot);
+    if (!world_attract_active()) // (the launcher's background has no pointer)
+        m_impl->cursor.DrawSnapshot(fd.cursor_snapshot);
 }
 
 void RendererOpenGL::render_thread_cleanup()

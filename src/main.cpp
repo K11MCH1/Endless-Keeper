@@ -154,6 +154,7 @@
 #endif
 
 #include "net_state.h"
+#include "world_attract.h"
 #include "world_stream.h"
 #include "world_menu.h"
 #include "server_admin.h"
@@ -1958,6 +1959,12 @@ static short process_command_line(unsigned short argc, char *argv[])
       else if (strcasecmp(parstr,"seed") == 0)
       {
           world_set_next_seed(pr2str);
+          narg++;
+      }
+      else if (strcasecmp(parstr,"attract") == 0)
+      {
+          /* the launcher's background: this run is hidden and hands its frames over (world_attract.c) */
+          world_attract_configure(pr2str);
           narg++;
       }
       else if (strcasecmp(parstr,"loadseed") == 0)

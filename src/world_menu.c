@@ -66,6 +66,7 @@
 #include "gui_parchment.h"
 #include "frontmenu_ingame_tabs.h"
 #include "local_camera.h"
+#include "world_attract.h"
 #include "chat_box.h"
 #include "post_inc.h"
 
@@ -461,6 +462,24 @@ static void wm_fresh_seed(char *seed, size_t len)
 void world_menu_fresh_seed(char *seed, size_t len)
 {
     wm_fresh_seed(seed, len);
+}
+
+/* The main menu's Continue (Endless Keeper, 2026-11-10): the newest Endless Mode save. */
+void world_menu_main_continue_maintain(struct GuiButton *gbtn)
+{
+    static Uint64 listed_at = 0;
+    if ((listed_at == 0) || (SDL_GetTicks() - listed_at >= 2000))
+    {
+        listed_at = SDL_GetTicks() | 1;
+        wm_list_saves();
+    }
+    wm_continue_maintain(gbtn);
+}
+
+void world_menu_main_continue(struct GuiButton *gbtn)
+{
+    wm_list_saves();
+    wm_continue(gbtn);
 }
 
 int world_menu_newest_endless_slot(void)
@@ -1682,6 +1701,8 @@ void world_autosave(const char *why)
 {
     if (!world_mode_active() || !world_menu_endless_campaign_loaded() || replay.load_enable)
         return;
+    if (world_attract_active())
+        return; /* the launcher's background keeps nothing */
     /* a network game: only the host keeps the run (every machine shares the save folder when tested on one PC) */
     if (network_is_active() && !network_is_host())
         return;
