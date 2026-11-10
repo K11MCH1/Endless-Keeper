@@ -143,6 +143,8 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 - **[Amenity Mastery](roadmap/AMENITY-MASTERY.md)**: rooms, spells and traps are mastered over time with experience
   from duplicate books, worth more the deeper they were found.
 
+  There is more! Just not polished and outlined here.
+
 ---
 
 ## 🖥️ Requirements
