@@ -1,6 +1,6 @@
 // EndlessKeeper.exe: the launcher's icon, its header picture and version
 #include <winver.h>
-1 ICON "endless-keeper.ico"
+1 ICON "../installer/endless-keeper.ico"
 100 RCDATA "header.png"
 // the languages: KeeperFX's launcher's translations (GPL v2), and Endless Keeper's own texts
 201 RCDATA "lang/cs.po"
