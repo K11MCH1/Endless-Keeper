@@ -75,7 +75,8 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 | ♾️ | **Endless world** | No map edge, ever. The world loads in 16×16-slab chunks around your dungeon and creatures, and freezes when nobody needs it. When you come back, it is exactly as you left it. |
 | 🎲 | **Procedural generation** | Every run is a new world built from a seed: rock masses, caves, lakes, rivers, gold seams and rare gems. Nothing is sealed off: everything can be reached by digging. |
 | 🏔️ | **Eight biomes** | Earthen Caverns, Rocky Depths, Volcanic Rifts, Flooded Grottos, Frozen Hollows, Sandstone Wastes and the rare Crystal Caverns and Ancient Ruins. Each has its own textures, liquids, riches and creatures. |
-| 🗺️ | **Endless map** | The full-screen map scrolls over everything you have discovered (**W A S D**, **Shift** for faster, **H** for home, click to go there). |
+| 🏯 | **A keep to start in** | Every run starts in a walled keep round your Dungeon Heart, with 8 imps and 10,000 gold. The ground around it is cleared in a natural shape. |
+| 🗺️ | **Full-screen map** | The map fills the whole screen and glides over everything you have discovered: **W A S D** or drag to move (**Shift** for faster), the mouse wheel to zoom from a wide overview down to single creatures, **H** for home, **[** and **]** to jump between your battles, click to go there. |
 
 <div align="center">
 <img src="docs/images/world-generator.png" alt="An overview of a generated world: biomes, gold seams, portals, fortresses and caves" width="820">
@@ -87,16 +88,19 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 | | Feature | What it means |
 |:-:|---|---|
 | 🌀 | **Neutral portals** | Claim them to raise your creature limit (+5 each) and to unlock the creatures of their biome. |
-| 💎 | **Reward caves** | Special boxes, gold hoards and wild creatures guarding research books. |
-| 🛡️ | **Hero fortresses** | Moated strongholds full of heroes and spellbooks. |
-| ⚔️ | **Heroes outposts** | Large, heavily trapped hero bases hidden in the world. Break the gate, fight through the guards and destroy the Heroes Heart for XP and a spellbook. |
+| 💎 | **Reward caves** | Special boxes, gold hoards and wild creatures guarding research books. Increase Level and Steal Hero boxes brought to your Library fuse into one stronger box, up to +10. |
+| 🛡️ | **Hero fortresses** | Moated strongholds full of heroes and books, built into the land around them: halls cross lava and water on causeways, and the moat is the biome's own. |
+| ⚔️ | **Heroes outposts** | Heavily trapped hero bases hidden in the world. Break the gate, fight through the guards and destroy the Heroes Heart for XP and a spellbook. Their traps stay hidden until they go off. |
+| 📐 | **Five sizes** | Fortresses and outposts are Small, Moderate, Medium, Large or Massive, matched to your strongest creature when you find them. Bigger ones hold more books, and from Medium up the heroes pour out of hero portals when you break into their rooms. |
 | 👑 | **Rival keepers** | Computer keepers sleep in their dungeons until you come close. Then they wake up and fight back. Defeat them for their research books. |
 
 ### 📈 Progression
 
 | | Feature | What it means |
 |:-:|---|---|
-| 📚 | **Research books** | Start with the Treasury, Lair, Hatchery, Summon Imp and Possession. Everything else is learnt from research books found in the world, and the further you travel, the better they get. |
+| 📚 | **Research books** | Start with the Treasury, Lair, Hatchery, Summon Imp and Possession. Everything else is learnt from research books found in the world: each book offers up to three things to learn and you pick one. The further you travel, the better the books get. |
+| 🏰 | **Room levels** | A book for a Lair, Hatchery, Library or Training Room you already have lets that room reach level 2 and 3 once your Library has researched it: faster healing, longer-lasting food, more training experience, faster research. |
+| ✨ | **Spell levels** | The same goes for Create Imp, Sight of Evil, Speed Monster, Conceal Monster, Heal, Lightning Strike and Protect Monster: higher-level imps, wider sight, stronger and longer-lasting casts. Room and spell icons show their level. |
 | 🧪 | **Levels up to 100** | Creatures and heroes can grow all the way to level 100, learning new abilities along the way. |
 | ⛏️ | **Imps learn by mining** | Every turn spent mining gold makes your imps a little more experienced. |
 | 🏅 | **Player levels** | Every Dungeon Heart you destroy (keeper or heroes) earns you XP and player levels. |
@@ -105,7 +109,9 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 | | Feature | What it means |
 |:-:|---|---|
-| ☀️ | **Day** | 12 minutes. Hero raiding parties, led by a Tunneller, may break in through the ceiling and dig towards your heart. The longer you survive, the tougher they get. |
+| ☀️ | **Day** | 12 minutes. Hero raiding parties may break in through the ceiling and dig towards your heart. How many parties land, and who is in them, follows your strongest creature: Thieves and Tunnellers at first, later Knights, Wizards, Giants and the other heroes of the biome they land in. |
+| 📖 | **Raiders carry books** | A raid can bring a research book with it. Kill the hero who carries it and it is yours. |
+| 🏃 | **Raids end** | No new raid comes while the heroes of the last one are still around, and raiders who haven't been dealt with walk home at dawn after their third night. |
 | 🌙 | **Night** | 8 minutes. Packs of wild creatures (spiders, skeletons, beetles, flies and worse) crawl out of the dirt paths and water. At dawn they fade away. |
 | 🕰️ | **Sun and moon dial** | An animated dial shows the time of day at a glance. |
 | 💾 | **Autosave** | Your run is saved at every dawn and when you quit. |
@@ -114,10 +120,14 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 | | Feature | What it means |
 |:-:|---|---|
-| 🏠 | **Shared worlds** | Host a world and let friends join at any time, even while it is running. Each player gets their own start somewhere in the same world. |
-| 📋 | **World List** | Browse running worlds with their players and ping, chat with everyone in the menu, or join by address. |
-| 🚀 | **Built for many players** | The server runs the world and streams it to the players, so there are no desyncs and a lagging player never holds anyone up. Designed for up to 100 players in one world. |
-| 🚪 | **Come back any time** | A player who leaves keeps their dungeon in the world and gets it back when they return. |
+| 🏠 | **Shared worlds** | Host a world and let friends join at any time, even while it is running. Each player gets their own start in the same world, 1,000 to 2,000 slabs from the nearest other player. |
+| 📋 | **World List** | Browse the running worlds of every Endless Keeper server with their players and ping, chat with everyone in the menu, or type a server's address to see its worlds. |
+| 🤝 | **Co-op parties** | Invite a player to your party in the World List and enter a world together. You start side by side as allied keepers: you see everything your ally sees and can drop creatures on their ground. Enemies that come for a party are one level higher. |
+| 🏘️ | **Solo and co-op dungeons** | Every player has a solo dungeon and a co-op dungeon. Entering a world alone takes you to your solo dungeon; entering with your party takes you to the pair of co-op dungeons you share, far out beyond the solo ones. |
+| 🚪 | **Come back any time** | A player who leaves keeps their dungeon in the world and gets it back when they return. While you are away a caretaker keeps your solo dungeon: it puts creatures to work, places the traps your Workshop made and defends, but builds, digs and attacks nothing. A co-op dungeon freezes instead. |
+| 💬 | **Chat box** | In a shared world, chat sits in a box at the bottom of the screen that you can scroll, shrink to just the lines, or close. |
+| 🛡️ | **Roles and commands** | A server can give players roles with a name colour and permissions for commands typed in the game, such as `!mute` or `!kick`. `/help` lists yours. `!delete dungeon` permanently deletes the dungeon you are playing so you can start a new one. |
+| 🚀 | **Built for many players** | The server runs the world and streams it to the players, so there are no desyncs and a lagging player never holds anyone up. Designed for up to 100 players in one world, with a 64-bit version for busy servers. |
 
 > [!NOTE]
 > **Multiplayer servers are not publicly available yet. They are coming soon!** Until then you can host a world
