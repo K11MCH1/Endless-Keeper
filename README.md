@@ -130,6 +130,8 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 - **[Misdeeds](roadmap/MISDEEDS.md)**: creatures remember what they did, earn vices for it, and can be named.
 - **[Circles of Hell](roadmap/CIRCLES-OF-HELL.md)**: the land around every dungeon is cut into named circles, each
   with stronger residents and better loot than the last.
+- **[Amenity Mastery](roadmap/AMENITY-MASTERY.md)**: rooms, spells and traps are mastered over time with experience
+  from duplicate books, worth more the deeper they were found.
 
 ---
 
