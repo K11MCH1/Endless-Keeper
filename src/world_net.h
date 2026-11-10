@@ -29,6 +29,9 @@ extern "C" {
 #define WNET_NAMES_MAX     128
 #define WNET_CHAT_MAX      50
 #define WNET_HUB_PORT      5560
+/* the public World List (2026-11-10): the Cloudflare Worker in tools/keeperfx-world-hub, the default hub when
+   WORLD_LIST_SERVER isn't set (a server's own hub: ws://127.0.0.1:5560/hub) */
+#define WNET_PUBLIC_HUB    "wss://world.endless-keeper.workers.dev/hub"
 
 struct WnetServer {
     char id[16];
@@ -48,6 +51,8 @@ struct WnetChatLine {
 /** The hub address (WORLD_LIST_SERVER in keeperfx.cfg; -worldlist on the command line). */
 extern char world_list_server[WNET_URL_MAX];
 void world_net_set_list_server(const char *url);
+/** -worldlist was given: WORLD_LIST_SERVER in keeperfx.cfg (read after the command line) leaves the address alone. */
+extern TbBool world_list_server_from_cmdline;
 
 /* The World List menu: this game as a player in the menu. */
 void wnet_menu_open(const char *player_name);

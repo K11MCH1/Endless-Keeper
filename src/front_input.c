@@ -90,6 +90,7 @@
 #include <math.h>
 #include "world_stream.h"
 #include "net_state.h"
+#include "chat_box.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -459,12 +460,16 @@ static short get_players_message_inputs(void)
             if (text[0] != '\0') {
                 message_add(MsgType_Local, player->id_number, text);
             }
+        } else if ((text[0] == '/') && network_is_active() && world_mode_active() && !netstate_is_client()) {
+            /* the host of an endless world typed a "/" command: there are no roles in a hosted world (Endless Keeper) */
+            chat_box_add(-1, "Server commands work on a dedicated server (Keeper Server), not in a hosted world.");
         } else {
             if (network_is_active()) {
                 send_network_chat_message_at(get_local_user(), text, cursor_x, cursor_y);
             }
             if (netstate_is_client()) {
-                if (text[0] != cmd_char)
+                /* "!" and, in endless worlds, "/" lines are commands the server answers: not shown as this one's chat */
+                if ((text[0] != cmd_char) && !((text[0] == '/') && world_mode_active()))
                     process_gameplay_chat_message(get_local_user(), text, cursor_x, cursor_y);
             } else if (!observer_is_active()) {
                 queue_gameplay_chat_message(get_local_user(), text, cursor_x, cursor_y);

@@ -8,8 +8,9 @@
  *     bottom of the screen in the style of the game's message dialogs, instead of the top of the screen, where the
  *     game's own news stays. The chat icon (the bottom of the event column; the events show one slot up) opens and
  *     closes it; its eye leaves only the lines, which stay a while and fade; its tick closes it. Up and down (and the
- *     mouse wheel over it) go through the last lines. The box moves up above a message dialog. The choice is kept
- *     in settings.toml. Single player and other games are as before.
+ *     mouse wheel over it) go through the last lines. The box stays at the bottom: a message dialog opening closes
+ *     it, and the box opening closes the dialog (2026-11-10). The choice is kept in settings.toml. Single player and
+ *     other games are as before.
  */
 /******************************************************************************/
 #include "pre_inc.h"
@@ -408,21 +409,20 @@ static int cb_menu_units(void)
     return max(units, 1);
 }
 
-/** The box's lowest edge: the screen's bottom, or the top of a message dialog there. */
+/** The box's lowest edge: always the screen's bottom (the user, 2026-11-10: it no longer moves up above a message
+ *  dialog; the two never show together, see chat_box_turn). */
 static long cb_bottom(void)
 {
-    static const MenuID below[] = {GMnu_TEXT_INFO, GMnu_BATTLE, GMnu_DUNGEON_SPECIAL};
-    long bottom = MyScreenHeight;
-    for (int i = 0; i < (int)(sizeof(below) / sizeof(below[0])); i++)
-    {
-        const MenuNumber m = menu_id_to_number(below[i]);
-        if (m >= 0)
-            bottom = min(bottom, (long)get_active_menu(m)->pos_y);
-    }
-    return bottom;
+    return MyScreenHeight;
 }
 
-/** Where the box is: against the event column, to the screen's right edge, at the bottom or above a message dialog. */
+/** A message dialog is up: an event's text, a battle, a dungeon special. */
+static TbBool cb_dialog_up(void)
+{
+    return menu_is_active(GMnu_TEXT_INFO) || menu_is_active(GMnu_BATTLE) || menu_is_active(GMnu_DUNGEON_SPECIAL);
+}
+
+/** Where the box is: against the event column, to the screen's right edge, at the bottom. */
 struct CbGeom {
     long x;
     long y;
@@ -516,7 +516,25 @@ static TbBool cb_box_on_screen(void)
 
 void chat_box_turn(void)
 {
+    /* the box and a message dialog share the bottom of the screen and never show together (the user, 2026-11-10):
+       a dialog opening closes the box (as its icon would), and the box opening (its icon, or typing) closes the
+       dialog that is up (as its tick would; its event stays in the column) */
+    static TbBool dialog_was_up = false;
+    static TbBool box_was_wanted = false;
+    const TbBool dialog_up = chat_box_active() && cb_dialog_up();
+    if (dialog_up && !dialog_was_up && (cb_mode == CBM_Open))
+        cb_set_mode(CBM_Closed);
     const TbBool want = chat_box_active() && cb_box_wanted();
+    if (want && !box_was_wanted && dialog_up && dialog_was_up)
+    {
+        SYNCLOG("Chat box: opened over a message dialog, which closes");
+        turn_off_event_box_if_necessary(my_player_number, my_visible_event_idx);
+        turn_off_menu(GMnu_TEXT_INFO);
+        turn_off_menu(GMnu_BATTLE);
+        turn_off_menu(GMnu_DUNGEON_SPECIAL);
+    }
+    dialog_was_up = chat_box_active() && cb_dialog_up();
+    box_was_wanted = want;
     if (want && !menu_is_active(GMnu_CHAT_BOX))
         turn_on_menu(GMnu_CHAT_BOX);
     else if (!want && menu_is_active(GMnu_CHAT_BOX))
@@ -593,6 +611,8 @@ static void cb_down_maintain(struct GuiButton *gbtn)
 void chat_box_draw_faded(void)
 {
     if (!chat_box_active() || cb_box_on_screen())
+        return;
+    if (cb_dialog_up() && !cb_typing()) /* the lines alone would lie over the dialog at the bottom */
         return;
     const TbBool closed = (cb_mode == CBM_Closed);
     if (closed && !cb_typing())

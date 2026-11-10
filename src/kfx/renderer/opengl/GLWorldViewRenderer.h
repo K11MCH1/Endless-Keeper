@@ -394,8 +394,10 @@ private:
     // Sprite decode atlas: GL_TEXTURE_2D_ARRAY where each layer holds one
     // pre-decoded sprite (populated on first use, persists for the level).
     // Fallback to m_kspr_sprite_tex_handle when atlas is full/absent/unsupported.
-    static const int k_kspr_atlas_layers = 2048;       // 2048x256x256 GL_RG8 = 256 MB
-    static const int k_kspr_atlas_preload_max = k_kspr_atlas_layers / 2;
+    static const int k_kspr_atlas_layers = 2048;       // 2048x256x256 GL_RG8 = 256 MB (the most asked for)
+    // the layers the driver gave (Endless Keeper, 2026-11-10): an AMD integrated GPU refused 2048, so the atlas
+    // is asked for again at 1024, 512, 256 before the non-atlas fallback; the preload fills half of it
+    int m_kspr_atlas_layers = k_kspr_atlas_layers;
     GpuResourceHandle m_kspr_sprite_array_handle = kInvalidGpuResource;
     GpuResourceHandle m_kspr_atlas_shader_handle = kInvalidGpuResource;  // sampler2DArray variant
     GLint  m_kspr_atlas_loc_viewport = -1;

@@ -733,6 +733,12 @@ bool GLResourceMapper::RealizeTexture(const GpuTextureDesc& desc, GLTexture& out
             break;
     }
 
+    /* Whether the driver took the storage (Endless Keeper, 2026-11-10): an AMD integrated GPU refused the 2048-layer
+       keeper-sprite array with GL_INVALID_VALUE, the texture stayed empty but was handed out as made, and every
+       creature and heart sprite uploaded into it was lost (invisible imps). A refused texture now fails, so its
+       user can try smaller or take its fallback path. Errors from before are drained first so they aren't blamed. */
+    for (int drain = 0; (drain < 16) && (glGetError() != GL_NO_ERROR); drain++)
+        ;
     if (desc.array_layers > 1)
     {
         glTexImage3D(target, 0, internal_format, desc.width, desc.height, desc.array_layers, 0,
@@ -743,8 +749,18 @@ bool GLResourceMapper::RealizeTexture(const GpuTextureDesc& desc, GLTexture& out
         glTexImage2D(target, 0, internal_format, desc.width, desc.height, 0,
                      gl_format, gl_type, desc.initial_pixels.empty() ? nullptr : desc.initial_pixels.data());
     }
+    const GLenum alloc_error = glGetError();
 
     glBindTexture(target, 0);
+
+    if (alloc_error != GL_NO_ERROR)
+    {
+        ERRORLOG("GLResourceMapper::RealizeTexture: the driver refused '%s' (%dx%d, %d layers): GL error 0x%04x",
+            (desc.debug_name != nullptr) ? desc.debug_name : "?", (int)desc.width, (int)desc.height,
+            (int)desc.array_layers, (unsigned)alloc_error);
+        glDeleteTextures(1, &tex_id);
+        return false;
+    }
 
     out.id = tex_id;
     out.target = target;

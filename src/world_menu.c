@@ -325,6 +325,14 @@ void world_menu_test_tick(void)
             wl_server[0] = '\0';
         wl_server_apply();
         break;
+    case 'w':
+    {
+        /* the Server box typed with KFX_WORLD_BOXTEXT (any text: a host, a URL) */
+        const char *t = getenv("KFX_WORLD_BOXTEXT");
+        snprintf(wl_server, sizeof(wl_server), "%s", (t != NULL) ? t : "");
+        wl_server_apply();
+        break;
+    }
     case 'O':
         /* the network service screen: online service and a new session, as -server does */
         if (setup_network_service(FrontendNetSvc_Online))
@@ -766,8 +774,19 @@ static void wl_title_maintain(struct GuiButton *gbtn)
     world_menu_test_tick();
 }
 
-/** The hub's URL for what was typed in the Server box: "host" or "host:port" (port 5560 when none; IPv6 in [ ]), or
- *  a ws:// / wss:// address as it is. "" for an empty box. */
+/** A Cloudflare Worker's host (like the public hub's): it is reached only over wss:// on the usual port, so the
+ *  Server box shows it without "wss://" and "/hub", and takes it back that way. */
+static TbBool wl_is_workers_host(const char *host, size_t len)
+{
+    static const char suffix[] = ".workers.dev";
+    const size_t sn = sizeof(suffix) - 1;
+    if ((len <= sn) || (memchr(host, ':', len) != NULL) || (memchr(host, '/', len) != NULL))
+        return false;
+    return (SDL_strncasecmp(host + len - sn, suffix, sn) == 0);
+}
+
+/** The hub's URL for what was typed in the Server box: "host" or "host:port" (port 5560 when none; IPv6 in [ ]),
+ *  a *.workers.dev host (wss://host/hub), or a ws:// / wss:// address as it is. "" for an empty box. */
 static void wl_hub_url_of(const char *typed, char *url, size_t size)
 {
     char t[WNET_URL_MAX];
@@ -783,6 +802,8 @@ static void wl_hub_url_of(const char *typed, char *url, size_t size)
         snprintf(url, size, "%s", t);
     else if (t[0] == '[')
         snprintf(url, size, (strstr(t, "]:") != NULL) ? "ws://%s/hub" : "ws://%s:5560/hub", t);
+    else if (wl_is_workers_host(t, strlen(t)))
+        snprintf(url, size, "wss://%s/hub", t);
     else if (first_colon == NULL)
         snprintf(url, size, "ws://%s:%d/hub", t, WNET_HUB_PORT);
     else if (strchr(first_colon + 1, ':') == NULL)
@@ -791,10 +812,17 @@ static void wl_hub_url_of(const char *typed, char *url, size_t size)
         snprintf(url, size, "ws://[%s]:%d/hub", t, WNET_HUB_PORT); /* a bare IPv6 address */
 }
 
-/** What the Server box shows for a hub's URL: the host (with :port when it isn't 5560), else the whole URL. */
+/** What the Server box shows for a hub's URL: the host (with :port when it isn't 5560), a *.workers.dev host alone,
+ *  else the whole URL. */
 static void wl_hub_short(const char *url, char *out, size_t size)
 {
     const size_t n = strlen(url);
+    if ((strncmp(url, "wss://", 6) == 0) && (n > 10) && (strcmp(url + n - 4, "/hub") == 0) &&
+        wl_is_workers_host(url + 6, n - 10))
+    {
+        snprintf(out, size, "%.*s", (int)(n - 10), url + 6);
+        return;
+    }
     if ((strncmp(url, "ws://", 5) == 0) && (n > 9) && (strcmp(url + n - 4, "/hub") == 0))
     {
         char core[WNET_URL_MAX];
@@ -814,13 +842,18 @@ static void wl_server_apply(void)
     wl_hub_url_of(wl_server, url, sizeof(url));
     const char *now = wnet_menu_hub();
     const char *next = (url[0] != '\0') ? url : world_list_server;
-    if (strcmp(now, next) != 0)
+    const TbBool moved = (strcmp(now, next) != 0);
+    /* an emptied box forgets the address even when it is the default's: a later default then applies */
+    if (moved || (strcmp(wnet_menu_hub_setting(), url) != 0))
     {
         wnet_menu_set_hub(url);
         save_settings();
-        SYNCLOG("World list: the hub is now %s", next);
-        wnet_menu_close();
-        wnet_menu_open(wl_name);
+        if (moved)
+        {
+            SYNCLOG("World list: the hub is now %s", next);
+            wnet_menu_close();
+            wnet_menu_open(wl_name);
+        }
     }
     wl_hub_short(wnet_menu_hub(), wl_server, sizeof(wl_server));
 }
@@ -847,17 +880,16 @@ static void wl_draw_server_label(struct GuiButton *gbtn)
 }
 
 
-/* the columns, in thousandths of a row: players, ping, the world's name, and its address on the right */
-#define WL_COL_PLAYERS 430
-#define WL_COL_PING    636
-#define WL_COL_ADDR    740
+/* the columns, in thousandths of a row: the world's name, players in the middle, and the ping on the right (the
+   user, 2026-11-10: the address column went, the ping took its place) */
+#define WL_COL_PLAYERS 400
+#define WL_COL_PING    600
 
 static void wl_draw_header(struct GuiButton *gbtn)
 {
     wl_text_in(gbtn, 0, WL_COL_PLAYERS, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_LEFT, "World");
-    wl_text_in(gbtn, WL_COL_PLAYERS, WL_COL_PING - WL_COL_PLAYERS, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_LEFT, "Players");
-    wl_text_in(gbtn, WL_COL_PING, WL_COL_ADDR - WL_COL_PING, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_LEFT, "Ping");
-    wl_text_in(gbtn, WL_COL_ADDR, 1000 - WL_COL_ADDR, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_RIGHT, "Address");
+    wl_text_in(gbtn, WL_COL_PLAYERS, WL_COL_PING - WL_COL_PLAYERS, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_CENTER, "Players");
+    wl_text_in(gbtn, WL_COL_PING, 1000 - WL_COL_PING, gbtn->scr_pos_y, gbtn->height, 3, Lb_TEXT_HALIGN_RIGHT, "Ping");
 }
 
 static int wl_row_index(const struct GuiButton *gbtn)
@@ -880,15 +912,9 @@ static void wl_row_draw(struct GuiButton *gbtn)
         snprintf(ping, sizeof(ping), "%d ms", sv->ping_ms);
     else
         snprintf(ping, sizeof(ping), "-");
-    char addr[WNET_HOST_MAX + 16];
-    if (strchr(sv->host, ':') != NULL)
-        snprintf(addr, sizeof(addr), "[%s]:%d", sv->host, sv->port); /* IPv6 */
-    else
-        snprintf(addr, sizeof(addr), "%s:%d", sv->host, sv->port);
     wl_text_in(gbtn, 0, WL_COL_PLAYERS, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_LEFT, sv->title);
-    wl_text_in(gbtn, WL_COL_PLAYERS, WL_COL_PING - WL_COL_PLAYERS, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_LEFT, players);
-    wl_text_in(gbtn, WL_COL_PING, WL_COL_ADDR - WL_COL_PING, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_LEFT, ping);
-    wl_text_in(gbtn, WL_COL_ADDR, 1000 - WL_COL_ADDR, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_RIGHT, addr);
+    wl_text_in(gbtn, WL_COL_PLAYERS, WL_COL_PING - WL_COL_PLAYERS, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_CENTER, players);
+    wl_text_in(gbtn, WL_COL_PING, 1000 - WL_COL_PING, gbtn->scr_pos_y, gbtn->height, font_idx, Lb_TEXT_HALIGN_RIGHT, ping);
 }
 
 static void wl_row_maintain(struct GuiButton *gbtn)

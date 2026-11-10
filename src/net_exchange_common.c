@@ -205,10 +205,25 @@ static TbError handle_chat_message(NetUserId source, char *read_pos, size_t mess
            chat needs the chat permission */
         if ((message[0] == cmd_char) && server_admin_player_command(source, message + 1))
             return Lb_OK;
+        if ((message[0] == '/') && world_mode_active()) {
+            /* endless worlds (2026-11-10): "/" commands as in Keeper Server's console, never chat; /help lists them */
+            if (!server_admin_player_command_as(source, message + 1, '/')) {
+                char msg[160];
+                snprintf(msg, sizeof(msg), "Unknown command: %.40s. Type /help for yours.", message);
+                server_admin_notice(source, msg);
+            }
+            return Lb_OK;
+        }
         if ((message[0] != cmd_char) && !server_roles_user_can(source, RolP_Chat)) {
             server_admin_notice(source, "You can't chat on this server.");
             return Lb_OK;
         }
+    }
+    if ((netstate.my_id == SERVER_ID) && (source != SERVER_ID) && !netstate_dedicated() && (source < MAX_NET_USERS)
+     && (message[0] == '/') && world_mode_active()) {
+        /* a hosted endless world has no roles: its "/" lines aren't chat either */
+        server_admin_notice(source, "Server commands work on a dedicated server (Keeper Server), not in a hosted world.");
+        return Lb_OK;
     }
     if ((netstate.my_id == SERVER_ID) && (source != SERVER_ID) && netstate_dedicated() && (message[0] != cmd_char)) {
         const PlayerNumber plyr = (source < MAX_NET_USERS) ? get_user_state(source)->player_id : PLAYER_NONE;

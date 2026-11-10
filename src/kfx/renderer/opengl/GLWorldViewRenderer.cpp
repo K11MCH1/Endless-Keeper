@@ -1114,26 +1114,55 @@ bool GLWorldViewRenderer::init_keeper_sprite_shader()
         // stays empty (nullptr upload) -- undefined storage is valid and
         // expected here, matching the original's own glTexImage3D(...,
         // nullptr) call.
-        GpuTextureDesc array_desc;
-        array_desc.width = k_kspr_decode_dim;
-        array_desc.height = k_kspr_decode_dim;
-        array_desc.array_layers = k_kspr_atlas_layers;
-        array_desc.format = GpuTextureFormat::RG8;
-        array_desc.min_filter = GpuTextureFilter::Nearest;
-        array_desc.mag_filter = GpuTextureFilter::Nearest;
-        array_desc.wrap = GpuTextureWrap::Clamp;
-        array_desc.debug_name = "kspr_sprite_array";
-        m_kspr_sprite_array_handle = m_resource_mapper->RequestCreateTexture(array_desc);
-        if (m_resource_mapper->ResolveTexture(m_kspr_sprite_array_handle) == nullptr)
+        // Endless Keeper (2026-11-10): an AMD integrated GPU (Ryzen 9 5900HS) refused the 2048-layer array and
+        // creatures and the heart went invisible. The driver's own limit and a refusal are checked now, the array
+        // is asked for again at half the layers down to 256, and without one the non-atlas fallback draws.
+        {
+            const char *gl_vendor = (const char *)glGetString(GL_VENDOR);
+            const char *gl_renderer = (const char *)glGetString(GL_RENDERER);
+            const char *gl_version = (const char *)glGetString(GL_VERSION);
+            GLint max_layers = 0;
+            glGetIntegerv(GL_MAX_ARRAY_TEXTURE_LAYERS, &max_layers);
+            SYNCLOG("GLWorldViewRenderer: %s / %s / OpenGL %s, max array layers %d", gl_vendor ? gl_vendor : "?",
+                gl_renderer ? gl_renderer : "?", gl_version ? gl_version : "?", (int)max_layers);
+            int want = k_kspr_atlas_layers;
+            const char *forced = getenv("KFX_GL_KSPR_LAYERS"); /* test hook: the first size asked for */
+            if ((forced != NULL) && (atoi(forced) > 0))
+                want = atoi(forced);
+            else if ((max_layers > 0) && (want > max_layers))
+                want = max_layers;
+            m_kspr_atlas_layers = want;
+        }
+        m_kspr_sprite_array_handle = kInvalidGpuResource;
+        for (int layers = m_kspr_atlas_layers; layers >= 256; layers /= 2)
+        {
+            GpuTextureDesc array_desc;
+            array_desc.width = k_kspr_decode_dim;
+            array_desc.height = k_kspr_decode_dim;
+            array_desc.array_layers = layers;
+            array_desc.format = GpuTextureFormat::RG8;
+            array_desc.min_filter = GpuTextureFilter::Nearest;
+            array_desc.mag_filter = GpuTextureFilter::Nearest;
+            array_desc.wrap = GpuTextureWrap::Clamp;
+            array_desc.debug_name = "kspr_sprite_array";
+            const GpuResourceHandle handle = m_resource_mapper->RequestCreateTexture(array_desc);
+            if (m_resource_mapper->ResolveTexture(handle) != nullptr)
+            {
+                m_kspr_sprite_array_handle = handle;
+                m_kspr_atlas_layers = layers;
+                break;
+            }
+            WARNLOG("GLWorldViewRenderer: keeper-sprite atlas of %d layers refused, trying %d", layers, layers / 2);
+        }
+        if (m_kspr_sprite_array_handle == kInvalidGpuResource)
         {
             WARNLOG("GL_TEXTURE_2D_ARRAY alloc failed, sprite atlas disabled");
-            m_kspr_sprite_array_handle = kInvalidGpuResource;
             m_kspr_atlas_shader_handle = kInvalidGpuResource;
             m_kspr_atlas_glow_shader_handle = kInvalidGpuResource;
             break;
         }
         SYNCLOG("GLWorldViewRenderer: keeper-sprite decode atlas ready (%d layers, 256x256 GL_RG8)",
-                k_kspr_atlas_layers);
+                m_kspr_atlas_layers);
     } while (false);
 
     // CLUT texture -- only useful (and only allocated) when the atlas shader
@@ -1582,7 +1611,7 @@ void GLWorldViewRenderer::execute_preload_atlas()
     // Vanilla sprites: only those already resident in RAM. keepsprite[i] is
     // lazy-loaded from disk; null entries haven't been accessed yet and
     // cannot be preloaded without a full disk-load pass.
-    for (int i = 0; i < KEEPSPRITE_LENGTH && m_kspr_atlas_used < k_kspr_atlas_preload_max; i++)
+    for (int i = 0; i < KEEPSPRITE_LENGTH && m_kspr_atlas_used < m_kspr_atlas_layers / 2; i++)
     {
         if (!keepsprite[i] || !*keepsprite[i]) continue;
         if ((size_t)i >= creature_table_length) continue;
@@ -1605,7 +1634,7 @@ void GLWorldViewRenderer::execute_preload_atlas()
     }
 
     // Custom sprites: fully in RAM after init_custom_sprites().
-    for (int i = 0; i < KEEPERSPRITE_ADD_NUM && m_kspr_atlas_used < k_kspr_atlas_preload_max; i++)
+    for (int i = 0; i < KEEPERSPRITE_ADD_NUM && m_kspr_atlas_used < m_kspr_atlas_layers / 2; i++)
     {
         if (!keepersprite_add[i]) continue;
         const struct KeeperSprite& ks = creature_table_add[i];
@@ -1631,7 +1660,7 @@ void GLWorldViewRenderer::execute_preload_atlas()
     if (m_kspr_atlas_used > m_kspr_atlas_peak)
         m_kspr_atlas_peak = m_kspr_atlas_used;
     SYNCLOG("GLWorldViewRenderer: atlas preload complete -- %d sprites uploaded (%d/%d layers used)",
-            preloaded, m_kspr_atlas_used, k_kspr_atlas_layers);
+            preloaded, m_kspr_atlas_used, m_kspr_atlas_layers);
 }
 
 void GLWorldViewRenderer::ensure_clut_valid()
@@ -1734,7 +1763,7 @@ int GLWorldViewRenderer::resolve_atlas_layer(int32_t sprite_id, const unsigned c
         if (darkens) *darkens = it->second.darkens;
         return it->second.layer;
     }
-    if (m_kspr_atlas_used >= k_kspr_atlas_layers)
+    if (m_kspr_atlas_used >= m_kspr_atlas_layers)
         return -1;
 
     // Clear the full scratch buffer before decoding so rows beyond src_h

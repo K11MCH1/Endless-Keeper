@@ -1174,8 +1174,8 @@ static void load_string_configuration(const char *buf, int32_t len, const char *
               CONFWRNLOG("Invalid \"%s\" value in %s file.", COMMAND_TEXT(cmd_num), config_textname);
           }
           break;
-      case 57: // WORLD_LIST_SERVER: the endless worlds' list and menu chat (ws://host:5560/hub or wss://...)
-          if (get_conf_parameter_single(buf, &pos, len, word_buf, sizeof(word_buf)) > 0)
+      case 57: // WORLD_LIST_SERVER: the endless worlds' list and menu chat (default WNET_PUBLIC_HUB; ws://host:5560/hub or wss://...)
+          if ((get_conf_parameter_single(buf, &pos, len, word_buf, sizeof(word_buf)) > 0) && !world_list_server_from_cmdline)
           {
               world_net_set_list_server(word_buf);
               SYNCLOG("World list server: %s", world_list_server);

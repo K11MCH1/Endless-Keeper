@@ -43,6 +43,9 @@ void server_admin_user_left(int user, int how);
 /** A seated player's in-game "!" command that is one of the admin's, run when a role allows it (server_roles.c): 1 when
  *  it was one (run or refused here), 0 when it is the console's own. */
 TbBool server_admin_player_command(int user, const char *text);
+/** The same for a line typed with another prefix ('/' in endless worlds, 2026-11-10): the answers name the command with
+ *  it. "help" lists the commands this player's roles allow. */
+TbBool server_admin_player_command_as(int user, const char *text, char prefix);
 /** A seated player's own leave packet (before the drop it causes): "left the world" / "timed out". */
 void server_admin_user_leaving(int user, TbBool timed_out);
 /** The process is closing: say bye to the admin. */

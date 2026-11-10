@@ -1008,11 +1008,65 @@ static void run_command(char *line)
         server_admin_log("warn", "Unknown command: /%s (try /help)", whole);
 }
 
+/* the prefix the player typed the command with ('!' or '/'), for the answers */
+static char pc_prefix = '!';
+
+/** In-game help (the user, 2026-11-10): the commands this player's roles allow (Keeper Server's Permissions tab), each
+ *  with what it takes, to them only. Lines stay under the chat box's 160 characters. */
+static void player_help(int user)
+{
+    if (!server_roles_setting("ingame"))
+    {
+        server_admin_notice(user, "In-game commands are off on this server.");
+        return;
+    }
+    static const struct { int perm; const char *usage; } cmds[] = {
+        {RolP_Players, "players"}, {RolP_Stats, "stats <name>"}, {RolP_Kick, "kick <name>"}, {RolP_Mute, "mute <name>"},
+        {RolP_Unmute, "unmute <name>"}, {RolP_Ban, "ban <name>"}, {RolP_Unban, "unban <name>"},
+        {RolP_Give, "give <name> gold|xp <amount>"}, {RolP_Reset, "reset <name>"}, {RolP_Say, "say <text>"},
+        {RolP_Save, "save"}, {RolP_Restart, "restart"}, {RolP_Stop, "stop"},
+    };
+    const PlayerNumber me = ((user > SERVER_ID) && (user < MAX_NET_USERS)) ? get_user_state(user)->player_id : -1;
+    const char *role = ((me >= 0) && (me < PLAYERS_COUNT)) ? server_roles_seat_top_name(me) : "Default";
+    char msg[160];
+    snprintf(msg, sizeof(msg), "Your commands (%s):", role);
+    server_admin_notice(user, msg);
+    size_t len = (size_t)snprintf(msg, sizeof(msg), "%chelp", pc_prefix);
+    int count = 0;
+    for (int i = 0; i < (int)(sizeof(cmds) / sizeof(cmds[0])); i++)
+    {
+        if (!server_roles_user_can(user, cmds[i].perm))
+            continue;
+        count++;
+        char item[48];
+        const int n = snprintf(item, sizeof(item), ", %c%s", pc_prefix, cmds[i].usage);
+        if (len + (size_t)n >= 150)
+        {
+            server_admin_notice(user, msg); /* this line is full: the rest goes on the next */
+            len = (size_t)snprintf(msg, sizeof(msg), "%s", item + 2);
+        } else
+            len += (size_t)snprintf(msg + len, sizeof(msg) - len, "%s", item);
+    }
+    server_admin_notice(user, msg);
+    if (server_roles_user_can(user, RolP_Cheats))
+        server_admin_notice(user, "Cheats are allowed for you: the game's ! cheat commands work (Tab completes them).");
+    if (!server_roles_user_can(user, RolP_Chat))
+        server_admin_notice(user, "Your role can't chat on this server.");
+    if (count == 0)
+        server_admin_notice(user, "Your role has no other commands here: the server's admin gives roles in Keeper Server.");
+}
+
 /** A seated player's in-game "!" command that is one of the admin's: run when a role of theirs allows it (Keeper
  *  Server's Permissions tab). 1 when it was one of those (run, or refused with a notice saying why); 0 when it isn't
  *  (the console's own command, which goes on as before). */
 TbBool server_admin_player_command(int user, const char *text)
 {
+    return server_admin_player_command_as(user, text, '!');
+}
+
+TbBool server_admin_player_command_as(int user, const char *text, char prefix)
+{
+    pc_prefix = prefix;
     char line[ADMIN_LINE_MAX];
     snprintf(line, sizeof(line), "%s", (text != NULL) ? text : "");
     char *s = line;
@@ -1026,6 +1080,12 @@ TbBool server_admin_player_command(int user, const char *text)
         wl++;
     }
     word[wl] = '\0';
+    if ((strcasecmp(word, "help") == 0) || (strcmp(word, "?") == 0) || (strcasecmp(word, "commands") == 0))
+    {
+        if ((user > SERVER_ID) && (user < MAX_NET_USERS))
+            player_help(user);
+        return true;
+    }
     const int perm = role_permission_by_name(word);
     if ((perm < 0) || (perm == RolP_Chat) || (perm == RolP_Cheats))
         return false;
@@ -1042,7 +1102,7 @@ TbBool server_admin_player_command(int user, const char *text)
     }
     if (!server_roles_user_can(user, perm))
     {
-        snprintf(msg, sizeof(msg), "You can't use !%s on this server.", word);
+        snprintf(msg, sizeof(msg), "You can't use %c%s on this server. Type %chelp for yours.", pc_prefix, word, pc_prefix);
         server_admin_notice(user, msg);
         server_admin_log("warn", "%s tried !%s (no role of theirs allows it)", server_admin_player_name(me), s);
         return true;
@@ -1073,8 +1133,8 @@ TbBool server_admin_player_command(int user, const char *text)
         (perm == RolP_Give) || (perm == RolP_Reset);
     if (acts_on && (tp >= 0) && (tp != me) && server_roles_setting("hierarchy") && (server_roles_seat_rank(tp) <= server_roles_seat_rank(me)))
     {
-        snprintf(msg, sizeof(msg), "%s's role (%s) is as high as yours: you can't use !%s on them.", server_admin_player_name(tp),
-            server_roles_seat_top_name(tp), word);
+        snprintf(msg, sizeof(msg), "%s's role (%s) is as high as yours: you can't use %c%s on them.", server_admin_player_name(tp),
+            server_roles_seat_top_name(tp), pc_prefix, word);
         server_admin_notice(user, msg);
         return true;
     }

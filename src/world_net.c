@@ -39,7 +39,8 @@
 extern "C" {
 #endif
 /******************************************************************************/
-char world_list_server[WNET_URL_MAX] = "ws://127.0.0.1:5560/hub";
+char world_list_server[WNET_URL_MAX] = WNET_PUBLIC_HUB;
+TbBool world_list_server_from_cmdline = false;
 /* the World List's Server box (settings.toml [network] world_list_server; "" = world_list_server) */
 static char menu_hub_url[WNET_URL_MAX] = "";
 static const char *menu_url(void) { return (menu_hub_url[0] != '\0') ? menu_hub_url : world_list_server; }
@@ -65,6 +66,12 @@ TbBool wnet_hub_off = false;
 #define LAN_GAME_PORT     5556
 #define LAN_FORGET_MS     7000
 #define LAN_MAX           16
+
+#ifdef KFX_ANDROID
+/* the phone's trusted CAs, a PEM file the launcher writes before each start (--ca-bundle): the engine's OpenSSL has
+   no CA store of its own there, so wss:// (the public hub) fails its TLS check without it */
+const char *KfxAndroidCaBundle(void);
+#endif
 
 static Uint32 now_ms(void)
 {
@@ -142,6 +149,10 @@ static int ws_connect_thread(void *data)
         return -1;
     }
     curl_easy_setopt(curl, CURLOPT_URL, c->url);
+#ifdef KFX_ANDROID
+    if (KfxAndroidCaBundle() != NULL)
+        curl_easy_setopt(curl, CURLOPT_CAINFO, KfxAndroidCaBundle());
+#endif
     curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)WS_CONNECT_MS);
     const CURLcode res = curl_easy_perform(curl);

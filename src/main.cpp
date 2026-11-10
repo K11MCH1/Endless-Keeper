@@ -1917,6 +1917,7 @@ static short process_command_line(unsigned short argc, char *argv[])
           /* the world list hub (overrides WORLD_LIST_SERVER) */
           narg++;
           world_net_set_list_server(pr2str);
+          world_list_server_from_cmdline = true;
       }
       else if (strcasecmp(parstr,"title") == 0)
       {
