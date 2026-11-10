@@ -1,0 +1,1741 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: \n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-05-07 14:37+0200\n"
+"PO-Revision-Date: 2026-09-26 22:54+0800\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: zh\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Poedit 3.9\n"
+
+#: Qt default
+msgid "OK"
+msgstr "确认"
+
+#: Qt default
+msgid "&OK"
+msgstr "&确认"
+
+#: Qt default
+msgid "Cancel"
+msgstr "取消"
+
+#: Qt default
+msgid "&Cancel"
+msgstr "&取消"
+
+#: Qt default
+msgid "Yes"
+msgstr "是"
+
+#: Qt default
+msgid "&Yes"
+msgstr "&是"
+
+#: Qt default
+msgid "No"
+msgstr "否"
+
+#: Qt default
+msgid "&No"
+msgstr "&否"
+
+#: Qt default
+msgid "Apply"
+msgstr "应用"
+
+#: Qt default
+msgid "&Apply"
+msgstr "&应用"
+
+#: Qt default
+msgid "Close"
+msgstr "关闭"
+
+#: Qt default
+msgid "&Close"
+msgstr "&关闭"
+
+#: Qt default
+msgid "Help"
+msgstr "帮助"
+
+#: Qt default
+msgid "&Help"
+msgstr "&帮助"
+
+#: Qt default
+msgid "Reset"
+msgstr "重置"
+
+#: Qt default
+msgid "&Reset"
+msgstr "&重置"
+
+#: Qt default
+msgid "Retry"
+msgstr "重试"
+
+#: Qt default
+msgid "&Retry"
+msgstr "&重试"
+
+#: Qt default
+msgid "Ignore"
+msgstr "忽略"
+
+#: Qt default
+msgid "&Ignore"
+msgstr "&忽略"
+
+#: Qt default
+msgid "Abort"
+msgstr "中止"
+
+#: Qt default
+msgid "&Abort"
+msgstr "&中止"
+
+#: Qt default
+msgid "Save"
+msgstr "保存"
+
+#: Qt default
+msgid "&Save"
+msgstr "&保存"
+
+#: Qt default
+msgid "Restore Defaults"
+msgstr "恢复默认设置"
+
+msgctxt "CopyDkFilesDialog|Window Title"
+msgid "Copy DK Files"
+msgstr "复制DK文件"
+
+msgctxt "CopyDkFilesDialog|Header"
+msgid "Copy Dungeon Keeper Files"
+msgstr "复制地下城守护者文件"
+
+msgctxt "CopyDkFilesDialog|Information"
+msgid ""
+"KeeperFX requires the original Dungeon Keeper files for copyright reasons.\n"
+"Please select the directory where these files are located.\n"
+"\n"
+"You can use your original CD, or a digital version from GOG, Steam or EA.\n"
+"If you want to use a digital version you will have to install it first."
+msgstr ""
+"由于版权原因，安装地下城守护者FX版需要提供原版游戏的文件。\n"
+"请选择原版游戏文件的目录。\n"
+"\n"
+"你可以插入原版游戏CD，或导入GOG，Steam，EA等平台上的数字版游戏。\n"
+"如果您想使用数字版游戏，请先将其安装。"
+
+msgctxt "CopyDkFilesDialog|Button"
+msgid "Browse"
+msgstr "浏览"
+
+msgctxt "CopyDkFilesDialog|Button"
+msgid "Cancel"
+msgstr "取消"
+
+msgctxt "CopyDkFilesDialog|Button"
+msgid "Copy"
+msgstr "复制"
+
+msgctxt "CopyDkFilesDialog|Label"
+msgid "A suitable DK installation has been automatically detected."
+msgstr "已自动检测到正确安装的地下城守护者游戏。"
+
+msgctxt "CopyDkFilesDialog|Directory Browse Dialog"
+msgid "Select Directory containing Dungeon Keeper files"
+msgstr "请选择地下城守护者游戏文件目录"
+
+msgctxt "CopyDkFilesDialog|MessageBox Title"
+msgid "Original DK files not found"
+msgstr "未找到原版DK游戏文件"
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid ""
+"The chosen directory does not contain all of the required files. Please select an original Dungeon Keeper installation."
+msgstr "选择的目录缺少必需的文件。请选择原版地下城守护者游戏的安装目录。"
+
+msgctxt "CopyDkFilesDialog|MessageBox Title"
+msgid "Select a directory"
+msgstr "选择目录"
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid "Please select an original Dungeon Keeper installation location."
+msgstr "请选择原版地下城守护者游戏的安装路径。"
+
+msgctxt "CopyDkFilesDialog|MessageBox Title"
+msgid "Failed to copy files"
+msgstr "复制文件失败"
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid "The current directory is not writable."
+msgstr "无法写入当前目录。"
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid "Something went wrong while copying the files."
+msgstr "复制文件时出现错误。"
+
+msgctxt "CopyDkFilesDialog|MessageBox Title"
+msgid "DK files copied!"
+msgstr "DK文件已复制！"
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid ""
+"The required Dungeon Keeper files have been copied.\n"
+"\n"
+"You can now play KeeperFX!"
+msgstr ""
+"所需的地下城守护者游戏文件已复制。\n"
+"\n"
+"你现在可以游玩FX版游戏了！"
+
+msgctxt "CopyDkFilesDialog|MessageBox Title"
+msgid "Confirmation"
+msgstr "确认"
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid ""
+"Are you sure?\n"
+"\n"
+"KeeperFX will not function correctly without these files."
+msgstr ""
+"你确定吗？\n"
+"\n"
+"缺少这些文件，FX版游戏可能无法正常运行。"
+
+msgctxt "CrashDialog|Window Title"
+msgid "KeeperFX Crash Report"
+msgstr "FX版游戏崩溃报告"
+
+msgctxt "CrashDialog|Header"
+msgid "KeeperFX has crashed"
+msgstr "FX版游戏崩溃了"
+
+msgctxt "CrashDialog|Information Label"
+msgid ""
+"It seems that KeeperFX has crashed and is unable to recover. If you wish to submit technical details about this crash to "
+"the KeeperFX developers, you can describe your problem below and click 'Send'. If you add contact details we can contact "
+"you later. Additional information such as KeeperFX logfiles and configuration will be sent too."
+msgstr ""
+"FX 版游戏似乎已崩溃且无法恢复。如果您想向 FX 版游戏开发人员提交有关此次崩溃的技术细节，请在下方描述您的问题，然后点击“发"
+"送”。如果您添加联系方式，我们可以稍后与您联系。其他信息（例如FX 版游戏日志文件和配置）也将一同发送。"
+
+#, qt-format
+msgctxt "CrashDialog|Information Label"
+msgid "You can also raise an issue on Github: %1"
+msgstr "您也可以在Github上提一个issue：%1"
+
+msgctxt "CrashDialog|Input box title"
+msgid "Information (Optional)"
+msgstr "信息（可选）"
+
+msgctxt "CrashDialog|Textarea Placeholder"
+msgid "Please explain what happened, and if possible the steps to reproduce this crash."
+msgstr "请描述发生了什么，并尽可能逐步说明导致此次崩溃的操作。"
+
+msgctxt "CrashDialog|Input box title"
+msgid "Savefile (Optional)"
+msgstr "保存文件（可选）"
+
+msgctxt "CrashDialog|Dropdown Placeholder Text"
+msgid "If you have a game save that could provide us with more information. You can add it here."
+msgstr "如果您有游戏存档，可以提供给我们更多信息。请在此处添加。"
+
+msgctxt "CrashDialog|Input box title"
+msgid "Contact Information (Optional)"
+msgstr "联系方式（可选）"
+
+msgctxt "CrashDialog|Input Placeholder"
+msgid "Discord handle"
+msgstr "Discord 账户"
+
+msgctxt "CrashDialog|Input Placeholder"
+msgid "KeeperFX.net username"
+msgstr "KeeperFX.net 用户名"
+
+msgctxt "CrashDialog|Input Placeholder"
+msgid "Email Address"
+msgstr "电子邮箱"
+
+msgctxt "CrashDialog|Button"
+msgid "Cancel"
+msgstr "取消"
+
+msgctxt "CrashDialog|Button"
+msgid "Send"
+msgstr "发送"
+
+msgctxt "CrashDialog|Menu Placeholder"
+msgid "No saves found"
+msgstr "未找到存档"
+
+msgctxt "CrashDialog|Default Savefile"
+msgid "None"
+msgstr "无"
+
+msgctxt "CrashDialog|MessageBox Title"
+msgid "Crash Report"
+msgstr "崩溃报告"
+
+msgctxt "CrashDialog|MessageBox Text"
+msgid "Failed to submit crash report."
+msgstr "提交崩溃报告失败。"
+
+#, qt-format
+msgctxt "CrashDialog|MessageBox Text"
+msgid ""
+"Your crash report has been successfully submitted!\n"
+"\n"
+"The KeeperFX team can not guarantee immediate results, but your feedback is very helpful for the developers working on "
+"KeeperFX.\n"
+"\n"
+"Report ID: %1"
+msgstr ""
+"您的崩溃报告已成功提交！\n"
+"\n"
+"FX版游戏开发团队无法保证立即解决问题，但您的反馈对FX版游戏的开发者非常有帮助。\n"
+"\n"
+"报告 ID：%1"
+
+msgctxt "DirectConnectDialog|Window Title"
+msgid "Direct Connect"
+msgstr "直连"
+
+msgctxt "DirectConnectDialog|Header"
+msgid "Direct Connect"
+msgstr "直连"
+
+msgctxt "DirectConnectDialog|Information Label"
+msgid "Directly connect to an open ENET lobby. Enter the IP address of the host. Only ENET is supported."
+msgstr "直接连接到开放的 ENET 大厅。输入主机的 IP 地址。仅支持 ENET。"
+
+msgctxt "DirectConnectDialog|Input Placeholder"
+msgid "IP Address"
+msgstr "IP地址"
+
+msgctxt "DirectConnectDialog|Input Placeholder"
+msgid "Port"
+msgstr "端口"
+
+msgctxt "DirectConnectDialog|Button"
+msgid "Cancel"
+msgstr "取消"
+
+msgctxt "DirectConnectDialog|Button"
+msgid "Connect"
+msgstr "连接"
+
+msgctxt "DirectConnectDialog|MessageBox Title"
+msgid "Direct Connect"
+msgstr "直连"
+
+msgctxt "DirectConnectDialog|MessageBox Text"
+msgid "Invalid IP address"
+msgstr "无效的IP地址"
+
+msgctxt "DirectConnectDialog|MessageBox Text"
+msgid "IPv6 addresses are not supported."
+msgstr "不支持IPv6地址。"
+
+msgctxt "DownloadMusicDialog|Dialog Title"
+msgid "KeeperFX Background Music"
+msgstr "FX版背景音乐"
+
+msgctxt "DownloadMusicDialog|Header"
+msgid "Download Music Files"
+msgstr "下载音乐文件"
+
+msgctxt "DownloadMusicDialog|Information"
+msgid ""
+"It seems the background music files were not found. This might happen when you copied over the Dungeon Keeper files from "
+"the CD instead of a digital release.\n"
+"\n"
+"You can let the launcher automatically download them because you have already proven your ownership of the original "
+"Dungeon Keeper game files.\n"
+"\n"
+"If you do not download the music files you will need to have the original CD in your disk drive to hear the background "
+"music."
+msgstr ""
+"似乎找不到背景音乐文件。这可能是因为您从 游戏CD 而不是数字版游戏复制了地下城守护者文件。\n"
+"\n"
+"您可以使用启动器自动下载这些文件，因为您已经证明了自己拥有原版地下城守护者游戏文件的所有权。\n"
+"\n"
+"如果您没有下载音乐文件，则需要将原版 CD 放入磁盘驱动器才能收听背景音乐。"
+
+msgctxt "DownloadMusicDialog|Button"
+msgid "Cancel"
+msgstr "取消"
+
+msgctxt "DownloadMusicDialog|Button"
+msgid "Download"
+msgstr "下载"
+
+msgctxt "DownloadMusicDialog|Failure Message"
+msgid "Failed to get download URL for music archive"
+msgstr "获取音乐文档的下载URL失败"
+
+msgctxt "DownloadMusicDialog|Failure Message"
+msgid "Invalid music archive file extension. It must be a 7zip archive."
+msgstr "无效的音乐文档文件扩展包。必须是7zip格式的。"
+
+msgctxt "DownloadMusicDialog|Failure Message"
+msgid "Failed to download music archive"
+msgstr "下载音乐文档失败"
+
+msgctxt "DownloadMusicDialog|Failure message"
+msgid "Music archive test failed. It may be corrupted."
+msgstr "音乐文档测试失败。它可能已损坏。"
+
+msgctxt "DownloadMusicDialog|Progress bar"
+msgid "Extracting: %p%"
+msgstr "提取中： %p%"
+
+msgctxt "DownloadMusicDialog|MessageBox Text"
+msgid "The KeeperFX background music has been successfully downloaded!"
+msgstr "FX版背景音乐已成功下载！"
+
+msgctxt "DownloadMusicDialog|Progress bar"
+msgid "Downloading: %p% (%vMiB)"
+msgstr "下载中: %p% (%vMiB)"
+
+msgctxt "DownloadMusicDialog|MessageBox Title"
+msgid "Download failed"
+msgstr "下载失败"
+
+msgctxt "DownloadMusicDialog|MessageBox Title"
+msgid "Confirmation"
+msgstr "确认"
+
+msgctxt "DownloadMusicDialog|MessageBox Text"
+msgid ""
+"Are you sure?\n"
+"\n"
+"You will not be able to hear the background music without having your CD in your disk drive."
+msgstr ""
+"你确定吗？\n"
+"\n"
+"如果你的光驱内未插入CD，你将无法听到游戏背景音乐。"
+
+msgctxt "EnetServerTestDialog|Window Title"
+msgid "Test internet lobby"
+msgstr "测试网络大厅"
+
+msgctxt "EnetServerTestDialog|Header"
+msgid "Multiplayer Lobby Portforwarding Test"
+msgstr "多人游戏大厅端口转发测试"
+
+msgctxt "EnetServerTestDialog|Information Label"
+msgid ""
+"This tool checks if your KeeperFX multiplayer lobby can be reached from the internet. You don't need to use this for local "
+"games, as those are already accessible within your network."
+msgstr ""
+"此工具用于检查您的FX版多人游戏大厅是否可以通过互联网访问。本地游戏无需使用此工具，因为本地游戏在您的网络中已经可以访问。"
+
+msgctxt "EnetServerTestDialog|Information Label"
+msgid ""
+"To host a game online, you must open port 5556 in your router. How to do this is different for every router and internet "
+"provider, so check online for instructions or ask your provider for help."
+msgstr ""
+"要开始在线游戏，您必须在路由器上打开 5556 端口。每个路由器和互联网提供商的操作方法都不同，因此请在线查看相关说明或向您的提"
+"供商寻求帮助。"
+
+msgctxt "EnetServerTestDialog|Information Label"
+msgid ""
+"KeeperFX only works with IPv4. If you don't have an IPv4 address or you are using a shared one (CGNAT), you won't be able "
+"to host an online game. You can ask your internet provider if they can give you an IPv4 address."
+msgstr ""
+"FX 版游戏仅适用于 IPv4。如果您没有 IPv4 地址或正在使用共享地址 (CGNAT)，则无法开始在线游戏。您可以咨询您的互联网服务提供"
+"商，他们是否可以为您提供 IPv4 地址。"
+
+msgctxt "EnetServerTestDialog|Button"
+msgid "Close"
+msgstr "关闭"
+
+msgctxt "EnetServerTestDialog|Button"
+msgid "Test"
+msgstr "测试"
+
+msgctxt "EnetServerTestDialog|MessageBox Title"
+msgid "IPv6 Detected"
+msgstr "检测到IPv6"
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "Failed to retrieve public IP address."
+msgstr "检索公共IP地址失败。"
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "This tool only works with IPv4."
+msgstr "此工具仅适用于IPv4。"
+
+msgctxt "EnetServerTestDialog|MessageBox Title"
+msgid "Portforwarding tool"
+msgstr "端口转发工具"
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "Failed to start ENET server."
+msgstr "启动ENET服务器失败。"
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "Failed to contact KeeperFX.net"
+msgstr "无法连接到 KeeperFX.net"
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "Your router is correctly port forwarded!"
+msgstr "您的路由器端口转发正常！"
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "Failed to connect to local ENET server."
+msgstr "无法连接到本地ENET服务器。"
+
+msgctxt "FileRemoverDialog|Window Title"
+msgid "Remove leftover files"
+msgstr "移除残留的文件"
+
+msgctxt "FileRemoverDialog|Header"
+msgid "Remove leftover files"
+msgstr "移除残留的文件"
+
+msgctxt "FileRemoverDialog|Information Label"
+msgid ""
+"The KeeperFX launcher has found files that were left over after KeeperFX was updated. These files might cause issues and "
+"should be removed."
+msgstr "FX版游戏启动器检测到FX版游戏更新后遗留的文件。这些文件可能会引发问题，请将其删除。"
+
+msgctxt "FileRemoverDialog|Checkbox Toggle"
+msgid "Always remove leftover files automatically"
+msgstr "始终自动删除残留文件"
+
+msgctxt "FileRemoverDialog|Button"
+msgid "Cancel"
+msgstr "取消"
+
+msgctxt "FileRemoverDialog|Button"
+msgid "Remove All"
+msgstr "全部移除"
+
+msgctxt "FileRemoverDialog|MessageBox Title"
+msgid "Confirmation"
+msgstr "确认"
+
+msgctxt "FileRemoverDialog|MessageBox Text"
+msgid ""
+"KeeperFX might not function correctly if these files are present.\n"
+"\n"
+"Are you sure you want to keep them?"
+msgstr ""
+"如果保留这些文件，可能导致FX版游戏无法正常运行。\n"
+"\n"
+"您确定要保留它们吗？"
+
+msgctxt "FileRemoverDialog|MessageBox Text"
+msgid "Something went wrong while removing leftover files."
+msgstr "删除残留文件时出现错误。"
+
+msgctxt "FileRemoverDialog|MessageBox Text"
+msgid "Leftover files have been removed!"
+msgstr "残留文件已成功删除！"
+
+msgctxt "Game|MessageBox Title"
+msgid "KeeperFX has crashed"
+msgstr "FX版游戏崩溃了"
+
+msgctxt "Game|MessageBox Text"
+msgid ""
+"It seems that KeeperFX has crashed and is unable to recover.\n"
+"\n"
+"Crash reporting is disabled because you are using the heavylog option.\n"
+"\n"
+"If you require assistance, please create an issue on Github or contact us on the Keeper Klan Discord."
+msgstr ""
+"FX版游戏似乎已崩溃且无法恢复。\n"
+"\n"
+"由于您使用了 heavylog 选项，崩溃报告功能已被禁用。\n"
+"\n"
+"如果您需要帮助，请在GitHub网站提交 issue或通过Keeper Klan Discord社群联系我们。"
+
+msgctxt "InstallKfxDialog|Window Title"
+msgid "Install KeeperFX"
+msgstr "安装地下城守护者FX版"
+
+msgctxt "InstallKfxDialog|Header"
+msgid "Download and Install KeeperFX"
+msgstr "下载并安装地下城守护者FX版"
+
+msgctxt "InstallKfxDialog|Information Label"
+msgid ""
+"Select your version, and this installer will download and install KeeperFX.\n"
+"\n"
+"Choose the stable release for reliability or the alpha version if you want to help us out with testing."
+msgstr ""
+"选择您的游戏版本，安装程序将下载并安装对应的FX版游戏。\n"
+"\n"
+"为了确保稳定性，请选择已发布的正式版本；如果您想帮助我们进行测试，请选择Alpha测试版本。"
+
+msgctxt "InstallKfxDialog|Label"
+msgid "Release version:"
+msgstr "已发布版本："
+
+msgctxt "InstallKfxDialog|Button"
+msgid "Cancel"
+msgstr "取消"
+
+msgctxt "InstallKfxDialog|Button"
+msgid "Install"
+msgstr "安装"
+
+msgctxt "InstallKfxDialog|Game Release Build"
+msgid "Stable (Default)"
+msgstr "稳定（默认）"
+
+msgctxt "InstallKfxDialog|Game Release Build"
+msgid "Alpha"
+msgstr "Alpha"
+
+msgctxt "InstallKfxDialog|Failure Message"
+msgid "Failed to get download URL for stable release"
+msgstr "获取正式版本的下载URL链接失败"
+
+msgctxt "InstallKfxDialog|Failure Message"
+msgid "Failed to download stable release"
+msgstr "下载正式版本失败"
+
+msgctxt "InstallKfxDialog|Failure message"
+msgid "Stable release archive test failed. It may be corrupted."
+msgstr "正式版本文档测试失败。它可能已损坏。"
+
+msgctxt "InstallKfxDialog|Progress bar"
+msgid "Extracting: %p%"
+msgstr "提取中： %p%"
+
+msgctxt "InstallKfxDialog|Failure message"
+msgid "Failed to create temp directory"
+msgstr "创建临时目录失败"
+
+msgctxt "InstallKfxDialog|Failure message"
+msgid "Failed to get download URL for alpha patch"
+msgstr "获取 Alpha 补丁的下载URL链接失败"
+
+msgctxt "InstallKfxDialog|Failure message"
+msgid "Alpha patch download failed."
+msgstr "Alpha 补丁下载失败。"
+
+msgctxt "InstallKfxDialog|Failure Message"
+msgid "Alpha patch archive test failed. It may be corrupted."
+msgstr "Alpha补丁文档测试失败。它可能已损坏。"
+
+msgctxt "InstallKfxDialog|Progress bar"
+msgid "Downloading: %p% (%vMiB)"
+msgstr "下载中: %p% (%vMiB)"
+
+msgctxt "InstallKfxDialog|MessageBox Title"
+msgid "Installation failed"
+msgstr "安装失败"
+
+msgctxt "InstallKfxDialog|MessageBox Title"
+msgid "KeeperFX Alpha builds"
+msgstr "FX版游戏Alpha补丁"
+
+msgctxt "InstallKfxDialog|MessageBox Text"
+msgid ""
+"Alpha patches may contain new features and changes, but often contain bugs and unfinished functionality. These patches are "
+"mostly meant for testers, and it is suggested to be part of the Keeper Klan discord if you use them.\n"
+"\n"
+"Are you sure you want to use Alpha patches?"
+msgstr ""
+"Alpha 补丁可能包含新内容和更改，但很可能包含bug和未完善的内容。这些补丁主要面向测试人员，如果您打算使用它们，建议您加入 "
+"Keeper Klan Discord社区。\n"
+"\n"
+"您确定要使用 Alpha 补丁吗？"
+
+msgctxt "InstallKfxDialog|MessageBox Title"
+msgid "Uninstall KeeperFX"
+msgstr "卸载FX版游戏"
+
+msgctxt "InstallKfxDialog|MessageBox Text"
+msgid ""
+"Do you want to uninstall KeeperFX?\n"
+"\n"
+"This will remove any leftover files."
+msgstr ""
+"你确定要卸载FX版游戏吗？\n"
+"\n"
+"这将删除所有剩余的文件。"
+
+msgctxt "InstallKfxDialog|MessageBox Title"
+msgid "Confirmation"
+msgstr "确认"
+
+msgctxt "InstallKfxDialog|MessageBox Text"
+msgid ""
+"Are you sure?\n"
+"\n"
+"You will be unable to play KeeperFX."
+msgstr ""
+"你确定吗？\n"
+"\n"
+"你将无法游玩FX版游戏。"
+
+msgctxt "InstallKfxDialog|Progress bar"
+msgid "Copying: %p%"
+msgstr "复制中: %p%"
+
+#, qt-format
+msgctxt "InstallKfxDialog|Failure Message"
+msgid "Failed to create destination directory: %1"
+msgstr "创建目标目录失败：%1"
+
+#, qt-format
+msgctxt "InstallKfxDialog|"
+msgid "Failed to move file: %1"
+msgstr "移动文件失败：%1"
+
+msgctxt "InstallKfxDialog|MessageBox Text"
+msgid "KeeperFX has been successfully installed!"
+msgstr "地下城守护者FX版已成功安装！"
+
+msgctxt "LauncherMainWindow|"
+msgid "KeeperFX Launcher"
+msgstr "FX版游戏启动器"
+
+msgctxt "LauncherMainWindow|Header"
+msgid "Latest workshop items"
+msgstr "最新的创作工坊项目"
+
+msgctxt "LauncherMainWindow|Header"
+msgid "Latest News"
+msgstr "最新新闻"
+
+msgctxt "LauncherMainWindow|Button"
+msgid "Settings"
+msgstr "设置"
+
+msgctxt "LauncherMainWindow|Button"
+msgid "Mods"
+msgstr "模式"
+
+msgctxt "LauncherMainWindow|Button"
+msgid "Workshop"
+msgstr "创作工坊"
+
+msgctxt "LauncherMainWindow|Button tooltip text"
+msgid "Check for updates"
+msgstr "检查FX版游戏更新"
+
+msgctxt "LauncherMainWindow|Button tooltip text"
+msgid "Open log file"
+msgstr "打开日志文件"
+
+msgctxt "LauncherMainWindow|Button tooltip text"
+msgid "Open game folder"
+msgstr "打开游戏文件夹"
+
+msgctxt "LauncherMainWindow|Social button tooltip text"
+msgid "Discord - Keeper Klan (English)"
+msgstr "Discord - Keeper Klan (英语)"
+
+msgctxt "LauncherMainWindow|Button"
+msgid "Play"
+msgstr "游玩"
+
+msgctxt "LauncherMainWindow|Version label tooltip text"
+msgid "Click to check for updates"
+msgstr "检查FX版游戏更新"
+
+msgctxt "LauncherMainWindow|Fallback text label"
+msgid "Loading..."
+msgstr "加载中..."
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "KeeperFX Launcher"
+msgstr "FX版游戏启动器"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid "This launcher version is a prototype and should only be used for testing."
+msgstr "启动器版本为测试版，仅应用于测试。"
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "KeeperFX Error"
+msgstr "FX版游戏错误"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"The launcher has detected that it might have been installed in the original Dungeon Keeper directory. There is a chance "
+"you will encounter issues and will be unable to play the game.\n"
+"\n"
+"KeeperFX should be installed in its own directory as it is a standalone game."
+msgstr ""
+"启动器已检测到安装地址在原版地下城守护者游戏的目录中。这可能会出现问题，甚至导致无法玩游戏。\n"
+"\n"
+"FX版游戏是一个独立的游戏，请将其安装在一个新目录中。"
+
+msgctxt "LauncherMainWindow|Messagebox Checkbox label"
+msgid "Don't show this again"
+msgstr "不再显示"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"The launcher failed to determine the version of KeeperFX. Your installation may be corrupted or outdated.\n"
+"\n"
+"Would you like to reinstall KeeperFX?"
+msgstr ""
+"启动器无法获取FX版游戏的版本。您的安装文件可能已损坏或版本过旧。\n"
+"\n"
+"您要重新安装FX版游戏吗？"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid "The launcher failed to grab the version of KeeperFX. Please report this error to the KeeperFX team."
+msgstr "启动器无法获取FX版游戏的版本。请将此错误报告给FX版游戏开发团队。"
+
+msgctxt "LauncherMainWindow|Menu"
+msgid "Play campaign"
+msgstr "游玩战役"
+
+msgctxt "LauncherMainWindow|Menu"
+msgid "Load save game"
+msgstr "读取存档"
+
+msgctxt "LauncherMainWindow|Menu"
+msgid "Direct connect (MP)"
+msgstr "直连（多人游戏）"
+
+msgctxt "LauncherMainWindow|Menu"
+msgid "Run packetfile"
+msgstr "运行包文件"
+
+msgctxt "LauncherMainWindow|Menu"
+msgid "Start without mods"
+msgstr "无模式启动游戏"
+
+msgctxt "LauncherMainWindow|Menu"
+msgid "Heavylog"
+msgstr "Heavylog"
+
+msgctxt "LauncherMainWindow|Button text"
+msgid "Play (hvlog)"
+msgstr "游玩（hvlog）"
+
+msgctxt "LauncherMainWindow|Button text"
+msgid "Play"
+msgstr "游玩"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"The launcher is unable to find 'keeperfx.exe'.\n"
+"\n"
+"Do you want to download and install KeeperFX?"
+msgstr ""
+"启动器找不到“keeperfx.exe”。\n"
+"\n"
+"您要下载并安装FX版游戏吗？"
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "Confirmation"
+msgstr "确认"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"Are you sure?\n"
+"\n"
+"You will be unable to play KeeperFX."
+msgstr ""
+"你确定吗？\n"
+"\n"
+"你将无法游玩FX版游戏。"
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "Language has changed"
+msgstr "语言已更改"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid "The launcher has to restart to change its language. Do you want to do that now?"
+msgstr "启动器必须重启才能更改语言。您现在要重启吗？"
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "KeeperFX Update"
+msgstr "FX版游戏更新"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid "You are already on the latest version!"
+msgstr "您的游戏目前已是最新版本！"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"Unable to grab latest KeeperFX version from the website. Try again later.\n"
+"\n"
+"If the issue persists, check your internet connection and firewall settings."
+msgstr ""
+"无法从网站获取最新版FX游戏。请稍后再试。\n"
+"\n"
+"如果问题仍然存在，请检查您的网络连接和防火墙设置。"
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "KeeperFX Verification Error"
+msgstr "FX版游戏认证错误"
+
+#, qt-format
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"The launcher failed to verify the signature of:\n"
+"\n"
+"%1\n"
+"It is highly suggested to only use official KeeperFX files."
+msgstr ""
+"启动器无法验证以下文件的签名：\n"
+"\n"
+"%1\n"
+"强烈建议您仅使用FX版游戏的官方文件。"
+
+#, qt-format
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"Failed to start KeeperFX.\n"
+"\n"
+"Error:\n"
+"%1"
+msgstr ""
+"FX版游戏启动失败。\n"
+"\n"
+"错误：\n"
+"%1"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid "Failed to start KeeperFX. Unknown error."
+msgstr "FX版游戏启动失败。未知错误。"
+
+msgctxt "LauncherMainWindow|Window Title"
+msgid "KeeperFX Launcher"
+msgstr "FX版游戏启动器"
+
+msgctxt "ModManagerDialog|"
+msgid "KeeperFX Mod Manager"
+msgstr "FX版游戏模式管理器"
+
+msgctxt "ModManagerDialog|Header"
+msgid "Mod Manager"
+msgstr "模式管理器"
+
+msgctxt "RunPacketFileDialog|Dialog Title"
+msgid "Run Packetfile"
+msgstr "运行包文件"
+
+msgctxt "RunPacketFileDialog|Header"
+msgid "Run Packetfile"
+msgstr "运行包文件"
+
+msgctxt "RunPacketFileDialog|Information Label"
+msgid "Select a packetfile to replay. KeeperFX will be started and the packetfile will automatically start playing."
+msgstr "选择并重放一个包文件。FX版游戏将启动，并自动开始播放该包文件。"
+
+msgctxt "RunPacketFileDialog|Notice Label"
+msgid "Packetsave will be disabled when loading a packetfile."
+msgstr "当加载包文件时，存档包会被禁用。"
+
+msgctxt "RunPacketFileDialog|Button"
+msgid "Cancel"
+msgstr "取消"
+
+msgctxt "RunPacketFileDialog|Button"
+msgid "Start"
+msgstr "开始"
+
+msgctxt "ScanNetworkDialog|Window Title"
+msgid "Scan Network"
+msgstr "扫描网络"
+
+msgctxt "ScanNetworkDialog|Header"
+msgid "Scan Network"
+msgstr "扫描网络"
+
+msgctxt "ScanNetworkDialog|Information Label"
+msgid ""
+"Scan your local network (LAN) for open ENET lobbies. The other person should be on the same network and must have opened a "
+"game lobby in KeeperFX. (Multiplayer -> ENET -> Create Game). When the other person has an open lobby this tool should be "
+"able to find their IP address."
+msgstr ""
+"扫描您的局域网(LAN)，查找已打开的 ENET 大厅。对手必须也连接到同一网络，并且必须在FX版游戏中打开游戏大厅。（多人游戏 -> "
+"ENET -> 创建游戏）。当对方已打开大厅时，此工具应该能够找到其 IP 地址。"
+
+msgctxt "ScanNetworkDialog|Button"
+msgid "Close"
+msgstr "关闭"
+
+msgctxt "ScanNetworkDialog|Button"
+msgid "Scan"
+msgstr "扫描"
+
+msgctxt "ScanNetworkDialog|Button"
+msgid "Connect"
+msgstr "连接"
+
+msgctxt "ScanNetworkDialog|Table Header"
+msgid "IP Address"
+msgstr "IP地址"
+
+msgctxt "ScanNetworkDialog|Table Header"
+msgid "Hostname"
+msgstr "主机名称"
+
+msgctxt "ScanNetworkDialog|Button text"
+msgid "Stop Scan"
+msgstr "停止扫描"
+
+msgctxt "ScanNetworkDialog|Progress bar"
+msgid "Scanning..."
+msgstr "扫描中…"
+
+msgctxt "ScanNetworkDialog|Button text"
+msgid "Scan"
+msgstr "扫描"
+
+msgctxt "ScanNetworkDialog|Progress bar"
+msgid "Scanning: %p% (%v/%m)"
+msgstr "扫描中: %p% (%v/%m)"
+
+msgctxt "SettingsDialog|Window Title"
+msgid "KeeperFX Settings"
+msgstr "FX版游戏设置"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Game"
+msgstr "游戏"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Game language"
+msgstr "游戏语言"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Screenshot type"
+msgstr "截图类型"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Display splash screens"
+msgstr "显示启动屏幕"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Display Intro"
+msgstr "显示开场动画"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable Cheats"
+msgstr "启用作弊"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Automatically enable imprison"
+msgstr "自动开启囚禁模式"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Automatically enable flee"
+msgstr "自动开启逃跑模式"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable Censorship"
+msgstr "启用审查模式"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Command character"
+msgstr "命令字符"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Packetsave filename"
+msgstr "存档包文件名"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid ""
+"Gameturns per second\n"
+"(default = 20)"
+msgstr ""
+"游戏每秒帧率\n"
+"(默认为20)"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Game launch options"
+msgstr "游戏启动选项"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Freeze game when not focused"
+msgstr "脱离游戏窗口时自动暂停游戏"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable delta time"
+msgstr "启用增量时间"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable Packetsave"
+msgstr "启用存档包"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Exit on LUA error"
+msgstr "退出LUA错误"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Graphics"
+msgstr "图像"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "View 2"
+msgstr "视图 2"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "View 1"
+msgstr "视图 1"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Display mode"
+msgstr "显示模式"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "View 3"
+msgstr "视图 3"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Resolution"
+msgstr "分辨率"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Menu"
+msgstr "菜单"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Movies"
+msgstr "影片"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Failsafe"
+msgstr "故障安全"
+
+#. This is shown under the views configuration
+msgctxt "SettingsDialog|Information Label"
+msgid "<i>Switch between in-game views by pressing <strong>Alt + R</strong></i>"
+msgstr "<i>切换游戏视图请按 <strong>Alt + R</strong></i>"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Display monitor"
+msgstr "显示监控"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Max. FPS (0 = unlimited)"
+msgstr "FPS最大值（0为无限制）"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Resize Movies"
+msgstr "调整影片尺寸"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Smoothen edges"
+msgstr "边缘平滑"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Automatically determine max. FPS"
+msgstr "自动决定FPS最大值"
+
+msgctxt "SettingsDialog|"
+msgid "Rendering Backend"
+msgstr "渲染后端"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable VSync"
+msgstr "启用垂直同步"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Creature flower size (px)"
+msgstr "怪物头上的生命花大小(px)"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Hand size %"
+msgstr "手的大小 %"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Select box line size %"
+msgstr "选择框线尺寸 %"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid ""
+"GUI blink rate\n"
+"(default = 1)"
+msgstr ""
+"图形界面闪烁频率\n"
+"(默认为1)"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid ""
+"Neutral flash rate\n"
+"(default = 1)"
+msgstr ""
+"中立单位闪烁频率\n"
+"(默认为1)"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable map fade animation"
+msgstr "启用地图淡出动画"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Sound"
+msgstr "声音"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Mute audio when game is not focused"
+msgstr "脱离游戏窗口时自动静音"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Pause music when game is paused"
+msgstr "游戏暂停时暂停音乐"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Use CD music instead of local files"
+msgstr "使用 CD 音乐代替本地文件"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable sound"
+msgstr "启用声音"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Frequency"
+msgstr "频率"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Volume"
+msgstr "音量"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable atmospheric sounds"
+msgstr "启用背景音效"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Input"
+msgstr "输入"
+
+msgctxt "SettingsDialog|Slider Title Label"
+msgid "Mouse sensitivity"
+msgstr "鼠标灵敏度"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Zoom towards cursor"
+msgstr "向光标处缩放"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Rotate around cursor"
+msgstr "围绕光标旋转"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Raw mouse input"
+msgstr "原始鼠标输入"
+
+#. "Capture Cursor"
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Unlock cursor from game window"
+msgstr "从游戏界面解锁光标"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Unlock cursor when game is paused"
+msgstr "游戏暂停时解除锁定光标"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Lock cursor in possession"
+msgstr "锁定控制怪物模式光标"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Screen edge camera panning"
+msgstr "屏幕边缘相机摇摄"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Default tag mode"
+msgstr "默认标签模式"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable tag mode toggle (Right-click)"
+msgstr "启用标签模式切换（右键单击）"
+
+msgctxt "SettingsDialog|Relative Mouse Mode Tooltip"
+msgid ""
+"Mouse locking method.\n"
+"\n"
+"- Enabled: Use SDL relative (\"raw\") mode for 1:1 deltas\n"
+"- Disabled: Use older grab-and-warp scheme (confines and re-centers the cursor)\n"
+"\n"
+"Disable this if the mouse feels off."
+msgstr ""
+"鼠标锁定方式。\n"
+"\n"
+"- 启用：使用 SDL 相对（“原始”）模式，实现 1:1 的位移。\n"
+"- 禁用：使用旧版“捕获并重置”方案（即限制光标移动范围并将其重置回中心）。\n"
+"\n"
+"如果感觉鼠标操作不顺畅，请禁用此选项。"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable relative mouse mode"
+msgstr "开启鼠标相对模式"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Multiplayer"
+msgstr "多人游戏"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Masterserver"
+msgstr "主服务器"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Launcher"
+msgstr "启动器"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Launcher language"
+msgstr "启动器语言"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Play button theme"
+msgstr "播放按钮主题"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable website integration"
+msgstr "启用网站集成"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable crash reporting"
+msgstr "启用游戏崩溃报告"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Open on same screen as game"
+msgstr "与游戏在同一屏幕上打开"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Show directory name in window title"
+msgstr "在窗口标题中显示目录名称"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "KeeperFX Release Channel"
+msgstr "FX版游戏版本发布频道"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid ""
+"Update check interval in days\n"
+"(0 = always check)"
+msgstr ""
+"更新检查间隔（天）\n"
+"\n"
+"（0代表始终检查）"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Download Server"
+msgstr "下载服务器"
+
+msgctxt "SettingsDialog|Button"
+msgid "Show launcher command line options"
+msgstr "显示启动器命令行选项"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Automatically check for KeeperFX updates"
+msgstr "检查FX版游戏更新"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Update automatically"
+msgstr "自动更新"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Backup savefiles during update"
+msgstr "更新时备份存档文件"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Automatically remove leftover files"
+msgstr "自动删除残留文件"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "API"
+msgstr "API"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable API"
+msgstr "启用API"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "API port"
+msgstr "API端口"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "About"
+msgstr "关于"
+
+msgctxt "SettingsDialog|Dialog Button"
+msgid "Open config file"
+msgstr "打开配置文件"
+
+msgctxt "SettingsDialog|Renderer Dropdown"
+msgid "Software"
+msgstr "软件"
+
+msgctxt "SettingsDialog|Renderer Dropdown"
+msgid "OpenGL"
+msgstr "OpenGL"
+
+msgctxt "SettingsDialog|Zoom To Cursor Dropdown"
+msgid "Never"
+msgstr "从不"
+
+msgctxt "SettingsDialog|Zoom To Cursor Dropdown"
+msgid "Mousewheel only"
+msgstr "仅限鼠标滚轮"
+
+msgctxt "SettingsDialog|Zoom To Cursor Dropdown"
+msgid "Mousewheel & Keyboard"
+msgstr "鼠标滚轮与键盘"
+
+msgctxt "SettingsDialog|Rotate Around Cursor Dropdown"
+msgid "Never"
+msgstr "从不"
+
+msgctxt "SettingsDialog|Rotate Around Cursor Dropdown"
+msgid "Always"
+msgstr "始终"
+
+msgctxt "SettingsDialog|Rotate Around Cursor Dropdown"
+msgid "Movement Keys Only (While holding Ctrl)"
+msgstr "仅限移动按键（按住Ctrl时）"
+
+msgctxt "SettingsDialog|Rotate Around Cursor Dropdown"
+msgid "Rotation Keys Only"
+msgstr "仅限旋转按键"
+
+msgctxt "SettingsDialog|Default Tag Mode Dropdown"
+msgid "Single"
+msgstr "单人"
+
+msgctxt "SettingsDialog|Default Tag Mode Dropdown"
+msgid "Drag"
+msgstr "拖拽"
+
+msgctxt "SettingsDialog|Default Tag Mode Dropdown"
+msgid "Remember Last"
+msgstr "记住上次"
+
+msgctxt "SettingsDialog|Play Button Theme Dropdown"
+msgid "Qt Fusion Dark"
+msgstr "Qt 融合黑色"
+
+msgctxt "SettingsDialog|Play Button Theme Dropdown"
+msgid "DK Orange (default)"
+msgstr "DK 橘色（默认）"
+
+msgctxt "SettingsDialog|Resize Movies Dropdown"
+msgid "Fit (default)"
+msgstr "适应（默认）"
+
+msgctxt "SettingsDialog|Resize Movies Dropdown"
+msgid "Off"
+msgstr "关"
+
+msgctxt "SettingsDialog|Resize Movies Dropdown"
+msgid "Stretch"
+msgstr "拉长"
+
+msgctxt "SettingsDialog|Resize Movies Dropdown"
+msgid "Crop"
+msgstr "缩短"
+
+msgctxt "SettingsDialog|Resize Movies Dropdown"
+msgid "Pixel perfect"
+msgstr "像素完美"
+
+msgctxt "SettingsDialog|Resolution Dropdown"
+msgid "Match desktop"
+msgstr "适应桌面尺寸"
+
+msgctxt "SettingsDialog|Resolution Dropdown"
+msgid "Custom..."
+msgstr "自定义…"
+
+msgctxt "SettingsDialog|Display Mode Dropdown"
+msgid "Fullscreen"
+msgstr "全屏模式"
+
+msgctxt "SettingsDialog|Display Mode Dropdown"
+msgid "Windowed"
+msgstr "窗口模式"
+
+msgctxt "SettingsDialog|Atmosphere Frequency Dropdown"
+msgid "Low"
+msgstr "低"
+
+msgctxt "SettingsDialog|Atmosphere Frequency Dropdown"
+msgid "Medium"
+msgstr "中"
+
+msgctxt "SettingsDialog|Atmosphere Frequency Dropdown"
+msgid "High"
+msgstr "高"
+
+msgctxt "SettingsDialog|Atmosphere Volume Dropdown"
+msgid "Low"
+msgstr "低"
+
+msgctxt "SettingsDialog|Atmosphere Volume Dropdown"
+msgid "Medium"
+msgstr "中"
+
+msgctxt "SettingsDialog|Atmosphere Volume Dropdown"
+msgid "High"
+msgstr "高"
+
+msgctxt "SettingsDialog|Game Release Channel"
+msgid "Stable (Default)"
+msgstr "稳定（默认）"
+
+msgctxt "SettingsDialog|Game Release Channel"
+msgid "Alpha"
+msgstr "Alpha"
+
+#, qt-format
+msgctxt "SettingsDialog|About Label"
+msgid "KeeperFX v%1"
+msgstr "FX版游戏 v%1"
+
+#, qt-format
+msgctxt "SettingsDialog|About Label"
+msgid "KeeperFX Launcher v%1"
+msgstr "FX版游戏启动器 v%1"
+
+msgctxt "SettingsDialog|About Label"
+msgid "Launcher Libraries:"
+msgstr "启动库："
+
+#, qt-format
+msgctxt "SettingsDialog|About Label"
+msgid "Join us on Discord: %1"
+msgstr "加入我们的 Discord: %1"
+
+#, qt-format
+msgctxt "SettingsDialog|Label Contributor List"
+msgid "KeeperFX Contributors: %1"
+msgstr "FX版游戏贡献者：%1"
+
+#, qt-format
+msgctxt "SettingsDialog|Label Translator List"
+msgid "KeeperFX Launcher Translators: %1"
+msgstr "FX版游戏启动器翻译人员： %1"
+
+msgctxt "SettingsDialog|MessageBox Title"
+msgid "KeeperFX Settings"
+msgstr "FX版游戏设置"
+
+msgctxt "SettingsDialog|MessageBox Text"
+msgid ""
+"Do you want to restore the default settings?\n"
+"\n"
+"All your custom settings will be lost."
+msgstr ""
+"是否恢复默认设置？\n"
+"\n"
+"当前的所有自定义设置都将丢失。"
+
+msgctxt "SettingsDialog|MessageBox Text"
+msgid "The default settings have been restored."
+msgstr "已还原为默认设置。"
+
+msgctxt "SettingsDialog|MessageBox Text"
+msgid "One or more settings have been changed. Are you sure you want to return without saving?"
+msgstr "部分游戏设置已被更改。您确定不保存就退出吗？"
+
+msgctxt "SettingsDialog|MessageBox Title"
+msgid "Launcher command line options"
+msgstr "启动器命令行选项"
+
+msgctxt "SettingsDialog|Custom resoltuion dialog title"
+msgid "Custom resolution"
+msgstr "自定义分辨率"
+
+msgctxt "SettingsDialog|Custom resolution dialog label"
+msgid "Width:"
+msgstr "宽："
+
+msgctxt "SettingsDialog|Custom resolution dialog label"
+msgid "Height:"
+msgstr "高："
+
+#, qt-format
+msgctxt "SettingsDialog|Resolution Dropdown"
+msgid "%1 x %2 (Custom)"
+msgstr "%1 x %2 (自定义)"
+
+msgctxt "UpdateDialog|Window Title"
+msgid "KeeperFX Update"
+msgstr "FX版游戏更新"
+
+msgctxt "UpdateDialog|Header"
+msgid "New KeeperFX version found!"
+msgstr "发现新版本FX游戏！"
+
+msgctxt "UpdateDialog|Button"
+msgid "Cancel"
+msgstr "取消"
+
+msgctxt "UpdateDialog|Button"
+msgid "Update"
+msgstr "更新"
+
+msgctxt "UpdateDialog|Appended to version string"
+msgid "Alpha"
+msgstr "Alpha"
+
+msgctxt "UpdateDialog|Label"
+msgid "Current version:"
+msgstr "当前版本："
+
+msgctxt "UpdateDialog|Label"
+msgid "New version:"
+msgstr "新版本："
+
+msgctxt "UpdateDialog|Progress bar"
+msgid "Downloading: %p% (%vMiB)"
+msgstr "下载中: %p% (%vMiB)"
+
+msgctxt "UpdateDialog|MessageBox Title"
+msgid "Update failed"
+msgstr "更新失败"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid "It seems the launcher does not have permission to write files in the application directory."
+msgstr "启动器似乎没有权限在程序目录下写入文件。"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid "You might have to start the launcher with administrator rights."
+msgstr "你可能需要以管理员身份运行启动器。"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid ""
+"It seems that KeeperFX is currently running. The updater cannot replace the game files while it is open.\n"
+"\n"
+"Please close KeeperFX before trying again.\n"
+"\n"
+"If the issue persists, restart your PC and retry the update."
+msgstr ""
+"FX版游戏似乎正在运行。游戏运行时，更新程序无法替换游戏文件。\n"
+"\n"
+"请先关闭FX版游戏，然后再试一次。\n"
+"\n"
+"如果问题仍然存在，请重启电脑并再次尝试更新。"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid ""
+"It seems that the legacy KeeperFX launcher is currently running.\n"
+"\n"
+"Please close it before trying again.\n"
+"\n"
+"If the issue persists, restart your PC and retry the update."
+msgstr ""
+"检测到旧版FX启动器当前正在运行。\n"
+"\n"
+"请先将其关闭，然后再试一次。\n"
+"\n"
+"如果问题仍然存在，请重启电脑并再次尝试更新。"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid "The updater failed to grab the latest stable version which is required for this alpha."
+msgstr "更新程序未能获取到此alpha版本所需的最新已发布版本。"
+
+msgctxt "UpdateDialog|Title label"
+msgid "Updating..."
+msgstr "更新中…"
+
+msgctxt "UpdateDialog|Progress bar (%p=percentage)"
+msgid "Comparing: %p%"
+msgstr "对比中：%p%"
+
+#, qt-format
+msgctxt "UpdateDialog|Failure Message"
+msgid "Failed to open file: %1"
+msgstr "打开文件失败：%1"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid "Archive download failed."
+msgstr "文档下载失败。"
+
+msgctxt "UpdateDialog|Progress bar"
+msgid "Extracting: %p%"
+msgstr "提取中： %p%"
+
+msgctxt "UpdateDialog|Title label"
+msgid "Update complete!"
+msgstr "更新完成！"
+
+#, qt-format
+msgctxt "UpdateDialog|MessageBox Text"
+msgid "KeeperFX has been successfully updated to version %1!"
+msgstr "FX版游戏已成功更新至版本 %1！"
+
+msgctxt "UpdateDialog|MessageBox Title"
+msgid "Confirmation"
+msgstr "确认"
+
+msgctxt "UpdateDialog|MessageBox Text"
+msgid "Are you sure you want to cancel the update?"
+msgstr "你确定要取消更新吗？"
+
+msgctxt "UpdateDialog|Failure message"
+msgid "Failed to create temp directory"
+msgstr "创建临时目录失败"
+
+msgctxt "UpdateDialog|Progress bar"
+msgid "Downloading: %p%"
+msgstr "下载中：%p%"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid "The temporary directory does not exist"
+msgstr "临时目录不存在"
+
+msgctxt "UpdateDialog|Progress bar"
+msgid "Copying: %p%"
+msgstr "复制中: %p%"
+
+#, qt-format
+msgctxt "UpdateDialog|Failure Message"
+msgid "File does not exist: %1"
+msgstr "文件不存在： %1"
+
+#, qt-format
+msgctxt "UpdateDialog|Failure Message"
+msgid "Failed to create destination directory: %1"
+msgstr "创建目标目录失败：%1"
+
+#, qt-format
+msgctxt "UpdateDialog|Failure Message"
+msgid "Failed to remove file (%1): %2"
+msgstr "无法移除文件 (%1): %2"
+
+#, qt-format
+msgctxt "UpdateDialog|Failure Message"
+msgid "Failed to move file (%1): %2"
+msgstr "无法移动文件 (%1): %2"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid "It is possible an antivirus is causing this problem. Try disabling it and try again."
+msgstr "您的杀毒软件可能导致了这个问题。请尝试禁用杀毒软件后再试一次。"
+
+msgctxt "UpdateDialog|Failure message"
+msgid "Failed to move all downloaded files"
+msgstr "移动全部下载的文件失败"
+
+msgctxt "main|MessageBox Title"
+msgid "KeeperFX Error"
+msgstr "FX版游戏错误"
+
+msgctxt "main|MessageBox Text"
+msgid "Failed to determine the KeeperFX version. This is required to submit a crash report."
+msgstr "无法确定FX版游戏的版本。提交崩溃报告需要此信息。"

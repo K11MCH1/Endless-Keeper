@@ -18,5 +18,7 @@ void engine_view_pause();
 void engine_view_resume();
 /** The hidden game has loaded and its first scene is on (the launcher's window waits for this, for a while). */
 bool engine_view_ready();
+/** A line in endlesskeeper-launcher.log, beside the game. */
+void engine_view_note(const char *text);
 /** What is going on in the picture, in a line. */
 const char *engine_view_caption();

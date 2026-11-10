@@ -2,6 +2,21 @@
 #include <winver.h>
 1 ICON "endless-keeper.ico"
 100 RCDATA "header.png"
+// the languages: KeeperFX's launcher's translations (GPL v2), and Endless Keeper's own texts
+201 RCDATA "lang/cs.po"
+202 RCDATA "lang/de.po"
+203 RCDATA "lang/es.po"
+204 RCDATA "lang/fr.po"
+205 RCDATA "lang/it.po"
+206 RCDATA "lang/ja.po"
+207 RCDATA "lang/ko.po"
+208 RCDATA "lang/nl.po"
+209 RCDATA "lang/pl.po"
+210 RCDATA "lang/pt.po"
+211 RCDATA "lang/ru.po"
+212 RCDATA "lang/uk.po"
+213 RCDATA "lang/zh-hans.po"
+300 RCDATA "lang/own.txt"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION 1,0,0,0

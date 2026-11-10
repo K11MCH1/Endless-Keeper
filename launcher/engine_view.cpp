@@ -320,6 +320,11 @@ bool engine_view_ready()
     return (g_shared != nullptr) && g_have_picture && (g_shared->fade < 80);
 }
 
+void engine_view_note(const char *text)
+{
+    note("%s", text);
+}
+
 const char *engine_view_caption()
 {
     return ((g_shared != nullptr) && g_have_picture) ? g_shared->caption : "";

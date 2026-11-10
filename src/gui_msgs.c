@@ -43,6 +43,7 @@
 #include "front_simple.h"
 #include "bflib_video.h"
 #include "kfx/renderer/RendererManager.h"
+#include "world_attract.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -121,6 +122,8 @@ static int draw_chat_sender(PlayerNumber plyr_idx, long x, long y, int units_per
 
 void message_draw(void)
 {
+    if (world_attract_active())
+        return; /* the launcher's background: the picture alone */
     SYNCDBG(7,"Starting");
     LbTextSetFont(winfont);
     int ps_units_per_px;

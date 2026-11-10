@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -141,6 +142,127 @@ static std::string join(const std::vector<std::string> &v)
 }
 
 /******************************************************************************/
+/* languages: KeeperFX's launcher's translations (the .po files in launcher/lang, GPL v2, by the KeeperFX launcher's translators) for
+   the texts the two launchers share, and launcher/lang/own.txt for Endless Keeper's own. Both are inside the program. */
+
+struct Language { const char *code, *name; int resource; };
+static const Language g_languages[] = {{"en", "English", 0}, {"cs", "\xC4\x8C" "e\xC5\xA1tina", 201}, {"de", "Deutsch", 202},
+    {"es", "Espa\xC3\xB1ol", 203}, {"fr", "Fran\xC3\xA7" "ais", 204}, {"it", "Italiano", 205},
+    {"ja", "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E", 206}, {"ko", "\xED\x95\x9C\xEA\xB5\xAD\xEC\x96\xB4", 207}, {"nl", "Nederlands", 208},
+    {"pl", "Polski", 209}, {"pt", "Portugu\xC3\xAAs", 210}, {"ru", "\xD0\xA0\xD1\x83\xD1\x81\xD1\x81\xD0\xBA\xD0\xB8\xD0\xB9", 211},
+    {"uk", "\xD0\xA3\xD0\xBA\xD1\x80\xD0\xB0\xD1\x97\xD0\xBD\xD1\x81\xD1\x8C\xD0\xBA\xD0\xB0", 212},
+    {"zh-hans", "\xE7\xAE\x80\xE4\xBD\x93\xE4\xB8\xAD\xE6\x96\x87", 213}};
+#define OWN_TEXTS_RESOURCE 300
+static std::map<std::string, std::string> g_texts;
+
+static std::string resource_text(int id)
+{
+    const HRSRC res = FindResourceW(nullptr, MAKEINTRESOURCEW(id), (LPCWSTR)RT_RCDATA);
+    if (res == nullptr)
+        return std::string();
+    const HGLOBAL mem = LoadResource(nullptr, res);
+    return std::string((const char *)LockResource(mem), SizeofResource(nullptr, res));
+}
+
+/** The text of a .po line's "..." (escapes undone), added to out. */
+static void po_quoted(const std::string &line, std::string &out)
+{
+    const size_t a = line.find('"'), b = line.rfind('"');
+    if ((a == std::string::npos) || (b <= a))
+        return;
+    for (size_t i = a + 1; i < b; i++)
+    {
+        if ((line[i] == '\\') && (i + 1 < b))
+        {
+            const char c = line[++i];
+            out += (c == 'n') ? '\n' : (c == 't') ? '\t' : c;
+        } else
+            out += line[i];
+    }
+}
+
+static void load_language(const std::string &code)
+{
+    g_texts.clear();
+    for (const Language &l : g_languages)
+    {
+        if ((code != l.code) || (l.resource == 0))
+            continue;
+        /* KeeperFX's launcher's: msgid "..." / msgstr "...", each maybe over several lines */
+        std::istringstream is(resource_text(l.resource));
+        std::string line, id, str;
+        int part = 0;
+        auto keep = [&]() {
+            if (!id.empty() && !str.empty())
+                g_texts[id] = str;
+            id.clear();
+            str.clear();
+        };
+        while (std::getline(is, line))
+        {
+            if (line.rfind("msgid ", 0) == 0)
+            {
+                keep();
+                part = 1;
+                po_quoted(line, id);
+            } else if (line.rfind("msgstr ", 0) == 0)
+            {
+                part = 2;
+                po_quoted(line, str);
+            } else if (!line.empty() && (line[0] == '"'))
+                po_quoted(line, (part == 1) ? id : str);
+            else if (line.rfind("msgctxt", 0) == 0)
+                part = 0;
+        }
+        keep();
+    }
+    /* Endless Keeper's own: "[code]" then "English=Translation" lines */
+    std::istringstream is(resource_text(OWN_TEXTS_RESOURCE));
+    std::string line;
+    bool mine = false;
+    while (std::getline(is, line))
+    {
+        if (!line.empty() && (line.back() == '\r'))
+            line.pop_back();
+        if (!line.empty() && (line[0] == '['))
+            mine = (line == "[" + code + "]");
+        else if (mine)
+        {
+            const size_t eq = line.find('=');
+            if ((eq != std::string::npos) && (eq > 0) && (eq + 1 < line.size()))
+                g_texts[line.substr(0, eq)] = line.substr(eq + 1);
+        }
+    }
+}
+
+/** The text in the launcher's language (the English itself when there is none). */
+static const char *T(const char *english)
+{
+    const auto it = g_texts.find(english);
+    return (it != g_texts.end()) ? it->second.c_str() : english;
+}
+
+/** A window's or tab's title in the launcher's language, its id the English: it stays the same window. */
+static std::string titled(const char *english)
+{
+    return std::string(T(english)) + "###" + english;
+}
+
+/** The language Windows is shown in, when the launcher has it. */
+static const char *system_language()
+{
+    wchar_t name[LOCALE_NAME_MAX_LENGTH] = L"";
+    GetUserDefaultLocaleName(name, LOCALE_NAME_MAX_LENGTH);
+    const std::string n = narrow(name);
+    if (n.rfind("zh", 0) == 0)
+        return ((n.find("Hant") != std::string::npos) || (n.find("TW") != std::string::npos) || (n.find("HK") != std::string::npos)) ? "en" : "zh-hans";
+    for (const Language &l : g_languages)
+        if (n.rfind(l.code, 0) == 0)
+            return l.code;
+    return "en";
+}
+
+/******************************************************************************/
 /* state */
 
 static SDL_Window *g_window = nullptr;
@@ -168,6 +290,8 @@ static HANDLE g_game_process = nullptr;
    long (then the launcher closes), with Settings open on that tab */
 static std::string t_shot, t_tab;
 static bool t_bare = false; /* "bare=1": the battle alone */
+static float t_play = 0;    /* "play=<seconds>": Play clicks itself then */
+static int t_burst = 0;     /* "burst=<n>": that many more screenshots, a quarter of a second apart (<file>_1.bmp ...) */
 static float t_after = 0;
 static int t_w = 0, t_h = 0;
 static ImGuiTabItemFlags tab_flags(const char *name)
@@ -374,6 +498,7 @@ static void play()
     }
     CloseHandle(pi.hThread);
     g_game_process = pi.hProcess;
+    engine_view_note(("Play: started " + narrow(cmd)).c_str());
     SDL_HideWindow(g_window); /* back when the game has closed */
 }
 
@@ -522,7 +647,7 @@ static void row_label(const char *label)
     const float x0 = ImGui::GetCursorPosX();
     ImGui::AlignTextToFramePadding();
     ImGui::PushTextWrapPos(x0 + col - 12 * S);
-    ImGui::TextUnformatted(label);
+    ImGui::TextUnformatted(T(label));
     ImGui::PopTextWrapPos();
     ImGui::SameLine(x0 + col);
     ImGui::SetNextItemWidth(-1);
@@ -531,7 +656,7 @@ static void row_label(const char *label)
 static void cfg_check(CfgFile &f, const char *label, const char *key, bool def, bool inverted = false)
 {
     bool v = f.flag(key, def) != inverted;
-    if (ImGui::Checkbox(label, &v))
+    if (ImGui::Checkbox((std::string(T(label)) + "###" + key).c_str(), &v))
         f.set(key, (v != inverted) ? "TRUE" : "FALSE");
 }
 
@@ -541,12 +666,12 @@ static void cfg_combo(CfgFile &f, const char *label, const char *key, const char
     const char *shown = cur.c_str();
     for (const auto &o : options)
         if (_stricmp(o.first, cur.c_str()) == 0)
-            shown = o.second;
+            shown = T(o.second);
     row_label(label);
     if (ImGui::BeginCombo((std::string("##") + key).c_str(), shown))
     {
         for (const auto &o : options)
-            if (ImGui::Selectable(o.second, _stricmp(o.first, cur.c_str()) == 0))
+            if (ImGui::Selectable((std::string(T(o.second)) + "###" + o.first).c_str(), _stricmp(o.first, cur.c_str()) == 0))
                 f.set(key, o.first);
         ImGui::EndCombo();
     }
@@ -598,7 +723,8 @@ static void list_resolutions()
 /** One screen mode of INGAME_RES / FRONTEND_RES: "DESKTOP", "DESKTOP_FULL", "WxHx32" (full screen) or "WxHw32" (a window). */
 static void resolution_row(const char *label, std::string &token, bool optional)
 {
-    static const char *const kinds[] = {"Borderless window (desktop)", "Full screen (desktop)", "Full screen", "Window", "Not used"};
+    const std::string desktop_full = std::string(T("Fullscreen")) + " (" + T("Match desktop") + ")";
+    const char *const kinds[] = {T("Match desktop"), desktop_full.c_str(), T("Fullscreen"), T("Windowed"), T("None")};
     int kind = 0;
     std::string res = "1920x1080";
     if (token.empty()) kind = 4;
@@ -615,7 +741,7 @@ static void resolution_row(const char *label, std::string &token, bool optional)
     }
     ImGui::PushID(label);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    ImGui::TextUnformatted(T(label));
     ImGui::SameLine(150 * S);
     ImGui::SetNextItemWidth(250 * S);
     bool changed = false;
@@ -652,7 +778,7 @@ static void heading(const char *text)
 {
     ImGui::Dummy(ImVec2(0, 4 * S));
     ImGui::PushStyleColor(ImGuiCol_Text, C_GOLD);
-    ImGui::TextUnformatted(text);
+    ImGui::TextUnformatted(T(text));
     ImGui::PopStyleColor();
     ImGui::Separator();
 }
@@ -662,13 +788,13 @@ static void settings_window(float w, float h)
     const ImVec2 size(std::min(w - 40 * S, 820 * S), std::min(h - 40 * S, 640 * S));
     ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(size);
-    if (!ImGui::BeginPopupModal("Settings", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+    if (!ImGui::BeginPopupModal(titled("Settings").c_str(), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
         return;
     const float foot = 52 * S;
     if (ImGui::BeginTabBar("tabs"))
     {
-        if (ImGui::BeginTabItem("Game", nullptr, tab_flags("Game")))
+        if (ImGui::BeginTabItem(titled("Game").c_str(), nullptr, tab_flags("Game")))
         {
             ImGui::BeginChild("game", ImVec2(0, -foot));
             cfg_combo(s_cfg, "Game language", "LANGUAGE", "ENG", {{"ENG", "English"}, {"ITA", "Italian"}, {"FRE", "French"}, {"SPA", "Spanish"},
@@ -681,8 +807,8 @@ static void settings_window(float w, float h)
                 std::vector<std::string> st = split(s_cfg.get("STARTUP"));
                 auto has = [&](const char *t) { return std::find_if(st.begin(), st.end(), [&](const std::string &s) { return _stricmp(s.c_str(), t) == 0; }) != st.end(); };
                 bool intro = has("INTRO"), splash = has("LEGAL") || has("FX");
-                bool changed = ImGui::Checkbox("Display intro", &intro);
-                changed = ImGui::Checkbox("Display splash screens", &splash) || changed;
+                bool changed = ImGui::Checkbox(titled("Display Intro").c_str(), &intro);
+                changed = ImGui::Checkbox(titled("Display splash screens").c_str(), &splash) || changed;
                 if (changed)
                 {
                     std::string v = splash ? "LEGAL FX" : "";
@@ -692,33 +818,40 @@ static void settings_window(float w, float h)
                     s_lcfg.set("GAME_PARAM_NO_INTRO", intro ? "FALSE" : "TRUE");
                 }
             }
-            cfg_check(s_lcfg, "Enable cheats", "GAME_PARAM_ALEX", false);
-            cfg_check(s_cfg, "Enable censorship", "CENSORSHIP", false);
+            cfg_check(s_lcfg, "Enable Cheats", "GAME_PARAM_ALEX", false);
+            cfg_check(s_cfg, "Enable Censorship", "CENSORSHIP", false);
             cfg_check(s_cfg, "Automatically enable flee", "FLEE_BUTTON_DEFAULT", false);
             cfg_check(s_cfg, "Automatically enable imprison", "IMPRISON_BUTTON_DEFAULT", false);
             cfg_check(s_cfg, "Enable delta time", "DELTA_TIME", true);
             cfg_check(s_cfg, "Freeze game when not focused", "FREEZE_GAME_ON_FOCUS_LOST", false);
             cfg_check(s_cfg, "Automatically save replays", "AUTOMATIC_REPLAYS", true);
-            cfg_check(s_cfg, "Exit on Lua error", "EXIT_ON_LUA_ERROR", false);
-            cfg_int(s_cfg, "Max. zoom distance (default 60)", "MAX_ZOOM_DISTANCE", 60, 0, 100, true);
-            cfg_int(s_cfg, "Game turns per second (default 20)", "TURNS_PER_SECOND", 20, 1, 200, false);
+            cfg_check(s_cfg, "Exit on LUA error", "EXIT_ON_LUA_ERROR", false);
+            cfg_int(s_cfg, "Max. zoom distance\n(default = 60)", "MAX_ZOOM_DISTANCE", 60, 0, 100, true);
+            cfg_int(s_cfg, "Gameturns per second\n(default = 20)", "TURNS_PER_SECOND", 20, 1, 200, false);
             {
                 std::vector<std::string> r = split(s_cfg.get("MAX_REPLAYS", "5 5 10"));
                 r.resize(3, "5");
                 int v[3] = {atoi(r[0].c_str()), atoi(r[1].c_str()), atoi(r[2].c_str())};
-                row_label("Max. replays kept: campaign, free play, multiplayer");
-                if (ImGui::InputInt3("##MAX_REPLAYS", v))
+                static const char *const names[3] = {"Campaign max. replays", "Freeplay max. replays", "Multiplayer max. replays"};
+                bool changed = false;
+                for (int i = 0; i < 3; i++)
+                {
+                    row_label(names[i]);
+                    ImGui::PushID(i);
+                    changed = ImGui::InputInt("##MAX_REPLAYS", &v[i]) || changed;
+                    ImGui::PopID();
+                }
+                if (changed)
                     s_cfg.set("MAX_REPLAYS", std::to_string(std::max(0, v[0])) + " " + std::to_string(std::max(0, v[1])) + " " + std::to_string(std::max(0, v[2])));
             }
-            cfg_int(s_cfg, "Replay max. file size in KiB (0 = unlimited)", "REPLAY_MAX_SIZE", 32768, 0, 4194304, false);
+            cfg_int(s_cfg, "Replay max. filesize\n(0 = unlimited)", "REPLAY_MAX_SIZE", 32768, 0, 4194304, false);
             cfg_text(s_lcfg, "Game launch options", "EXTRA_GAME_LAUNCH_OPTIONS");
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Graphics", nullptr, tab_flags("Graphics")))
+        if (ImGui::BeginTabItem(titled("Graphics").c_str(), nullptr, tab_flags("Graphics")))
         {
             ImGui::BeginChild("graphics", ImVec2(0, -foot));
-            heading("In-game views (switch between them with Alt + R)");
             {
                 std::vector<std::string> v = split(s_cfg.get("INGAME_RES", "DESKTOP"));
                 v.resize(3);
@@ -732,7 +865,7 @@ static void settings_window(float w, float h)
                     s_cfg.set("INGAME_RES", join(v));
                 }
             }
-            heading("Menus and movies");
+            ImGui::Separator();
             {
                 std::vector<std::string> v = split(s_cfg.get("FRONTEND_RES", "640x480w32 DESKTOP DESKTOP"));
                 v.resize(3, "DESKTOP");
@@ -743,59 +876,58 @@ static void settings_window(float w, float h)
                 if (v != before)
                     s_cfg.set("FRONTEND_RES", join(v));
             }
-            heading("Display");
+            ImGui::Separator();
             cfg_int(s_cfg, "Display monitor", "DISPLAY_NUMBER", 1, 1, 8, false);
-            cfg_combo(s_cfg, "Rendering backend", "RENDERER", "OPENGL", {{"OPENGL", "OpenGL"}, {"SOFTWARE", "Software"}});
+            cfg_combo(s_cfg, "Rendering Backend", "RENDERER", "OPENGL", {{"OPENGL", "OpenGL"}, {"SOFTWARE", "Software"}});
             cfg_check(s_cfg, "Enable VSync", "VSYNC", true);
             {
                 std::vector<std::string> f = split(s_cfg.get("FRAMES_PER_SECOND", "AUTO 60"));
                 bool is_auto = !f.empty() && (_stricmp(f[0].c_str(), "AUTO") == 0);
                 int fps = is_auto ? ((f.size() > 1) ? atoi(f[1].c_str()) : 60) : (f.empty() ? 0 : atoi(f[0].c_str()));
-                bool changed = ImGui::Checkbox("Automatically determine max. FPS", &is_auto);
-                row_label(is_auto ? "Max. FPS when it can't be determined" : "Max. FPS (0 = unlimited)");
+                bool changed = ImGui::Checkbox(titled("Automatically determine max. FPS").c_str(), &is_auto);
+                row_label("Max. FPS\n(0 = unlimited)");
                 changed = ImGui::InputInt("##FPS", &fps) || changed;
                 if (changed)
                     s_cfg.set("FRAMES_PER_SECOND", (is_auto ? "AUTO " : "") + std::to_string(std::max(0, fps)));
             }
-            cfg_combo(s_cfg, "Viewport mode", "VIEWPORT_MODE", "ORIGINAL", {{"ORIGINAL", "Original: the view stops at the sidebar"},
-                {"FULL", "Full: the sidebar is drawn over the view"}, {"FULL_LETTERBOX", "Full, with black under the sidebar"}});
-            cfg_combo(s_cfg, "Resize movies", "RESIZE_MOVIES", "FIT", {{"OFF", "Off"}, {"FIT", "Fit"}, {"STRETCH", "Stretch"}, {"CROP", "Crop"},
+            cfg_combo(s_cfg, "Viewport mode", "VIEWPORT_MODE", "ORIGINAL", {{"ORIGINAL", "Original"}, {"FULL", "Full"}, {"FULL_LETTERBOX", "Full (Letterbox)"}});
+            cfg_combo(s_cfg, "Resize Movies", "RESIZE_MOVIES", "FIT", {{"OFF", "Off"}, {"FIT", "Fit (default)"}, {"STRETCH", "Stretch"}, {"CROP", "Crop"},
                 {"PIXELPERFECT", "Pixel perfect"}, {"4BY3", "4:3"}, {"4BY3PP", "4:3 pixel perfect"}});
             cfg_check(s_lcfg, "Smoothen edges", "GAME_PARAM_VID_SMOOTH", false);
             cfg_check(s_cfg, "Enable map fade animation", "PARCHMENT_MAP_FADE", true);
-            heading("Sizes");
-            cfg_int(s_cfg, "Creature flower size (px)", "CREATURE_STATUS_SIZE", 16, 0, 64, true);
-            cfg_int(s_cfg, "Hand size (%)", "HAND_SIZE", 100, 25, 300, true);
-            cfg_int(s_cfg, "Select box line size (%)", "LINE_BOX_SIZE", 150, 25, 500, true);
-            cfg_int(s_cfg, "GUI blink rate (default 1)", "GUI_BLINK_RATE", 1, 1, 60, false);
-            cfg_int(s_cfg, "Neutral flash rate (default 1)", "NEUTRAL_FLASH_RATE", 1, 1, 60, false);
+            ImGui::Separator();
+            cfg_int(s_cfg, "Creature flower size", "CREATURE_STATUS_SIZE", 16, 0, 64, true);
+            cfg_int(s_cfg, "Hand size", "HAND_SIZE", 100, 25, 300, true);
+            cfg_int(s_cfg, "Select box line size", "LINE_BOX_SIZE", 150, 25, 500, true);
+            cfg_int(s_cfg, "GUI blink rate\n(default = 1)", "GUI_BLINK_RATE", 1, 1, 60, false);
+            cfg_int(s_cfg, "Neutral flash rate\n(default = 1)", "NEUTRAL_FLASH_RATE", 1, 1, 60, false);
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Sound", nullptr, tab_flags("Sound")))
+        if (ImGui::BeginTabItem(titled("Sound").c_str(), nullptr, tab_flags("Sound")))
         {
             ImGui::BeginChild("sound", ImVec2(0, -foot));
             cfg_check(s_lcfg, "Enable sound", "GAME_PARAM_NO_SOUND", false, true);
             cfg_check(s_lcfg, "Use CD music instead of local files", "GAME_PARAM_USE_CD_MUSIC", false);
             cfg_check(s_cfg, "Mute audio when game is not focused", "MUTE_AUDIO_ON_FOCUS_LOST", false);
             cfg_check(s_cfg, "Pause music when game is paused", "PAUSE_MUSIC_WHEN_GAME_PAUSED", false);
-            heading("Atmospheric sounds");
+            ImGui::Separator();
             cfg_check(s_cfg, "Enable atmospheric sounds", "ATMOSPHERIC_SOUNDS", true);
             cfg_combo(s_cfg, "Frequency", "ATMOS_FREQUENCY", "MEDIUM", {{"LOW", "Low"}, {"MEDIUM", "Medium"}, {"HIGH", "High"}});
             cfg_combo(s_cfg, "Volume", "ATMOS_VOLUME", "MEDIUM", {{"LOW", "Low"}, {"MEDIUM", "Medium"}, {"HIGH", "High"}});
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Input", nullptr, tab_flags("Input")))
+        if (ImGui::BeginTabItem(titled("Input").c_str(), nullptr, tab_flags("Input")))
         {
             ImGui::BeginChild("input", ImVec2(0, -foot));
-            cfg_int(s_cfg, "Mouse sensitivity (0 = Windows' own)", "POINTER_SENSITIVITY", 0, 0, 500, true, "%d%%");
-            cfg_combo(s_cfg, "Zoom towards cursor", "ZOOM_TO_MOUSE", "WHEEL", {{"ON", "On"}, {"OFF", "Off"}, {"WHEEL", "Mouse wheel only"}});
-            cfg_combo(s_cfg, "Rotate around cursor", "ROTATE_AROUND_MOUSE", "OFF", {{"OFF", "Off"}, {"ON", "On"},
-                {"MOVEMENT_KEYS", "With Ctrl + movement keys"}, {"ROTATION_KEYS", "With the rotation keys"}});
-            cfg_combo(s_cfg, "Default tag mode", "DEFAULT_TAG_MODE", "SINGLE", {{"SINGLE", "Single"}, {"DRAG", "Drag"}, {"REMEMBER", "Remember"}});
-            cfg_check(s_cfg, "Enable tag mode toggle (right-click)", "TAG_MODE_TOGGLING", false);
-            cfg_check(s_cfg, "Enable relative (raw) mouse mode", "RELATIVE_MOUSE_MODE", true);
+            cfg_int(s_cfg, "Mouse sensitivity", "POINTER_SENSITIVITY", 0, 0, 500, true, "%d%%");
+            cfg_combo(s_cfg, "Zoom towards cursor", "ZOOM_TO_MOUSE", "WHEEL", {{"ON", "Always"}, {"OFF", "Never"}, {"WHEEL", "Mousewheel only"}});
+            cfg_combo(s_cfg, "Rotate around cursor", "ROTATE_AROUND_MOUSE", "OFF", {{"OFF", "Never"}, {"ON", "Always"},
+                {"MOVEMENT_KEYS", "Movement Keys Only (While holding Ctrl)"}, {"ROTATION_KEYS", "Rotation Keys Only"}});
+            cfg_combo(s_cfg, "Default tag mode", "DEFAULT_TAG_MODE", "SINGLE", {{"SINGLE", "Single"}, {"DRAG", "Drag"}, {"REMEMBER", "Remember Last"}});
+            cfg_check(s_cfg, "Enable tag mode toggle (Right-click)", "TAG_MODE_TOGGLING", false);
+            cfg_check(s_cfg, "Enable relative mouse mode", "RELATIVE_MOUSE_MODE", true);
             cfg_check(s_lcfg, "Unlock cursor from game window", "GAME_PARAM_ALT_INPUT", false);
             cfg_check(s_cfg, "Lock cursor to the game window", "CAPTURE_CURSOR", true);
             cfg_check(s_cfg, "Unlock cursor when game is paused", "UNLOCK_CURSOR_WHEN_GAME_PAUSED", true);
@@ -804,28 +936,30 @@ static void settings_window(float w, float h)
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Launcher", nullptr, tab_flags("Launcher")))
+        if (ImGui::BeginTabItem(titled("Launcher").c_str(), nullptr, tab_flags("Launcher")))
         {
             ImGui::BeginChild("launcher", ImVec2(0, -foot));
-            cfg_combo(s_lcfg, "Launcher language", "LAUNCHER_LANGUAGE", "en", {{"en", "English"}});
+            {
+                std::vector<std::pair<const char *, const char *>> langs;
+                for (const Language &l : g_languages)
+                    langs.push_back({l.code, l.name});
+                cfg_combo(s_lcfg, "Launcher language", "LAUNCHER_LANGUAGE", "en", langs);
+            }
             ImGui::Dummy(ImVec2(0, 6 * S));
-            if (ImGui::Button("Show launcher command line options"))
+            if (ImGui::Button(titled("Show launcher command line options").c_str()))
                 g_show_options = true;
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("API", nullptr, tab_flags("API")))
+        if (ImGui::BeginTabItem(titled("API").c_str(), nullptr, tab_flags("API")))
         {
             ImGui::BeginChild("api", ImVec2(0, -foot));
-            ImGui::PushStyleColor(ImGuiCol_Text, C_TEXT_DIM);
-            ImGui::TextWrapped("The API lets other programs talk to the running game over TCP.");
-            ImGui::PopStyleColor();
             cfg_check(s_cfg, "Enable API", "API_ENABLED", false);
             cfg_int(s_cfg, "API port", "API_PORT", 5599, 1, 65535, false);
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("About", nullptr, tab_flags("About")))
+        if (ImGui::BeginTabItem(titled("About").c_str(), nullptr, tab_flags("About")))
         {
             ImGui::BeginChild("about", ImVec2(0, -foot));
             const float aw = ImGui::GetContentRegionAvail().x;
@@ -857,10 +991,10 @@ static void settings_window(float w, float h)
             if (left > 0)
                 ImGui::Dummy(ImVec2(0, left));
             ImGui::Separator();
-            centred("Credits", 20 * S, C_GOLD);
-            centred("Endless Keeper is built on KeeperFX, the work of the KeeperFX team and its community.", 16 * S, C_TEXT);
+            centred(T("Credits"), 20 * S, C_GOLD);
+            centred(T("Endless Keeper is built on KeeperFX, the work of the KeeperFX team and its community."), 16 * S, C_TEXT);
             centred_link("kfx", "https://keeperfx.net", "https://keeperfx.net");
-            centred_link("discord", "Keeper Klan Discord", "https://discord.gg/hE4p7vy2Hb");
+            centred_link("discord", T("Discord - Keeper Klan (English)"), "https://discord.gg/hE4p7vy2Hb");
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
@@ -870,23 +1004,24 @@ static void settings_window(float w, float h)
     const ImVec2 bs(130 * S, 34 * S);
     const ImVec2 base = ImGui::GetCursorScreenPos();
     const float right = base.x + ImGui::GetContentRegionAvail().x;
-    if (button("save", "Save", ImVec2(right - bs.x * 2 - 12 * S, base.y + 4 * S), bs, true, 18 * S))
+    if (button("save", T("Save"), ImVec2(right - bs.x * 2 - 12 * S, base.y + 4 * S), bs, true, 18 * S))
     {
         if (!s_cfg.save() || !s_lcfg.save())
             g_message = "The settings could not be saved: is the game's folder read-only?";
         g_cfg = s_cfg;
         g_lcfg = s_lcfg;
+        load_language(g_lcfg.get("LAUNCHER_LANGUAGE", "en"));
         ImGui::CloseCurrentPopup();
     }
-    if (button("cancel", "Cancel", ImVec2(right - bs.x, base.y + 4 * S), bs, false, 18 * S))
+    if (button("cancel", T("Cancel"), ImVec2(right - bs.x, base.y + 4 * S), bs, false, 18 * S))
         ImGui::CloseCurrentPopup();
     if (g_show_options)
     {
-        ImGui::OpenPopup("Launcher command line options");
+        ImGui::OpenPopup(titled("Launcher command line options").c_str());
         g_show_options = false;
     }
     ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Launcher command line options", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+    if (ImGui::BeginPopupModal(titled("Launcher command line options").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
     {
         static const char *const rows[][2] = {{"--play", "start the game at once, without the launcher's window"},
             {"--game-dir <folder>", "the game's folder, when the launcher isn't in it"},
@@ -898,10 +1033,10 @@ static void settings_window(float w, float h)
             ImGui::TextUnformatted(r[0]);
             ImGui::PopStyleColor();
             ImGui::SameLine(230 * S);
-            ImGui::TextUnformatted(r[1]);
+            ImGui::TextUnformatted(T(r[1]));
         }
         ImGui::Dummy(ImVec2(0, 6 * S));
-        if (ImGui::Button("Close", ImVec2(120 * S, 0)))
+        if (ImGui::Button(titled("Close").c_str(), ImVec2(120 * S, 0)))
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
@@ -915,7 +1050,7 @@ static void updates_box(ImVec2 pos, ImVec2 size)
 {
     ImDrawList *dl = ImGui::GetWindowDrawList();
     panel(dl, pos, ImVec2(pos.x + size.x, pos.y + size.y));
-    text_shadow(dl, 24 * S, ImVec2(pos.x + 20 * S, pos.y + 14 * S), C_GOLD, "Updates");
+    text_shadow(dl, 24 * S, ImVec2(pos.x + 20 * S, pos.y + 14 * S), C_GOLD, T("Updates"));
     dl->AddLine(ImVec2(pos.x + 16 * S, pos.y + 48 * S), ImVec2(pos.x + size.x - 16 * S, pos.y + 48 * S), C_EDGE, 1.0f);
     UpdateState up;
     std::vector<Release> releases;
@@ -932,14 +1067,14 @@ static void updates_box(ImVec2 pos, ImVec2 size)
     {
         ImGui::PushStyleColor(ImGuiCol_Text, C_TEXT_DIM);
         if (up == UP_CHECKING)
-            ImGui::TextUnformatted("Looking for releases...");
+            ImGui::TextUnformatted(T("Loading..."));
         else if (opt_no_update)
             ImGui::TextUnformatted("The update check is off (--no-update-check).");
         else
         {
-            ImGui::TextWrapped("The release list could not be loaded (%s).", why.c_str());
+            ImGui::TextWrapped("%s (%s)", T("The release list could not be loaded."), why.c_str());
             ImGui::PopStyleColor();
-            if (ImGui::Button("Try again"))
+            if (ImGui::Button(titled("Retry").c_str()))
                 check_updates();
             ImGui::PushStyleColor(ImGuiCol_Text, C_TEXT_DIM);
         }
@@ -959,10 +1094,10 @@ static void updates_box(ImVec2 pos, ImVec2 size)
         if (link("title", plain(r.title).c_str(), (i == 0) ? 21 * S : 18 * S, (i == 0) ? C_GOLD_HI : C_GOLD))
             open_url(r.url.c_str());
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Open this release's download page");
+            ImGui::SetTooltip("%s", T("Open this release's download page"));
         ImGui::PushStyleColor(ImGuiCol_Text, C_TEXT_DIM);
         const bool newer = version_newer(r.version, mine), same = !newer && !version_newer(mine, r.version);
-        ImGui::Text("%s%s", r.date.c_str(), newer ? "  -  new" : (same ? "  -  installed" : ""));
+        ImGui::Text("%s%s%s", r.date.c_str(), (newer || same) ? "  -  " : "", newer ? T("new") : (same ? T("installed") : ""));
         ImGui::PopStyleColor();
         release_notes(r.body);
         ImGui::PopID();
@@ -994,30 +1129,43 @@ static void message_boxes(float w, float h)
         g_prompted = true;
         g_prompt_update = true;
     }
-    if (g_prompt_update && !ImGui::IsPopupOpen("Update") && !ImGui::IsPopupOpen("Settings"))
-        ImGui::OpenPopup("Update");
+    if (g_prompt_update && !ImGui::IsPopupOpen(titled("Update").c_str()) && !ImGui::IsPopupOpen(titled("Settings").c_str()))
+        ImGui::OpenPopup(titled("Update").c_str());
     ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(std::min(w - 40 * S, 520 * S), 0));
-    if (ImGui::BeginPopupModal("Update", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings))
+    if (ImGui::BeginPopupModal(titled("Update").c_str(), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings))
     {
         const float bw = 150 * S;
         const float full = ImGui::GetContentRegionAvail().x;
+        auto percent = [&](const char *english) {
+            /* "Downloading: %p%" with the number in */
+            std::string text = T(english);
+            const size_t at = text.find("%p%");
+            if (at != std::string::npos)
+                text.replace(at, 3, std::to_string((int)(fraction * 100.0f)) + "%");
+            return text;
+        };
         if (up == UP_INSTALLING)
         {
-            ImGui::Text("%s...", stage.c_str());
+            const std::string text = (stage == "Downloading") ? percent("Downloading: %p%") : (stage == "Unpacking") ? percent("Extracting: %p%")
+                : (stage == "Installing") ? percent("Copying: %p%") : std::string(T("Updating..."));
+            ImGui::TextUnformatted(text.c_str());
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.72f, 0.16f, 0.08f, 1.0f));
-            ImGui::ProgressBar(fraction, ImVec2(-1, 22 * S));
+            ImGui::ProgressBar(fraction, ImVec2(-1, 22 * S), "");
             ImGui::PopStyleColor();
-            if ((stage == "Downloading") && ImGui::Button("Cancel", ImVec2(bw, 0)))
+            if ((stage == "Downloading") && ImGui::Button(titled("Cancel").c_str(), ImVec2(bw, 0)))
                 g_cancel = true;
         } else if (up == UP_INSTALL_FAILED)
         {
-            ImGui::TextWrapped("The update could not be installed: %s.", why.c_str());
+            ImGui::PushStyleColor(ImGuiCol_Text, C_GOLD_HI);
+            ImGui::TextUnformatted(T("Update failed"));
+            ImGui::PopStyleColor();
+            ImGui::TextWrapped("%s", why.c_str());
             ImGui::Dummy(ImVec2(0, 4 * S));
-            if (ImGui::Button("Open the download page", ImVec2(bw * 1.5f, 0)))
+            if (ImGui::Button(titled("Open this release's download page").c_str(), ImVec2(bw * 1.9f, 0)))
                 open_url(newest.url.c_str());
             ImGui::SameLine(full - bw);
-            if (ImGui::Button("Close", ImVec2(bw, 0)))
+            if (ImGui::Button(titled("Close").c_str(), ImVec2(bw, 0)))
             {
                 std::lock_guard<std::mutex> lock(g_mx);
                 g_up = UP_LISTED;
@@ -1027,9 +1175,12 @@ static void message_boxes(float w, float h)
             }
         } else if (up == UP_RESTART)
         {
-            ImGui::TextWrapped("%s is installed. The launcher starts again now.", plain(newest.title).c_str());
+            ImGui::PushStyleColor(ImGuiCol_Text, C_GOLD_HI);
+            ImGui::TextUnformatted(T("Update complete!"));
+            ImGui::PopStyleColor();
+            ImGui::TextWrapped("%s", plain(newest.title).c_str());
             ImGui::Dummy(ImVec2(0, 4 * S));
-            if (ImGui::Button("OK", ImVec2(bw, 0)))
+            if (ImGui::Button(titled("OK").c_str(), ImVec2(bw, 0)))
             {
                 STARTUPINFOW si;
                 PROCESS_INFORMATION pi;
@@ -1049,17 +1200,18 @@ static void message_boxes(float w, float h)
         } else
         {
             ImGui::PushStyleColor(ImGuiCol_Text, C_GOLD_HI);
-            ImGui::TextWrapped("%s is available.", plain(newest.title).c_str());
+            ImGui::TextWrapped("%s", plain(newest.title).c_str());
             ImGui::PopStyleColor();
-            ImGui::TextWrapped("You have %s. Update now? Your settings and saves are kept.", GAME_TITLE);
+            ImGui::Text("%s %s", T("Current version:"), GAME_TITLE);
+            ImGui::Text("%s %s", T("New version:"), plain(newest.title).c_str());
             ImGui::Dummy(ImVec2(0, 6 * S));
             const ImVec2 base = ImGui::GetCursorScreenPos();
-            if (button("yes", "Update", base, ImVec2(bw, 36 * S), true, 19 * S) || t_update)
+            if (button("yes", T("Update"), base, ImVec2(bw, 36 * S), true, 19 * S) || t_update)
             {
                 t_update = false;
                 start_update(newest);
             }
-            if (button("no", "Not now", ImVec2(base.x + full - bw, base.y), ImVec2(bw, 36 * S), false, 19 * S))
+            if (button("no", T("Cancel"), ImVec2(base.x + full - bw, base.y), ImVec2(bw, 36 * S), false, 19 * S))
             {
                 g_prompt_update = false;
                 ImGui::CloseCurrentPopup();
@@ -1076,7 +1228,7 @@ static void message_boxes(float w, float h)
     {
         ImGui::TextWrapped("%s", g_message.c_str());
         ImGui::Dummy(ImVec2(0, 4 * S));
-        if (ImGui::Button("OK", ImVec2(120 * S, 0)))
+        if (ImGui::Button(titled("OK").c_str(), ImVec2(120 * S, 0)))
         {
             g_message.clear();
             ImGui::CloseCurrentPopup();
@@ -1135,9 +1287,9 @@ static void frame(float w, float h)
     if (narrow)
     {
         const float half = (col_w - gap) * 0.5f;
-        if (button("play", "Play", ImVec2(pad, top), ImVec2(half, set_h * 1.2f), true, 26 * S, !busy))
+        if (button("play", T("Play"), ImVec2(pad, top), ImVec2(half, set_h * 1.2f), true, 26 * S, !busy))
             play();
-        if (button("settings", "Settings", ImVec2(pad + half + gap, top), ImVec2(half, set_h * 1.2f), false, 20 * S, !busy))
+        if (button("settings", T("Settings"), ImVec2(pad + half + gap, top), ImVec2(half, set_h * 1.2f), false, 20 * S, !busy))
             g_show_settings = true;
         box_pos = ImVec2(pad, top + set_h * 1.2f + gap);
         box_size = ImVec2(w - pad * 2, bottom - box_pos.y);
@@ -1145,9 +1297,9 @@ static void frame(float w, float h)
     } else
     {
         const float by = std::max(top, bottom - play_h - gap - set_h);
-        if (button("play", "Play", ImVec2(pad, by), ImVec2(col_w, play_h), true, 40 * S, !busy))
+        if (button("play", T("Play"), ImVec2(pad, by), ImVec2(col_w, play_h), true, 40 * S, !busy))
             play();
-        if (button("settings", "Settings", ImVec2(pad, by + play_h + gap), ImVec2(col_w, set_h), false, 22 * S, !busy))
+        if (button("settings", T("Settings"), ImVec2(pad, by + play_h + gap), ImVec2(col_w, set_h), false, 22 * S, !busy))
             g_show_settings = true;
         /* the box keeps to the right: the battle shows between it and the buttons */
         const float box_w = std::min(w - (pad + col_w + pad) - pad, std::max(430 * S, w * 0.46f));
@@ -1168,7 +1320,7 @@ static void frame(float w, float h)
         g_show_settings = false;
         s_cfg = g_cfg;
         s_lcfg = g_lcfg;
-        ImGui::OpenPopup("Settings");
+        ImGui::OpenPopup(titled("Settings").c_str());
     }
     settings_window(w, h);
     message_boxes(w, h);
@@ -1239,6 +1391,12 @@ int main(int, char **)
     }
     g_cfg.load(g_game_dir + L"\\keeperfx.cfg");
     g_lcfg.load(g_game_dir + L"\\endlesskeeper-launcher.cfg");
+    if (g_lcfg.find("LAUNCHER_LANGUAGE") < 0)
+    {
+        g_lcfg.set("LAUNCHER_LANGUAGE", system_language()); /* the first start: Windows' language, when there is one */
+        g_lcfg.save();
+    }
+    load_language(g_lcfg.get("LAUNCHER_LANGUAGE", "en"));
     if (opt_play)
     {
         const std::wstring exe = game_exe();
@@ -1292,6 +1450,16 @@ int main(int, char **)
         }
         if (!loaded)
             io.Fonts->AddFontDefault();
+        /* and Windows' fonts for the letters the book face lacks (Japanese, Korean, Chinese ...) */
+        for (const wchar_t *name : {L"\\Fonts\\segoeui.ttf", L"\\Fonts\\malgunbd.ttf", L"\\Fonts\\malgun.ttf", L"\\Fonts\\YuGothB.ttc", L"\\Fonts\\meiryob.ttc",
+                 L"\\Fonts\\msyhbd.ttc", L"\\Fonts\\msyh.ttc"})
+        {
+            if (GetFileAttributesW((std::wstring(win) + name).c_str()) == INVALID_FILE_ATTRIBUTES)
+                continue;
+            ImFontConfig merge;
+            merge.MergeMode = true;
+            io.Fonts->AddFontFromFileTTF(narrow(std::wstring(win) + name).c_str(), 17.0f, &merge);
+        }
     }
     ImGui_ImplSDL3_InitForSDLRenderer(g_window, g_renderer);
     ImGui_ImplSDLRenderer3_Init(g_renderer);
@@ -1311,7 +1479,10 @@ int main(int, char **)
                 else if (key == "after") t_after = (float)atof(val.c_str());
                 else if (key == "settings") t_tab = val;
                 else if (key == "bare") t_bare = true;
+                else if (key == "play") t_play = (float)atof(val.c_str());
+                else if (key == "burst") t_burst = atoi(val.c_str());
                 else if (key == "version") t_version = val;
+                else if (key == "lang") load_language(val);
                 else if (key == "update") t_update = true;
                 else if (key == "size") sscanf(val.c_str(), "%dx%d", &t_w, &t_h);
             }
@@ -1349,6 +1520,7 @@ int main(int, char **)
             {
                 CloseHandle(g_game_process);
                 g_game_process = nullptr;
+                engine_view_note("Play: the game has closed; the launcher is back");
                 g_cfg.load(g_cfg.path);
                 engine_view_resume();
                 SDL_ShowWindow(g_window);
@@ -1406,6 +1578,11 @@ int main(int, char **)
             static float t_time = 0;
             static bool t_opened = false;
             t_time += dt;
+            if ((t_play > 0) && (t_time >= t_play))
+            {
+                t_play = 0;
+                play();
+            }
             if (!t_tab.empty() && !t_opened && (t_time > 1.0f))
             {
                 t_opened = true;
@@ -1414,13 +1591,18 @@ int main(int, char **)
                 t_tab.clear(); /* selected: the tab is the player's again */
             if (t_time >= t_after)
             {
+                static int t_done = 0;
                 SDL_Surface *shot = SDL_RenderReadPixels(g_renderer, nullptr);
                 if (shot != nullptr)
                 {
-                    SDL_SaveBMP(shot, t_shot.c_str());
+                    std::string file = t_shot;
+                    if (t_done > 0)
+                        file.insert(file.size() - 4, "_" + std::to_string(t_done));
+                    SDL_SaveBMP(shot, file.c_str());
                     SDL_DestroySurface(shot);
                 }
-                running = false;
+                t_after += 0.25f;
+                running = (t_done++ < t_burst);
             }
         }
         SDL_RenderPresent(g_renderer);

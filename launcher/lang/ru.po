@@ -1,0 +1,2143 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: \n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-06 21:16+0200\n"
+"PO-Revision-Date: 2026-10-07 07:40+0200\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Poedit 3.9\n"
+
+#: Qt default
+msgid "OK"
+msgstr "ОК"
+
+#: Qt default
+msgid "&OK"
+msgstr "&ОК"
+
+#: Qt default
+msgid "Cancel"
+msgstr "Отмена"
+
+#: Qt default
+msgid "&Cancel"
+msgstr "&Отмена"
+
+#: Qt default
+msgid "Yes"
+msgstr "Да"
+
+#: Qt default
+msgid "&Yes"
+msgstr "&Да"
+
+#: Qt default
+msgid "No"
+msgstr "Нет"
+
+#: Qt default
+msgid "&No"
+msgstr "&Нет"
+
+#: Qt default
+msgid "Apply"
+msgstr "Применить"
+
+#: Qt default
+msgid "&Apply"
+msgstr "&Применить"
+
+#: Qt default
+msgid "Close"
+msgstr "Закрыть"
+
+#: Qt default
+msgid "&Close"
+msgstr "&Закрыть"
+
+#: Qt default
+msgid "Help"
+msgstr "Помощь"
+
+#: Qt default
+msgid "&Help"
+msgstr "&Помощь"
+
+#: Qt default
+msgid "Reset"
+msgstr "Сбросить"
+
+#: Qt default
+msgid "&Reset"
+msgstr "&Сбросить"
+
+#: Qt default
+msgid "Retry"
+msgstr "Повторить"
+
+#: Qt default
+msgid "&Retry"
+msgstr "&Повторить"
+
+#: Qt default
+msgid "Ignore"
+msgstr "Игнорировать"
+
+#: Qt default
+msgid "&Ignore"
+msgstr "&Игнорировать"
+
+#: Qt default
+msgid "Abort"
+msgstr "Прервать"
+
+#: Qt default
+msgid "&Abort"
+msgstr "&Прервать"
+
+#: Qt default
+msgid "Save"
+msgstr "Сохранить"
+
+#: Qt default
+msgid "&Save"
+msgstr "&Сохранить"
+
+#: Qt default
+msgid "Restore Defaults"
+msgstr "Восстановить настройки по умолчанию"
+
+msgctxt "CopyDkFilesDialog|Window Title"
+msgid "Copy DK Files"
+msgstr "Копирование файлов DK"
+
+msgctxt "CopyDkFilesDialog|Header"
+msgid "Copy Dungeon Keeper Files"
+msgstr "Копирование игры «Хранитель подземелий»"
+
+msgctxt "CopyDkFilesDialog|Information"
+msgid ""
+"KeeperFX requires the original Dungeon Keeper files for copyright reasons.\n"
+"Please select the directory where these files are located.\n"
+"\n"
+"You can use your original CD, or a digital version from GOG, Steam or EA.\n"
+"If you want to use a digital version you will have to install it first."
+msgstr ""
+"KeeperFX нужны файлы оригинала по требованиям законодательства.\n"
+"Укажите директорию, в которой находятся файлы игры.\n"
+"KeeperFX совместим как с официальным CD-диском, так и с цифровой версией, "
+"приобретенной в GOG, Steam или EA app.\n"
+"Если вы хотите использовать цифровую версию, сначала установите её."
+
+msgctxt "CopyDkFilesDialog|Button"
+msgid "Browse"
+msgstr "Обзор"
+
+msgctxt "CopyDkFilesDialog|Button"
+msgid "Cancel"
+msgstr "Отменить"
+
+msgctxt "CopyDkFilesDialog|Button"
+msgid "Copy"
+msgstr "Копировать"
+
+msgctxt "CopyDkFilesDialog|Label"
+msgid "A suitable DK installation has been automatically detected."
+msgstr "Совместимая версия DK была обнаружена автоматически."
+
+msgctxt "CopyDkFilesDialog|Directory Browse Dialog"
+msgid "Select Directory containing Dungeon Keeper files"
+msgstr "Директория установки DK"
+
+msgctxt "CopyDkFilesDialog|MessageBox Title"
+msgid "Original DK files not found"
+msgstr "Файлы DK не найдены"
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid ""
+"The chosen directory does not contain all of the required files. Please "
+"select an original Dungeon Keeper installation."
+msgstr ""
+"Выбранная директория не содержит необходимых файлов. Укажите директорию с "
+"установленной оригинальной игрой «Хранитель подземелий»."
+
+msgctxt "CopyDkFilesDialog|MessageBox Title"
+msgid "Select a directory"
+msgstr "Выберите директорию"
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid "Please select an original Dungeon Keeper installation location."
+msgstr "Укажите директорию установки оригинальной игры."
+
+msgctxt "CopyDkFilesDialog|MessageBox Title"
+msgid "Failed to copy files"
+msgstr "Не удалось скопировать файлы"
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid "The current directory is not writable."
+msgstr "Невозможно записать в текущую директорию."
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid "Something went wrong while copying the files."
+msgstr "Копирование файлов было выполнено некорректно."
+
+msgctxt "CopyDkFilesDialog|MessageBox Title"
+msgid "DK files copied!"
+msgstr "Копирование файлов DK завершено"
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid ""
+"The required Dungeon Keeper files have been copied.\n"
+"\n"
+"You can now play KeeperFX!"
+msgstr ""
+"Копирование файлов «Хранителя подземелий» успешно завершено.\n"
+"\n"
+"KeeperFX готов к запуску."
+
+msgctxt "CopyDkFilesDialog|MessageBox Title"
+msgid "Confirmation"
+msgstr "Подтверждение"
+
+msgctxt "CopyDkFilesDialog|MessageBox Text"
+msgid ""
+"Are you sure?\n"
+"\n"
+"KeeperFX will not function correctly without these files."
+msgstr ""
+"Вы уверены?\n"
+"\n"
+"Без этих файлов KeeperFX не будет работать корректно."
+
+msgctxt "CrashDialog|Window Title"
+msgid "KeeperFX Crash Report"
+msgstr "Отчет об ошибке KeeperFX"
+
+msgctxt "CrashDialog|Header"
+msgid "KeeperFX has crashed"
+msgstr "Неустранимая ошибка KeeperFX"
+
+msgctxt "CrashDialog|Information Label"
+msgid ""
+"It seems that KeeperFX has crashed and is unable to recover. If you wish to "
+"submit technical details about this crash to the KeeperFX developers, you "
+"can describe your problem below and click 'Send'. If you add contact details "
+"we can contact you later. Additional information such as KeeperFX logfiles "
+"and configuration will be sent too."
+msgstr ""
+"В приложении KeeperFX произошла неустранимая ошибка. Если хотите сообщить о "
+"ней разработчикам KeeperFX, опишите свою проблему в форме ниже и нажмите "
+"кнопку «Отправить». Укажите свои контактные данные, если хотите, чтобы мы "
+"могли связаться с вами. К сообщению об ошибке будет приложена дополнительная "
+"информация, в том числе файлы журнала и настроек KeeperFX."
+
+#, qt-format
+msgctxt "CrashDialog|Information Label"
+msgid "You can also raise an issue on Github: %1"
+msgstr "Вы также можете сообщить о проблеме на GitHub: %1"
+
+msgctxt "CrashDialog|Input box title"
+msgid "Information (Optional)"
+msgstr "Информация (необязательно)"
+
+msgctxt "CrashDialog|Textarea Placeholder"
+msgid ""
+"Please explain what happened, and if possible the steps to reproduce this "
+"crash."
+msgstr ""
+"Кратко опишите суть проблемы и, если возможно, шаги, необходимые для её "
+"воспроизведения."
+
+msgctxt "CrashDialog|Input box title"
+msgid "Savefile (Optional)"
+msgstr "Файл сохранения (необязательно)"
+
+msgctxt "CrashDialog|Dropdown Placeholder Text"
+msgid ""
+"If you have a game save that could provide us with more information. You can "
+"add it here."
+msgstr ""
+"Если у вас остался файл сохранения игры, прикрепите его к этой форме. Его "
+"содержимое может указывать на источник проблемы."
+
+msgctxt "CrashDialog|Input box title"
+msgid "Contact Information (Optional)"
+msgstr "Контактные данные (необязательно)"
+
+msgctxt "CrashDialog|Input Placeholder"
+msgid "Discord handle"
+msgstr "Имя пользователя Discord"
+
+msgctxt "CrashDialog|Input Placeholder"
+msgid "KeeperFX.net username"
+msgstr "Имя пользователя KeeperFX.net"
+
+msgctxt "CrashDialog|Input Placeholder"
+msgid "Email Address"
+msgstr "Адрес электронной почты"
+
+msgctxt "CrashDialog|Button"
+msgid "Cancel"
+msgstr "Отмена"
+
+msgctxt "CrashDialog|Button"
+msgid "Send"
+msgstr "Отправить"
+
+msgctxt "CrashDialog|Menu Placeholder"
+msgid "No saves found"
+msgstr "Файлы сохранений не найдены"
+
+msgctxt "CrashDialog|Default Savefile"
+msgid "None"
+msgstr "Отсутствует"
+
+msgctxt "CrashDialog|MessageBox Title"
+msgid "Crash Report"
+msgstr "Отчет об ошибке"
+
+msgctxt "CrashDialog|MessageBox Text"
+msgid "Failed to submit crash report."
+msgstr "Не удалось отправить отчет об ошибке."
+
+#, qt-format
+msgctxt "CrashDialog|MessageBox Text"
+msgid ""
+"Your crash report has been successfully submitted!\n"
+"\n"
+"The KeeperFX team can not guarantee immediate results, but your feedback is "
+"very helpful for the developers working on KeeperFX.\n"
+"\n"
+"Report ID: %1"
+msgstr ""
+"Отчет об ошибке успешно отправлен.\n"
+"\n"
+"Разработчики KeeperFX не гарантируют немедленного внесения исправлений, но "
+"обратная связь очень важна для участников проекта.\n"
+"\n"
+"Номер отчета: %1"
+
+msgctxt "DirectConnectDialog|Window Title"
+msgid "Direct Connect"
+msgstr "Прямое подключение"
+
+msgctxt "DirectConnectDialog|Header"
+msgid "Direct Connect"
+msgstr "Прямое подключение"
+
+msgctxt "DirectConnectDialog|Information Label"
+msgid ""
+"Directly connect to an open ENET lobby. Enter the IP address of the host. "
+"Only ENET is supported."
+msgstr ""
+"Прямое подключение к запущенному ENET-лобби. Введите IP-адрес хоста. "
+"Поддерживается только ENET."
+
+msgctxt "DirectConnectDialog|Input Placeholder"
+msgid "IP Address"
+msgstr "IP-адрес"
+
+msgctxt "DirectConnectDialog|Input Placeholder"
+msgid "Port"
+msgstr "Порт"
+
+msgctxt "DirectConnectDialog|Button"
+msgid "Cancel"
+msgstr "Отмена"
+
+msgctxt "DirectConnectDialog|Button"
+msgid "Connect"
+msgstr "Подключение"
+
+msgctxt "DirectConnectDialog|MessageBox Title"
+msgid "Direct Connect"
+msgstr "Прямое подключение"
+
+msgctxt "DirectConnectDialog|MessageBox Text"
+msgid "Invalid IP address"
+msgstr "Неверный IP-адрес"
+
+msgctxt "DirectConnectDialog|MessageBox Text"
+msgid "IPv6 addresses are not supported."
+msgstr "Адреса IPv6 не поддерживаются."
+
+msgctxt "DownloadMusicDialog|Dialog Title"
+msgid "KeeperFX Background Music"
+msgstr "Фоновая музыка KeeperFX"
+
+msgctxt "DownloadMusicDialog|Header"
+msgid "Download Music Files"
+msgstr "Загрузка фоновой музыки"
+
+msgctxt "DownloadMusicDialog|Information"
+msgid ""
+"It seems the background music files were not found. This might happen when "
+"you copied over the Dungeon Keeper files from the CD instead of a digital "
+"release.\n"
+"\n"
+"You can let the launcher automatically download them because you have "
+"already proven your ownership of the original Dungeon Keeper game files.\n"
+"\n"
+"If you do not download the music files you will need to have the original CD "
+"in your disk drive to hear the background music."
+msgstr ""
+"Не удалось найти музыкальные файлы. Возможная причина: в качестве источника "
+"оригинальной игры был указан официальный CD-диск.\n"
+"\n"
+"Вы можете разрешить Центру управления автоматически загрузить их, поскольку "
+"вы подтвердили наличие оригинальной игры.\n"
+"\n"
+"В случае отказа для воспроизведения музыки игре потребуется наличие в "
+"приводе CD-диска."
+
+msgctxt "DownloadMusicDialog|Button"
+msgid "Cancel"
+msgstr "Отмена"
+
+msgctxt "DownloadMusicDialog|Button"
+msgid "Download"
+msgstr "Загрузить"
+
+msgctxt "DownloadMusicDialog|Failure Message"
+msgid "Failed to get download URL for music archive"
+msgstr "Не удалось получить URL-адрес для загрузки архива с музыкой"
+
+msgctxt "DownloadMusicDialog|Failure Message"
+msgid "Invalid music archive file extension. It must be a 7zip archive."
+msgstr "Недопустимое расширение архива с музыкой. Укажите архив 7-Zip."
+
+msgctxt "DownloadMusicDialog|Failure Message"
+msgid "Failed to download music archive"
+msgstr "Не удалось загрузить архив с музыкой"
+
+msgctxt "DownloadMusicDialog|Failure message"
+msgid "Music archive test failed. It may be corrupted."
+msgstr "Не удалось проверить архив с музыкой. Файл поврежден."
+
+msgctxt "DownloadMusicDialog|Progress bar"
+msgid "Extracting: %p%"
+msgstr "Извлечение: %p%"
+
+msgctxt "DownloadMusicDialog|MessageBox Text"
+msgid "The KeeperFX background music has been successfully downloaded!"
+msgstr "Архив с фоновой музыкой успешно загружен."
+
+msgctxt "DownloadMusicDialog|Progress bar"
+msgid "Downloading: %p% (%vMiB)"
+msgstr "Загрузка: %p% (%v МиБ)"
+
+msgctxt "DownloadMusicDialog|MessageBox Title"
+msgid "Download failed"
+msgstr "Загрузка не удалась"
+
+msgctxt "DownloadMusicDialog|MessageBox Title"
+msgid "Confirmation"
+msgstr "Подтверждение"
+
+msgctxt "DownloadMusicDialog|MessageBox Text"
+msgid ""
+"Are you sure?\n"
+"\n"
+"You will not be able to hear the background music without having your CD in "
+"your disk drive."
+msgstr ""
+"Вы уверены?\n"
+"\n"
+"Фоновая музыка не будет воспроизводиться, если в приводе не будет CD-диска."
+
+msgctxt "EnetServerTestDialog|Window Title"
+msgid "Test internet lobby"
+msgstr "Доступность интернет-лобби"
+
+msgctxt "EnetServerTestDialog|Header"
+msgid "Multiplayer Lobby Portforwarding Test"
+msgstr "Проверка перенаправления портов в лобби многопользовательского режима"
+
+msgctxt "EnetServerTestDialog|Information Label"
+msgid ""
+"This tool checks if your KeeperFX multiplayer lobby can be reached from the "
+"internet. You don't need to use this for local games, as those are already "
+"accessible within your network."
+msgstr ""
+"Эта утилита проверяет, доступно ли созданное вами лобби KeeperFX из "
+"Интернета. Для игры по локальной сети не требуется."
+
+msgctxt "EnetServerTestDialog|Information Label"
+msgid ""
+"To host a game online, you must open port 5556 in your router. How to do "
+"this is different for every router and internet provider, so check online "
+"for instructions or ask your provider for help."
+msgstr ""
+"Чтобы стать хостом игры в сети Интернет, необходимо открыть порт 5556 на "
+"маршрутизаторе. Процедура открытия порта зависит от модели маршрутизатора и "
+"интернет-провайдера. Обратитесь за консультацией к публичным ресурсам в сети "
+"Интернет или в техническую поддержку своего провайдера."
+
+msgctxt "EnetServerTestDialog|Information Label"
+msgid ""
+"KeeperFX only works with IPv4. If you don't have an IPv4 address or you are "
+"using a shared one (CGNAT), you won't be able to host an online game. You "
+"can ask your internet provider if they can give you an IPv4 address."
+msgstr ""
+"KeeperFX соединяется только с адресами IPv4. Если у вас нет адреса IPv4 или "
+"в вашей сети используется технология трансляции адресов (CGNAT), вы не "
+"сможете стать хостом игры. Обратитесь к своему интернет-провайдеру по "
+"вопросу приобретения публичного адреса IPv4."
+
+msgctxt "EnetServerTestDialog|Button"
+msgid "Close"
+msgstr "Закрыть"
+
+msgctxt "EnetServerTestDialog|Button"
+msgid "Test"
+msgstr "Проверить"
+
+msgctxt "EnetServerTestDialog|MessageBox Title"
+msgid "IPv6 Detected"
+msgstr "Обнаружен адрес IPv6"
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "Failed to retrieve public IP address."
+msgstr "Не удалось получить публичный IP-адрес."
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "This tool only works with IPv4."
+msgstr "Эта утилита работает только с IPv4."
+
+msgctxt "EnetServerTestDialog|MessageBox Title"
+msgid "Portforwarding tool"
+msgstr "Перенаправление портов"
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "Failed to start ENET server."
+msgstr "Не удалось запустить сервер ENET."
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "Failed to contact KeeperFX.net"
+msgstr "Не удалось соединиться с KeeperFX.net."
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "Your router is correctly port forwarded!"
+msgstr "Перенаправление портов на маршрутизаторе настроено корректно."
+
+msgctxt "EnetServerTestDialog|MessageBox Text"
+msgid "Failed to connect to local ENET server."
+msgstr "Не удалось подключиться к локальному серверу ENET."
+
+msgctxt "FileRemoverDialog|Window Title"
+msgid "Remove leftover files"
+msgstr "Удаление оставшихся файлов"
+
+msgctxt "FileRemoverDialog|Header"
+msgid "Remove leftover files"
+msgstr "Удаление оставшихся файлов"
+
+msgctxt "FileRemoverDialog|Information Label"
+msgid ""
+"The KeeperFX launcher has found files that were left over after KeeperFX was "
+"updated. These files might cause issues and should be removed."
+msgstr ""
+"Центр управления KeeperFX обнаружил файлы предыдущих обновлений KeeperFX. "
+"Они могут вызывать проблемы и должны быть удалены."
+
+msgctxt "FileRemoverDialog|Checkbox Toggle"
+msgid "Always remove leftover files automatically"
+msgstr "Всегда автоматически удалять оставшиеся файлы"
+
+msgctxt "FileRemoverDialog|Button"
+msgid "Cancel"
+msgstr "Отмена"
+
+msgctxt "FileRemoverDialog|Button"
+msgid "Remove All"
+msgstr "Удалить всё"
+
+msgctxt "FileRemoverDialog|MessageBox Title"
+msgid "Confirmation"
+msgstr "Подтверждение"
+
+msgctxt "FileRemoverDialog|MessageBox Text"
+msgid ""
+"KeeperFX might not function correctly if these files are present.\n"
+"\n"
+"Are you sure you want to keep them?"
+msgstr ""
+"KeeperFX может работать некорректно при наличии на диске этих файлов.\n"
+"\n"
+"Вы уверены, что хотите сохранить их?"
+
+msgctxt "FileRemoverDialog|MessageBox Text"
+msgid "Something went wrong while removing leftover files."
+msgstr "При удалении оставшихся файлов произошла ошибка."
+
+msgctxt "FileRemoverDialog|MessageBox Text"
+msgid "Leftover files have been removed!"
+msgstr "Оставшиеся файлы удалены."
+
+msgctxt "Game|MessageBox Title"
+msgid "KeeperFX has crashed"
+msgstr "Неустранимая ошибка KeeperFX"
+
+msgctxt "Game|MessageBox Text"
+msgid ""
+"It seems that KeeperFX has crashed and is unable to recover.\n"
+"\n"
+"Crash reporting is disabled because you are using the heavylog option.\n"
+"\n"
+"If you require assistance, please create an issue on Github or contact us on "
+"the Keeper Klan Discord."
+msgstr ""
+"В приложении KeeperFX произошла неустранимая ошибка.\n"
+"\n"
+"Отправка сообщений об ошибках отключена, поскольку активировано детальное "
+"журналирование.\n"
+"\n"
+"Если вам необходима помощь в решении этой проблемы, сообщите о ней в разделе "
+"Issues на GitHub или свяжитесь с нами на сервере Keeper Klan в Discord."
+
+msgctxt "InstallKfxDialog|Window Title"
+msgid "Install KeeperFX"
+msgstr "Установка KeeperFX"
+
+msgctxt "InstallKfxDialog|Header"
+msgid "Download and Install KeeperFX"
+msgstr "Загрузка и установка KeeperFX"
+
+msgctxt "InstallKfxDialog|Information Label"
+msgid ""
+"Select your version, and this installer will download and install KeeperFX.\n"
+"\n"
+"Choose the stable release for reliability or the alpha version if you want "
+"to help us out with testing."
+msgstr ""
+"Выберите релизную ветку, и эта утилита сама загрузит и установит KeeperFX.\n"
+"\n"
+"Стабильная ветка предлагает более стабильную и надежную версию движка; альфа-"
+"ветка предназначена для тестирования актуальной версии."
+
+msgctxt "InstallKfxDialog|Label"
+msgid "Release version:"
+msgstr "Релизная ветка:"
+
+msgctxt "InstallKfxDialog|Button"
+msgid "Cancel"
+msgstr "Отмена"
+
+msgctxt "InstallKfxDialog|Button"
+msgid "Install"
+msgstr "Установить"
+
+msgctxt "InstallKfxDialog|Game Release Build"
+msgid "Stable (Default)"
+msgstr "Стабильная (по умолч.)"
+
+msgctxt "InstallKfxDialog|Game Release Build"
+msgid "Alpha"
+msgstr "Альфа"
+
+msgctxt "InstallKfxDialog|Failure Message"
+msgid "Failed to get download URL for stable release"
+msgstr "Не удалось получить URL-адрес для загрузки стабильной версии"
+
+msgctxt "InstallKfxDialog|Failure Message"
+msgid "Failed to download stable release"
+msgstr "Не удалось загрузить стабильную версию"
+
+msgctxt "InstallKfxDialog|Failure message"
+msgid "Stable release archive test failed. It may be corrupted."
+msgstr "Не удалось проверить архив стабильной версии. Возможно, он поврежден."
+
+msgctxt "InstallKfxDialog|Progress bar"
+msgid "Extracting: %p%"
+msgstr "Извлечение: %p%"
+
+msgctxt "InstallKfxDialog|Failure message"
+msgid "Failed to create temp directory"
+msgstr "Не удалось создать временную директорию"
+
+msgctxt "InstallKfxDialog|Failure message"
+msgid "Failed to get download URL for alpha patch"
+msgstr "Не удалось получить URL-адрес для загрузки альфа-патча"
+
+msgctxt "InstallKfxDialog|Failure message"
+msgid "Alpha patch download failed."
+msgstr "Не удалось загрузить альфа-патч."
+
+msgctxt "InstallKfxDialog|Failure Message"
+msgid "Alpha patch archive test failed. It may be corrupted."
+msgstr "Не удалось проверить альфа-патч. Возможно, он поврежден."
+
+msgctxt "InstallKfxDialog|Progress bar"
+msgid "Downloading: %p% (%vMiB)"
+msgstr "Загрузка: %p% (%v МиБ)"
+
+msgctxt "InstallKfxDialog|MessageBox Title"
+msgid "Installation failed"
+msgstr "Загрузка не удалась"
+
+msgctxt "InstallKfxDialog|MessageBox Title"
+msgid "KeeperFX Alpha builds"
+msgstr "Альфа-сборки KeeperFX"
+
+msgctxt "InstallKfxDialog|MessageBox Text"
+msgid ""
+"Alpha patches may contain new features and changes, but often contain bugs "
+"and unfinished functionality. These patches are mostly meant for testers, "
+"and it is suggested to be part of the Keeper Klan discord if you use them.\n"
+"\n"
+"Are you sure you want to use Alpha patches?"
+msgstr ""
+"Альфа-патчи могут содержать полезные изменения и новые функции, но также "
+"вызывать ошибки. Эти патчи предназначены главным образом для тестирования, и "
+"если вы их устанавливаете, рекомендуем присоединиться к серверу Keeper Klan "
+"в Discord.\n"
+"\n"
+"Вы уверены, что хотите использовать альфа-патчи?"
+
+msgctxt "InstallKfxDialog|MessageBox Title"
+msgid "Uninstall KeeperFX"
+msgstr "Удаление KeeperFX"
+
+msgctxt "InstallKfxDialog|MessageBox Text"
+msgid ""
+"Do you want to uninstall KeeperFX?\n"
+"\n"
+"This will remove any leftover files."
+msgstr ""
+"Вы точно хотите удалить KeeperFX?\n"
+"\n"
+"Все оставшиеся файлы будут удалены."
+
+msgctxt "InstallKfxDialog|MessageBox Title"
+msgid "Confirmation"
+msgstr "Подтверждение"
+
+msgctxt "InstallKfxDialog|MessageBox Text"
+msgid ""
+"Are you sure?\n"
+"\n"
+"You will be unable to play KeeperFX."
+msgstr ""
+"Вы уверены?\n"
+"\n"
+"Вы не сможете играть в KeeperFX."
+
+msgctxt "InstallKfxDialog|Progress bar"
+msgid "Copying: %p%"
+msgstr "Копирование: %p%"
+
+#, qt-format
+msgctxt "InstallKfxDialog|Failure Message"
+msgid "Failed to create destination directory: %1"
+msgstr "Не удалось создать директорию назначения: %1"
+
+#, qt-format
+msgctxt "InstallKfxDialog|"
+msgid "Failed to move file: %1"
+msgstr "Не удалось переместить файл: %1"
+
+msgctxt "InstallKfxDialog|MessageBox Text"
+msgid "KeeperFX has been successfully installed!"
+msgstr "KeeperFX успешно установлен."
+
+msgctxt "KfxVersion|Release Type"
+msgid "Unknown"
+msgstr "Неизвестный"
+
+msgctxt "KfxVersion|Release Type"
+msgid "Stable"
+msgstr "Стабильная"
+
+msgctxt "KfxVersion|Release Type"
+msgid "Alpha"
+msgstr "Альфа"
+
+msgctxt "KfxVersion|Release Type"
+msgid "Prototype"
+msgstr "Прототип"
+
+msgctxt "KfxVersion|Release Type"
+msgid "Development"
+msgstr "В разработке"
+
+msgctxt "LauncherMainWindow|"
+msgid "KeeperFX Launcher"
+msgstr "Центр управления KeeperFX"
+
+msgctxt "LauncherMainWindow|Header"
+msgid "Latest workshop items"
+msgstr "Свежие обновления в Мастерской"
+
+msgctxt "LauncherMainWindow|Header"
+msgid "Latest News"
+msgstr "Последние новости"
+
+msgctxt "LauncherMainWindow|Button"
+msgid "Settings"
+msgstr "Настройки"
+
+msgctxt "LauncherMainWindow|Button"
+msgid "Mods"
+msgstr "Моды"
+
+msgctxt "LauncherMainWindow|Button"
+msgid "Workshop"
+msgstr "Мастерская"
+
+msgctxt "LauncherMainWindow|Button"
+msgid "Replays"
+msgstr "Реплеи"
+
+msgctxt "LauncherMainWindow|Button tooltip text"
+msgid "Check for updates"
+msgstr "Проверить обновления"
+
+msgctxt "LauncherMainWindow|Button tooltip text"
+msgid "Open log file"
+msgstr "Открыть файл журнала"
+
+msgctxt "LauncherMainWindow|Button tooltip text"
+msgid "Open game folder"
+msgstr "Открыть директорию игры"
+
+msgctxt "LauncherMainWindow|Social button tooltip text"
+msgid "Discord - Keeper Klan (English)"
+msgstr "Сервер Keeper Klan в Discord (англ.)"
+
+msgctxt "LauncherMainWindow|Button"
+msgid "Play"
+msgstr "Запуск"
+
+msgctxt "LauncherMainWindow|Version label tooltip text"
+msgid "Click to check for updates"
+msgstr "Проверить наличие обновлений KeeperFX"
+
+msgctxt "LauncherMainWindow|Fallback text label"
+msgid "Loading..."
+msgstr "Загрузка..."
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "KeeperFX Launcher"
+msgstr "Центр управления KeeperFX"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"This launcher version is a prototype and should only be used for testing."
+msgstr ""
+"Это тестовая версия Центра управления. Не рекомендуется использовать её в "
+"качестве постоянной."
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "KeeperFX Error"
+msgstr "Ошибки KeeperFX"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"The launcher has detected that it might have been installed in the original "
+"Dungeon Keeper directory. There is a chance you will encounter issues and "
+"will be unable to play the game.\n"
+"\n"
+"KeeperFX should be installed in its own directory as it is a standalone game."
+msgstr ""
+"Центр управления обнаружил, что он, вероятно, был установлен в исходную "
+"папку игры «Хранитель подземелий». Такой вариант установки может вызвать "
+"проблемы вплоть до полной неработоспособности игры.\n"
+"\n"
+"Установите KeeperFX в отдельную директорию, так как это самостоятельный "
+"продукт."
+
+msgctxt "LauncherMainWindow|Messagebox Checkbox label"
+msgid "Don't show this again"
+msgstr "Больше не показывать это сообщение"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"The launcher failed to determine the version of KeeperFX. Your installation "
+"may be corrupted or outdated.\n"
+"\n"
+"Would you like to reinstall KeeperFX?"
+msgstr ""
+"Центр управления не смог определить версию KeeperFX. Игра может быть "
+"установлена некорректно, или её версия устарела.\n"
+"\n"
+"Хотите переустановить KeeperFX?"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"The launcher failed to grab the version of KeeperFX. Please report this "
+"error to the KeeperFX team."
+msgstr ""
+"Центр управления не смог загрузить сборку KeeperFX. Сообщите об ошибке "
+"разработчикам KeeperFX."
+
+msgctxt "LauncherMainWindow|Menu"
+msgid "Play campaign"
+msgstr "Кампания"
+
+msgctxt "LauncherMainWindow|Menu"
+msgid "Load save game"
+msgstr "Загрузить сохраненную игру"
+
+msgctxt "LauncherMainWindow|Menu"
+msgid "Direct connect (MP)"
+msgstr "Прямое подключение (МП)"
+
+msgctxt "LauncherMainWindow|Menu"
+msgid "Start without mods"
+msgstr "Запуск с отключенными модами"
+
+msgctxt "LauncherMainWindow|Menu"
+msgid "Heavylog"
+msgstr "Детальное журналирование"
+
+msgctxt "LauncherMainWindow|Button text"
+msgid "Play (hvlog)"
+msgstr "Запуск (жур.)"
+
+msgctxt "LauncherMainWindow|Button text"
+msgid "Play"
+msgstr "Запуск"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"The launcher is unable to find 'keeperfx.exe'.\n"
+"\n"
+"Do you want to download and install KeeperFX?"
+msgstr ""
+"Центр управления не обнаружил файл keeperfx.exe.\n"
+"\n"
+"Хотите загрузить и установить KeeperFX?"
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "Confirmation"
+msgstr "Подтверждение"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"Are you sure?\n"
+"\n"
+"You will be unable to play KeeperFX."
+msgstr ""
+"Вы уверены?\n"
+"\n"
+"Вы не сможете играть в KeeperFX."
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "Language has changed"
+msgstr "Язык изменен"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"The launcher has to restart to change its language. Do you want to do that "
+"now?"
+msgstr ""
+"Для изменения языка необходимо перезапустить Центр управления. Сделать это "
+"сейчас?"
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "KeeperFX Update"
+msgstr "Обновление KeeperFX"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid "You are already on the latest version!"
+msgstr "У вас уже установлена актуальная версия игры."
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"Unable to grab latest KeeperFX version from the website. Try again later.\n"
+"\n"
+"If the issue persists, check your internet connection and firewall settings."
+msgstr ""
+"Не удалось скачать актуальную версию KeeperFX. Попробуйте позже.\n"
+"\n"
+"Если проблема повторяется, проверьте настройки сети и брандмауэра."
+
+msgctxt "LauncherMainWindow|MessageBox Title"
+msgid "KeeperFX Verification Error"
+msgstr "Ошибка проверки KeeperFX"
+
+#, qt-format
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"The launcher failed to verify the signature of:\n"
+"\n"
+"%1\n"
+"It is highly suggested to only use official KeeperFX files."
+msgstr ""
+"Центр управления не смог проверить цифровую подпись следующих файлов:\n"
+"\n"
+"%1\n"
+"Используйте только официальные файлы KeeperFX."
+
+#, qt-format
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid ""
+"Failed to start KeeperFX.\n"
+"\n"
+"Error:\n"
+"%1"
+msgstr ""
+"Не удалось запустить KeeperFX.\n"
+"\n"
+"Ошибка:\n"
+"%1"
+
+msgctxt "LauncherMainWindow|MessageBox Text"
+msgid "Failed to start KeeperFX. Unknown error."
+msgstr "Не удалось запустить KeeperFX. Неизвестная ошибка."
+
+msgctxt "LauncherMainWindow|Window Title"
+msgid "KeeperFX Launcher"
+msgstr "Центр управления KeeperFX"
+
+msgctxt "LauncherMainWindow|Messagebox Title"
+msgid "KeeperFX Version Mismatch"
+msgstr "Несоответствие версии KeeperFX"
+
+#, qt-format
+msgctxt "LauncherMainWindow|Messagebox Text"
+msgid ""
+"The launcher has detected that the installed KeeperFX release type (%1) does "
+"not match what the launcher was expecting (%2).\n"
+"\n"
+"This can happen if you manually installed a KeeperFX version after "
+"installing the game using the launcher, or if you changed your release type "
+"in the settings without letting the launcher update the files.\n"
+"\n"
+"Please select which version you want to use:"
+msgstr ""
+"Центр управления обнаружил, что установленная версия KeeperFX (%1) не "
+"соответствует указанной в Центре управления релизной ветке (%2).\n"
+"\n"
+"Такое может произойти в результате ручной установки KeeperFX поверх уже "
+"существующей версии игры, созданной Центром обновления; или в настройках "
+"Центра управления была изменена релизная ветка, но Центр обновления не смог "
+"обновить локальные файлы.\n"
+"\n"
+"Выберите версию, которую будете использовать в дальнейшем."
+
+msgctxt "ReplayDialog|Dialog Title"
+msgid "Replays"
+msgstr "Реплеи"
+
+msgctxt "ReplayDialog|Header"
+msgid "Replays"
+msgstr "Доступные реплеи"
+
+msgctxt "ReplayDialog|Information Label"
+msgid ""
+"These are your stored replays. You can either play them directly in KeeperFX "
+"or copy them to your clipboard if you want to share them with others."
+msgstr ""
+"Список сохраненных реплеев. Их можно запускать прямо из KeeperFX или "
+"копировать в буфер обмена, чтобы поделиться с другими игроками."
+
+msgctxt "ReplayDialog|Button"
+msgid "Close"
+msgstr "Закрыть"
+
+msgctxt "ReplayDialog|Button"
+msgid "Copy to Clipboard"
+msgstr "Скопировать в буфер обмена"
+
+msgctxt "ReplayDialog|Button"
+msgid "Start"
+msgstr "Запуск"
+
+msgctxt "ReplayDialog|Replay Table Column Header"
+msgid "Type"
+msgstr "Тип"
+
+msgctxt "ReplayDialog|Replay Table Column Header"
+msgid "Name"
+msgstr "Имя"
+
+msgctxt "ReplayDialog|Replay Table Column Header"
+msgid "Size"
+msgstr "Размер"
+
+msgctxt "ReplayDialog|Replay Table Column Header"
+msgid "Date"
+msgstr "Дата"
+
+msgctxt "ReplayDialog|Replay Type"
+msgid "Unknown"
+msgstr "Неизвестный"
+
+msgctxt "ReplayDialog|Replay Type"
+msgid "Freeplay"
+msgstr "Одиночная карта"
+
+msgctxt "ReplayDialog|Replay Type"
+msgid "Campaign"
+msgstr "Кампания"
+
+msgctxt "ReplayDialog|Replay Type"
+msgid "Multiplayer"
+msgstr "Мультиплеер"
+
+#, qt-format
+msgctxt "ReplayDialog|Replay Filesize"
+msgid "%1 KiB"
+msgstr "%1 КиБ"
+
+msgctxt "ReplayDialog|Button State Text"
+msgid "Copied!"
+msgstr "Скопировано."
+
+msgctxt "ScanNetworkDialog|Window Title"
+msgid "Scan Network"
+msgstr "Сканирование сети"
+
+msgctxt "ScanNetworkDialog|Header"
+msgid "Scan Network"
+msgstr "Сканировать сеть"
+
+msgctxt "ScanNetworkDialog|Information Label"
+msgid ""
+"Scan your local network (LAN) for open ENET lobbies. The other person should "
+"be on the same network and must have opened a game lobby in KeeperFX. "
+"(Multiplayer -> ENET -> Create Game). When the other person has an open "
+"lobby this tool should be able to find their IP address."
+msgstr ""
+"Сканирует локальную сеть (LAN) на наличие запущенных ENET-лобби. Другой "
+"пользователь должен находиться в той же сети и открыть игровое лобби в "
+"KeeperFX. (Многопользовательский режим -> ENET -> Создать игру). Когда у "
+"другого пользователя открыто лобби, эта утилита ищет его IP-адрес."
+
+msgctxt "ScanNetworkDialog|Button"
+msgid "Close"
+msgstr "Закрыть"
+
+msgctxt "ScanNetworkDialog|Button"
+msgid "Scan"
+msgstr "Сканировать"
+
+msgctxt "ScanNetworkDialog|Button"
+msgid "Connect"
+msgstr "Подключиться"
+
+msgctxt "ScanNetworkDialog|Table Header"
+msgid "IP Address"
+msgstr "IP-адрес"
+
+msgctxt "ScanNetworkDialog|Table Header"
+msgid "Hostname"
+msgstr "Имя хоста"
+
+msgctxt "ScanNetworkDialog|Button text"
+msgid "Stop Scan"
+msgstr "Прервать сканирование"
+
+msgctxt "ScanNetworkDialog|Progress bar"
+msgid "Scanning..."
+msgstr "Сканирование..."
+
+msgctxt "ScanNetworkDialog|Button text"
+msgid "Scan"
+msgstr "Сканировать"
+
+msgctxt "ScanNetworkDialog|Progress bar"
+msgid "Scanning: %p% (%v/%m)"
+msgstr "Сканирование: %p% (%v/%m)"
+
+msgctxt "SettingsDialog|Window Title"
+msgid "KeeperFX Settings"
+msgstr "Настройки KeeperFX"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Game"
+msgstr "Игра"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Game language"
+msgstr "Язык игры"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Display Intro"
+msgstr "Показывать начальную заставку"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Display splash screens"
+msgstr "Отображать загрузочные экраны"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable Cheats"
+msgstr "Включить читы"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable Censorship"
+msgstr "Включить цензуру"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Screenshot type"
+msgstr "Формат скриншотов"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Automatically enable flee"
+msgstr "Автоматически включать «Спасаться бегством»"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Automatically enable imprison"
+msgstr "Автоматически включать «Заключать в тюрьму»"
+
+msgctxt "SettingsDialog|Max. Zoom Distance Tooltip"
+msgid ""
+"The maximum distance you can zoom out the camera [0 - 100].\n"
+"\n"
+"0 = original Dungeon Keeper maximum distance\n"
+"60 = KeeperFX default distance\n"
+"100 = KeeperFX maximum distance\n"
+"\n"
+"Note: This is not a percentage"
+msgstr ""
+"Максимальная высота, на которую можно поднять камеру [0–100].\n"
+"\n"
+"- 0 – как в оригинальной Dungeon Keeper;\n"
+"- 60 – высота KeeperFX по умолчанию;\n"
+"- 100 – максимально возможная в KeeperFX высота камеры.\n"
+"\n"
+"Значение указывается в игровых единицах."
+
+msgctxt "SettingsDialog|"
+msgid ""
+"Max. zoom distance\n"
+"(default = 60)"
+msgstr ""
+"Макс. отдаление камеры\n"
+"(по умолчанию – 60)"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid ""
+"Gameturns per second\n"
+"(default = 20)"
+msgstr ""
+"Игровых тиков в секунду\n"
+"(по умолчанию – 20)"
+
+msgctxt "SettingsDialog|"
+msgid "Campaign max. replays"
+msgstr "Макс. реплеев кампании"
+
+msgctxt "SettingsDialog|"
+msgid "Freeplay max. replays"
+msgstr "Макс. реплеев одиночных карт"
+
+msgctxt "SettingsDialog|"
+msgid "Multiplayer max. replays"
+msgstr "Макс. реплеев мультиплеера"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid ""
+"Replay max. filesize\n"
+"(0 = unlimited)"
+msgstr ""
+"Макс. размер файла реплея\n"
+"(0 – без ограничений)"
+
+#. Shorthand for 'kibibyte'
+msgctxt "SettingsDialog|Measurement Unit Label"
+msgid "KiB"
+msgstr "КиБ"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Game launch options"
+msgstr "Опции запуска игры"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable delta time"
+msgstr "Включить дельту времени"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Freeze game when not focused"
+msgstr "Включать паузу, если окно игры не активно"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Automatically save replays"
+msgstr "Автоматически сохранять реплеи"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Exit on LUA error"
+msgstr "Выход при ошибке LUA"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Graphics"
+msgstr "Графика"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "View 2"
+msgstr "Режим 2"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "View 1"
+msgstr "Режим 1"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Display mode"
+msgstr "Режим отображения"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "View 3"
+msgstr "Режим 3"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Resolution"
+msgstr "Разрешение"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Menu"
+msgstr "Меню"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Movies"
+msgstr "Ролики"
+
+#. Should be kept very short
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Failsafe"
+msgstr "Безопасное"
+
+#. This is shown under the views configuration
+msgctxt "SettingsDialog|Information Label"
+msgid ""
+"<i>Switch between in-game views by pressing <strong>Alt + R</strong></i>"
+msgstr ""
+"<i>Чтобы переключаться между режимами во время игры, нажимайте <strong>Alt + "
+"R</strong>.</i>"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Display monitor"
+msgstr "Выбор монитора"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid ""
+"Max. FPS\n"
+"(0 = unlimited)"
+msgstr ""
+"Ограничение кадровой частоты\n"
+"(0 – без ограничений)"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Resize Movies"
+msgstr "Отображение заставок"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Smoothen edges"
+msgstr "Билинейное сглаживание"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Automatically determine max. FPS"
+msgstr "Автоматически задавать предел кадровой частоты"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Rendering Backend"
+msgstr "Рендеринг"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable VSync"
+msgstr "Включить вертикальную синхронизацию"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Creature flower size"
+msgstr "Размер цветка здоровья"
+
+#. Shorthand for 'pixel(s)'
+msgctxt "SettingsDialog|Measurement Unit Label"
+msgid "px"
+msgstr "пикс."
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Hand size"
+msgstr "Размер Руки зла"
+
+#. Shorthand for 'percent'
+msgctxt "SettingsDialog|Measurement Unit Label"
+msgid "%"
+msgstr "%"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Select box line size"
+msgstr "Толщина линии блока выбора"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid ""
+"GUI blink rate\n"
+"(default = 1)"
+msgstr ""
+"Скорость мерцания интерфейса\n"
+"(по умолчанию – 1)"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid ""
+"Neutral flash rate\n"
+"(default = 1)"
+msgstr ""
+"Частота мерцания нейтр. тайлов\n"
+"(по умолчанию – 1)"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable map fade animation"
+msgstr "Эффект угасания карты"
+
+msgctxt "SettingsDialog|Viewport Mode Tooltip"
+msgid ""
+"How the in-game view shares the screen with the sidebar, in every view.\n"
+"\n"
+"Original = the view stops at the sidebar\n"
+"Full = the view spans the screen and the sidebar is drawn over it\n"
+"Full (Letterbox) = same as 'Full' but with black under the sidebar"
+msgstr ""
+"Определяет, как отрисовывается панель команд.\n"
+"\n"
+"- Оригинал – Панель команд находится сбоку от игрового поля;\n"
+"- На весь экран – Игровое поле занимает весь экран. Панель команд "
+"накладывается поверх него;\n"
+"- Леттербоксинг – Аналогично режиму «На весь экран», но место под панелью "
+"команд закрашивается черным."
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Viewport mode"
+msgstr "Игровое поле"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Sound"
+msgstr "Звук"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Mute audio when game is not focused"
+msgstr "Отключать звук, когда окно игры не активно"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Pause music when game is paused"
+msgstr "Приостанавливать музыку в режиме паузы"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Use CD music instead of local files"
+msgstr "Проигрывать треки с CD-диска вместо локальных файлов"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable sound"
+msgstr "Включить звук"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Frequency"
+msgstr "Частота воспроизведения"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Volume"
+msgstr "Громкость"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable atmospheric sounds"
+msgstr "Включить атмосферные фоновые звуки"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Input"
+msgstr "Устройства ввода"
+
+msgctxt "SettingsDialog|Slider Title Label"
+msgid "Mouse sensitivity"
+msgstr "Чувствительность мыши"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Zoom towards cursor"
+msgstr "Масштабир. отн. курсора"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Rotate around cursor"
+msgstr "Вращение вокруг курсора"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Raw mouse input"
+msgstr "Прямой ввод с мыши"
+
+#. "Capture Cursor"
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Unlock cursor from game window"
+msgstr "Не привязывать положение курсора к окну игры"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Unlock cursor when game is paused"
+msgstr "Разблокировать курсор в режиме паузы"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Lock cursor in possession"
+msgstr "Захват курсора при вселении в создание"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Screen edge camera panning"
+msgstr "Панорамирование камеры по краю экрана"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Default tag mode"
+msgstr "Выделять по умолчанию"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable tag mode toggle (Right-click)"
+msgstr "Включить переключение режима выделения (ПКМ)"
+
+msgctxt "SettingsDialog|Relative Mouse Mode Tooltip"
+msgid ""
+"Mouse locking method.\n"
+"\n"
+"- Enabled: Use SDL relative (\"raw\") mode for 1:1 deltas\n"
+"- Disabled: Use older grab-and-warp scheme (confines and re-centers the "
+"cursor)\n"
+"\n"
+"Disable this if the mouse feels off."
+msgstr ""
+"Способ захвата событий мыши.\n"
+"\n"
+"- Вкл.: Относительный («сырой») режим SDL для дельт 1:1;\n"
+"- Выкл.: Устаревшая схема «захват и перемещение» (ограничивает положение "
+"курсора площадью окна и центрирует курсор).\n"
+"\n"
+"Отключите эту опцию, если курсор мыши ведет себя некорректно."
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable relative mouse mode"
+msgstr "Включить относительный режим мыши"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Multiplayer"
+msgstr "Многопользовательский режим"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Matchmaking server"
+msgstr "Сервер подбора игроков"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "Multiplayer port"
+msgstr "Сетевой порт"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable matchmaking"
+msgstr "Включить матчмейкинг"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "Launcher"
+msgstr "Центр управления"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Launcher language"
+msgstr "Язык Центра управления"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Play button theme"
+msgstr "Тема кнопки «Запуск»"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable website integration"
+msgstr "Включить интеграцию с веб-сайтом"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable crash reporting"
+msgstr "Включить отправку отчетов об ошибках"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Open on same screen as game"
+msgstr "Открывать на том же экране, что и игру"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Show directory name in window title"
+msgstr "Отображать директорию игры в заголовке окна"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "KeeperFX Release Channel"
+msgstr "Релизная ветка KeeperFX"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid ""
+"Update check interval in days\n"
+"(0 = always check)"
+msgstr ""
+"Частота проверки (дн.)\n"
+"(0 – всегда проверять)"
+
+msgctxt "SettingsDialog|Dropdown Title Label"
+msgid "Download Server"
+msgstr "Сервер загрузки"
+
+msgctxt "SettingsDialog|Button"
+msgid "Show launcher command line options"
+msgstr "Показать опции командной строки Центра управления"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Automatically check for KeeperFX updates"
+msgstr "Автоматически проверять обновления KeeperFX"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Update automatically"
+msgstr "Обновлять автоматически"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Backup savefiles during update"
+msgstr "Резервное копирование файлов сохранений при обновлении"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Automatically remove leftover files"
+msgstr "Автоматически удалять оставшиеся файлы"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "API"
+msgstr "API"
+
+msgctxt "SettingsDialog|Checkbox Toggle"
+msgid "Enable API"
+msgstr "Активировать API"
+
+msgctxt "SettingsDialog|Textinput Title Label"
+msgid "API port"
+msgstr "Порт API"
+
+msgctxt "SettingsDialog|Tab Title"
+msgid "About"
+msgstr "О программе"
+
+msgctxt "SettingsDialog|Dialog Button"
+msgid "Open config file"
+msgstr "Открыть файл настроек"
+
+msgctxt "SettingsDialog|Renderer Dropdown"
+msgid "Software"
+msgstr "Программный"
+
+msgctxt "SettingsDialog|Renderer Dropdown"
+msgid "OpenGL"
+msgstr "OpenGL"
+
+msgctxt "SettingsDialog|Zoom To Cursor Dropdown"
+msgid "Never"
+msgstr "Никогда"
+
+msgctxt "SettingsDialog|Zoom To Cursor Dropdown"
+msgid "Mousewheel only"
+msgstr "Только колесом прокрутки"
+
+msgctxt "SettingsDialog|Zoom To Cursor Dropdown"
+msgid "Mousewheel & Keyboard"
+msgstr "Колесом прокрутки и клавишами"
+
+msgctxt "SettingsDialog|Rotate Around Cursor Dropdown"
+msgid "Never"
+msgstr "Никогда"
+
+msgctxt "SettingsDialog|Rotate Around Cursor Dropdown"
+msgid "Always"
+msgstr "Всегда"
+
+msgctxt "SettingsDialog|Rotate Around Cursor Dropdown"
+msgid "Movement Keys Only (While holding Ctrl)"
+msgstr "Клав. перем. камеры (с Ctrl)"
+
+msgctxt "SettingsDialog|Rotate Around Cursor Dropdown"
+msgid "Rotation Keys Only"
+msgstr "Клав. вращения камеры"
+
+msgctxt "SettingsDialog|Viewport Mode Dropdown"
+msgid "Original"
+msgstr "Оригинал"
+
+msgctxt "SettingsDialog|Viewport Mode Dropdown"
+msgid "Full"
+msgstr "На весь экран"
+
+msgctxt "SettingsDialog|Viewport Mode Dropdown"
+msgid "Full (Letterbox)"
+msgstr "Леттербоксинг"
+
+msgctxt "SettingsDialog|Default Tag Mode Dropdown"
+msgid "Single"
+msgstr "По одному"
+
+msgctxt "SettingsDialog|Default Tag Mode Dropdown"
+msgid "Drag"
+msgstr "Удержанием"
+
+msgctxt "SettingsDialog|Default Tag Mode Dropdown"
+msgid "Remember Last"
+msgstr "Запоминать последний режим"
+
+msgctxt "SettingsDialog|Play Button Theme Dropdown"
+msgid "Qt Fusion Dark"
+msgstr "Темная Fusion Qt"
+
+msgctxt "SettingsDialog|Play Button Theme Dropdown"
+msgid "DK Orange (default)"
+msgstr "Оранжевая DK (по умолч.)"
+
+msgctxt "SettingsDialog|Resize Movies Dropdown"
+msgid "Fit (default)"
+msgstr "Заполнение (по умолч.)"
+
+msgctxt "SettingsDialog|Resize Movies Dropdown"
+msgid "Off"
+msgstr "Без обработки"
+
+msgctxt "SettingsDialog|Resize Movies Dropdown"
+msgid "Stretch"
+msgstr "Растяжение"
+
+msgctxt "SettingsDialog|Resize Movies Dropdown"
+msgid "Crop"
+msgstr "Обрезание"
+
+msgctxt "SettingsDialog|Resize Movies Dropdown"
+msgid "Pixel perfect"
+msgstr "Пиксель в пиксель"
+
+msgctxt "SettingsDialog|Resolution Dropdown"
+msgid "Match desktop"
+msgstr "Как у рабочего стола"
+
+msgctxt "SettingsDialog|Resolution Dropdown"
+msgid "Custom..."
+msgstr "Пользовательское"
+
+msgctxt "SettingsDialog|Display Mode Dropdown"
+msgid "Fullscreen"
+msgstr "Полноэкранный"
+
+msgctxt "SettingsDialog|Display Mode Dropdown"
+msgid "Windowed"
+msgstr "Оконный"
+
+msgctxt "SettingsDialog|Atmosphere Frequency Dropdown"
+msgid "Low"
+msgstr "Низкая"
+
+msgctxt "SettingsDialog|Atmosphere Frequency Dropdown"
+msgid "Medium"
+msgstr "Средняя"
+
+msgctxt "SettingsDialog|Atmosphere Frequency Dropdown"
+msgid "High"
+msgstr "Высокая"
+
+msgctxt "SettingsDialog|Atmosphere Volume Dropdown"
+msgid "Low"
+msgstr "Низкая"
+
+msgctxt "SettingsDialog|Atmosphere Volume Dropdown"
+msgid "Medium"
+msgstr "Средняя"
+
+msgctxt "SettingsDialog|Atmosphere Volume Dropdown"
+msgid "High"
+msgstr "Высокая"
+
+msgctxt "SettingsDialog|Game Release Channel"
+msgid "Stable (Default)"
+msgstr "Стабильная (по умолч.)"
+
+msgctxt "SettingsDialog|Game Release Channel"
+msgid "Alpha"
+msgstr "Альфа"
+
+#, qt-format
+msgctxt "SettingsDialog|Mouse Sensitivity Slider Percentage Label"
+msgid "%1%"
+msgstr "%1%"
+
+msgctxt "SettingsDialog|Link"
+msgid "Set to default server"
+msgstr "Вернуть сервер по умолчанию"
+
+#, qt-format
+msgctxt "SettingsDialog|About Label"
+msgid "KeeperFX v%1"
+msgstr "KeeperFX v%1"
+
+#, qt-format
+msgctxt "SettingsDialog|About Label"
+msgid "KeeperFX Launcher v%1"
+msgstr "Центр управления KeeperFX v%1"
+
+msgctxt "SettingsDialog|About Label"
+msgid "Launcher Libraries:"
+msgstr "Использованные библиотеки:"
+
+#, qt-format
+msgctxt "SettingsDialog|About Label"
+msgid "Join us on Discord: %1"
+msgstr "Присоединяйтесь к нам в Discord: %1"
+
+#, qt-format
+msgctxt "SettingsDialog|Label Contributor List"
+msgid "KeeperFX Contributors: %1"
+msgstr "Разработчики KeeperFX: %1"
+
+#, qt-format
+msgctxt "SettingsDialog|Label Translator List"
+msgid "KeeperFX Launcher Translators: %1"
+msgstr "Переводчики Центра управления: %1"
+
+msgctxt "SettingsDialog|MessageBox Text"
+msgid "Multiplayer port and API port must be different when API is enabled"
+msgstr "Сетевой порт и порт API не должны совпадать."
+
+msgctxt "SettingsDialog|MessageBox Title"
+msgid "Invalid Settings"
+msgstr "Некорректные настройки"
+
+msgctxt "SettingsDialog|MessageBox Text"
+msgid "Cannot save settings due to the following errors:"
+msgstr ""
+"Не удалось сохранить настройки. Конфигурация содержит следующие ошибки:"
+
+msgctxt "SettingsDialog|MessageBox Title"
+msgid "KeeperFX Settings"
+msgstr "Настройки KeeperFX"
+
+msgctxt "SettingsDialog|MessageBox Text"
+msgid ""
+"Do you want to restore the default settings?\n"
+"\n"
+"All your custom settings will be lost."
+msgstr ""
+"Хотите восстановить настройки по умолчанию?\n"
+"\n"
+"Все текущие настройки будут сброшены."
+
+msgctxt "SettingsDialog|MessageBox Text"
+msgid "The default settings have been restored."
+msgstr "Настройки по умолчанию восстановлены."
+
+msgctxt "SettingsDialog|MessageBox Text"
+msgid ""
+"One or more settings have been changed. Are you sure you want to return "
+"without saving?"
+msgstr ""
+"Один или несколько параметров изменены. Вы уверены, что хотите вернуться в "
+"главное окно без сохранения?"
+
+msgctxt "SettingsDialog|MessageBox Title"
+msgid "Launcher command line options"
+msgstr "Опции командной строки Центра управления"
+
+msgctxt "SettingsDialog|Custom resoltuion dialog title"
+msgid "Custom resolution"
+msgstr "Выбор разрешения"
+
+msgctxt "SettingsDialog|Custom resolution dialog label"
+msgid "Width:"
+msgstr "Ширина:"
+
+msgctxt "SettingsDialog|Custom resolution dialog label"
+msgid "Height:"
+msgstr "Высота:"
+
+#, qt-format
+msgctxt "SettingsDialog|Resolution Dropdown"
+msgid "%1 x %2 (Custom)"
+msgstr "%1 x %2 (польз.)"
+
+msgctxt "UpdateDialog|Window Title"
+msgid "KeeperFX Update"
+msgstr "Обновление KeeperFX"
+
+msgctxt "UpdateDialog|Header"
+msgid "New KeeperFX version found!"
+msgstr "Обнаружено обновление KeeperFX"
+
+msgctxt "UpdateDialog|Button"
+msgid "Cancel"
+msgstr "Отмена"
+
+msgctxt "UpdateDialog|Button"
+msgid "Update"
+msgstr "Обновить"
+
+msgctxt "UpdateDialog|Appended to version string"
+msgid "Alpha"
+msgstr "Альфа"
+
+msgctxt "UpdateDialog|Label"
+msgid "Current version:"
+msgstr "Текущая версия:"
+
+msgctxt "UpdateDialog|Label"
+msgid "New version:"
+msgstr "Новая версия:"
+
+msgctxt "UpdateDialog|Progress bar"
+msgid "Downloading: %p% (%vMiB)"
+msgstr "Загрузка: %p% (%v МиБ)"
+
+msgctxt "UpdateDialog|MessageBox Title"
+msgid "Update failed"
+msgstr "Обновление не удалось"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid ""
+"It seems the launcher does not have permission to write files in the "
+"application directory."
+msgstr ""
+"Центру управления недостаточно прав для записи файлов в директорию "
+"приложения."
+
+msgctxt "UpdateDialog|Failure Message"
+msgid "You might have to start the launcher with administrator rights."
+msgstr "Запустите Центр управления с правами администратора."
+
+msgctxt "UpdateDialog|Failure Message"
+msgid ""
+"It seems that KeeperFX is currently running. The updater cannot replace the "
+"game files while it is open.\n"
+"\n"
+"Please close KeeperFX before trying again.\n"
+"\n"
+"If the issue persists, restart your PC and retry the update."
+msgstr ""
+"Обнаружена запущенная игра. Обновление файлов невозможно при запущенном "
+"KeeperFX.\n"
+"\n"
+"Закройте KeeperFX и повторите попытку.\n"
+"\n"
+"Если ошибка повторяется, перезагрузите систему и попробуйте обновить игру "
+"еще раз."
+
+msgctxt "UpdateDialog|Failure Message"
+msgid ""
+"It seems that the legacy KeeperFX launcher is currently running.\n"
+"\n"
+"Please close it before trying again.\n"
+"\n"
+"If the issue persists, restart your PC and retry the update."
+msgstr ""
+"Возможно, запущен устаревший лончер KeeperFX из стандартного дистрибутива.\n"
+"\n"
+"Закройте его и повторите попытку.\n"
+"\n"
+"Если ошибка повторяется, перезагрузите систему и попробуйте обновить игру "
+"еще раз."
+
+msgctxt "UpdateDialog|Failure Message"
+msgid ""
+"The updater failed to grab the latest stable version which is required for "
+"this alpha."
+msgstr ""
+"Не удалось скачать последнюю стабильную версию, необходимую для установки "
+"альфа-патча."
+
+msgctxt "UpdateDialog|Title label"
+msgid "Updating..."
+msgstr "Обновление..."
+
+msgctxt "UpdateDialog|Progress bar (%p=percentage)"
+msgid "Comparing: %p%"
+msgstr "Сравнение: %p%"
+
+#, qt-format
+msgctxt "UpdateDialog|Failure Message"
+msgid "Failed to open file: %1"
+msgstr "Не удалось открыть файл: %1"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid "Archive download failed."
+msgstr "Сбой при загрузке архива."
+
+msgctxt "UpdateDialog|Progress bar"
+msgid "Extracting: %p%"
+msgstr "Извлечение: %p%"
+
+msgctxt "UpdateDialog|Title label"
+msgid "Update complete!"
+msgstr "Обновление установлено."
+
+#, qt-format
+msgctxt "UpdateDialog|MessageBox Text"
+msgid "KeeperFX has been successfully updated to version %1!"
+msgstr "KeeperFX успешно обновлен до версии %1."
+
+msgctxt "UpdateDialog|MessageBox Title"
+msgid "Confirmation"
+msgstr "Подтверждение"
+
+msgctxt "UpdateDialog|MessageBox Text"
+msgid "Are you sure you want to cancel the update?"
+msgstr "Вы уверены, что хотите отменить обновление?"
+
+msgctxt "UpdateDialog|Failure message"
+msgid "Failed to create temp directory"
+msgstr "Не удалось создать временную директорию"
+
+msgctxt "UpdateDialog|Progress bar"
+msgid "Downloading: %p%"
+msgstr "Загрузка: %p%"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid "The temporary directory does not exist"
+msgstr "Временная папка не существует"
+
+msgctxt "UpdateDialog|Progress bar"
+msgid "Copying: %p%"
+msgstr "Копирование: %p%"
+
+#, qt-format
+msgctxt "UpdateDialog|Failure Message"
+msgid "File does not exist: %1"
+msgstr "Файл не существует: %1"
+
+#, qt-format
+msgctxt "UpdateDialog|Failure Message"
+msgid "Failed to create destination directory: %1"
+msgstr "Не удалось создать целевую директорию: %1"
+
+#, qt-format
+msgctxt "UpdateDialog|Failure Message"
+msgid "Failed to remove file (%1): %2"
+msgstr "Не удалось удалить файл (%1): %2"
+
+#, qt-format
+msgctxt "UpdateDialog|Failure Message"
+msgid "Failed to move file (%1): %2"
+msgstr "Не удалось переместить файл (%1): %2"
+
+msgctxt "UpdateDialog|Failure Message"
+msgid ""
+"It is possible an antivirus is causing this problem. Try disabling it and "
+"try again."
+msgstr ""
+"Работа антивируса может вызывать эту ошибку. Отключите его и повторите "
+"попытку."
+
+msgctxt "UpdateDialog|Failure message"
+msgid "Failed to move all downloaded files"
+msgstr "Не удалось переместить загруженные файлы"
+
+msgctxt "main|MessageBox Title"
+msgid "KeeperFX Error"
+msgstr "Ошибка KeeperFX"
+
+msgctxt "main|MessageBox Text"
+msgid ""
+"Failed to determine the KeeperFX version. This is required to submit a crash "
+"report."
+msgstr ""
+"Не удалось определить версию KeeperFX. Отправка сообщения об ошибке "
+"невозможна."
+
+#~ msgctxt "LauncherMainWindow|Menu"
+#~ msgid "Load Replay..."
+#~ msgstr "Загрузить реплей"
+
+#~ msgctxt "LoadReplayDialog|Header"
+#~ msgid "Load Replay"
+#~ msgstr "Загрузка реплея"
+
+#~ msgctxt "LoadReplayDialog|Information Label"
+#~ msgid ""
+#~ "Select a replay to load. KeeperFX will be started and the replay will "
+#~ "automatically start playing."
+#~ msgstr ""
+#~ "Выберите файл реплея для воспроизведения. Запустится KeeperFX, и "
+#~ "выбранный реплей начнет воспроизводиться автоматически."
+
+#~ msgctxt "LoadReplayDialog|Button"
+#~ msgid "Cancel"
+#~ msgstr "Отмена"
+
+#~ msgctxt "ModManagerDialog|"
+#~ msgid "KeeperFX Mod Manager"
+#~ msgstr "Менеджер модов KeeperFX"
+
+#~ msgctxt "ModManagerDialog|Header"
+#~ msgid "Mod Manager"
+#~ msgstr "Менеджер модов"
+
+#~ msgctxt "ModManagerDialog|Info text"
+#~ msgid ""
+#~ "Mods are loaded from top to bottom and you can decide when a mod gets "
+#~ "loaded. It can be after the KeeperFX base game, after the campaign "
+#~ "specific changes, or after the map specific changes. Move them up or down "
+#~ "to change the order."
+#~ msgstr ""
+#~ "Моды загружаются сверху вниз, в порядке, определяемом пользователем. Они "
+#~ "могут загружаться сразу после загрузки KeeperFX, после изменений, "
+#~ "относящихся к кампании, или после изменений, определяемых картой. Порядок "
+#~ "задается путем перемещения модов по списку."
+
+#~ msgctxt "ModManagerDialog|"
+#~ msgid "After Base game"
+#~ msgstr "После ванильной игры"
+
+#~ msgctxt "ModManagerDialog|"
+#~ msgid "<PLACEHOLDER>"
+#~ msgstr "<ЗАГЛУШКА>"
+
+#~ msgctxt "ModManagerDialog|"
+#~ msgid "After Campaign"
+#~ msgstr "После кампании"
+
+#~ msgctxt "ModManagerDialog|"
+#~ msgid "After Map"
+#~ msgstr "После карты"
+
+#~ msgctxt "ModManagerDialog|"
+#~ msgid "Close"
+#~ msgstr "Закрыть"
+
+#~ msgctxt "LauncherMainWindow|Menu"
+#~ msgid "Run packetfile"
+#~ msgstr "Просмотр реплеев"
+
+#~ msgctxt "RunPacketFileDialog|Dialog Title"
+#~ msgid "Run Packetfile"
+#~ msgstr "Выбор реплея"
+
+#~ msgctxt "RunPacketFileDialog|Header"
+#~ msgid "Run Packetfile"
+#~ msgstr "Список реплеев"
+
+#~ msgctxt "RunPacketFileDialog|Notice Label"
+#~ msgid "Packetsave will be disabled when loading a packetfile."
+#~ msgstr "Сохранение реплеев будет отключено при воспроизведении реплея."
+
+#~ msgctxt "RunPacketFileDialog|Button"
+#~ msgid "Cancel"
+#~ msgstr "Отмена"
+
+#~ msgctxt "SettingsDialog|Checkbox Toggle"
+#~ msgid "Enable Packetsave"
+#~ msgstr "Включить запись реплеев"
+
+#~ msgctxt "SettingsDialog|Textinput Title Label"
+#~ msgid "Packetsave filename"
+#~ msgstr "Имя файла реплея"
+
+#~ msgctxt "SettingsDialog|Textinput Title Label"
+#~ msgid "Command character"
+#~ msgstr "Клавиша вызова консоли"
+
+#~ msgctxt "CDN|Download Server"
+#~ msgid "KeeperFX.net (Default, Germany)"
+#~ msgstr "KeeperFX.net (Германия, станд.)"
+
+#~ msgctxt "CDN|Download Server"
+#~ msgid "Cloudflare CDN (Worldwide)"
+#~ msgstr "Cloudflare CDN (Глобальный)"
+
+#~ msgctxt "LauncherMainWindow|Menu"
+#~ msgid "Scan local network (MP)"
+#~ msgstr "Сканирование локальной сети (МП)"
+
+#~ msgctxt "LauncherMainWindow|Menu"
+#~ msgid "Test internet lobby (MP)"
+#~ msgstr "Проверка интернет-лобби (МП)"

@@ -69,6 +69,7 @@
 #include "observer.h"
 #include "world_colours.h"
 #include "world_stream.h"
+#include "world_attract.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -554,6 +555,8 @@ void remove_thing_from_limbo(struct Thing *thing)
 
 void draw_power_hand(void)
 {
+    if (world_attract_active())
+        return; /* the launcher's background: no keeper's hand over the picture */
     SYNCDBG(17,"Starting");
     const struct PlayerInfo *player = get_displayed_player();
     struct PickedUpOffset *pickoffs;

@@ -286,6 +286,22 @@ static void add_group(int side, MapSlabCoord x, MapSlabCoord y, int level, int c
     g->left = count;
 }
 
+/* test hook KFX_ATTRACT_TEST="level=<n>,zoom=<n>": every battle at about that level, the camera that close and still */
+static int test_level = -1, test_zoom = 0;
+static void read_test(void)
+{
+    if (test_level >= 0)
+        return;
+    test_level = 0;
+    const char *env = getenv("KFX_ATTRACT_TEST");
+    const char *at = (env != NULL) ? strstr(env, "level=") : NULL;
+    if (at != NULL)
+        test_level = atoi(at + 6);
+    at = (env != NULL) ? strstr(env, "zoom=") : NULL;
+    if (at != NULL)
+        test_zoom = atoi(at + 5);
+}
+
 static int near_level(int base)
 {
     const int level = base + (int)arand(31) - 15;
@@ -296,7 +312,8 @@ static void start_scene(void)
 {
     /* the fight is in the cave's middle: the sides are dropped a few slabs apart, in sight of each other */
     const MapSlabCoord cx = A.hx + ARENA_WEST + ARENA_W / 2, cy = A.hy;
-    const int base = 1 + (int)arand(100);
+    read_test();
+    const int base = (test_level > 0) ? test_level : 1 + (int)arand(100);
     #define NEAR_LEVEL near_level(base)
     A.group_count = 0;
     A.scene = (int)arand(6);
@@ -362,7 +379,10 @@ static void move_camera(void)
     pose.y = (MapCoord)((cy * STL_PER_SLB + 1.5f) * COORD_PER_STL);
     A.zoom_base = 2300; /* a good part of the cave in view (the game's range is 520, far, to 12000) */
     pose.zoom[0] = (int32_t)((float)A.zoom_base * (1.0f + 0.22f * sinf(t * 0.0045f)));
-    A.cam_angle += 0.35f;
+    if (test_zoom > 0)
+        pose.zoom[0] = test_zoom;
+    else
+        A.cam_angle += 0.35f;
     pose.yaw[0] = ((int32_t)A.cam_angle) & ANGLE_MASK;
     ustate->dungeon_camera = pose;
     sync_local_camera_pose(get_my_user(), &pose);
