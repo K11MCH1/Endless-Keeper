@@ -318,18 +318,23 @@ TbError process_login_message(NetUserId source, char *read_pos, const char *end_
         has_token_field = true;
     }
     netsec_server_mark_raw(source, false);
+    user->party_key = 0;
     if (secure_server) {
         /* the token for this world: sealed by a newer client, else an older client's secret turned into it */
         char sealed_password[sizeof(netstate.password)] = "";
         uint64_t sealed_token = 0;
+        uint64_t party_key = 0;
         const int sealed = has_token_field ? netsec_server_login_ext(source, read_pos + 1 + sizeof(user->reconnect_token), end_pos,
-            &sealed_token, sealed_password, sizeof(sealed_password)) : 0;
+            &sealed_token, sealed_password, sizeof(sealed_password), &party_key) : 0;
         if (sealed < 0) {
             NETMSG("Peer %d sent a sealed login this server can't open", (int)source);
             netstate.sp->drop_user(source, NetJoin_Accepted);
             return Lb_OK;
         }
         user->reconnect_token = (sealed > 0) ? sealed_token : netsec_world_token(user->reconnect_token);
+        user->party_key = (sealed > 0) ? party_key : 0;
+        if (user->party_key != 0)
+            NETMSG("Peer %d comes with a party", (int)source);
         if (password_later && netstate.password[0] != 0 && strncmp(sealed_password, netstate.password, sizeof(netstate.password)) != 0) {
             NETMSG("Peer chose wrong password");
             netstate.sp->drop_user(source, NetJoin_Locked);
@@ -439,8 +444,20 @@ void LbNetwork_InitSessionsFromCmdLine(const char *str)
 
 uint64_t net_local_reconnect_token(void);
 
+/* the key of the party this player joins a world with (the World List sets it before the join, 0 for none) */
+uint64_t net_party_key = 0;
+
 static uint64_t local_reconnect_token(void)
 {
+    /* test hook KFX_NET_TOKEN=<hex>: this window's own login secret (windows on one PC share settings.toml, and with
+       it one secret: the server tells them apart only by the order they join in) */
+    const char *env = getenv("KFX_NET_TOKEN");
+    if ((env != NULL) && (env[0] != '\0')) {
+        const uint64_t secret = strtoull(env, NULL, 16);
+        if (secret != 0) {
+            return secret;
+        }
+    }
     if (settings.reconnect_token == 0) {
         uint64_t secret = 0;
         netsec_random(&secret, sizeof(secret)); /* the system's random bytes: it is this machine's secret */
@@ -511,7 +528,7 @@ TbError LbNetwork_ExchangeLogin(char *player_name)
     write_pos += sizeof(reconnect_token);
     if (secure > 0) {
         write_pos += netsec_client_login_ext(write_pos, sizeof(netstate.msg_buffer) - (size_t)(write_pos - netstate.msg_buffer),
-            secret, netstate.password);
+            secret, netstate.password, net_party_key);
     }
     send_message_buffer(SERVER_ID, write_pos);
     TbClockMSec wait_start_time = LbTimerClock();

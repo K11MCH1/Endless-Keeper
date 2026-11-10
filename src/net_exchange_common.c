@@ -16,6 +16,7 @@
 /******************************************************************************/
 #include "pre_inc.h"
 #include "net_exchange_common.h"
+#include "chat_box.h"
 
 #include "bflib_datetm.h"
 #include "bflib_video.h"
@@ -41,6 +42,7 @@
 #include "world_stream.h"
 #include "server_admin.h"
 #include "gui_msgs.h"
+#include "server_roles.h"
 #include "post_inc.h"
 /******************************************************************************/
 
@@ -191,10 +193,22 @@ static TbError handle_chat_message(NetUserId source, char *read_pos, size_t mess
            drops this player (kicked, banned), which the menu shows */
         if (sender_byte == SERVER_FAREWELL_SENDER) {
             server_farewell_set(message);
+        } else if (chat_box_active()) {
+            chat_box_add(-1, message); /* the chat box (chat_box.c) */
         } else {
             message_add(MsgType_Blank, 0, message);
         }
         return Lb_OK;
+    }
+    if ((netstate.my_id == SERVER_ID) && (source != SERVER_ID) && netstate_dedicated() && (source < MAX_NET_USERS)) {
+        /* roles (server_roles.c): a command a role gives runs here (or is refused, with a notice) and goes no further;
+           chat needs the chat permission */
+        if ((message[0] == cmd_char) && server_admin_player_command(source, message + 1))
+            return Lb_OK;
+        if ((message[0] != cmd_char) && !server_roles_user_can(source, RolP_Chat)) {
+            server_admin_notice(source, "You can't chat on this server.");
+            return Lb_OK;
+        }
     }
     if ((netstate.my_id == SERVER_ID) && (source != SERVER_ID) && netstate_dedicated() && (message[0] != cmd_char)) {
         const PlayerNumber plyr = (source < MAX_NET_USERS) ? get_user_state(source)->player_id : PLAYER_NONE;
@@ -461,6 +475,10 @@ TbError process_network_message(NetUserId source, void *server_buf, size_t frame
     case NETMSG_KEYINFO:
         if ((source == SERVER_ID) && (netstate.my_id != SERVER_ID))
             netsec_client_keyinfo(read_pos, payload_size);
+        return Lb_OK;
+    case NETMSG_ROLES:
+        if ((source == SERVER_ID) && (netstate.my_id != SERVER_ID))
+            roles_client_receive(read_pos, payload_size);
         return Lb_OK;
     default:
         return Lb_OK;

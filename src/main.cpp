@@ -158,6 +158,7 @@
 #include "world_menu.h"
 #include "server_admin.h"
 #include "net_diag.h"
+#include "net_portforward.h"
 #include "post_inc.h"
 
 #ifdef _MSC_VER
@@ -2348,7 +2349,9 @@ int LbBullfrogMain(unsigned short argc, char *argv[])
     {
         api_init_server();
         game_loop();
+        wnet_hub_stop(); /* Endless Keeper: a dedicated server's World List hub, and its router forward */
         LbNetwork_Stop();
+        port_forward_wait(); /* the router forwards are removed before the game ends */
     }
     reset_game();
     RendererResetScreen(true);

@@ -71,6 +71,10 @@ void message_update(void);
 void message_draw(void);
 void zero_messages(void);
 void message_add(char type, short idx, const char *text);
+/** The message just added is a chat line from this player (an endless server shows the name, server_roles.c). */
+void message_set_chat_sender(PlayerNumber plyr_idx);
+/** The chat font tinted with a role's colour (rgb 0xRRGGBB): a remap of the palette, or NULL. */
+const unsigned char *message_chat_name_remap(uint32_t rgb);
 void message_add_custom_icon(short icon_idx, const char *text);
 void message_add_fmt(char type, short idx, const char *fmt_str, ...);
 void show_game_time_taken(unsigned long fps, unsigned long turns);

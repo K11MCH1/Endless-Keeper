@@ -53,6 +53,8 @@ void LbNetwork_SetServerPort(int port);
 void LbNetwork_InitSessionsFromCmdLine(const char *str);
 void LbNetwork_ClearCmdLineSessions(void);
 uint64_t net_local_reconnect_token(void);
+/** The key of the party this player joins a world with (World List; 0: none). It goes in the sealed login. */
+extern uint64_t net_party_key;
 TbError LbNetwork_Join(struct TbNetworkSessionNameEntry *nsname, char *playr_name, int32_t *playr_num, void *optns);
 TbError LbNetwork_Create(char *plyr_name, uint32_t *plyr_num, void *optns);
 TbError LbNetwork_EnableNewPlayers(TbBool allow);

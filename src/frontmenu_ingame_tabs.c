@@ -20,6 +20,7 @@
 #include "observer.h"
 #include "kfx/renderer/RendererManager.h"
 #include "frontmenu_ingame_tabs.h"
+#include "chat_box.h"
 #include "globals.h"
 #include "bflib_basics.h"
 
@@ -410,7 +411,11 @@ void gui_choose_room(struct GuiButton *gbtn)
 
 void gui_area_event_button(struct GuiButton *gbtn)
 {
-    EventIndex evidx = get_my_event_button_index(gbtn->content.lval);
+    if (chat_box_icon_button(gbtn)) { /* a network endless game: the chat icon (chat_box.c) */
+        chat_box_icon_draw(gbtn);
+        return;
+    }
+    EventIndex evidx = get_my_event_button_index(event_button_slot(gbtn));
     if (evidx == 0) {
         return;
     }
@@ -2221,7 +2226,11 @@ void gui_area_stat_button(struct GuiButton *gbtn)
 
 void maintain_event_button(struct GuiButton *gbtn)
 {
-    EventIndex evidx = get_my_event_button_index(gbtn->content.lval);
+    if (chat_box_icon_button(gbtn)) {
+        chat_box_icon_maintain(gbtn);
+        return;
+    }
+    EventIndex evidx = get_my_event_button_index(event_button_slot(gbtn));
     struct Event* event = &game.event[evidx];
     struct UserState* ustate = get_local_user_state();
     if ((my_visible_event_idx != 0) && (evidx == my_visible_event_idx))

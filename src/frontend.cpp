@@ -96,6 +96,7 @@
 #include "moonphase.h"
 #include "config_keeperfx.h"
 #include "world_menu.h"
+#include "chat_box.h"
 #include "net_state.h"
 #include "server_admin.h"
 #include "world_stream.h"
@@ -220,6 +221,8 @@ struct GuiMenu *menu_list[] = {
     &world_endless_load_menu,
     &world_list_menu,
     &world_respawn_menu, //53
+    &world_party_menu,
+    &chat_box_menu, //55
     NULL,
 };
 
@@ -2131,6 +2134,7 @@ short is_toggleable_menu(short mnu_idx)
   case GMnu_FEENDLESS_LOAD:
   case GMnu_FEWORLD_LIST:
   case GMnu_WORLD_RESPAWN:
+  case GMnu_FEPARTY_INVITE:
       return false;
   default:
       return true;

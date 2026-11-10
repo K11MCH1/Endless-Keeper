@@ -40,6 +40,11 @@ TbBool server_admin_banned(uint64_t token, const char *name, const char *ip);
 void server_admin_notice(int user, const char *text);
 /** A user left the server (how: 0 left, 1 timed out, 2 dropped). */
 void server_admin_user_left(int user, int how);
+/** A seated player's in-game "!" command that is one of the admin's, run when a role allows it (server_roles.c): 1 when
+ *  it was one (run or refused here), 0 when it is the console's own. */
+TbBool server_admin_player_command(int user, const char *text);
+/** A seated player's own leave packet (before the drop it causes): "left the world" / "timed out". */
+void server_admin_user_leaving(int user, TbBool timed_out);
 /** The process is closing: say bye to the admin. */
 void server_admin_shutdown(TbBool restart);
 /** A player's name as the console shows it ("Keeper 7" for a world keeper with none). */

@@ -29,6 +29,8 @@
 #include "thing_objects.h"
 #include "frontmenu_ingame_map.h"
 #include "gui_msgs.h"
+#include "power_hand.h"
+#include "packets.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -36,6 +38,25 @@
 static const unsigned char display_cycle[] = {1, 2, 3, 6, 7, 8}; /* blue, green, yellow, purple, black, orange */
 #define DISPLAY_CYCLE_LEN ((int)(sizeof(display_cycle) / sizeof(display_cycle[0])))
 #define COLOUR_RED 0
+#define COLOUR_GREEN 2
+/* co-op (2026-11-10): the local player's allied keeper of a party is green, and nobody else is */
+static const unsigned char display_cycle_ally[] = {1, 3, 6, 7, 8};
+#define DISPLAY_CYCLE_ALLY_LEN ((int)(sizeof(display_cycle_ally) / sizeof(display_cycle_ally[0])))
+static PlayerNumber coop_ally = PLAYER_NONE;
+
+/** The keeper a party made the local player's ally: allied both ways and locked (the server's doing). */
+static PlayerNumber find_coop_ally(void)
+{
+    const PlayerNumber me = my_player_number;
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        if ((p == me) || (p == PLAYER_GOOD) || (p == PLAYER_NEUTRAL) || (p == game.neutral_player_num))
+            continue;
+        if (players_are_mutual_allies(me, p) && is_player_ally_locked(me, p) && is_player_ally_locked(p, me))
+            return p;
+    }
+    return PLAYER_NONE;
+}
 
 #define MET_MAX 1024
 static int32_t met_ids[MET_MAX];      /* world_player_identity of each keeper met, in order */
@@ -69,6 +90,7 @@ void world_colours_reset(void)
     defeat_watch = 0;
     met_count = 0;
     table_on = false;
+    coop_ally = PLAYER_NONE;
     for (int c = 0; c < COLOURS_COUNT; c++)
         colour_table[c] = (unsigned char)c;
 }
@@ -81,9 +103,13 @@ unsigned char world_display_colour(PlayerNumber plyr_idx)
         return COLOUR_RED;
     if ((plyr_idx == PLAYER_GOOD) || (plyr_idx == PLAYER_NEUTRAL) || (plyr_idx == game.neutral_player_num))
         return get_player_color_idx(plyr_idx);
+    if (plyr_idx == coop_ally)
+        return COLOUR_GREEN; /* the allied keeper of a party, met or not */
     const int i = met_index(world_player_identity(plyr_idx));
     if (i < 0)
         return get_player_color_idx(PLAYER_NEUTRAL); /* not met yet: shown as nobody's */
+    if (coop_ally != PLAYER_NONE)
+        return display_cycle_ally[i % DISPLAY_CYCLE_ALLY_LEN];
     return display_cycle[i % DISPLAY_CYCLE_LEN];
 }
 
@@ -97,9 +123,21 @@ static void refresh_table(void)
     table_on = colours_active();
     if (!table_on)
         return;
-    /* a true colour belongs to the player that has it (dungeon->color_idx), the first one when shared */
+    /* a true colour belongs to the player that has it (dungeon->color_idx), the first one when shared: the local
+       player first, then its ally */
     TbBool done[COLOURS_COUNT];
     memset(done, 0, sizeof(done));
+    const PlayerNumber first[2] = {my_player_number, coop_ally};
+    for (int k = 0; k < 2; k++)
+    {
+        if ((first[k] < 0) || (first[k] >= PLAYERS_COUNT))
+            continue;
+        const unsigned char c = get_player_color_idx(first[k]);
+        if ((c >= COLOURS_COUNT) || done[c])
+            continue;
+        done[c] = true;
+        colour_table[c] = world_display_colour(first[k]);
+    }
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
         const unsigned char c = get_player_color_idx(p);
@@ -225,6 +263,17 @@ void world_colours_turn(void)
             refresh_table();
         return;
     }
+    {
+        const PlayerNumber ally = find_coop_ally();
+        if (ally != coop_ally)
+        {
+            coop_ally = ally;
+            if (ally != PLAYER_NONE)
+                SYNCLOG("World colours: player %d's allied keeper is player %d, shown green", (int)my_player_number, (int)ally);
+            else
+                SYNCLOG("World colours: player %d has no allied keeper any more", (int)my_player_number);
+        }
+    }
     /* the keepers not met yet */
     PlayerBitFlags open = pmask_none();
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
@@ -282,6 +331,38 @@ void world_colours_turn(void)
             player_code_name(p), (int)display_cycle[(met_count - 1) % DISPLAY_CYCLE_LEN]);
     }
     refresh_table();
+}
+
+/** Test hook (KFX_NET_TESTSAY "#drop"): on this machine, can the local player drop a creature on its ally's floor (the
+ *  hand's box is green there)? */
+void world_colours_test_drop(void)
+{
+    const struct Thing *heartng = find_players_dungeon_heart(coop_ally);
+    if ((coop_ally == PLAYER_NONE) || !thing_exists(heartng))
+    {
+        SYNCLOG("World co-op test (this machine): player %d has no ally's heart in sight (ally %d)", (int)my_player_number, (int)coop_ally);
+        return;
+    }
+    const MapSlabCoord sx = subtile_slab(heartng->mappos.x.stl.num) - 3, sy = subtile_slab(heartng->mappos.y.stl.num);
+    const struct Thing *held = get_first_thing_in_power_hand(get_my_player());
+    SYNCLOG("World co-op test (this machine): player %d sees ally %d's floor: %d; with %s in the hand the box there is %s",
+        (int)my_player_number, (int)coop_ally, (int)subtile_revealed(slab_subtile_center(sx), slab_subtile_center(sy), my_player_number),
+        thing_is_creature(held) ? "a creature" : (thing_exists(held) ? "a thing" : "nothing"),
+        can_drop_thing_here(slab_subtile_center(sx), slab_subtile_center(sy), my_player_number, 0) ? "green" : "red");
+}
+
+/** Test hook (KFX_NET_TESTSAY "#grab"): the local player picks up its first imp. */
+void world_colours_test_grab(void)
+{
+    const struct Dungeon *dungeon = get_players_num_dungeon(my_player_number);
+    const struct Thing *imp = dungeon_invalid(dungeon) ? INVALID_THING : thing_get(dungeon->digger_list_start);
+    if (!thing_exists(imp))
+    {
+        SYNCLOG("World co-op test (this machine): player %d has no imp to pick up", (int)my_player_number);
+        return;
+    }
+    set_players_packet_action(get_my_player(), PckA_UsePwrHandPick, imp->index, 0, 0, 0);
+    SYNCLOG("World co-op test (this machine): player %d picks up its imp %d", (int)my_player_number, (int)imp->index);
 }
 
 unsigned short world_display_thing_sprite(const struct Thing *thing)

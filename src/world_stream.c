@@ -12,6 +12,7 @@
 #include "pre_inc.h"
 #include <limits.h>
 #include "world_stream.h"
+#include "chat_box.h"
 #include "world_shift.h"
 #include "world_gen.h"
 #include "world_daynight.h"
@@ -141,6 +142,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_STATS_MAGIC 0x31545350u /* "PST1": optional, after PKY1 (last): the players' records (server console) */
 #define WORLD_PERKS_MAGIC 0x314B5250u /* "PRK1": optional, after PST1 (last): the players' passive upgrades, by token */
 #define WORLD_SKEY_MAGIC 0x3159454Bu /* "KEY1": optional, after PRK1 (last): the world's key, secret half (net_secure.c) */
+#define WORLD_COOP_MAGIC 0x31504F43u /* "COP1": optional, after KEY1 (last): the allied pairs of a party (co-op) */
 #define WORLD_MAX_PORTALS 65536
 /* The player's creature limit (imps don't count, as in stock): this many, plus this many per owned portal. */
 #define WORLD_BASE_CREATURES 10
@@ -261,6 +263,229 @@ void world_set_seat_token(PlayerNumber plyr_idx, uint64_t token)
 {
     if ((plyr_idx >= 0) && (plyr_idx < PLAYERS_MAX))
         seat_tokens[plyr_idx] = token;
+}
+
+/******************************************************************************/
+/* Co-op (2026-11-10): two players who made a party in the World List enter a world as allied keepers. The pair is the
+   seats' (the server's, kept in the save): allied both ways and locked, so neither can end it; creatures can be
+   dropped on each other's ground. Allies can't claim each other's ground or rooms, and nobody digs another keeper's
+   reinforced walls (the game's own rules). Two new seats start side by side; a new seat whose partner has a dungeon
+   starts on the nearest untouched ground. A dungeon reset of either ends it. */
+static int64_t world_slab_x_of(int64_t x);
+static int64_t world_slab_y_of(int64_t y);
+static void coop_selftest_levels(PlayerNumber a, const struct Thing *ha);
+static int16_t coop_partner[PLAYERS_MAX];    /* the seat's partner + 1 (0: none) */
+static uint64_t coop_held[PLAYERS_MAX];      /* a seat made for a party's second player, until that player takes it:
+                                                the party's key (0: not held) */
+/* each keeper's allied keeper of a party + 1 (0: none), read from the players' alliances each turn: game state, so the
+   same on every machine (the pairs above are the server's). Allies of a party see what each other sees. */
+static int16_t coop_ally_of[PLAYERS_MAX];
+#define COOP_SIDE 11 /* slabs between partners' hearts: two walled 9x9 start dungeons with 2 slabs of earth between */
+
+static void coop_clear(void)
+{
+    memset(coop_partner, 0, sizeof(coop_partner));
+    memset(coop_held, 0, sizeof(coop_held));
+    memset(coop_ally_of, 0, sizeof(coop_ally_of));
+}
+
+TbBool world_coop_allies(PlayerNumber a, PlayerNumber b)
+{
+    return world_mode_active() && (a != b) && (a >= 0) && (b >= 0) && (a < PLAYERS_COUNT) && (b < PLAYERS_COUNT) &&
+        players_are_mutual_allies(a, b) && is_player_ally_locked(a, b) && is_player_ally_locked(b, a);
+}
+
+PlayerNumber world_coop_ally(PlayerNumber p)
+{
+    if (!W.active || (p < 0) || (p >= PLAYERS_MAX) || (coop_ally_of[p] == 0))
+        return PLAYER_NONE;
+    return (PlayerNumber)(coop_ally_of[p] - 1);
+}
+
+void world_coop_refresh(void)
+{
+    if (!W.active)
+        return;
+    TbBool changed = false;
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        int16_t now = 0;
+        const struct PlayerInfo *player = get_player(p);
+        if (player_exists(player) && pmask_any(player->players_with_locked_ally_status))
+        {
+            for (PlayerNumber q = 0; (q < PLAYERS_COUNT) && (now == 0); q++)
+                if (world_coop_allies(p, q))
+                    now = (int16_t)(q + 1);
+        }
+        if (now != coop_ally_of[p])
+        {
+            coop_ally_of[p] = now;
+            changed = true;
+        }
+    }
+    /* what a player sees has changed (its ally's ground comes into view, or goes): the minimap follows */
+    if (changed && !netstate_dedicated())
+    {
+        if (world_paged)
+        {
+            for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+                panel_map_update((MapSubtlCoord)pg->cx * CHUNK_STL, (MapSubtlCoord)pg->cy * CHUNK_STL, CHUNK_STL, CHUNK_STL);
+        } else
+            panel_map_update(0, 0, game.map_subtiles_x, game.map_subtiles_y);
+    }
+}
+
+PlayerNumber world_coop_partner(PlayerNumber p)
+{
+    if ((p < 0) || (p >= PLAYERS_MAX) || (coop_partner[p] == 0))
+        return PLAYER_NONE;
+    return (PlayerNumber)(coop_partner[p] - 1);
+}
+
+/** The pair's effects on the game (again after a load, or a new start of either): allied and locked both ways (which
+ *  is what lets each drop creatures on the other's ground: world_coop_allies); never the same colour. */
+static void coop_apply(PlayerNumber a, PlayerNumber b)
+{
+    if (!player_exists(get_player(a)) || !player_exists(get_player(b)))
+        return;
+    TbBool changed = false;
+    for (int k = 0; k < 2; k++)
+    {
+        const PlayerNumber p = (k == 0) ? a : b, q = (k == 0) ? b : a;
+        if (!player_allied_with(get_player(p), q))
+        {
+            set_ally_with_player(p, q, true);
+            changed = true;
+        }
+        if (!is_player_ally_locked(p, q))
+            set_player_ally_locked(p, q, true);
+    }
+    if (get_player_color_idx(a) == get_player_color_idx(b))
+    {
+        /* seats 7 apart share a colour: each machine tells its player's ally by it (world_colours.c) */
+        static const unsigned char others[] = {1, 2, 3, 6, 7, 8};
+        const unsigned char taken = get_player_color_idx(a);
+        for (size_t i = 0; i < sizeof(others); i++)
+        {
+            if (others[i] != taken)
+            {
+                set_player_colour(b, others[i]);
+                break;
+            }
+        }
+    }
+    if (changed)
+        update_navigation_around_all_doors(); /* an ally's doors let its partner's creatures through */
+    world_coop_refresh();
+}
+
+TbBool world_coop_bond(PlayerNumber a, PlayerNumber b)
+{
+    if (!W.active || (a == b) || (a < 0) || (b < 0) || (a >= PLAYERS_COUNT) || (b >= PLAYERS_COUNT) ||
+        (coop_partner[a] != 0) || (coop_partner[b] != 0))
+        return false;
+    coop_partner[a] = (int16_t)(b + 1);
+    coop_partner[b] = (int16_t)(a + 1);
+    coop_apply(a, b);
+    SYNCLOG("World: players %d and %d are allied keepers (a party) until a dungeon reset", (int)a, (int)b);
+    return true;
+}
+
+PlayerNumber world_coop_unbond(PlayerNumber p)
+{
+    const PlayerNumber q = world_coop_partner(p);
+    if (q == PLAYER_NONE)
+        return PLAYER_NONE;
+    coop_partner[p] = 0;
+    if ((q >= 0) && (q < PLAYERS_MAX))
+        coop_partner[q] = 0;
+    for (int k = 0; k < 2; k++)
+    {
+        const PlayerNumber a = (k == 0) ? p : q, b = (k == 0) ? q : p;
+        if (player_invalid(get_player(a)))
+            continue;
+        set_player_ally_locked(a, b, false);
+        set_ally_with_player(a, b, false);
+    }
+    update_navigation_around_all_doors();
+    world_coop_refresh();
+    SYNCLOG("World: players %d and %d are allied keepers no more", (int)p, (int)q);
+    return q;
+}
+
+/** Test hook KFX_COOP_TEST=1 (the server): once a pair's two hearts stand, each is shown the other's start dungeon (the
+ *  test's screenshots show both) and the log says what the alliance does: nobody claims the other's floor or digs its
+ *  wall, and a creature can be dropped there. */
+static void coop_selftest(PlayerNumber a, PlayerNumber b)
+{
+    static PlayerBitFlags tested;
+    static int on = -1;
+    if (on < 0)
+        on = (getenv("KFX_COOP_TEST") != NULL) ? 1 : 0;
+    if (!on || pmask_has(tested, a))
+        return;
+    const struct Thing *ha = find_players_dungeon_heart(a), *hb = find_players_dungeon_heart(b);
+    if (!thing_exists(ha) || !thing_exists(hb))
+        return;
+    pmask_add(&tested, a);
+    for (int k = 0; k < 2; k++)
+    {
+        const PlayerNumber me = (k == 0) ? a : b, other = (k == 0) ? b : a;
+        const struct Thing *heartng = (k == 0) ? hb : ha; /* the other's heart */
+        const MapSlabCoord sx = subtile_slab(heartng->mappos.x.stl.num), sy = subtile_slab(heartng->mappos.y.stl.num);
+        /* the other's floor 3 slabs west of its heart, and its wall beyond */
+        const TbBool seen = subtile_revealed(slab_subtile_center(sx - 3), slab_subtile_center(sy), me);
+        const TbBool seen_own = map_block_revealed_directly(get_map_block_at(slab_subtile_center(sx - 3), slab_subtile_center(sy)), me);
+        const TbBool claim = player_can_claim_slab(me, sx - 3, sy);
+        const TbBool dig = subtile_is_diggable_for_player(me, slab_subtile_center(sx - 4), slab_subtile_center(sy), false);
+        const TbBool drop = can_drop_thing_here_as(slab_subtile_center(sx - 3), slab_subtile_center(sy), me, 0, true);
+        const TbBool drop_other = can_drop_thing_here_as(slab_subtile_center(sx - 3), slab_subtile_center(sy), me, 0, false);
+        const struct SlabMap *floor = get_slabmap_block(sx - 3, sy), *wall = get_slabmap_block(sx - 4, sy);
+        SYNCLOG("World co-op test: player %d and its ally %d: allied %d, locked %d; the ally's floor (kind %d, owner %d): "
+            "seen %d (by its own creatures %d), claim %d, drop a creature %d, drop another thing %d; the ally's wall "
+            "(kind %d, owner %d): dig %d; enemies for it a level higher: %d", (int)me, (int)other,
+            (int)players_are_mutual_allies(me, other), (int)is_player_ally_locked(me, other), (int)floor->kind,
+            (int)slabmap_owner(floor), (int)seen, (int)seen_own, (int)claim, (int)drop, (int)drop_other, (int)wall->kind,
+            (int)slabmap_owner(wall), (int)dig, world_coop_level_bonus(me));
+    }
+    coop_selftest_levels(a, ha);
+    SYNCLOG("World co-op test: hearts of players %d and %d at world slabs (%ld,%ld) and (%ld,%ld), colours %d and %d", (int)a, (int)b,
+        (long)world_slab_x_of(subtile_slab(ha->mappos.x.stl.num)), (long)world_slab_y_of(subtile_slab(ha->mappos.y.stl.num)),
+        (long)world_slab_x_of(subtile_slab(hb->mappos.x.stl.num)), (long)world_slab_y_of(subtile_slab(hb->mappos.y.stl.num)),
+        (int)get_player_color_idx(a), (int)get_player_color_idx(b));
+}
+
+/** Every pair's effects are in place (each 64 turns: a load or a new start of either sets a keeper's allies anew). */
+static void coop_keep(void)
+{
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        const PlayerNumber q = world_coop_partner(p);
+        if ((q != PLAYER_NONE) && (p < q))
+        {
+            coop_apply(p, q);
+            coop_selftest(p, q);
+        }
+    }
+}
+
+void world_coop_hold_seat(PlayerNumber p, uint64_t key)
+{
+    if ((p >= 0) && (p < PLAYERS_MAX))
+        coop_held[p] = key;
+}
+
+uint64_t world_coop_held_key(PlayerNumber p)
+{
+    return ((p >= 0) && (p < PLAYERS_MAX)) ? coop_held[p] : 0;
+}
+
+PlayerNumber world_coop_held_seat(uint64_t key)
+{
+    for (PlayerNumber p = 0; (p < PLAYERS_MAX) && (key != 0); p++)
+        if (coop_held[p] == key)
+            return p;
+    return PLAYER_NONE;
 }
 /* bumped whenever a map memory record is written, replaced or freed (world_minimap_code caches a record pointer) */
 static uint32_t world_memory_gen = 0;
@@ -744,8 +969,53 @@ static TbBool stamp_structure_cell(uint8_t wg_slab, uint8_t wg_owner)
 
 /* the ground round a copied start follows the start's rules: no gold or gems this close to the heart, no rock,
    lava or water this close (nothing seals the dungeon or its portal in), no dug paths at all */
-#define STAMP_NO_GOLD_DIST 21
-#define STAMP_CLEAR_DIST 14
+/* (2026-11-10) in a rough ring, as the first start's own ground (a blob), not a square: a square cut rock, lava and
+   water off along straight lines. The reach moves in and out round the ring, and a little slab by slab. */
+#define STAMP_NO_GOLD_DIST 20.0   /* slabs from the heart, give or take the wobble */
+#define STAMP_NO_GOLD_WOBBLE 2.5
+#define STAMP_CLEAR_DIST 14.0
+#define STAMP_CLEAR_WOBBLE 3.0
+
+static uint64_t stamp_hash(uint64_t a, int64_t x, int64_t y)
+{
+    uint64_t h = a ^ ((uint64_t)x * 0x9E3779B97F4A7C15ULL) ^ ((uint64_t)y * 0xC2B2AE3D27D4EB4FULL);
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    return h;
+}
+
+/** How far the cleared ground reaches from a copied start's heart towards a slab (dx, dy from the heart): the base,
+ *  moved in and out smoothly round the ring (three waves, their phases from the world's seed and the start's place),
+ *  and by up to 0.6 slab by slab (a ragged edge). */
+static double stamp_reach(uint64_t salt, int64_t dx, int64_t dy, double base, double wobble)
+{
+    const double two_pi = 6.283185307179586;
+    const double a = atan2((double)dy, (double)dx);
+    const double p1 = (double)(salt & 0xFFFF) / 65536.0 * two_pi;
+    const double p2 = (double)((salt >> 16) & 0xFFFF) / 65536.0 * two_pi;
+    const double p3 = (double)((salt >> 32) & 0xFFFF) / 65536.0 * two_pi;
+    const double wave = 0.5 * sin(2.0 * a + p1) + 0.3 * sin(3.0 * a + p2) + 0.2 * sin(5.0 * a + p3);
+    const double rag = (double)(stamp_hash(salt, dx, dy) % 1000) / 1000.0 - 0.5;
+    return base + wobble * wave + rag * 1.2;
+}
+
+/** A slab on the way from the heart to the portal (a slab to each side), or within 3 of the portal: never sealed in,
+ *  wherever the ring's edge falls. (dx, dy) and the portal (px, py) are from the heart. */
+static TbBool stamp_way_to_portal(int64_t dx, int64_t dy, int64_t px, int64_t py)
+{
+    if (max(llabs(dx - px), llabs(dy - py)) <= 3)
+        return true;
+    const double len2 = (double)(px * px + py * py);
+    if (len2 <= 0.0)
+        return false;
+    double t = (double)(dx * px + dy * py) / len2;
+    t = (t < 0.0) ? 0.0 : ((t > 1.0) ? 1.0 : t);
+    const double ex = (double)dx - t * (double)px, ey = (double)dy - t * (double)py;
+    return ex * ex + ey * ey <= 1.5 * 1.5;
+}
 #define WTF_StampCopy 0x80 /* generation only: a thing copied by a stamp (never stored) */
 
 /** Can a creature stand on the slab (open floor, liquids too)? Off the map counts as solid. */
@@ -1009,6 +1279,7 @@ static void apply_stamps(int32_t cx, int32_t cy, struct WorldChunkData *cd)
             }
         }
         /* the chunk's own ground round the dungeon, cleared as round the first start */
+        const uint64_t salt = stamp_hash(W.seed, st->dx, st->dy);
         for (int64_t y = oy1; y <= oy2; y++)
         {
             for (int64_t x = ox1; x <= ox2; x++)
@@ -1016,11 +1287,15 @@ static void apply_stamps(int32_t cx, int32_t cy, struct WorldChunkData *cd)
                 const int i = (int)((y - cy1) * WG_CHUNK + (x - cx1));
                 if (structure[i])
                     continue;
-                const int64_t d = max(llabs(x - hx), llabs(y - hy));
+                const int64_t ddx = x - hx, ddy = y - hy;
+                const double d = sqrt((double)(ddx * ddx + ddy * ddy));
                 const SlabKind k = cd->kind[i];
-                if ((d <= STAMP_NO_GOLD_DIST) && ((k == SlbT_GOLD) || (k == SlbT_DENSEGOLD) || (k == SlbT_GEMS)))
+                if (((k == SlbT_GOLD) || (k == SlbT_DENSEGOLD) || (k == SlbT_GEMS))
+                 && (d <= stamp_reach(salt ^ 0x474F4C44u, ddx, ddy, STAMP_NO_GOLD_DIST, STAMP_NO_GOLD_WOBBLE)))
                     cd->kind[i] = SlbT_EARTH;
-                if ((d <= STAMP_CLEAR_DIST) && ((k == SlbT_ROCK) || (k == SlbT_LAVA) || (k == SlbT_WATER)))
+                if (((k == SlbT_ROCK) || (k == SlbT_LAVA) || (k == SlbT_WATER))
+                 && ((d <= stamp_reach(salt, ddx, ddy, STAMP_CLEAR_DIST, STAMP_CLEAR_WOBBLE))
+                  || stamp_way_to_portal(ddx, ddy, start.portal_x - start.heart_x, start.portal_y - start.heart_y)))
                     cd->kind[i] = SlbT_EARTH;
                 if (k == SlbT_PATH)
                     cd->kind[i] = SlbT_EARTH;
@@ -1090,6 +1365,92 @@ static double dist_to_nearest_start(int64_t x, int64_t y)
             best = d;
     }
     return best;
+}
+
+/* Co-op (2026-11-10): enemies made for keepers in a party are a level higher. "For" a keeper: the one a raid comes
+   for; else the keeper whose start dungeon is nearest the place (as the heroes' and books' grades go by the nearest
+   start). Heroes and computer keepers' creatures of new ground, what an outpost or fortress sends, wild creatures. */
+int world_coop_level_bonus(PlayerNumber plyr_idx)
+{
+    return (W.active && (world_coop_partner(plyr_idx) != PLAYER_NONE)) ? 1 : 0;
+}
+
+int world_coop_level_bonus_at(int64_t wx, int64_t wy)
+{
+    if (!W.active || (W.gen == NULL))
+        return 0;
+    TbBool any = false;
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && !any; p++)
+        any = (coop_partner[p] != 0);
+    if (!any)
+        return 0;
+    struct WgStructRef start;
+    wg_start_ref(W.gen, &start);
+    PlayerNumber nearest = PLAYER_NONE;
+    double best = 1e30;
+    if (!seat_has_stamp(PLAYER0))
+    {
+        /* the level's own start is player 0's */
+        const double dx = (double)(wx - start.heart_x), dy = (double)(wy - start.heart_y);
+        best = dx * dx + dy * dy;
+        nearest = PLAYER0;
+    }
+    for (int n = 0; n < W.stamp_count; n++)
+    {
+        if (W.stamps[n].plyr < 0)
+            continue; /* a start given up */
+        const double dx = (double)(wx - (start.heart_x + W.stamps[n].dx)), dy = (double)(wy - (start.heart_y + W.stamps[n].dy));
+        if (dx * dx + dy * dy < best)
+        {
+            best = dx * dx + dy * dy;
+            nearest = (PlayerNumber)W.stamps[n].plyr;
+        }
+    }
+    return world_coop_level_bonus(nearest);
+}
+
+int world_coop_level_bonus_at_slab(MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    return world_coop_level_bonus_at(world_slab_x_of(slb_x), world_slab_y_of(slb_y));
+}
+
+/** The enemies of a chunk's record (heroes, computer keepers' creatures) go up by so many levels; returns how many. */
+static int coop_raise_enemies(struct WorldChunkData *cd, int bonus)
+{
+    int raised = 0;
+    for (int t = 0; (t < cd->thing_count) && (bonus > 0); t++)
+    {
+        struct WorldThing *th = &cd->things[t];
+        if ((th->oclass != TCls_Creature) || (th->level == 0))
+            continue;
+        if ((th->owner != WOwn_Heroes) && !((th->owner >= WOwn_Keeper0) && (th->owner < WOwn_HumanBase)))
+            continue;
+        th->level = (uint8_t)min(255, (int)th->level + bonus);
+        raised++;
+    }
+    return raised;
+}
+
+/** The self-test's part on levels (KFX_COOP_TEST): by place (at a's heart; 400 slabs east of it), and the pass over
+ *  a chunk's record. */
+static void coop_selftest_levels(PlayerNumber a, const struct Thing *ha)
+{
+    const int64_t ax = world_slab_x_of(subtile_slab(ha->mappos.x.stl.num)), ay = world_slab_y_of(subtile_slab(ha->mappos.y.stl.num));
+    static struct WorldChunkData probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.thing_count = 5;
+    const uint8_t owners[5] = {WOwn_Heroes, WOwn_Keeper0, WOwn_Neutral, WOwn_Player, WOwn_Heroes};
+    for (int t = 0; t < 5; t++)
+    {
+        probe.things[t].oclass = (t == 4) ? TCls_Object : TCls_Creature;
+        probe.things[t].owner = owners[t];
+        probe.things[t].level = (uint8_t)((t == 4) ? 0 : 3);
+    }
+    const int raised = coop_raise_enemies(&probe, world_coop_level_bonus_at(ax, ay));
+    SYNCLOG("World co-op test: a level higher at player %d's heart: %d; 400 slabs east: %d; of a hero, a keeper's "
+        "creature, a neutral one and a player's at level 3 a chunk's pass makes %d, %d, %d, %d (%d raised)", (int)a,
+        world_coop_level_bonus_at(ax, ay), world_coop_level_bonus_at(ax + 400, ay), (int)probe.things[0].level,
+        (int)probe.things[1].level, (int)probe.things[2].level, (int)probe.things[3].level, raised);
 }
 
 /** Research books: the two reward caves nearest each player start always hold one. */
@@ -1365,6 +1726,13 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
     place_books(&ch, cx, cy, cd);
     decorate_rewards(&ch, cx, cy, cd);
     apply_outposts(cx, cy, cd);
+    {
+        /* co-op: the enemies of ground nearest a party's start are a level higher */
+        const int bonus = world_coop_level_bonus_at((int64_t)cx * WG_CHUNK + WG_CHUNK / 2, (int64_t)cy * WG_CHUNK + WG_CHUNK / 2);
+        const int raised = coop_raise_enemies(cd, bonus);
+        if (raised > 0)
+            SYNCLOG("World: chunk (%d,%d): %d enemies a level higher (the nearest start is a party's)", (int)cx, (int)cy, raised);
+    }
     apply_stamps(cx, cy, cd);
     return true;
 }
@@ -4476,6 +4844,83 @@ void world_level_start(void)
  *  start whose radius grows with the square root of n (a sunflower: SPAWN_SPACING for the second player, then evenly
  *  spread, about 1.6-1.9 times SPAWN_SPACING between neighbours). Integer maths, so every machine places it the same.
  *  Nudged out and sideways until no keeper, fortress or portal is near and the nearest start is 1000-2000 slabs off. */
+/* co-op: the place being chosen needs this much more room to the east or south, for the partner's start beside it */
+static int64_t place_ext_x, place_ext_y;
+
+/** Can a start's copy go here: no keeper, fortress, portal or heroes outpost near, and only ground not made yet. */
+static TbBool stamp_place_free(const struct WorldStamp *st)
+{
+    struct WgStructRef refs[2];
+    int64_t x1, y1, x2, y2;
+    stamp_rect(st, &x1, &y1, &x2, &y2);
+    x2 += place_ext_x;
+    y2 += place_ext_y;
+    /* no keeper, fortress or portal near (a reward cave under it is just covered) */
+    const unsigned mask = (1u << WgT_Keeper) | (1u << WgT_Fortress) | (1u << WgT_Portal);
+    if (wg_structures_in(W.gen, x1 - 8, y1 - 8, x2 + 8, y2 + 8, mask, refs, 2) > 0)
+        return false;
+    if (world_outpost_in_box(x1 - 8, y1 - 8, x2 + 8, y2 + 8))
+        return false; /* nor a heroes outpost */
+    /* nor ground already made (stored or loaded): the copy goes only into freshly generated chunks */
+    for (int64_t cy = floor_div(y1 - 8, WG_CHUNK); cy <= floor_div(y2 + 8, WG_CHUNK); cy++)
+        for (int64_t cx = floor_div(x1 - 8, WG_CHUNK); cx <= floor_div(x2 + 8, WG_CHUNK); cx++)
+            if ((table_find(&W.store, (int32_t)cx, (int32_t)cy) != NULL) ||
+                (world_paged && (wp_page(engine_chunk_of(cx), engine_chunk_of(cy)) != NULL)))
+                return false;
+    return true;
+}
+
+/** Where a pair's second start goes from the first: beside it, across the arm that leads to the portal. */
+static void coop_side(int64_t *sx, int64_t *sy)
+{
+    struct WgStructRef start;
+    wg_start_ref(W.gen, &start);
+    const int64_t px = start.portal_x - start.heart_x, py = start.portal_y - start.heart_y;
+    *sx = (llabs(px) > llabs(py)) ? 0 : COOP_SIDE; /* the portal east or west: the partner to the south */
+    *sy = (llabs(px) > llabs(py)) ? COOP_SIDE : 0;
+}
+
+/** Where the seat's start dungeon is (its stamp's offset; the level's own start for player 0). */
+static TbBool seat_start_offset(PlayerNumber p, int64_t *dx, int64_t *dy)
+{
+    for (int n = W.stamp_count - 1; n >= 0; n--)
+    {
+        if (W.stamps[n].plyr == p)
+        {
+            *dx = W.stamps[n].dx;
+            *dy = W.stamps[n].dy;
+            return true;
+        }
+    }
+    if ((p == PLAYER0) && thing_exists(find_players_dungeon_heart(PLAYER0)))
+    {
+        *dx = 0;
+        *dy = 0;
+        return true;
+    }
+    return false;
+}
+
+/** Co-op: a start for a seat whose partner has a dungeon: the nearest ground to it that nobody has seen or dug yet
+ *  (rings of 16 slabs outwards, 16 directions each). */
+static TbBool choose_offset_near(PlayerNumber plyr, int64_t ndx, int64_t ndy, int64_t *dx, int64_t *dy)
+{
+    for (long r = 64; r <= 640; r += 16)
+    {
+        for (long k = 0; k < 16; k++)
+        {
+            const long a = (k * (ANGLE_MASK + 1) / 16) & ANGLE_MASK;
+            const struct WorldStamp st = {plyr, ndx + ((int64_t)LbSinL(a) * r) / 65536, ndy - ((int64_t)LbCosL(a) * r) / 65536};
+            if (!stamp_place_free(&st))
+                continue;
+            *dx = st.dx;
+            *dy = st.dy;
+            return true;
+        }
+    }
+    return false;
+}
+
 static TbBool choose_seat_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
 {
     const int n = W.stamp_count + 1;
@@ -4483,7 +4928,6 @@ static TbBool choose_seat_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
     const long angle = (ANGLE_EAST + (long)(n - 1) * SPAWN_GOLDEN_ANGLE) & ANGLE_MASK;
     static const int outs[] = {0, 40, 80, 120, 160, 200, 260};
     static const int turns[] = {0, 40, -40, 80, -80, 120, -120};
-    struct WgStructRef refs[2];
     for (size_t o = 0; o < sizeof(outs) / sizeof(outs[0]); o++)
     {
         for (size_t t = 0; t < sizeof(turns) / sizeof(turns[0]); t++)
@@ -4491,21 +4935,7 @@ static TbBool choose_seat_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
             const long r = radius + outs[o];
             const long a = (angle + turns[t]) & ANGLE_MASK;
             struct WorldStamp st = {plyr, ((int64_t)LbSinL(a) * r) / 65536, -((int64_t)LbCosL(a) * r) / 65536};
-            int64_t x1, y1, x2, y2;
-            stamp_rect(&st, &x1, &y1, &x2, &y2);
-            /* no keeper, fortress or portal near (a reward cave under it is just covered) */
-            const unsigned mask = (1u << WgT_Keeper) | (1u << WgT_Fortress) | (1u << WgT_Portal);
-            if (wg_structures_in(W.gen, x1 - 8, y1 - 8, x2 + 8, y2 + 8, mask, refs, 2) > 0)
-                continue;
-            if (world_outpost_in_box(x1 - 8, y1 - 8, x2 + 8, y2 + 8))
-                continue; /* nor a heroes outpost */
-            /* nor ground already made (stored or loaded): the copy goes only into freshly generated chunks */
-            TbBool made = false;
-            for (int64_t cy = floor_div(y1 - 8, WG_CHUNK); (cy <= floor_div(y2 + 8, WG_CHUNK)) && !made; cy++)
-                for (int64_t cx = floor_div(x1 - 8, WG_CHUNK); (cx <= floor_div(x2 + 8, WG_CHUNK)) && !made; cx++)
-                    made = (table_find(&W.store, (int32_t)cx, (int32_t)cy) != NULL) ||
-                        (world_paged && (wp_page(engine_chunk_of(cx), engine_chunk_of(cy)) != NULL));
-            if (made)
+            if (!stamp_place_free(&st))
                 continue;
             /* 1000-2000 slabs from the nearest start (the first player's is at offset 0,0) */
             int64_t nearest = st.dx * st.dx + st.dy * st.dy;
@@ -4553,8 +4983,34 @@ static PlayerBitFlags make_seat_starts(void)
             have = have || (W.stamps[n].plyr == p);
         if (have)
             continue;
-        int64_t dx, dy;
-        if (!choose_seat_offset(p, &dx, &dy))
+        int64_t dx = 0, dy = 0;
+        TbBool placed = false;
+        const PlayerNumber mate = world_coop_partner(p);
+        if (mate != PLAYER_NONE)
+        {
+            /* co-op: beside the partner's start made a moment ago; near the dungeon it has had for longer; or, the
+               first of two new ones, where the other's fits beside it */
+            int64_t mdx, mdy, sx, sy;
+            coop_side(&sx, &sy);
+            if (seat_start_offset(mate, &mdx, &mdy))
+            {
+                if (pmask_has(made, mate))
+                {
+                    dx = mdx + sx;
+                    dy = mdy + sy;
+                    placed = true;
+                } else
+                    placed = choose_offset_near(p, mdx, mdy, &dx, &dy);
+            } else
+            {
+                place_ext_x = sx;
+                place_ext_y = sy;
+                placed = choose_seat_offset(p, &dx, &dy);
+                place_ext_x = 0;
+                place_ext_y = 0;
+            }
+        }
+        if (!placed && !choose_seat_offset(p, &dx, &dy))
         {
             struct WorldStamp probe = {p, 180, 0};
             int64_t x1, y1, x2, y2;
@@ -4570,11 +5026,19 @@ static PlayerBitFlags make_seat_starts(void)
         st->plyr = p;
         st->dx = dx;
         st->dy = dy;
-        const int loaded = world_load_chunks_round((MapSlabCoord)engine_slab_x(start.heart_x + dx),
-            (MapSlabCoord)engine_slab_y(start.heart_y + dy), 2);
-        SYNCLOG("World: player %d starts at world slab (%ld,%ld), %d chunks loaded", (int)p, (long)(start.heart_x + dx),
-            (long)(start.heart_y + dy), loaded);
         pmask_add(&made, p);
+    }
+    /* their ground comes once every new start has its place (a pair's two are in the same chunks) */
+    for (int n = 0; n < W.stamp_count; n++)
+    {
+        const struct WorldStamp *st = &W.stamps[n];
+        if ((st->plyr < 0) || (st->plyr >= PLAYERS_COUNT) || !pmask_has(made, st->plyr))
+            continue;
+        const int loaded = world_load_chunks_round((MapSlabCoord)engine_slab_x(start.heart_x + st->dx),
+            (MapSlabCoord)engine_slab_y(start.heart_y + st->dy), 2);
+        SYNCLOG("World: player %d starts at world slab (%ld,%ld), %d chunks loaded%s", (int)st->plyr,
+            (long)(start.heart_x + st->dx), (long)(start.heart_y + st->dy), loaded,
+            (world_coop_partner(st->plyr) != PLAYER_NONE) ? " (an allied keeper's start)" : "");
     }
     return made;
 }
@@ -4737,26 +5201,54 @@ static void cameras_to_hearts(PlayerNumber only)
     }
 }
 
-void world_seat_joined(PlayerNumber plyr_idx)
+/** One seat, or a pair's two (co-op: the second is PLAYER_NONE otherwise), join the running world. */
+static void seats_joined(PlayerNumber first, PlayerNumber second)
 {
     if (!W.active || !world_paged)
         return;
     const PlayerBitFlags made = make_seat_starts();
     bind_hearts();
-    struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
-    if (pmask_has(made, plyr_idx) && !dungeon_invalid(dungeon) && (dungeon->total_money_owned == 0))
+    for (int k = 0; k < 2; k++)
     {
-        dungeon->offmap_money_owned = W.start_money;
-        dungeon->total_money_owned = W.start_money;
+        const PlayerNumber plyr_idx = (k == 0) ? first : second;
+        if (plyr_idx == PLAYER_NONE)
+            continue;
+        struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
+        if (pmask_has(made, plyr_idx) && !dungeon_invalid(dungeon) && (dungeon->total_money_owned == 0))
+        {
+            dungeon->offmap_money_owned = W.start_money;
+            dungeon->total_money_owned = W.start_money;
+        }
+        /* the keeper's start (exploration, cameras, allies) now that it has a heart */
+        init_player(get_player(plyr_idx), 0);
+        world_progress_new_player(plyr_idx);
+        world_perks_seat_started(plyr_idx); /* what the player keeps from earlier starts (by player, not seat) */
+        cameras_to_hearts(plyr_idx);
+        const struct Thing *heartng = find_players_dungeon_heart(plyr_idx);
+        SYNCLOG("World: player %d joined the running world%s, heart %d", (int)plyr_idx,
+            pmask_has(made, plyr_idx) ? " with a new start dungeon" : "", thing_exists(heartng) ? (int)heartng->index : 0);
     }
-    /* the keeper's start (exploration, cameras, allies) now that it has a heart */
-    init_player(get_player(plyr_idx), 0);
-    world_progress_new_player(plyr_idx);
-    world_perks_seat_started(plyr_idx); /* what the player keeps from earlier starts (by player, not seat) */
+    coop_keep(); /* a new start sets the keeper's allies anew: its partner is one again */
+}
+
+void world_seat_joined(PlayerNumber plyr_idx)
+{
+    seats_joined(plyr_idx, PLAYER_NONE);
+}
+
+void world_seats_joined_coop(PlayerNumber first, PlayerNumber second)
+{
+    world_coop_bond(first, second);
+    seats_joined(first, second);
+}
+
+void world_coop_seat_taken(PlayerNumber plyr_idx)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
+        return;
+    coop_held[plyr_idx] = 0;
+    world_perks_seat_started(plyr_idx); /* now that the seat has its player */
     cameras_to_hearts(plyr_idx);
-    const struct Thing *heartng = find_players_dungeon_heart(plyr_idx);
-    SYNCLOG("World: player %d joined the running world%s, heart %d", (int)plyr_idx,
-        pmask_has(made, plyr_idx) ? " with a new start dungeon" : "", thing_exists(heartng) ? (int)heartng->index : 0);
 }
 
 /******************************************************************************/
@@ -5247,6 +5739,106 @@ static void remake_chunk(const struct WorldChunkData *old, int32_t cx, int32_t c
     }
 }
 
+/** Has the chunk record ground of a human seat other than this one? */
+static TbBool record_has_other_seat(const struct WorldChunkData *cd, uint8_t wown)
+{
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+    {
+        const uint8_t o = cd->owner[i];
+        if ((o != wown) && ((o == WOwn_Player) || (o > WOwn_HumanBase)))
+            return true;
+    }
+    return false;
+}
+
+/** A reset in a chunk the seat shares with another player (an allied keeper's dungeon is next door; 2026-11-10): only
+ *  the seat's own ground is made again from the generator (plain earth where the generator has a structure), and its
+ *  things go with it. Everything else in the chunk stays as it is. */
+static void reset_shared_chunk(struct WorldChunkData *cd, int32_t cx, int32_t cy, PlayerNumber p, uint8_t wown,
+    int *kept_creatures)
+{
+    struct WorldChunkData *fresh = &reset_fresh;
+    const TbBool have_fresh = generate_chunk_data(cx, cy, fresh);
+    static uint8_t gone[WG_CHUNK_CELLS];
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+    {
+        gone[i] = (cd->owner[i] == wown);
+        pmask_del(&cd->dig[i], p);
+        if (!gone[i])
+            continue;
+        SlabKind k = SlbT_EARTH;
+        if (have_fresh && (fresh->owner[i] == WOwn_Neutral) && !fresh->wall[i] && (fresh->door[i] == 0))
+        {
+            const SlabKind fk = fresh->kind[i];
+            if ((fk == SlbT_ROCK) || (fk == SlbT_GOLD) || (fk == SlbT_DENSEGOLD) || (fk == SlbT_GEMS) || (fk == SlbT_LAVA) ||
+                (fk == SlbT_WATER) || (fk == SlbT_PATH))
+                k = fk;
+        }
+        cd->kind[i] = k;
+        cd->owner[i] = WOwn_Neutral;
+        cd->health[i] = 0;
+        cd->wall[i] = 0;
+        cd->door[i] = 0;
+        cd->texture[i] = cd->texture_initial[i];
+        cd->dig[i] = pmask_none();
+    }
+    for (int i = 0; i < CHUNK_STL_CELLS; i++)
+        pmask_del(&cd->revealed[i], p);
+    static int remap[WORLD_MAX_THINGS_PER_CHUNK];
+    const int old_count = cd->thing_count;
+    int n = 0;
+    for (int t = 0; t < old_count; t++)
+    {
+        struct WorldThing th = cd->things[t];
+        const int lx = (int)max(0L, min((long)WG_CHUNK - 1, (long)(th.x / COORD_PER_STL / STL_PER_SLB)));
+        const int ly = (int)max(0L, min((long)WG_CHUNK - 1, (long)(th.y / COORD_PER_STL / STL_PER_SLB)));
+        const int i = ly * WG_CHUNK + lx;
+        TbBool keep = true;
+        if (th.owner == wown)
+        {
+            /* its creatures and traps went before; what is left on its ground goes with it, the rest is nobody's */
+            keep = !gone[i] && (th.oclass != TCls_Creature) && (th.oclass != TCls_Trap);
+            th.owner = WOwn_Neutral;
+        } else if (gone[i])
+        {
+            /* another keeper's creature standing there stays (the slab under it open); things go with the ground */
+            keep = (th.oclass == TCls_Creature) && (th.owner != WOwn_Neutral) && (th.owner != WOwn_Heroes);
+            if (keep)
+            {
+                if (th.flags & WTF_Lair)
+                    th.z = -1;
+                th.flags &= (uint8_t)~(WTF_Lair | WTF_Prisoner | WTF_Tortured | WTF_LaidToRest);
+                if (!record_slab_open(cd, i))
+                    cd->kind[i] = SlbT_PATH;
+                (*kept_creatures)++;
+            }
+        }
+        remap[t] = keep ? n : -1;
+        if (keep)
+            cd->things[n++] = th;
+    }
+    cd->thing_count = n;
+    int ne = 0;
+    for (int e = 0; e < cd->ext_count; e++)
+    {
+        const int o = cd->ext[e].ordinal;
+        if ((o >= old_count) || (remap[o] < 0))
+            continue;
+        cd->ext[ne] = cd->ext[e];
+        cd->ext[ne].ordinal = (uint16_t)remap[o];
+        ne++;
+    }
+    cd->ext_count = ne;
+    if (!store_chunk_record(cd))
+        ERRORLOG("World: chunk (%d,%d) could not be stored after a reset", (int)cx, (int)cy);
+    struct ChunkSlot *mem = table_find(&W.memory, cx, cy);
+    if ((mem != NULL) && (mem->data != NULL))
+    {
+        memset(mem->data, 0, mem->len);
+        world_memory_gen++;
+    }
+}
+
 /** Users of the seat out of a creature and back over the dungeon. */
 static void seat_users_to_dungeon(PlayerNumber p)
 {
@@ -5302,6 +5894,7 @@ TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
     const TbBool cared = world_caretaker_active(p);
     SYNCLOG("World: player %d (%s): the dungeon is reset (a new start at offset %ld,%ld)", (int)p, player->player_name,
         (long)ndx, (long)ndy);
+    world_coop_unbond(p); /* co-op: the alliance of a party lasts until this */
     /* the old start's box: its stamp, or the level's own start for player 0 */
     int64_t box[4];
     const int64_t *boxp = NULL;
@@ -5380,7 +5973,7 @@ TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
             W.stamps[n].plyr = WORLD_STAMP_WIPED;
     /* 6. the store: those chunks and every record with ground of the seat's (or in the box) are made again; in the
           others what is left of the seat's is nobody's */
-    int remade = 0, freed = 0, kept = 0;
+    int remade = 0, freed = 0, kept = 0, shared = 0;
     {
         int nkeys = 0;
         int32_t *keys = store_keys(&nkeys);
@@ -5393,6 +5986,13 @@ TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
             TbBool remake = (table_find(&reset_chunks, cx, cy) != NULL) || chunk_in_box(cx, cy, boxp);
             for (int i = 0; (i < WG_CHUNK_CELLS) && !remake; i++)
                 remake = (cd->owner[i] == wown);
+            if (remake && record_has_other_seat(cd, wown))
+            {
+                /* another player's ground is in it (an allied keeper's dungeon beside this one): that stays */
+                reset_shared_chunk(cd, cx, cy, p, wown, &kept);
+                remade++;
+                shared++;
+            } else
             if (remake)
             {
                 remake_chunk(cd, cx, cy, p, wown, origin_home, &kept);
@@ -5462,9 +6062,10 @@ TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
                 netstate_server_request_keyframe(user);
     }
     const struct Thing *heartng = find_players_dungeon_heart(p);
-    SYNCLOG("World: player %d's dungeon reset: %d chunks made again (%d were loaded, %d loaded again), %d other records "
-        "freed, %d creatures and %d traps gone, %d other keepers' creatures kept; %s", (int)p, remade, nloaded, reloaded,
-        freed, creatures, traps, kept, thing_exists(heartng) ? "new start placed" : "NO new start");
+    SYNCLOG("World: player %d's dungeon reset: %d chunks made again (%d were loaded, %d loaded again; in %d shared with "
+        "other players only its own ground), %d other records freed, %d creatures and %d traps gone, %d other keepers' "
+        "creatures kept; %s", (int)p, remade, nloaded, reloaded, shared, freed, creatures, traps, kept,
+        thing_exists(heartng) ? "new start placed" : "NO new start");
     if (!thing_exists(heartng))
     {
         set_player_as_lost_level(player); /* no dungeon at all: "Start again" is offered */
@@ -7131,10 +7732,12 @@ void world_client_turn(void)
 {
     if (!W.active)
         return;
+    world_coop_refresh(); /* who is whose ally of a party (they see what each other sees) */
     client_follow_new_heart();
     world_colours_turn();
     world_progress_present();
     world_respawn_prompt_turn();
+    chat_box_turn();
     world_shots_hook();
     world_assist_hook();
     world_progress_client_turn();
@@ -7185,9 +7788,13 @@ void world_process_turn(void)
         update_keepers();
         update_portals();
     }
+    if ((game.play_gameturn % 64) == 3)
+        coop_keep();
+    world_coop_refresh();
     world_colours_turn(); /* local presentation only */
     world_progress_present();
     world_respawn_prompt_turn();
+    chat_box_turn();
     world_shots_hook();
     world_mapdrag_hook();
     world_mapedge_hook();
@@ -7262,6 +7869,7 @@ void world_level_end(void)
     gold_dirty = false;
     gold_next = 0;
     memset(seat_tokens, 0, sizeof(seat_tokens)); /* a new world's seats have no owners yet (a load sets them after) */
+    coop_clear();
     netstate_level_end();
     world_progress_level_end();
     world_levels_reset();
@@ -7852,6 +8460,24 @@ TbBool world_save_blob(unsigned char **data, uint32_t *len)
             rec_put(&w, wsec, NETSEC_KEY_LEN);
             memset(wsec, 0, sizeof(wsec));
         }
+        /* co-op: the allied pairs, and a seat still held for a party's second player: last */
+        uint32_t ncoop = 0;
+        for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+            if ((coop_partner[p] != 0) || (coop_held[p] != 0))
+                ncoop++;
+        if (ncoop > 0)
+        {
+            rec_u32(&w, WORLD_COOP_MAGIC);
+            rec_u32(&w, ncoop);
+            for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+            {
+                if ((coop_partner[p] == 0) && (coop_held[p] == 0))
+                    continue;
+                const uint32_t v[2] = {(uint32_t)p, (uint32_t)coop_partner[p]};
+                rec_put(&w, v, sizeof(v));
+                rec_put(&w, &coop_held[p], 8);
+            }
+        }
     }
     if ((w.buf == NULL) || w.err)
     {
@@ -8283,6 +8909,26 @@ TbBool world_load_blob(const unsigned char *data, uint32_t len)
             had_key = true;
         }
         memset(wsec, 0, sizeof(wsec));
+        ok = !r.bad;
+    }
+    if (!blob_resync)
+        coop_clear(); /* a save from before co-op has no pairs */
+    if (ok && (r.len - r.pos >= 8) && (rec_peek_u32(&r) == WORLD_COOP_MAGIC))
+    {
+        rec_get_u32(&r);
+        const uint32_t n = rec_get_u32(&r);
+        for (uint32_t k = 0; (k < n) && !r.bad; k++)
+        {
+            uint32_t v[2] = {0, 0};
+            uint64_t held = 0;
+            rec_get(&r, v, sizeof(v));
+            rec_get(&r, &held, 8);
+            if (!r.bad && !blob_resync && (v[0] < PLAYERS_MAX) && (v[1] <= PLAYERS_MAX))
+            {
+                coop_partner[v[0]] = (int16_t)v[1];
+                coop_held[v[0]] = held;
+            }
+        }
         ok = !r.bad;
     }
     free(raw);

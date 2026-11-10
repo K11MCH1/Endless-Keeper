@@ -36,8 +36,15 @@
 #include "game_merge.h"
 #include "vidmode.h"
 #include "value_util.h"
+#include "world_net.h"
+#include "chat_box.h"
 #include <ctype.h>
 #include "post_inc.h"
+
+/* the World List's Server box as last saved (or loaded): a change there is a change to save too */
+static char world_list_server_saved[WNET_URL_MAX] = "";
+/* the chat box's state (chat_box.c) as last saved or loaded */
+static int chat_box_saved = CBM_Open;
 
 #ifdef __cplusplus
 extern "C" {
@@ -536,6 +543,18 @@ TbBool load_settings(void)
         if (val && value_type(val) == VALUE_STRING) snprintf(net_config_info.net_player_name, sizeof(net_config_info.net_player_name), "%s", value_string(val));
         val = value_dict_get(vsec, "lobby_name");
         if (val && value_type(val) == VALUE_STRING) snprintf(net_config_info.net_lobby_name, sizeof(net_config_info.net_lobby_name), "%s", value_string(val));
+        val = value_dict_get(vsec, "world_list_server"); /* the World List's Server box (Endless Keeper) */
+        if (val && value_type(val) == VALUE_STRING)
+        {
+            wnet_menu_set_hub(value_string(val));
+            snprintf(world_list_server_saved, sizeof(world_list_server_saved), "%s", wnet_menu_hub_setting());
+        }
+        val = value_dict_get(vsec, "chat_box"); /* an endless server's chat box: 0 open, 1 the eye, 2 closed */
+        if (val && value_type(val) == VALUE_INT32)
+        {
+            chat_box_mode_load(value_int32(val));
+            chat_box_saved = chat_box_mode_setting();
+        }
         val = value_dict_get(vsec, "max_players");
         if (val && value_type(val) == VALUE_INT32) net_config_info.max_players = (uint8_t)clamp(value_int32(val), MIN_NET_USERS, STOCK_NET_USERS);
         val = value_dict_get(vsec, "spectators_enabled");
@@ -583,7 +602,8 @@ TbBool load_settings(void)
 short save_settings(void)
 {
     if (memcmp(&settings, &settings_saved, sizeof(settings)) == 0 && memcmp(&net_config_info, &net_config_saved, sizeof(net_config_info)) == 0
-     && memcmp(&skirmish_config_info, &skirmish_config_saved, sizeof(skirmish_config_info)) == 0)
+     && memcmp(&skirmish_config_info, &skirmish_config_saved, sizeof(skirmish_config_info)) == 0
+     && (strcmp(wnet_menu_hub_setting(), world_list_server_saved) == 0) && (chat_box_mode_setting() == chat_box_saved))
         return true;
 
     char *fname = prepare_file_path(FGrp_Save, "settings.toml");
@@ -641,6 +661,12 @@ short save_settings(void)
     TOSAVE("\n[network]\n");
     TOSAVE("player_name = \"%s\"\n", player_name);
     TOSAVE("lobby_name = \"%s\"\n", lobby_name);
+    {
+        char hub[2 * WNET_URL_MAX];
+        escape_toml_string(hub, sizeof(hub), wnet_menu_hub_setting());
+        TOSAVE("world_list_server = \"%s\"\n", hub);
+    }
+    TOSAVE("chat_box = %d\n", chat_box_mode_setting());
     TOSAVE("max_players = %d\n", (int)net_config_info.max_players);
     TOSAVE("spectators_enabled = %d\n", (int)net_config_info.spectators_enabled);
     TOSAVE("spectator_chat = %d\n", (int)net_config_info.spectator_chat);
@@ -656,6 +682,8 @@ short save_settings(void)
     free(buf);
     settings_saved = settings;
     net_config_saved = net_config_info;
+    snprintf(world_list_server_saved, sizeof(world_list_server_saved), "%s", wnet_menu_hub_setting());
+    chat_box_saved = chat_box_mode_setting();
     skirmish_config_saved = skirmish_config_info;
     return true;
 }

@@ -39,11 +39,83 @@
 #include "observer.h"
 #include "player_instances.h"
 #include "world_stream.h"
+#include "server_roles.h"
+#include "front_simple.h"
+#include "bflib_video.h"
+#include "kfx/renderer/RendererManager.h"
 #include "post_inc.h"
 
 /******************************************************************************/
 
 int chat_font_size = 20;
+
+/* each message's chat sender (-1: not a chat line), beside game.messages and moved with them: a chat line from an
+   endless server shows the sender's name first, in its role's colour (server_roles.c) */
+static short msg_sender[GUI_MESSAGES_COUNT];
+
+static void msg_sender_insert(void)
+{
+    memmove(&msg_sender[1], &msg_sender[0], sizeof(msg_sender[0]) * (GUI_MESSAGES_COUNT - 1));
+    msg_sender[0] = -1;
+}
+
+void message_set_chat_sender(PlayerNumber plyr_idx)
+{
+    msg_sender[0] = plyr_idx;
+}
+
+/** The chat font tinted with a role's colour: each palette colour becomes the role's colour at that colour's brightness
+ *  (the nearest the game's palette has), so letters keep their shading and dark edge. A few colours are kept. */
+const unsigned char *message_chat_name_remap(uint32_t rgb)
+{
+    static struct { uint32_t rgb; TbBool made; unsigned char map[256]; } cache[4];
+    static int next;
+    if (engine_palette == NULL)
+        return NULL;
+    for (int k = 0; k < 4; k++)
+        if (cache[k].made && (cache[k].rgb == rgb))
+            return cache[k].map;
+    const int k = next;
+    next = (next + 1) % 4;
+    const int tr = (int)((rgb >> 16) & 0xFF) >> 2, tg = (int)((rgb >> 8) & 0xFF) >> 2, tb = (int)(rgb & 0xFF) >> 2;
+    for (int i = 0; i < 256; i++)
+    {
+        const unsigned char *c = &engine_palette[3 * i];
+        /* the font's main colour (about 34 of 63 bright) takes the role's colour itself; darker ones a darker shade */
+        const int lum = (c[0] * 30 + c[1] * 59 + c[2] * 11) / 100;
+        const int f = min(64, lum * 64 / 34);
+        cache[k].map[i] = LbPaletteFindColour(engine_palette, (unsigned char)(tr * f / 64), (unsigned char)(tg * f / 64),
+            (unsigned char)(tb * f / 64));
+    }
+    cache[k].rgb = rgb;
+    cache[k].made = true;
+    return cache[k].map;
+}
+
+/** "<name>: " before a chat line (in its role's colour, with a dark edge); returns its width. */
+static int draw_chat_sender(PlayerNumber plyr_idx, long x, long y, int units_per_px)
+{
+    const char *name = NULL;
+    TbBool coloured = false;
+    uint32_t rgb = 0;
+    if ((plyr_idx < 0) || !roles_client_player(plyr_idx, &name, &coloured, &rgb))
+        return 0;
+    char prefix[32];
+    snprintf(prefix, sizeof(prefix), "%s: ", name);
+    const unsigned char *remap = coloured ? message_chat_name_remap(rgb) : NULL;
+    if (remap != NULL)
+    {
+        const unsigned char *old_remap = LbTextGetRemap();
+        const unsigned short flags = RendererGetDrawFlags();
+        RendererSetDrawFlags(flags & ~(Lb_TEXT_ONE_COLOR | Lb_TEXT_REMAP));
+        LbTextSetRemap(remap);
+        LbTextDrawResized(x, y, units_per_px, prefix);
+        LbTextSetRemap(old_remap);
+        RendererSetDrawFlags(flags);
+    } else
+        LbTextDrawResized(x, y, units_per_px, prefix);
+    return LbTextStringWidthM(prefix, units_per_px);
+}
 
 void message_draw(void)
 {
@@ -80,7 +152,8 @@ void message_draw(void)
             if ((game.messages[i].type == MsgType_Player) || (game.messages[i].type == MsgType_Spectator) || (game.messages[i].type == MsgType_Local)) {
                 text_offset = text_offset * icon_units_per_px / ps_units_per_px;
             }
-            LbTextDrawResized(x + text_offset, y, tx_units_per_px, game.messages[i].text);
+            const int sender_w = (game.messages[i].type == MsgType_Player) ? draw_chat_sender(msg_sender[i], x + text_offset, y, tx_units_per_px) : 0;
+            LbTextDrawResized(x + text_offset + sender_w, y, tx_units_per_px, game.messages[i].text);
             unsigned long spr_idx = 0;
             PlayerNumber plyr_idx = game.messages[i].plyr_idx;
             switch (game.messages[i].type)
@@ -245,6 +318,8 @@ void message_update(void)
 void zero_messages(void)
 {
     game.active_messages_count = 0;
+    for (int i = 0; i < GUI_MESSAGES_COUNT; i++)
+        msg_sender[i] = -1;
     for (int i = 0; i < 3; i++)
     {
       memset(&game.messages[i], 0, sizeof(struct GuiMessage));
@@ -267,6 +342,9 @@ void clear_messages_from_player(char type, PlayerNumber plyr_idx)
 
 void delete_message(unsigned char msg_idx)
 {
+    if (msg_idx < GUI_MESSAGES_COUNT - 1)
+        memmove(&msg_sender[msg_idx], &msg_sender[msg_idx + 1], sizeof(msg_sender[0]) * (GUI_MESSAGES_COUNT - 1 - msg_idx));
+    msg_sender[GUI_MESSAGES_COUNT - 1] = -1;
     memset(&game.messages[msg_idx], 0, sizeof(struct GuiMessage));
     if (msg_idx < game.active_messages_count - 1)
     {
@@ -282,6 +360,7 @@ void delete_message(unsigned char msg_idx)
 void message_add(char type, short idx, const char *text)
 {
     SYNCDBG(2,"Player %d: %s",idx,text);
+    msg_sender_insert();
     for (int i = GUI_MESSAGES_COUNT - 1; i > 0; i--)
     {
         memcpy(&game.messages[i], &game.messages[i-1], sizeof(struct GuiMessage));
@@ -314,6 +393,7 @@ void targeted_message_add(char type, PlayerNumber plyr_idx, PlayerNumber target_
     static char full_msg_text[2048];
     vsnprintf(full_msg_text, sizeof(full_msg_text), fmt_str, val);
     SYNCDBG(2,"Player %d: %s",(int)plyr_idx,full_msg_text);
+    msg_sender_insert();
     for (int i = GUI_MESSAGES_COUNT - 1; i > 0; i--)
     {
         memcpy(&game.messages[i], &game.messages[i-1], sizeof(struct GuiMessage));

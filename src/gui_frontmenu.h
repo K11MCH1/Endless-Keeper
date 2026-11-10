@@ -80,6 +80,8 @@ enum GUI_Menus {
   GMnu_FEENDLESS_LOAD     = 51,
   GMnu_FEWORLD_LIST       = 52,
   GMnu_WORLD_RESPAWN      = 53, /* endless world: "Start again" or "Quit" after a defeat */
+  GMnu_FEPARTY_INVITE     = 54, /* World List: "Join <name> to party?" */
+  GMnu_CHAT_BOX           = 55, /* a network endless game's chat box (chat_box.c) */
 };
 
 #define MENU_INVALID_ID -1

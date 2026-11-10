@@ -68,6 +68,7 @@
 #include "local_camera.h"
 #include "observer.h"
 #include "world_colours.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -246,6 +247,11 @@ long can_thing_be_picked_up_by_player(const struct Thing *thing, PlayerNumber pl
             return true;
         if (object_is_pickable_by_hand_to_hold_by_player(thing, plyr_idx))
             return true;
+        /* endless worlds (2026-11-10): a spellbook or a special box is picked up, or used, only where it lies on the
+           player's own ground (claimed floor or a room). The hand's power would take the player's own ones wherever
+           the player sees them: an ally's dungeon too, now that a party's allies see what each other sees. */
+        if (world_mode_active() && (thing_is_spellbook(thing) || thing_is_special_box(thing)))
+            return false;
     }
     // Other things are pickable only for placing in hand
     return can_cast_spell(plyr_idx, PwrK_HAND, thing->mappos.x.stl.num, thing->mappos.y.stl.num, thing, CastChk_Default);
@@ -1591,6 +1597,14 @@ TbBool is_dangerous_drop_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 
 TbBool can_drop_thing_here(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, unsigned long allow_unclaimed)
 {
+    /* (a creature in the hand can go on the ground of a party's ally; anything else only on the player's own) */
+    return can_drop_thing_here_as(stl_x, stl_y, plyr_idx, allow_unclaimed,
+        thing_is_creature(get_first_thing_in_power_hand(get_player(plyr_idx))));
+}
+
+TbBool can_drop_thing_here_as(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, unsigned long allow_unclaimed,
+    TbBool creature)
+{
     struct Map *mapblk;
     mapblk = get_map_block_at(stl_x, stl_y);
     if (!map_block_revealed(mapblk, plyr_idx))
@@ -1615,6 +1629,9 @@ TbBool can_drop_thing_here(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumbe
     else
     {
         if (slabmap_owner(slb) == plyr_idx)
+            return true;
+        /* endless worlds: the ground of a party's allied keeper (co-op) takes the player's creatures */
+        if (creature && world_coop_allies(plyr_idx, slabmap_owner(slb)))
             return true;
     }
     if (allow_unclaimed && slabmap_owner(slb) == game.neutral_player_num && slb->kind == SlbT_PATH)

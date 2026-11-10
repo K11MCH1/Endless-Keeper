@@ -55,6 +55,13 @@ void wnet_menu_close(void);
 void wnet_menu_poll(void);
 /** A line for the status bar: connecting, connected (with the name in use), or why not. */
 const char *wnet_menu_status(void);
+/** 0 connecting, 1 connected, 2 can't reach (trying again). */
+int wnet_menu_state(void);
+/* The World List's own hub (its Server box, 2026-11-09): "" means world_list_server. Kept in settings.toml. */
+void wnet_menu_set_hub(const char *url);
+const char *wnet_menu_hub_setting(void);
+/** The hub the World List connects to. */
+const char *wnet_menu_hub(void);
 int wnet_menu_server_count(void);
 const struct WnetServer *wnet_menu_server(int i);
 int wnet_menu_name_count(void);
@@ -64,6 +71,31 @@ const struct WnetChatLine *wnet_menu_chat_line(int i);
 /** Bumped whenever the chat gets a line, so the menu can follow it. */
 unsigned long wnet_menu_chat_serial(void);
 void wnet_menu_say(const char *text);
+
+/* Parties (2026-11-09): two players in the menu group up, ahead of playing together. The hub relays the invites and
+   keeps the parties; a party ends when either player leaves it or the World List. Only parties of two for now. */
+/** Connected to the hub, with a name from it. */
+TbBool wnet_menu_connected(void);
+/** This player's name on the hub ("" until it has one). */
+const char *wnet_menu_my_name(void);
+/** The other player in this player's party ("" when not in one). */
+const char *wnet_menu_party(void);
+/** The player whose invite waits for this player's answer ("" when none). */
+const char *wnet_menu_invite_from(void);
+/** The player this one invited, while the answer is awaited ("" when none). */
+const char *wnet_menu_invite_to(void);
+void wnet_menu_party_invite(const char *name);
+void wnet_menu_party_answer(TbBool accept);
+void wnet_menu_party_leave(void);
+/* Co-op (2026-11-10): a party enters a world together. The hub gives each party a key; the player who joins a world
+   tells the hub ("go"), which tells the partner; both games give the key to the world's server with their login, and
+   the server makes them allied keepers. */
+/** This player (in a party) enters the world with this id: the partner is told to follow. Returns the party's key
+ *  for the login (0: no party, or an older hub). The party is over in the menu. */
+uint64_t wnet_menu_party_go(const char *server_id);
+/** The partner entered a world: its row in the list (-1: none, or it isn't in this list) and the party's key. Asked
+ *  once: the menu joins it. */
+int wnet_menu_party_follow(uint64_t *key);
 
 /* This game as a server: it registers with the hub (and with its own hub, if it runs one). */
 void wnet_server_begin(const char *title, int port);

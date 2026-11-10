@@ -21,6 +21,7 @@
 #include "local_camera.h"
 #include "observer.h"
 #include "world_daynight.h"
+#include "chat_box.h"
 
 #include "post_inc.h"
 
@@ -52,6 +53,7 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
     if (show_sidebar) {
         draw_whole_status_panel();
     }
+    chat_box_turn(); /* an endless server's chat box opens, closes and moves with the message dialogs */
     draw_gui();
     world_daynight_draw();
     if (show_sidebar) {
@@ -59,6 +61,7 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
     }
     
     message_draw();
+    chat_box_draw_faded();
     draw_power_hand();
     gui_draw_all_boxes();
 }

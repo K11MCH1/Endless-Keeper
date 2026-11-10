@@ -63,6 +63,12 @@
 #include "../deps/zstd/zstd.h"
 #include "net_zdict.h"
 #include "kfx/profiling/KfxProfilingC.h"
+#include "server_roles.h"
+#include "chat_box.h"
+#include "bflib_sndlib.h"
+#include "scrcapt.h"
+#include "gui_parchment.h"
+#include "world_colours.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -148,6 +154,7 @@ static uint8_t *rec;
 static size_t rec_len, rec_cap;
 static TbBool rec_failed;
 static NetUserMask keyframe_wanted; /* users that need a keyframe */
+static TbBool client_music_started; /* a thin client started the level's music (once a session) */
 static NetUserMask known_clients;   /* users that have had a keyframe since they connected */
 static uint32_t next_input_seq[MAX_NET_USERS];
 static struct Packet last_input[MAX_NET_USERS];
@@ -1578,6 +1585,7 @@ static uint8_t *simcheck_cc;
 #define NS_CAP_ZSTD1 0x1u           /* zstd with the dictionaries 17001 (shared part) and 17002 (own part) */
 #define NS_WIRE_ZSTD 0x80000000u    /* in NsWire.raw_len */
 #define NS_CAP_DUAL1 0x2u           /* takes each turn twice: reliably, and an unreliable copy (the first to come is used) */
+#define NS_CAP_ROLES1 NETSTATE_CAP_ROLES /* reads NETMSG_ROLES (2026-11-10) */
 #define NS_WIRE_COPY 0x40000000u    /* in NsWire.raw_len: this is the unreliable copy of a turn */
 #define NS_ZSTD_LEVEL 3
 static uint32_t ns_caps[MAX_NET_CONNECTIONS];
@@ -1637,7 +1645,14 @@ void netstate_server_caps(NetUserId source, const char *buffer, size_t size)
     if (ns_caps[source] != caps)
         SYNCLOG("Thin-client server: user %d reads%s%s", (int)source, (caps & NS_CAP_ZSTD1) ? " zstd with the dictionaries" : " zlib only",
             (caps & NS_CAP_DUAL1) ? ", and takes each turn's unreliable copy too" : "");
+    if (ns_caps[source] != caps)
+        server_roles_caps_changed(source); /* it gets the roles table again */
     ns_caps[source] = caps;
+}
+
+uint32_t netstate_client_caps(NetUserId user)
+{
+    return ((user >= 0) && (user < MAX_NET_CONNECTIONS)) ? ns_caps[user] : 0;
 }
 
 /** The turn's shared part in zstd, when a streaming client reads it. */
@@ -3906,10 +3921,19 @@ static void client_apply(const uint8_t *data, size_t len)
     {
         client_has_keyframe = true;
         SYNCLOG("Thin client: keyframe applied at turn %lu", (unsigned long)h.turn);
+        if (!client_music_started)
+        {
+            /* the level's music: a new game starts it in init_player (the local player's set-up), which a thin client
+               never runs; the same track, once a session (it keeps playing through later keyframes) */
+            client_music_started = true;
+            const LevelNumber lvnum = get_loaded_level_number();
+            const long safe_lvnum = (lvnum > 0) ? lvnum : 1;
+            play_music_track(3 + (int)((safe_lvnum - 1) % 4)); /* tracks 3..6 */
+        }
         {
             /* what this client reads: zstd with the dictionaries (KFX_NET_NOZSTD=1: zlib only, as older clients) */
             const uint32_t caps = ((getenv("KFX_NET_NOZSTD") != NULL) ? 0u : NS_CAP_ZSTD1) |
-                ((getenv("KFX_NET_NODUAL") != NULL) ? 0u : NS_CAP_DUAL1);
+                ((getenv("KFX_NET_NODUAL") != NULL) ? 0u : NS_CAP_DUAL1) | NS_CAP_ROLES1;
             char *wp = begin_net_message(NETMSG_STATE_CAPS);
             memcpy(wp, &caps, 4);
             send_message_buffer(SERVER_ID, wp + 4);
@@ -3928,6 +3952,50 @@ static void client_apply(const uint8_t *data, size_t len)
         }
     }
     client_rebuild_local();
+    {
+        /* test hook KFX_NET_TESTSAY="<s>:<text>|...": chat lines this client sends that many seconds after its first
+           keyframe ("#shot": a screenshot instead) */
+        static Uint64 say_from = 0;
+        static int say_next = 0;
+        const char *ts = getenv("KFX_NET_TESTSAY");
+        if ((ts != NULL) && client_has_keyframe && !network_user_is_spectator(netstate.my_id))
+        {
+            if (say_from == 0)
+                say_from = SDL_GetTicks();
+            const char *item = ts;
+            for (int i = 0; (i < say_next) && (item != NULL); i++)
+            {
+                item = strchr(item, '|');
+                if (item != NULL)
+                    item++;
+            }
+            const char *colon = ((item != NULL) && (*item != '\0')) ? strchr(item, ':') : NULL;
+            if ((colon != NULL) && (SDL_GetTicks() - say_from >= (Uint64)atol(item) * 1000))
+            {
+                const char *end = strchr(colon + 1, '|');
+                char text[128];
+                snprintf(text, sizeof(text), "%.*s", (int)((end != NULL) ? (size_t)(end - colon - 1) : strlen(colon + 1)), colon + 1);
+                if (strncmp(text, "#cb ", 4) == 0)
+                    chat_box_test(text + 4); /* the chat box: "#cb eye", "#cb type hello", ... */
+                else if (strcmp(text, "#grab") == 0)
+                    world_colours_test_grab(); /* co-op: an imp into the hand */
+                else if (strcmp(text, "#drop") == 0)
+                    world_colours_test_drop(); /* co-op: the hand's box over the ally's floor */
+                else if (strcmp(text, "#map") == 0)
+                    zoom_to_parchment_map(); /* the full-screen map */
+                else if (strcmp(text, "#unmap") == 0)
+                    zoom_from_parchment_map();
+                else if (strcmp(text, "#shot") == 0)
+                {
+                    char fname[64];
+                    snprintf(fname, sizeof(fname), "scrshots/say_p%d_%d.png", (int)my_player_number, say_next);
+                    take_screenshot(fname);
+                } else
+                    send_network_chat_message(netstate.my_id, text);
+                say_next++;
+            }
+        }
+    }
     {
         static struct DungeonCamera last_cam;
         static TbBool last_cam_valid = false;
@@ -4204,6 +4272,9 @@ void netstate_level_start(void)
     events_len = 0;
     client_has_keyframe = false;
     client_keyframe_asked = false;
+    client_music_started = false;
+    roles_client_reset(); /* the next server says its own */
+    chat_box_reset();
 }
 
 void netstate_level_end(void)

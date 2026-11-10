@@ -85,6 +85,9 @@ void drop_gold_coins(const struct Coord3d *pos, long value, long plyr_idx);
 TbBool is_dangerous_drop_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 short can_place_thing_here(struct Thing *thing, long x, long y, long dngn_idx);
 TbBool can_drop_thing_here(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, unsigned long allow_unclaimed);
+/** The same for a thing of a kind (a creature or not), whatever the hand holds. */
+TbBool can_drop_thing_here_as(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, unsigned long allow_unclaimed,
+    TbBool creature);
 TbBool armageddon_blocks_creature_pickup(const struct Thing *thing, PlayerNumber plyr_idx);
 TbBool thing_pickup_is_blocked_by_hand_rule(const struct Thing *thing_to_pick, PlayerNumber plyr_idx);
 void reset_hand_rules(void);

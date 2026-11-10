@@ -19,6 +19,7 @@
 #include "pre_inc.h"
 #include "kfx/renderer/RendererManager.h"
 #include "frontmenu_ingame_evnt.h"
+#include "chat_box.h"
 #include "globals.h"
 #include "bflib_basics.h"
 #include "bflib_datetm.h"
@@ -85,7 +86,11 @@ EventIndex get_my_event_button_index(unsigned int button_idx)
 void gui_open_event(struct GuiButton *gbtn)
 {
     SYNCDBG(5,"Starting");
-    EventIndex evidx = get_my_event_button_index(gbtn->content.lval);
+    if (chat_box_icon_button(gbtn)) { /* the chat icon opens and closes the chat box */
+        chat_box_icon_click(gbtn);
+        return;
+    }
+    EventIndex evidx = get_my_event_button_index(event_button_slot(gbtn));
     if (evidx == my_visible_event_idx)
     {
         gui_close_objective(gbtn);
@@ -99,7 +104,9 @@ void gui_open_event(struct GuiButton *gbtn)
 void gui_kill_event(struct GuiButton *gbtn)
 {
     struct PlayerInfo* player = get_my_player();
-    EventIndex evidx = get_my_event_button_index(gbtn->content.lval);
+    if (chat_box_icon_button(gbtn))
+        return;
+    EventIndex evidx = get_my_event_button_index(event_button_slot(gbtn));
     turn_off_event_box_if_necessary(player->id_number, evidx);
     if (replay.load_enable || (network_is_active() && net_join_role == NetRole_Spectator)) {
         return;

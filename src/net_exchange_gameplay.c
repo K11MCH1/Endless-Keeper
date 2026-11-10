@@ -17,6 +17,7 @@
 #include "pre_inc.h"
 #include "kfx/renderer/RendererManager.h"
 #include "net_exchange_gameplay.h"
+#include "chat_box.h"
 #include "bflib_enet.h"
 #include "bflib_datetm.h"
 #include "game_legacy.h"
@@ -235,7 +236,13 @@ void process_gameplay_chat_message(NetUserId user, const char *message, MapCoord
             }
         }
         if (shown) {
-            message_add(message_type, plyr_idx, text);
+            if ((message_type == MsgType_Player) && chat_box_active()) {
+                chat_box_add(plyr_idx, text); /* an endless server's chat box, not the top of the screen */
+            } else {
+                message_add(message_type, plyr_idx, text);
+                if ((message_type == MsgType_Player) && (text[0] != cmd_char))
+                    message_set_chat_sender(plyr_idx);
+            }
             play_non_3d_sample(snd_chat_message[user == get_local_user()]);
         }
     }

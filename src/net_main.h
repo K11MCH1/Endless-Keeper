@@ -163,6 +163,7 @@ enum NetMessageType {
     NETMSG_STATE_CAPS,       /* thin-client play: what a client reads (u32 NS_CAP_*), after each keyframe (2026-11-09) */
     NETMSG_KEYREQ,           /* endless worlds: a joining client asks for the world's key (net_secure.c) */
     NETMSG_KEYINFO,          /* the server's answer: its public key and a nonce for this login */
+    NETMSG_ROLES,            /* endless servers: each seat's name and role colour, for chat (server_roles.c, 2026-11-10) */
 };
 
 enum NetConnectionRole {
@@ -224,6 +225,7 @@ struct NetUser {
     uint32_t spectator_resync_requested_at;
     TbBool spectator_conversion_requested;
     uint64_t reconnect_token;
+    uint64_t party_key;      /* the key of the party it came with from the World List (0: none; co-op, 2026-11-10) */
     TbBool seat_requested;
     NetUserId seat_user;
     UserPreferences seat_prefs;

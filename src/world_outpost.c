@@ -2342,6 +2342,7 @@ static int op_spawn_model(MapSlabCoord sx, MapSlabCoord sy, long model, int leve
     if (thing_is_invalid(thing))
         return 0;
     const int cap = op_level_cap();
+    level += world_coop_level_bonus_at_slab(sx, sy); /* co-op: a level higher by a party's start */
     init_creature_level(thing, (CrtrExpLevel)(max(1, min(level, cap)) - 1));
     struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
     if (!creature_control_invalid(cctrl))

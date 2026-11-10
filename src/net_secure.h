@@ -27,6 +27,8 @@ extern "C" {
 
 #define NETSEC_KEY_LEN 32
 #define NETSEC_MAGIC 0x31534B45u /* "EKS1" */
+/* what a server reads in a sealed login beyond the token and password (the byte after its key and nonce) */
+#define NETSEC_FEAT_PARTY 0x01 /* a party's key (co-op, 2026-11-10) */
 
 /** Random bytes from the operating system (for keys and nonces). */
 void netsec_random(void *buf, size_t n);
@@ -58,11 +60,11 @@ void netsec_client_keyinfo(const char *buf, size_t size);
 void netsec_client_reset(void);
 TbBool netsec_client_has_key(void);
 /** The client: the sealed part of the login (token for this server, password) into dst; its length (0: none). */
-size_t netsec_client_login_ext(char *dst, size_t room, uint64_t secret, const char *password);
+size_t netsec_client_login_ext(char *dst, size_t room, uint64_t secret, const char *password, uint64_t party_key);
 /** The server: reads the sealed part of a login, if any (1: read, token and password set; 0: none; -1: broken or
  *  not sealed to this server's key and nonce). */
 int netsec_server_login_ext(NetUserId source, const char *p, const char *end, uint64_t *token, char *password,
-    size_t password_room);
+    size_t password_room, uint64_t *party_key);
 /** The server: a user's token came as an older client's secret (turned once the world has its key). */
 void netsec_server_mark_raw(NetUserId user, TbBool raw);
 

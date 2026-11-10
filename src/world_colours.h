@@ -23,6 +23,9 @@ extern "C" {
 
 /** Called each game turn in world levels: looks for keepers the local player has just met (local state only). */
 void world_colours_turn(void);
+/** Test hook: logs whether the local player can drop a creature on its ally's floor. */
+void world_colours_test_drop(void);
+void world_colours_test_grab(void);
 /** Forgets who was met (a new level, a loaded save). */
 void world_colours_reset(void);
 /** The colour index this machine shows for a player (get_player_color_idx outside endless levels). */

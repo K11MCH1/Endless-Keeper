@@ -228,6 +228,7 @@ static TbBool wild_spawn(struct WildRng *rng, ThingModel model, MapSlabCoord x, 
         PLAYER_GOOD);
     if (thing_is_invalid(thing))
         return false;
+    level += world_coop_level_bonus_at_slab(x, y); /* co-op: a level higher by a party's start */
     init_creature_level(thing, (CrtrExpLevel)(level - 1));
     struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
     cctrl->party.objective = CHeroTsk_DefendSpawn;

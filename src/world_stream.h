@@ -57,6 +57,36 @@ void world_imp_mined_gold(struct Thing *creatng);
 void world_set_seat_token(PlayerNumber plyr_idx, uint64_t token);
 /** A player joined the running world (server): a new start dungeon, gold, the kit, and the view on the heart. */
 void world_seat_joined(PlayerNumber plyr_idx);
+/* Co-op (2026-11-10): two players who made a party in the World List are allied keepers in the world they enter: allied
+   both ways and locked, creatures dropped on each other's ground. The pair is the seats', kept in the save, until a
+   dungeon reset of either. */
+/** The seat's partner (PLAYER_NONE: none). */
+PlayerNumber world_coop_partner(PlayerNumber plyr_idx);
+/** Are the two a party's allied keepers: allied both ways and locked (game state, the same on every machine; the
+ *  pairs themselves are the server's)? Each can drop creatures on the other's ground. */
+TbBool world_coop_allies(PlayerNumber a, PlayerNumber b);
+/** A keeper's allied keeper of a party (PLAYER_NONE: none), read from the alliances each turn (world_coop_refresh):
+ *  the same on every machine. A party's allies see what each other sees. */
+PlayerNumber world_coop_ally(PlayerNumber plyr_idx);
+void world_coop_refresh(void);
+/** Co-op: enemies made for a keeper in a party are so many levels higher (1, or 0): for a keeper; for the keeper whose
+ *  start dungeon is nearest a world slab, or an engine slab. */
+int world_coop_level_bonus(PlayerNumber plyr_idx);
+int world_coop_level_bonus_at(int64_t wx, int64_t wy);
+int world_coop_level_bonus_at_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
+/** Two seats become a pair (false when either has a partner already). */
+TbBool world_coop_bond(PlayerNumber a, PlayerNumber b);
+/** The seat's pair ends; returns the partner it had (PLAYER_NONE: none). */
+PlayerNumber world_coop_unbond(PlayerNumber plyr_idx);
+/** A pair's two new seats join the running world: their start dungeons side by side. */
+void world_seats_joined_coop(PlayerNumber first, PlayerNumber second);
+/** A seat made for a party's second player (its dungeon stands, beside the first's): held for the login with this
+ *  key; the key of a held seat (0: not held); the seat held for a key (PLAYER_NONE: none). */
+void world_coop_hold_seat(PlayerNumber plyr_idx, uint64_t key);
+uint64_t world_coop_held_key(PlayerNumber plyr_idx);
+PlayerNumber world_coop_held_seat(uint64_t key);
+/** The held seat has its player now. */
+void world_coop_seat_taken(PlayerNumber plyr_idx);
 /** Start again (2026-11-08): may this defeated keeper's seat start again (an endless world's human seat)? */
 TbBool world_seat_can_respawn(PlayerNumber plyr_idx);
 /** Frees the defeated keeper's seat (its leftovers nobody's, its records from zero) and gives it to the same player

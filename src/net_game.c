@@ -896,6 +896,7 @@ void process_user_leave_game_packet(NetUserId user)
     // note: packet processed in sync with simulation, it's okay to do this.
     // replays take this path too, so the departure is visible there.
     if (network_is_active()) {
+        server_admin_user_leaving(user, get_packet(user)->actn_par1 == NET_LEAVE_TIMED_OUT); /* the server log */
         OnDroppedUser(user, NETDROP_MANUAL);
     }
     const TbBool timed_out = (get_packet(user)->actn_par1 == NET_LEAVE_TIMED_OUT);

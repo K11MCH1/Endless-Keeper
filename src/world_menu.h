@@ -46,6 +46,7 @@ void world_menu_load_setup(void);
 extern struct GuiMenu world_list_menu;
 /** "Start again" or "Quit": the box shown 5 s after this machine's keeper is defeated in an endless world. */
 extern struct GuiMenu world_respawn_menu;
+extern struct GuiMenu world_party_menu;
 /** Every world turn (this machine's presentation): shows the box after a defeat, and puts the panel back when the
  *  keeper has started again. */
 void world_respawn_prompt_turn(void);

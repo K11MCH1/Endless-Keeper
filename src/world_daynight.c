@@ -827,6 +827,7 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
     }
     /* how many parties: by the player's best creature, each party landing on its own spot */
     const int best = dn_keeper_best_level(plyr_idx);
+    const int coop_bonus = world_coop_level_bonus(plyr_idx);
     const int tier = dn_tier_for(best);
     const int want = dn_tiers[tier].parties_min +
         (int)dn_rand(&rng, (uint32_t)(dn_tiers[tier].parties_max - dn_tiers[tier].parties_min + 1));
@@ -915,6 +916,9 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         }
         int levels[6];
         dn_party_levels(&rng, n, best, day, levels);
+        /* co-op: the heroes that come for a keeper in a party are a level higher */
+        for (int j = 0; (j < n) && (coop_bonus > 0); j++)
+            levels[j] = min(levels[j] + coop_bonus, DN_LEVEL_CAP);
         struct Thing *leader = INVALID_THING;
         int made = 0;
         char desc[200];
@@ -972,8 +976,8 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         made_all += made;
         const long dist = (long)floor(sqrt((double)(sx - hx) * (sx - hx) + (double)(sy - hy) * (sy - hy)) + 0.5);
         SYNCLOG("World: day %ld raid %d party %d of %d: %d heroes tunnel in at engine slab (%d,%d), %ld slabs from the"
-            " heart, %s: %s (player's best level %d)", day, idx + 1, s + 1, nspots, made, (int)sx, (int)sy, dist,
-            wg_biome_name(biome), desc, best);
+            " heart, %s: %s (player's best level %d%s)", day, idx + 1, s + 1, nspots, made, (int)sx, (int)sy, dist,
+            wg_biome_name(biome), desc, best, (coop_bonus > 0) ? "; a level higher: the keeper is in a party" : "");
     }
     if (made_all == 0)
         return;

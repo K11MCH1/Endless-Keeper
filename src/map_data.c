@@ -30,6 +30,7 @@
 #include "map_utils.h"
 #include "room_util.h"
 #include "world_pages.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -314,6 +315,12 @@ PlayerBitFlags get_player_vision_mask(PlayerNumber plyr_idx)
             if (players_are_mutual_allies(plyr_idx, i)) {
                 pmask_add(&players, i);
             }
+        }
+    } else {
+        /* endless worlds: the allied keeper of a party (co-op), whatever the rule for other allies says */
+        const PlayerNumber ally = world_coop_ally(plyr_idx);
+        if (ally != PLAYER_NONE) {
+            pmask_add(&players, ally);
         }
     }
     return players;
@@ -637,6 +644,10 @@ void clear_slab_dig(MapSlabCoord slb_x, MapSlabCoord slb_y, PlayerNumber plyr_id
         else
         {
             untag_blocks_for_digging_in_area(slab_subtile(slb_x, 0), slab_subtile(slb_y, 0), plyr_idx);
+            /* endless worlds: a party's ally sees it too */
+            const PlayerNumber ally = world_coop_ally(plyr_idx);
+            if (ally != PLAYER_NONE)
+                untag_blocks_for_digging_in_area(slab_subtile(slb_x, 0), slab_subtile(slb_y, 0), ally);
         }
     }
 }

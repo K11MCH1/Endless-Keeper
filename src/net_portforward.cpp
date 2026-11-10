@@ -352,6 +352,7 @@ static void port_forward_remove_mapping(void)
         UPNP_DeletePortMapping(upnp_urls.controlURL, upnp_data.first.servicetype, port_string, "UDP", NULL);
         FreeUPNPUrls(&upnp_urls);
     }
+    LbNetLog("Port forwarding: UDP port %u forward removed\n", mapped_port);
     mapped_port = 0;
     active_method = PORT_FORWARD_NONE;
 }
@@ -384,4 +385,139 @@ void port_forward_set_mapping(uint16_t port)
         WSACleanup();
 #endif
     });
+}
+
+/******************************************************************************/
+/* The World List hub's TCP port (2026-11-09): players elsewhere reach a dedicated server's hub by the server's
+   address. Its own task and router state, apart from the game port's (the two may run at once). */
+static std::future<void> tcp_task;
+static std::atomic<uint32_t> tcp_generation = 0;
+static uint16_t tcp_mapped_port = 0;
+static enum PortForwardMethod tcp_method = PORT_FORWARD_NONE;
+static struct UPNPUrls tcp_urls;
+static struct IGDdatas tcp_data;
+
+/** A NAT-PMP TCP mapping for port (lifetime 0 removes it); 1 if the router agreed. */
+static int tcp_natpmp(uint16_t port, uint32_t lifetime)
+{
+    natpmp_t n;
+    if (initnatpmp(&n, 0, 0) < 0) {
+        return 0;
+    }
+    int result = -1;
+    if (sendnewportmappingrequest(&n, NATPMP_PROTOCOL_TCP, port, (lifetime != 0) ? port : 0, lifetime) >= 0) {
+        natpmpresp_t response;
+        fd_set file_descriptors;
+        struct timeval timeout;
+        clock_t start_time = LbTimerClock();
+        do {
+            if ((double)(LbTimerClock() - start_time) / 1000.0 > NATPMP_TIMEOUT_SECONDS) {
+                result = -1;
+                break;
+            }
+            FD_ZERO(&file_descriptors);
+            FD_SET(n.s, &file_descriptors);
+            getnatpmprequesttimeout(&n, &timeout);
+            select(FD_SETSIZE, &file_descriptors, NULL, NULL, &timeout);
+            result = readnatpmpresponseorretry(&n, &response);
+        } while (result == NATPMP_TRYAGAIN);
+    }
+    closenatpmp(&n);
+    return (result >= 0) ? 1 : 0;
+}
+
+static int tcp_upnp_add(uint16_t port)
+{
+    int error = 0;
+    struct UPNPDev *device_list = upnpDiscover(UPNP_TIMEOUT_MS, NULL, NULL, 0, 0, 2, &error);
+    if (!device_list) {
+        return 0;
+    }
+    char lanaddr[64] = "";
+#if (MINIUPNPC_API_VERSION >= 18)
+    int igd = UPNP_GetValidIGD(device_list, &tcp_urls, &tcp_data, lanaddr, sizeof(lanaddr), NULL, 0);
+#else
+    int igd = UPNP_GetValidIGD(device_list, &tcp_urls, &tcp_data, lanaddr, sizeof(lanaddr));
+#endif
+    freeUPNPDevlist(device_list);
+    if (igd == 0) {
+        FreeUPNPUrls(&tcp_urls);
+        return 0;
+    }
+    char port_string[16];
+    snprintf(port_string, sizeof(port_string), "%u", port);
+    UPNP_DeletePortMapping(tcp_urls.controlURL, tcp_data.first.servicetype, port_string, "TCP", "");
+    int result = UPNP_AddPortMapping(tcp_urls.controlURL, tcp_data.first.servicetype, port_string, port_string, lanaddr, "KeeperFX World List", "TCP", "", "0");
+    if (result != UPNPCOMMAND_SUCCESS) {
+        result = UPNP_AddPortMapping(tcp_urls.controlURL, tcp_data.first.servicetype, port_string, port_string, lanaddr, "KeeperFX World List", "TCP", "", "3600");
+    }
+    if (result != UPNPCOMMAND_SUCCESS) {
+        LbNetLog("UPnP: the router refused TCP port %u (error %d, %s)\n", port, result, strupnperror(result));
+        FreeUPNPUrls(&tcp_urls);
+        return 0;
+    }
+    LbNetLog("UPnP: TCP port %u (World List hub) forwarded to %s\n", port, lanaddr);
+    return 1;
+}
+
+void port_forward_set_tcp_mapping(uint16_t port)
+{
+    uint32_t generation = ++tcp_generation;
+    tcp_task = std::async(std::launch::async, [previous = std::move(tcp_task), port, generation]() mutable {
+        if (previous.valid()) {
+            previous.wait();
+            previous = {};
+        }
+        if (generation != tcp_generation) {
+            return;
+        }
+#ifdef _WIN32
+        WSADATA data;
+        if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+            return;
+        }
+#endif
+        if (tcp_mapped_port != 0) {
+            char port_string[16];
+            snprintf(port_string, sizeof(port_string), "%u", tcp_mapped_port);
+            if (tcp_method == PORT_FORWARD_UPNP) {
+                UPNP_DeletePortMapping(tcp_urls.controlURL, tcp_data.first.servicetype, port_string, "TCP", NULL);
+                FreeUPNPUrls(&tcp_urls);
+            } else if (tcp_method == PORT_FORWARD_NATPMP) {
+                tcp_natpmp(tcp_mapped_port, 0);
+            }
+            LbNetLog("Port forwarding: TCP port %u forward removed\n", tcp_mapped_port);
+            tcp_mapped_port = 0;
+            tcp_method = PORT_FORWARD_NONE;
+        }
+        if ((port != 0) && (generation == tcp_generation)) {
+            if (is_cgnat_detected()) {
+                LbNetLog("Port forwarding: CGNAT, the World List hub's TCP port %u can't be forwarded\n", port);
+            } else if (getenv("KFX_PORTFORWARD_DRYRUN") != NULL) {
+                LbNetLog("Port forwarding: would ask the router for TCP port %u (dry run)\n", port);
+            } else if (tcp_natpmp(port, 0x7FFFFFFF)) {
+                LbNetLog("NAT-PMP: TCP port %u (World List hub) forwarded\n", port);
+                tcp_mapped_port = port;
+                tcp_method = PORT_FORWARD_NATPMP;
+            } else if (tcp_upnp_add(port)) {
+                tcp_mapped_port = port;
+                tcp_method = PORT_FORWARD_UPNP;
+            } else {
+                LbNetLog("Port forwarding: the router didn't forward TCP port %u; for players elsewhere, forward it by hand\n", port);
+            }
+        }
+#ifdef _WIN32
+        WSACleanup();
+#endif
+    });
+}
+
+void port_forward_wait(void)
+{
+    if (mapping_task.valid()) {
+        mapping_task.wait_for(std::chrono::seconds(5));
+    }
+    if (tcp_task.valid()) {
+        tcp_task.wait_for(std::chrono::seconds(5));
+    }
 }

@@ -33,6 +33,7 @@
 #include "world_stream.h"
 #include "bflib_enet.h"
 #include "server_admin.h"
+#include "thing_list.h"
 #include "post_inc.h"
 
 #define THIN_JOIN_LOAD_MS 120000
@@ -406,7 +407,8 @@ static void thin_unique_name(NetUserId id)
         const int keep = (int)(sizeof(candidate) - 1 - strlen(suffix));
         snprintf(candidate, sizeof(candidate), "%.*s%s", keep, base, suffix);
         TbBool used = false;
-        for (NetUserId u = 0; (u < MAX_NET_CONNECTIONS) && !used; u++) {
+        /* a dedicated server's own user plays no keeper: its name (the PC's settings) is not taken */
+        for (NetUserId u = netstate_dedicated() ? SERVER_ID + 1 : 0; (u < MAX_NET_CONNECTIONS) && !used; u++) {
             used = (u != id) && IsUserActive(u) && (strcmp(netstate.users[u].name, candidate) == 0);
         }
         if (!used) {
@@ -446,16 +448,97 @@ static void thin_drop_stale(NetUserId u, const char *name, int quiet_ms)
     netstate.users_timed_out[u] = true;
 }
 
+/* Co-op (2026-11-10): two joiners who made a party in the World List bring its key in their logins, and become allied
+   keepers (world_stream.c). Two new players start side by side: the first to be ready waits for the other, who is
+   seated with a second seat made beside its own and held for the first. A new player whose partner has a dungeon
+   starts near it. Two players who both have dungeons are allied where they are. */
+#define PARTY_WAIT_MS 60000 /* a new player waits this long for its partner */
+static TbClockMSec party_wait_from[MAX_NET_CONNECTIONS]; /* when a new joiner began to wait for its partner (0: not) */
+
+/** The seated player (its user) who came with this party key, or INVALID_USER_ID. */
+static NetUserId party_seated_user(uint64_t key)
+{
+    for (NetUserId u = SERVER_ID + 1; u < MAX_NET_USERS; u++) {
+        const PlayerNumber p = get_net_user_player_number(u);
+        if (IsUserActive(u) && (netstate.users[u].party_key == key) && (p >= 0) && (p < PLAYERS_COUNT)) {
+            return u;
+        }
+    }
+    return INVALID_USER_ID;
+}
+
+/** Another joiner (not seated yet) who came with this party key, or INVALID_USER_ID. */
+static NetUserId party_joiner(uint64_t key, NetUserId except)
+{
+    for (NetUserId c = MAX_NET_USERS; c < MAX_NET_CONNECTIONS; c++) {
+        if ((c != except) && IsUserActive(c) && (netstate.users[c].party_key == key)) {
+            return c;
+        }
+    }
+    return INVALID_USER_ID;
+}
+
+/** A seat nobody has (fresh: one without a dungeon standing, as a party's new players need). */
+static PlayerNumber thin_free_seat(TbBool fresh, PlayerNumber except)
+{
+    const PlayerNumber *seats = NULL;
+    const int seat_count = world_seat_players(&seats);
+    for (int s = 0; s < seat_count; s++) {
+        const PlayerNumber p = seats[s];
+        struct PlayerInfo *player = get_player(p);
+        if ((p == except) || (get_player_primary_user(player) >= 0) || (player->player_name[0] != 0) || (world_seat_token(p) != 0)
+         || (player->victory_state != VicS_Undecided) || world_player_is_keeper(p) || (world_coop_held_key(p) != 0)) {
+            continue;
+        }
+        if (fresh && thing_exists(find_players_dungeon_heart(p))) {
+            continue;
+        }
+        return p;
+    }
+    return PLAYER_NONE;
+}
+
+static void party_notice_pair(PlayerNumber a, PlayerNumber b, const char *how)
+{
+    for (int k = 0; k < 2; k++) {
+        const PlayerNumber me = (k == 0) ? a : b, other = (k == 0) ? b : a;
+        const NetUserId u = get_player_primary_user(get_player(me));
+        if ((u <= SERVER_ID) || (u >= MAX_NET_USERS)) {
+            continue;
+        }
+        char text[160];
+        snprintf(text, sizeof(text), "You and %s are allied keepers%s", server_admin_player_name(other), how);
+        server_admin_notice(u, text);
+    }
+    server_admin_log("party", "%s and %s are allied keepers (a party)", server_admin_player_name(a),
+        server_admin_player_name(b));
+}
+
 static void thin_seat_joiners(void)
 {
     static NetUserMask full_noted;
     if ((game.play_gameturn % 100) == 0) {
         full_noted = numask_none(); /* seats free up: try again */
     }
+    {
+        /* co-op: a seat held for a party's second player who has gone is nobody's again (its dungeon stands: the next
+           player to join gets it, as the first start of a dedicated server) */
+        const PlayerNumber *seats = NULL;
+        const int seat_count = world_seat_players(&seats);
+        for (int s = 0; s < seat_count; s++) {
+            const uint64_t key = world_coop_held_key(seats[s]);
+            if ((key != 0) && (party_joiner(key, INVALID_USER_ID) == INVALID_USER_ID)) {
+                SYNCLOG("Server: the player seat %d was held for has gone: it is a free seat", (int)seats[s]);
+                world_coop_hold_seat(seats[s], 0);
+                world_coop_unbond(seats[s]);
+            }
+        }
+    }
     for (NetUserId spectator_id = MAX_NET_USERS; spectator_id < MAX_NET_CONNECTIONS; spectator_id++) {
         struct NetUser *spectator = &netstate.users[spectator_id];
         if (!IsUserActive(spectator_id)) {
             numask_del(&full_noted, spectator_id);
+            party_wait_from[spectator_id] = 0;
             continue;
         }
         if ((spectator->spectator_state != NetSpectator_Streaming) || spectator->seat_requested || numask_has(full_noted, spectator_id)) {
@@ -498,7 +581,9 @@ static void thin_seat_joiners(void)
             continue; /* seated once the old connection has left the game */
         }
         /* a name another live user has (another window on the same PC): one of its own, for everyone to tell apart */
-        for (NetUserId u = SERVER_ID; u < MAX_NET_CONNECTIONS; u++) {
+        /* (not a dedicated server's own user: it plays no keeper, and has the name of the PC it runs on, often the
+           player's own: they became "<name> (2)") */
+        for (NetUserId u = netstate_dedicated() ? SERVER_ID + 1 : SERVER_ID; u < MAX_NET_CONNECTIONS; u++) {
             if ((u != spectator_id) && IsUserActive(u) && (strcmp(netstate.users[u].name, spectator->name) == 0)) {
                 thin_unique_name(spectator_id);
                 break;
@@ -520,15 +605,28 @@ static void thin_seat_joiners(void)
              && (get_player_primary_user(player) < 0) && mine) {
                 seat = p;
                 returning = true;
+            } else if (mine && (token != 0)) {
+                /* its own seat, which it can't take back: said once a second at most, with why */
+                static TbClockMSec said_at = 0;
+                if (LbTimerClock() - said_at >= 1000) {
+                    said_at = LbTimerClock();
+                    SYNCLOG("Server: %s can't take seat %d back: exists %d, placeholder %d, victory state %d, its user %d", spectator->name,
+                        (int)p, (int)player_exists(player), (int)player_is_placeholder(player), (int)player->victory_state,
+                        (int)get_player_primary_user(player));
+                }
             }
         }
-        for (int s = 0; (s < seat_count) && (seat == PLAYER_NONE); s++) {
-            const PlayerNumber p = seats[s];
-            struct PlayerInfo *player = get_player(p);
-            if ((get_player_primary_user(player) < 0) && (player->player_name[0] == 0) && (world_seat_token(p) == 0)
-             && (player->victory_state == VicS_Undecided) && !world_player_is_keeper(p)) {
-                seat = p;
-            }
+        /* co-op: the seat made for this player beside its partner's, a moment ago */
+        const uint64_t party_key = spectator->party_key;
+        TbBool held = false;
+        if ((seat == PLAYER_NONE) && (party_key != 0)) {
+            seat = world_coop_held_seat(party_key);
+            held = (seat != PLAYER_NONE);
+        }
+        if (seat == PLAYER_NONE) {
+            /* a new player; one with a party starts beside or near its partner, on new ground (not in the dungeon a free
+               seat may have standing) */
+            seat = thin_free_seat(party_key != 0, PLAYER_NONE);
         }
         NetUserId user = INVALID_USER_ID;
         for (NetUserId u = SERVER_ID + 1; (u < (NetUserId)min((unsigned)MAX_NET_USERS, netstate.max_users)) && (user == INVALID_USER_ID); u++) {
@@ -558,16 +656,67 @@ static void thin_seat_joiners(void)
             numask_add(&full_noted, spectator_id);
             continue;
         }
+        PlayerNumber pair_seat = PLAYER_NONE; /* co-op: a second new seat, beside this one, for the partner who waits */
+        PlayerNumber near_seat = PLAYER_NONE; /* co-op: the partner's seat, which has a dungeon: this one starts near it */
+        const char *party_note = NULL;
+        if ((party_key != 0) && !returning && !held) {
+            const NetUserId puser = party_seated_user(party_key);
+            const NetUserId pconn = party_joiner(party_key, spectator_id);
+            const TbClockMSec now = LbTimerClock();
+            if (puser != INVALID_USER_ID) {
+                const PlayerNumber pseat = get_net_user_player_number(puser);
+                if (world_coop_partner(pseat) == PLAYER_NONE) {
+                    near_seat = pseat;
+                } else {
+                    party_note = "Your party partner is allied with another keeper in this world: you play on your own.";
+                }
+            } else if ((pconn != INVALID_USER_ID) && (party_wait_from[pconn] != 0)) {
+                pair_seat = thin_free_seat(true, seat);
+                if (pair_seat == PLAYER_NONE) {
+                    party_note = "There is no free seat for your party partner: you play on your own.";
+                }
+            } else if ((party_wait_from[spectator_id] == 0) || (now - party_wait_from[spectator_id] < PARTY_WAIT_MS)) {
+                if (party_wait_from[spectator_id] == 0) {
+                    party_wait_from[spectator_id] = (now != 0) ? now : 1;
+                    SYNCLOG("Server: %s waits for its party partner", spectator->name);
+                }
+                continue;
+            } else {
+                party_note = "Your party partner didn't come: you play on your own.";
+                SYNCLOG("Server: %s's party partner didn't come in %d s", spectator->name, PARTY_WAIT_MS / 1000);
+            }
+        }
+        party_wait_from[spectator_id] = 0;
         SYNCLOG("Server: %s %s as player %d (user %d)", spectator->name, returning ? "comes back" : "joins", (int)seat, (int)user);
+        if (!returning && !held) {
+            /* a seat of that name stays behind: said with why (its login isn't the seat's owner) */
+            for (int s = 0; s < seat_count; s++) {
+                const struct PlayerInfo *other = get_player(seats[s]);
+                if ((seats[s] != seat) && player_exists(other) && (strcmp(other->player_name, spectator->name) == 0)) {
+                    SYNCLOG("Server: seat %d is %s's too, but another login's (the seat's ends ...%04x, this login's ...%04x)", (int)seats[s],
+                        spectator->name, (unsigned)(world_seat_token(seats[s]) & 0xFFFF), (unsigned)(token & 0xFFFF));
+                }
+            }
+        }
         get_user_state(user)->reconnect_player_id = seat;
         netstate_server_user_reset(user);
-        if (!returning) {
+        if (!returning && !held) {
             /* an unused seat is a non-existing keeper: it becomes a human seat */
             struct PlayerInfo *player = get_player(seat);
             player->id_number = seat;
             player->allocflags |= PlaF_Allocated | PlaF_Seat;
             player->allocflags &= ~(PlaF_CompCtrl | PlaF_Placeholder);
             player->victory_state = VicS_Undecided;
+        }
+        if (pair_seat != PLAYER_NONE) {
+            /* and the partner's, held for it until its own turn here (the next) */
+            struct PlayerInfo *player = get_player(pair_seat);
+            player->id_number = pair_seat;
+            player->allocflags |= PlaF_Allocated | PlaF_Seat;
+            player->allocflags &= ~(PlaF_CompCtrl | PlaF_Placeholder);
+            player->victory_state = VicS_Undecided;
+            world_coop_hold_seat(pair_seat, party_key);
+            SYNCLOG("Server: seat %d is held for %s's party partner", (int)pair_seat, spectator->name);
         }
         world_set_seat_token(seat, token);
         seat_spectator(spectator_id, user);
@@ -577,8 +726,41 @@ static void thin_seat_joiners(void)
             server_admin_log("join", "%s %s (seat %d%s%s)", netstate.users[user].name,
                 returning ? "came back to the world" : "joined the world", (int)seat, (ip[0] != '\0') ? ", " : "", ip);
         }
-        if (!returning) {
-            world_seat_joined(seat);
+        if (held) {
+            /* its dungeon stands beside its partner's */
+            world_coop_seat_taken(seat);
+            const PlayerNumber mate = world_coop_partner(seat);
+            if (mate != PLAYER_NONE) {
+                party_notice_pair(seat, mate, ": your dungeons are side by side.");
+            }
+        } else if (!returning) {
+            if (pair_seat != PLAYER_NONE) {
+                world_seats_joined_coop(seat, pair_seat);
+            } else {
+                const TbBool bonded = (near_seat != PLAYER_NONE) && world_coop_bond(seat, near_seat);
+                world_seat_joined(seat);
+                if (bonded) {
+                    party_notice_pair(seat, near_seat, ": the new dungeon is near the other.");
+                }
+            }
+        } else if (party_key != 0) {
+            /* both have dungeons here: allied where they are */
+            const NetUserId puser = party_seated_user(party_key);
+            const PlayerNumber pseat = ((puser != INVALID_USER_ID) && (puser != user)) ? get_net_user_player_number(puser) : PLAYER_NONE;
+            if ((pseat != PLAYER_NONE) && (pseat != seat)) {
+                if (world_coop_partner(seat) == pseat) {
+                    /* already a pair */
+                } else if (world_coop_bond(seat, pseat)) {
+                    party_notice_pair(seat, pseat, " now.");
+                } else {
+                    party_note = (world_coop_partner(seat) != PLAYER_NONE)
+                        ? "You are allied with another keeper in this world (until a dungeon reset): the party changes nothing."
+                        : "Your party partner is allied with another keeper in this world: the party changes nothing.";
+                }
+            }
+        }
+        if (party_note != NULL) {
+            server_admin_notice(user, party_note);
         }
     }
 }
@@ -673,6 +855,7 @@ void network_spectator_finish_seat(void)
     if (netstate_thin_mode())
     {
         thin_spectate_notice_at = 0;
+        net_party_key = 0; /* co-op: the party's key was for this entry (a later join by another menu brings none) */
         show_onscreen_msg(3 * turns_per_second, "You have joined the world"); /* "Joining the world..." was up */
     }
 }
@@ -777,6 +960,13 @@ static void start_spectating(PlayerNumber camera_player_number)
     observer_init(camera_player_number);
     if (netstate_thin_mode())
     {
+        if (net_party_key != 0)
+        {
+            /* co-op: a new player waits for its party partner (up to a minute) before its seat comes */
+            show_onscreen_msg(10 * turns_per_second, "Joining the world with your party...");
+            thin_spectate_notice_at = LbTimerClock() + 70000;
+            return;
+        }
         show_onscreen_msg(5 * turns_per_second, "Joining the world...");
         thin_spectate_notice_at = LbTimerClock() + 8000;
         return;

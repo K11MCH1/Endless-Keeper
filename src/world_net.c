@@ -25,11 +25,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <stdarg.h>
 
 #include "world_net.h"
 #include "bflib_basics.h"
 #include "bflib_netsession.h"
 #include "ver_defs.h"
+#include "net_portforward.h"
+#include "net_secure.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -37,6 +40,12 @@ extern "C" {
 #endif
 /******************************************************************************/
 char world_list_server[WNET_URL_MAX] = "ws://127.0.0.1:5560/hub";
+/* the World List's Server box (settings.toml [network] world_list_server; "" = world_list_server) */
+static char menu_hub_url[WNET_URL_MAX] = "";
+static const char *menu_url(void) { return (menu_hub_url[0] != '\0') ? menu_hub_url : world_list_server; }
+void wnet_menu_set_hub(const char *url) { snprintf(menu_hub_url, sizeof(menu_hub_url), "%s", (url != NULL) ? url : ""); }
+const char *wnet_menu_hub_setting(void) { return menu_hub_url; }
+const char *wnet_menu_hub(void) { return menu_url(); }
 char wnet_title[WNET_TITLE_MAX] = "";
 int wnet_hub_port_wanted = WNET_HUB_PORT;
 TbBool wnet_hub_off = false;
@@ -315,6 +324,14 @@ static struct {
     int chat_count;
     unsigned long chat_serial;
     char status[160];
+    /* the party (names as the hub gives them; "" for none) */
+    char party[WNET_NAME_MAX];
+    uint64_t party_key;          /* its key from the hub (0: an older hub): both players give it to the world they join */
+    char go_id[16];              /* the partner entered this world: this game follows ("" when none) */
+    uint64_t go_key;
+    char invite_from[WNET_NAME_MAX];
+    char invite_to[WNET_NAME_MAX];
+    Uint32 invite_to_at;
     /* pings: one UDP socket, a request to each server every 2 s */
     ENetSocket udp;
     /* worlds found on this network: kept apart, merged into servers[] after each change (id "lan") */
@@ -338,6 +355,18 @@ static void menu_add_chat(const char *name, const char *text)
     snprintf(line->name, sizeof(line->name), "%s", name);
     snprintf(line->text, sizeof(line->text), "%s", text);
     WM.chat_serial++;
+}
+
+/** A line of its own in the chat box (no name): what happened to an invite or to the party. */
+static void menu_note(const char *fmt, ...)
+{
+    char text[WNET_TEXT_MAX];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(text, sizeof(text), fmt, ap);
+    va_end(ap);
+    menu_add_chat("", text);
+    LbNetLog("World list: %s\n", text);
 }
 
 static int menu_ping_slot(const char *host, int port)
@@ -441,6 +470,85 @@ static void menu_handle(const char *text, size_t len)
         const char *n = value_string(value_dict_get(&msg, "name"));
         const char *x = value_string(value_dict_get(&msg, "text"));
         menu_add_chat((n != NULL) ? n : "", (x != NULL) ? x : "");
+    } else if (strcmp(t, "invite") == 0)
+    {
+        /* another player asks this one into their party: the menu asks "Join <name> to party?" */
+        char from[WNET_NAME_MAX];
+        json_copy(from, sizeof(from), &msg, "from");
+        if ((from[0] != '\0') && (WM.party[0] == '\0'))
+        {
+            snprintf(WM.invite_from, sizeof(WM.invite_from), "%s", from);
+            LbNetLog("World list: %s invites this player to a party\n", from);
+        }
+    } else if (strcmp(t, "invite_off") == 0)
+    {
+        /* that invite is gone (its sender left, joined another party, or nobody answered it) */
+        char from[WNET_NAME_MAX];
+        json_copy(from, sizeof(from), &msg, "from");
+        if ((from[0] != '\0') && (strcmp(from, WM.invite_from) == 0))
+        {
+            WM.invite_from[0] = '\0';
+            menu_note("%s's invite has ended.", from);
+        }
+    } else if (strcmp(t, "invite_result") == 0)
+    {
+        /* this player's invite didn't make a party */
+        char to[WNET_NAME_MAX], result[24];
+        json_copy(to, sizeof(to), &msg, "to");
+        json_copy(result, sizeof(result), &msg, "result");
+        if (strcmp(to, WM.invite_to) == 0)
+            WM.invite_to[0] = '\0';
+        if (strcmp(result, "refused") == 0)
+            menu_note("%s refused your invite.", to);
+        else if (strcmp(result, "no_answer") == 0)
+            menu_note("%s didn't answer your invite.", to);
+        else if (strcmp(result, "busy") == 0)
+            menu_note("%s is answering another invite.", to);
+        else if (strcmp(result, "in_party") == 0)
+            menu_note("%s is already in a party.", to);
+        else if (strcmp(result, "you_in_party") == 0)
+            menu_note("You are already in a party.");
+        else
+            menu_note("%s isn't in the World List any more.", to);
+    } else if (strcmp(t, "party") == 0)
+    {
+        char with[WNET_NAME_MAX];
+        json_copy(with, sizeof(with), &msg, "with");
+        if (with[0] != '\0')
+        {
+            snprintf(WM.party, sizeof(WM.party), "%s", with);
+            WM.invite_from[0] = '\0';
+            WM.invite_to[0] = '\0';
+            char key[24];
+            json_copy(key, sizeof(key), &msg, "key");
+            WM.party_key = strtoull(key, NULL, 16);
+            menu_note("You are in a party with %s.", with);
+        } else if (WM.party[0] != '\0')
+        {
+            char why[16];
+            json_copy(why, sizeof(why), &msg, "why");
+            if (strcmp(why, "gone") == 0)
+                menu_note("%s left the World List: the party is over.", WM.party);
+            else
+                menu_note("%s left the party.", WM.party);
+            WM.party[0] = '\0';
+            WM.party_key = 0;
+        }
+    } else if (strcmp(t, "go") == 0)
+    {
+        /* the partner entered a world: this game follows it there, with the party's key (co-op) */
+        char id[16], name[WNET_NAME_MAX];
+        json_copy(id, sizeof(id), &msg, "id");
+        json_copy(name, sizeof(name), &msg, "name");
+        if ((WM.party[0] != '\0') && (id[0] != '\0'))
+        {
+            snprintf(WM.go_id, sizeof(WM.go_id), "%s", id);
+            WM.go_key = WM.party_key;
+            menu_note("%s enters a world: your party follows.", (name[0] != '\0') ? name : WM.party);
+            LbNetLog("World list: the party follows %s into world %s\n", WM.party, id);
+            WM.party[0] = '\0';
+            WM.party_key = 0;
+        }
     } else if (strcmp(t, "error") == 0)
     {
         const char *r = value_string(value_dict_get(&msg, "reason"));
@@ -607,9 +715,9 @@ void wnet_menu_open(const char *player_name)
     WM.udp = ENET_SOCKET_NULL;
     WM.on = true;
     snprintf(WM.want_name, sizeof(WM.want_name), "%s", ((player_name != NULL) && (player_name[0] != '\0')) ? player_name : "Keeper");
-    url_host(world_list_server, WM.hub_host, sizeof(WM.hub_host));
+    url_host(menu_url(), WM.hub_host, sizeof(WM.hub_host));
     SDL_SetAtomicInt(&WM.ws.state, WsS_Idle);
-    LbNetLog("World list: menu open, hub %s, name %s\n", world_list_server, WM.want_name);
+    LbNetLog("World list: menu open, hub %s, name %s\n", menu_url(), WM.want_name);
 }
 
 void wnet_menu_close(void)
@@ -627,7 +735,23 @@ void wnet_menu_poll(void)
 {
     if (!WM.on)
         return;
-    ws_maintain(&WM.ws, world_list_server);
+    ws_maintain(&WM.ws, menu_url());
+    if (!ws_open(&WM.ws) && ((WM.party[0] != '\0') || (WM.invite_from[0] != '\0') || (WM.invite_to[0] != '\0')))
+    {
+        /* the hub forgets a player who drops: so does this end */
+        if (WM.party[0] != '\0')
+            menu_note("Lost the World List: the party with %s is over.", WM.party);
+        WM.party[0] = '\0';
+        WM.party_key = 0;
+        WM.invite_from[0] = '\0';
+        WM.invite_to[0] = '\0';
+    }
+    if ((WM.invite_to[0] != '\0') && ((int32_t)(now_ms() - WM.invite_to_at) >= 70000))
+    {
+        /* a hub with parties ends an invite after 60 s; one from before parties never answers */
+        menu_note("No answer from %s.", WM.invite_to);
+        WM.invite_to[0] = '\0';
+    }
     if (ws_open(&WM.ws))
     {
         if (!WM.ws.hello_sent)
@@ -650,18 +774,26 @@ void wnet_menu_poll(void)
     {
         /* the hub's name for this player, when it isn't the one asked for (the name was taken: " (2)") */
         if ((WM.name[0] != '\0') && (strcmp(WM.name, WM.want_name) != 0))
-            snprintf(WM.status, sizeof(WM.status), "World list: %s (you are %s)", world_list_server, WM.name);
+            snprintf(WM.status, sizeof(WM.status), "World list: %s (you are %s)", menu_url(), WM.name);
         else
-            snprintf(WM.status, sizeof(WM.status), "World list: %s", world_list_server);
+            snprintf(WM.status, sizeof(WM.status), "World list: %s", menu_url());
     }
     else if ((state == WsS_Connecting) && (WM.ws.fails == 0))
-        snprintf(WM.status, sizeof(WM.status), "Connecting to %s...", world_list_server);
+        snprintf(WM.status, sizeof(WM.status), "Connecting to %s...", menu_url());
     else
-        snprintf(WM.status, sizeof(WM.status), "Can't reach %s: trying again", world_list_server);
+        snprintf(WM.status, sizeof(WM.status), "Can't reach %s: trying again", menu_url());
     menu_pings();
 }
 
 const char *wnet_menu_status(void) { return WM.status; }
+int wnet_menu_state(void)
+{
+    if (!WM.on)
+        return 2;
+    if (ws_open(&WM.ws))
+        return 1;
+    return ((SDL_GetAtomicInt(&WM.ws.state) == WsS_Connecting) && (WM.ws.fails == 0)) ? 0 : 2;
+}
 int wnet_menu_server_count(void) { return WM.on ? WM.server_count : 0; }
 const struct WnetServer *wnet_menu_server(int i) { return ((i >= 0) && (i < WM.server_count)) ? &WM.servers[i] : NULL; }
 int wnet_menu_name_count(void) { return WM.on ? WM.name_count : 0; }
@@ -669,6 +801,83 @@ const char *wnet_menu_name(int i) { return ((i >= 0) && (i < WM.name_count)) ? W
 int wnet_menu_chat_count(void) { return WM.on ? WM.chat_count : 0; }
 const struct WnetChatLine *wnet_menu_chat_line(int i) { return ((i >= 0) && (i < WM.chat_count)) ? &WM.chat[i] : NULL; }
 unsigned long wnet_menu_chat_serial(void) { return WM.chat_serial; }
+
+TbBool wnet_menu_connected(void) { return WM.on && ws_open(&WM.ws) && (WM.name[0] != '\0'); }
+const char *wnet_menu_my_name(void) { return WM.on ? WM.name : ""; }
+const char *wnet_menu_party(void) { return WM.on ? WM.party : ""; }
+const char *wnet_menu_invite_from(void) { return WM.on ? WM.invite_from : ""; }
+const char *wnet_menu_invite_to(void) { return WM.on ? WM.invite_to : ""; }
+
+void wnet_menu_party_invite(const char *name)
+{
+    if (!wnet_menu_connected() || (name == NULL) || (name[0] == '\0') || (strcmp(name, WM.name) == 0) ||
+        (WM.party[0] != '\0') || (WM.invite_to[0] != '\0'))
+        return;
+    char esc[WNET_NAME_MAX * 6 + 1];
+    net_json_escape(esc, sizeof(esc), name);
+    char msg[WNET_NAME_MAX * 6 + 32];
+    snprintf(msg, sizeof(msg), "{\"t\":\"invite\",\"to\":\"%s\"}", esc);
+    ws_send(&WM.ws, msg);
+    snprintf(WM.invite_to, sizeof(WM.invite_to), "%s", name);
+    WM.invite_to_at = now_ms();
+    menu_note("Invite sent to %s.", name);
+}
+
+void wnet_menu_party_answer(TbBool accept)
+{
+    if (!WM.on || (WM.invite_from[0] == '\0'))
+        return;
+    char esc[WNET_NAME_MAX * 6 + 1];
+    net_json_escape(esc, sizeof(esc), WM.invite_from);
+    char msg[WNET_NAME_MAX * 6 + 64];
+    snprintf(msg, sizeof(msg), "{\"t\":\"answer\",\"from\":\"%s\",\"accept\":%s}", esc, accept ? "true" : "false");
+    ws_send(&WM.ws, msg);
+    LbNetLog("World list: this player %s %s's invite\n", accept ? "accepts" : "refuses", WM.invite_from);
+    WM.invite_from[0] = '\0';
+}
+
+void wnet_menu_party_leave(void)
+{
+    if (!WM.on || (WM.party[0] == '\0'))
+        return;
+    ws_send(&WM.ws, "{\"t\":\"leave\"}");
+    menu_note("You left the party with %s.", WM.party);
+    WM.party[0] = '\0';
+    WM.party_key = 0;
+}
+
+uint64_t wnet_menu_party_go(const char *server_id)
+{
+    if (!WM.on || (WM.party[0] == '\0') || (server_id == NULL) || (server_id[0] == '\0'))
+        return 0;
+    char esc[16 * 6 + 1];
+    net_json_escape(esc, sizeof(esc), server_id);
+    char msg[sizeof(esc) + 32];
+    snprintf(msg, sizeof(msg), "{\"t\":\"go\",\"id\":\"%s\"}", esc);
+    ws_send(&WM.ws, msg);
+    LbNetLog("World list: this player enters world %s; the party (%s) follows\n", server_id, WM.party);
+    const uint64_t key = WM.party_key;
+    WM.party[0] = '\0';
+    WM.party_key = 0;
+    return key;
+}
+
+int wnet_menu_party_follow(uint64_t *key)
+{
+    if (!WM.on || (WM.go_id[0] == '\0'))
+        return -1;
+    int found = -1;
+    for (int i = 0; (i < WM.server_count) && (found < 0); i++)
+        if (strcmp(WM.servers[i].id, WM.go_id) == 0)
+            found = i;
+    if (found < 0)
+        menu_note("The world your party entered isn't in this list.");
+    else if (key != NULL)
+        *key = WM.go_key;
+    WM.go_id[0] = '\0';
+    WM.go_key = 0;
+    return found;
+}
 
 void wnet_menu_say(const char *text)
 {
@@ -819,8 +1028,18 @@ struct HubClient {
     Uint32 say_times[5];
     int say_pos;
     Uint32 accepted;          /* when it connected: the handshake must come within HUB_HANDSHAKE_MS */
+    /* a player's party (2026-11-09) */
+    int uid;                  /* its number on this hub, never reused: parties and invites refer to it */
+    int party;                /* the other player in its party (0: none) */
+    uint64_t party_key;       /* the party's key (co-op: both give it to the world they enter) */
+    int invite_to;            /* the player it invited, until they answer (0: none) */
+    int invite_from;          /* the player whose invite it is answering (0: none) */
+    Uint32 invite_at;         /* when that invite came */
+    Uint32 invite_times[5];   /* at most 5 invites in any 10 s */
+    int invite_pos;
 };
 #define HUB_HANDSHAKE_MS 10000
+#define HUB_INVITE_MS 60000     /* an invite nobody answers ends after this */
 #define HUB_OUT_MAX (1u << 20)  /* a client that doesn't read is let go past this */
 
 /** Control characters (and DEL) become spaces: names, chat and titles are shown as text, and each control character
@@ -842,6 +1061,7 @@ static struct {
     TbBool servers_dirty;
     Uint32 servers_sent;
     int next_id;
+    int next_uid;
 } H;
 
 TbBool wnet_hub_running(void) { return H.on; }
@@ -961,12 +1181,15 @@ static void hub_send_text(struct HubClient *c, const char *text)
 }
 
 static void hub_send_names_all(void);
+static void hub_party_gone(struct HubClient *c);
 
 static void hub_drop(struct HubClient *c)
 {
     if (!c->used)
         return;
     const int role = c->role;
+    if (role == HubR_Player)
+        hub_party_gone(c); /* its party and its invites end */
     enet_socket_destroy(c->s);
     free(c->out);
     memset(c, 0, sizeof(*c));
@@ -1065,6 +1288,202 @@ static int hub_count(int role)
     return n;
 }
 
+/* Parties: the hub relays invites between players in the menu and keeps who is in whose party. */
+static struct HubClient *hub_player_uid(int uid)
+{
+    for (int i = 0; (i < HUB_CLIENTS_MAX) && (uid != 0); i++)
+        if (H.c[i].used && (H.c[i].role == HubR_Player) && (H.c[i].uid == uid))
+            return &H.c[i];
+    return NULL;
+}
+
+static struct HubClient *hub_player_named(const char *name)
+{
+    for (int i = 0; (i < HUB_CLIENTS_MAX) && (name[0] != '\0'); i++)
+        if (H.c[i].used && (H.c[i].role == HubR_Player) && (strcmp(H.c[i].name, name) == 0))
+            return &H.c[i];
+    return NULL;
+}
+
+/** {"t":"<t>","<k1>":"<v1>"} or, with k2, {"t":"<t>","<k1>":"<v1>","<k2>":"<v2>"}. */
+static void hub_send_kv(struct HubClient *c, const char *t, const char *k1, const char *v1, const char *k2, const char *v2)
+{
+    char e1[WNET_NAME_MAX * 6 + 1], e2[WNET_NAME_MAX * 6 + 1];
+    json_esc(e1, sizeof(e1), v1);
+    char out[96 + sizeof(e1) + sizeof(e2)];
+    if (k2 != NULL)
+    {
+        json_esc(e2, sizeof(e2), v2);
+        snprintf(out, sizeof(out), "{\"t\":\"%s\",\"%s\":\"%s\",\"%s\":\"%s\"}", t, k1, e1, k2, e2);
+    } else
+        snprintf(out, sizeof(out), "{\"t\":\"%s\",\"%s\":\"%s\"}", t, k1, e1);
+    hub_send_text(c, out);
+}
+
+/** c's invite (if it has one out) is withdrawn: its player's question closes. */
+static void hub_invite_cancel_out(struct HubClient *c)
+{
+    struct HubClient *d = hub_player_uid(c->invite_to);
+    c->invite_to = 0;
+    if ((d != NULL) && (d->invite_from == c->uid))
+    {
+        d->invite_from = 0;
+        hub_send_kv(d, "invite_off", "from", c->name, NULL, NULL);
+    }
+}
+
+/** The invite c is answering (if any) fails with `result` for its sender; c's question closes if tell_c. */
+static void hub_invite_fail_in(struct HubClient *c, const char *result, TbBool tell_c)
+{
+    struct HubClient *s = hub_player_uid(c->invite_from);
+    c->invite_from = 0;
+    if (s == NULL)
+        return;
+    if (tell_c)
+        hub_send_kv(c, "invite_off", "from", s->name, NULL, NULL);
+    if (s->invite_to == c->uid)
+    {
+        s->invite_to = 0;
+        hub_send_kv(s, "invite_result", "to", c->name, "result", result);
+    }
+}
+
+static void hub_party_form(struct HubClient *a, struct HubClient *b)
+{
+    /* every other invite either of them has open ends */
+    for (int k = 0; k < 2; k++)
+    {
+        struct HubClient *p = (k == 0) ? a : b;
+        struct HubClient *q = (k == 0) ? b : a;
+        if (p->invite_to == q->uid)
+            p->invite_to = 0;
+        else
+            hub_invite_cancel_out(p);
+        if (p->invite_from == q->uid)
+            p->invite_from = 0;
+        else
+            hub_invite_fail_in(p, "in_party", true);
+    }
+    a->party = b->uid;
+    b->party = a->uid;
+    /* the party's key: only these two games get it; the world they enter pairs the two logins that bring it */
+    uint64_t key = 0;
+    while (key == 0)
+        netsec_random(&key, sizeof(key));
+    a->party_key = key;
+    b->party_key = key;
+    char hex[20];
+    snprintf(hex, sizeof(hex), "%016llx", (unsigned long long)key);
+    hub_send_kv(a, "party", "with", b->name, "key", hex);
+    hub_send_kv(b, "party", "with", a->name, "key", hex);
+    LbNetLog("World list hub: %s and %s are a party\n", a->name, b->name);
+}
+
+/** c's party (if any) ends; the other player hears why ("left": c left it, "gone": c left the menu). */
+static void hub_party_end(struct HubClient *c, const char *why)
+{
+    struct HubClient *p = hub_player_uid(c->party);
+    c->party = 0;
+    c->party_key = 0;
+    if ((p == NULL) || (p->party != c->uid))
+        return;
+    p->party = 0;
+    p->party_key = 0;
+    char e[WNET_NAME_MAX * 6 + 1];
+    json_esc(e, sizeof(e), c->name);
+    char out[sizeof(e) + 64];
+    snprintf(out, sizeof(out), "{\"t\":\"party\",\"with\":\"\",\"name\":\"%s\",\"why\":\"%s\"}", e, why);
+    hub_send_text(p, out);
+    LbNetLog("World list hub: the party of %s and %s is over (%s)\n", c->name, p->name, why);
+}
+
+static void hub_party_gone(struct HubClient *c)
+{
+    hub_party_end(c, "gone");
+    hub_invite_cancel_out(c);
+    hub_invite_fail_in(c, "gone", false);
+}
+
+static TbBool hub_invite_allowed(struct HubClient *c)
+{
+    const Uint32 now = now_ms();
+    if ((c->invite_times[c->invite_pos] != 0) && ((int32_t)(now - c->invite_times[c->invite_pos]) < 10000))
+        return false;
+    c->invite_times[c->invite_pos] = (now == 0) ? 1 : now;
+    c->invite_pos = (c->invite_pos + 1) % 5;
+    return true;
+}
+
+static void hub_party_message(struct HubClient *c, const char *t, const VALUE *msg)
+{
+    if (strcmp(t, "invite") == 0)
+    {
+        if (!hub_invite_allowed(c))
+            return;
+        char to[WNET_NAME_MAX];
+        json_copy(to, sizeof(to), msg, "to");
+        struct HubClient *d = hub_player_named(to);
+        if ((d == NULL) || (d == c))
+            hub_send_kv(c, "invite_result", "to", to, "result", "gone");
+        else if (c->party != 0)
+            hub_send_kv(c, "invite_result", "to", to, "result", "you_in_party");
+        else if (d->party != 0)
+            hub_send_kv(c, "invite_result", "to", to, "result", "in_party");
+        else if (d->invite_to == c->uid)
+            hub_party_form(d, c); /* they had invited c: both want it */
+        else if ((d->invite_from != 0) && (d->invite_from != c->uid))
+            hub_send_kv(c, "invite_result", "to", to, "result", "busy");
+        else
+        {
+            if (c->invite_to != d->uid)
+                hub_invite_cancel_out(c); /* one invite out at a time */
+            c->invite_to = d->uid;
+            d->invite_from = c->uid;
+            d->invite_at = now_ms();
+            hub_send_kv(d, "invite", "from", c->name, NULL, NULL);
+            LbNetLog("World list hub: %s invites %s to a party\n", c->name, d->name);
+        }
+    } else if (strcmp(t, "answer") == 0)
+    {
+        char from[WNET_NAME_MAX];
+        json_copy(from, sizeof(from), msg, "from");
+        struct HubClient *s = hub_player_named(from);
+        const VALUE *acc = value_dict_get(msg, "accept");
+        const TbBool accept = (value_type(acc) == VALUE_BOOL) && value_bool(acc);
+        if ((s == NULL) || (c->invite_from != s->uid))
+            return; /* no such invite (any more) */
+        c->invite_from = 0;
+        if (s->invite_to == c->uid)
+            s->invite_to = 0;
+        if (!accept)
+            hub_send_kv(s, "invite_result", "to", c->name, "result", "refused");
+        else if ((s->party == 0) && (c->party == 0))
+            hub_party_form(s, c);
+    } else if (strcmp(t, "leave") == 0)
+    {
+        if (c->party != 0)
+        {
+            hub_party_end(c, "left");
+            hub_send_text(c, "{\"t\":\"party\",\"with\":\"\"}");
+        }
+    } else if (strcmp(t, "go") == 0)
+    {
+        /* c enters a world: its partner is told to follow, and the party is over here (both leave the menu) */
+        struct HubClient *p = hub_player_uid(c->party);
+        char id[16];
+        json_copy(id, sizeof(id), msg, "id");
+        if ((p != NULL) && (p->party == c->uid) && (id[0] != '\0'))
+        {
+            hub_send_kv(p, "go", "name", c->name, "id", id);
+            LbNetLog("World list hub: the party of %s and %s enters world %s\n", c->name, p->name, id);
+            p->party = 0;
+            p->party_key = 0;
+            c->party = 0;
+            c->party_key = 0;
+        }
+    }
+}
+
 static void hub_handle(struct HubClient *c, const char *text, size_t len)
 {
     VALUE msg = {0};
@@ -1104,6 +1523,7 @@ static void hub_handle(struct HubClient *c, const char *text, size_t len)
                 }
                 json_copy(c->build, sizeof(c->build), &msg, "build");
                 c->role = HubR_Player;
+                c->uid = ++H.next_uid;
                 char esc[WNET_NAME_MAX * 6 + 1];
                 json_esc(esc, sizeof(esc), c->name);
                 char out[256];
@@ -1173,6 +1593,10 @@ static void hub_handle(struct HubClient *c, const char *text, size_t len)
             hub_clean(c->title);
         }
         H.servers_dirty = true;
+    } else if (((strcmp(t, "invite") == 0) || (strcmp(t, "answer") == 0) || (strcmp(t, "leave") == 0) || (strcmp(t, "go") == 0))
+        && (c->role == HubR_Player))
+    {
+        hub_party_message(c, t, &msg);
     } else if ((strcmp(t, "say") == 0) && (c->role == HubR_Player))
     {
         /* at most 5 lines in any 5 s */
@@ -1368,6 +1792,7 @@ TbBool wnet_hub_start(int port)
     H.on = true;
     H.port = port;
     LbNetLog("World list hub: listening on port %d\n", port);
+    port_forward_set_tcp_mapping((uint16_t)port); /* players elsewhere connect to it by this server's address */
     return true;
 }
 
@@ -1384,6 +1809,7 @@ void wnet_hub_stop(void)
     enet_socket_destroy(H.listen);
     memset(&H, 0, sizeof(H));
     H.listen = ENET_SOCKET_NULL;
+    port_forward_set_tcp_mapping(0);
 }
 
 /** The address alone: no port (a.b.c.d:port, [v6]:port) and no IPv4-mapped prefix (::ffff:a.b.c.d). */
@@ -1492,6 +1918,11 @@ void wnet_hub_poll(void)
                 break;
         }
     }
+    /* an invite nobody answered ends */
+    for (int i = 0; i < HUB_CLIENTS_MAX; i++)
+        if (H.c[i].used && (H.c[i].role == HubR_Player) && (H.c[i].invite_from != 0) &&
+            ((int32_t)(now_ms() - H.c[i].invite_at) >= HUB_INVITE_MS))
+            hub_invite_fail_in(&H.c[i], "no_answer", true);
     if (H.servers_dirty && ((int32_t)(now_ms() - H.servers_sent) >= 1000))
     {
         H.servers_dirty = false;

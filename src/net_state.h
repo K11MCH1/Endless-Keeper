@@ -36,6 +36,10 @@ void netstate_set_dedicated(TbBool on);
 TbBool netstate_dedicated(void);
 /** A client's NETMSG_STATE_CAPS (what it reads), on the server. */
 void netstate_server_caps(NetUserId source, const char *buffer, size_t size);
+/** What a client said it reads (NETSTATE_CAP_*; 0 until it has said). */
+uint32_t netstate_client_caps(NetUserId user);
+/** A client reads NETMSG_ROLES (the seats' names and role colours, server_roles.c). */
+#define NETSTATE_CAP_ROLES 0x4u
 /** -loadslot: the save to load at startup (-1 none; -2 the newest endless save). */
 void netstate_set_startup_load_slot(int slot);
 int netstate_take_startup_load_slot(void);

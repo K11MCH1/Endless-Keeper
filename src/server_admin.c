@@ -45,6 +45,7 @@
 #include <sys/socket.h>
 #endif
 #include "net_secure.h"
+#include "server_roles.h"
 #include "post_inc.h"
 
 #define ADMIN_IN_MAX      8192
@@ -73,6 +74,7 @@ static struct {
     TbBool net_init, bind_warned;
     time_t next_try;
     NetUserId dropping;        /* the user a kick or ban is dropping (its leave is logged by the kick) */
+    NetUserId left_user;       /* the user whose own leave was just logged (the drop that follows isn't); 0: none */
     uint16_t heroes_seen[PLAYERS_MAX];
     TbBool heroes_known[PLAYERS_MAX];
     unsigned long seq;         /* the number of the last log event (Keeper Server skips the ones it has seen) */
@@ -350,7 +352,7 @@ static size_t stats_json(char *buf, size_t cap, PlayerNumber p)
     const double hours = (st != NULL) ? (double)st->play_turns / ((double)max(turns_per_second, 1) * 3600.0) : 0.0;
     const struct PlayerInfo *player = get_player(p);
     const TbBool defeated = !player_invalid(player) && (player->victory_state == VicS_LostLevel);
-    return (size_t)snprintf(buf, cap,
+    size_t n = (size_t)snprintf(buf, cap,
         "\"name\":%s,\"seat\":%d,\"online\":%s,\"level\":%d,\"xp\":%lu,\"creatures\":%d,\"rooms\":%d,\"kills\":%u,"
         "\"heroes_killed\":%u,\"hearts\":%lu,\"outposts\":%lu,\"portals\":%lu,\"hours\":%.3f,\"muted\":%s,\"ip\":%s,"
         "\"gold\":%ld,\"defeated\":%s,\"banned\":%s",
@@ -360,6 +362,9 @@ static size_t stats_json(char *buf, size_t cap, PlayerNumber p)
         (st != NULL) ? (unsigned long)st->hearts : 0UL, (st != NULL) ? (unsigned long)st->outposts : 0UL,
         (st != NULL) ? (unsigned long)st->portals : 0UL, hours, seat_muted(p) ? "true" : "false", ipj,
         dg ? (long)dungeon->total_money_owned : 0L, defeated ? "true" : "false", seat_banned(p) ? "true" : "false");
+    if (n < cap)
+        n += server_roles_seat_json(buf + n, cap - n, p); /* its roles and name colour */
+    return n;
 }
 
 /******************************************************************************/
@@ -491,15 +496,26 @@ TbBool server_admin_enabled(void)
     return (A.port > 0);
 }
 
+/* the player of an in-game command (server_admin_player_command): the results go to them as notices too */
+static NetUserId actor_user = -1;
+static char actor_name[40];
+static TbBool actor_ok; /* the command did something (an "admin" line) */
+
 void server_admin_log(const char *kind, const char *fmt, ...)
 {
-    if (A.port <= 0)
-        return;
     char text[ADMIN_LINE_MAX / 2];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(text, sizeof(text), fmt, ap);
     va_end(ap);
+    if ((actor_user > SERVER_ID) && ((strcmp(kind, "admin") == 0) || (strcmp(kind, "warn") == 0)))
+    {
+        if (strcmp(kind, "admin") == 0)
+            actor_ok = true;
+        server_admin_notice(actor_user, text);
+    }
+    if (A.port <= 0)
+        return;
     if (strcmp(kind, "net") == 0)
         LbNetLog("Console: %s\n", text); /* the network log keeps the network's console lines too */
     char tj[ADMIN_LINE_MAX / 2 + 64], kj[48];
@@ -522,8 +538,8 @@ void server_admin_chat(int user, int plyr_idx, const char *name, const char *msg
     char line[ADMIN_LINE_MAX];
     A.seq++;
     snprintf(line, sizeof(line),
-        "{\"t\":\"log\",\"kind\":\"chat\",\"seq\":%lu,\"turn\":%lu,\"time\":%ld,\"name\":%s,\"seat\":%d,\"user\":%d,\"text\":%s}",
-        A.seq, (unsigned long)game.play_gameturn, uptime_s(), nj, plyr_idx, user, mj);
+        "{\"t\":\"log\",\"kind\":\"chat\",\"seq\":%lu,\"turn\":%lu,\"time\":%ld,\"name\":%s,\"seat\":%d,\"user\":%d,\"text\":%s,\"color\":\"%s\"}",
+        A.seq, (unsigned long)game.play_gameturn, uptime_s(), nj, plyr_idx, user, mj, (plyr_idx >= 0) ? server_roles_seat_color(plyr_idx) : "");
     emit(line);
 }
 
@@ -574,10 +590,30 @@ void server_admin_notice(int user, const char *text)
     send_notice(user, SERVER_NOTICE_SENDER, text);
 }
 
+/** A player's own leave (its leave packet, handled in step with the game): logged as that, and the drop it causes
+ *  isn't logged again (a drop this side makes was logged "was dropped (it reconnected)"). */
+void server_admin_user_leaving(int user, TbBool timed_out)
+{
+    if ((A.port <= 0) || (user <= SERVER_ID) || (user >= MAX_NET_USERS) || (user == A.dropping))
+        return;
+    if (netstate.users[user].progress == USER_UNUSED)
+        return;
+    const PlayerNumber p = get_user_state(user)->player_id;
+    if ((p < 0) || (p >= PLAYERS_COUNT))
+        return; /* not seated yet: the drop's own line says so */
+    server_admin_log("leave", "%s %s", server_admin_player_name(p), timed_out ? "timed out" : "left the world");
+    A.left_user = user;
+}
+
 void server_admin_user_left(int user, int how)
 {
     if ((A.port <= 0) || (user <= SERVER_ID) || (user >= MAX_NET_USERS) || (user == A.dropping))
         return;
+    if (user == A.left_user)
+    {
+        A.left_user = 0; /* its leave was logged just before */
+        return;
+    }
     if (netstate.users[user].progress == USER_UNUSED)
         return;
     const char *detail = enet_last_drop_detail(); /* why ENet dropped it ("" for a drop this side asked for) */
@@ -630,7 +666,7 @@ static void cmd_players(void)
 {
     const PlayerNumber *seats = NULL;
     const int n = world_seat_players(&seats);
-    const size_t cap = 4096 + (size_t)n * 640;
+    const size_t cap = 4096 + (size_t)n * 800;
     char *buf = (char *)malloc(cap);
     if (buf == NULL)
         return;
@@ -643,7 +679,7 @@ static void cmd_players(void)
         /* the seats someone has played (a name), or plays now */
         if ((seat_name(p)[0] == '\0') && (seat_user(p) <= SERVER_ID))
             continue;
-        if (len + 700 >= cap)
+        if (len + 860 >= cap)
             break;
         if (!first)
             buf[len++] = ',';
@@ -822,6 +858,7 @@ static void cmd_reset(const char *name)
         return;
     }
     char why[96] = "";
+    const PlayerNumber mate = world_coop_partner(p); /* co-op: a reset ends the alliance of a party */
     if (!world_seat_reset(p, why, sizeof(why)))
     {
         server_admin_log("warn", "%s's dungeon was not reset: %s", seat_name(p), why);
@@ -831,14 +868,33 @@ static void cmd_reset(const char *name)
     const NetUserId u = seat_user(p);
     if (u > SERVER_ID)
         server_admin_notice(u, "The server reset your dungeon. You start again elsewhere.");
+    if (mate != PLAYER_NONE)
+    {
+        char msg[160];
+        server_admin_log("party", "%s and %s are allied keepers no more (the reset)", seat_name(p), seat_name(mate));
+        if (u > SERVER_ID)
+        {
+            snprintf(msg, sizeof(msg), "You and %s are allied keepers no more.", seat_name(mate));
+            server_admin_notice(u, msg);
+        }
+        const NetUserId mu = seat_user(mate);
+        if (mu > SERVER_ID)
+        {
+            snprintf(msg, sizeof(msg), "%s's dungeon was reset: you are allied keepers no more.", seat_name(p));
+            server_admin_notice(mu, msg);
+        }
+    }
 }
 
 static void say(const char *text)
 {
     char msg[300];
-    snprintf(msg, sizeof(msg), "Server: %s", text);
+    if (actor_user > SERVER_ID)
+        snprintf(msg, sizeof(msg), "Server (%s): %s", actor_name, text); /* said by a role in game */
+    else
+        snprintf(msg, sizeof(msg), "Server: %s", text);
     server_admin_notice(-1, msg);
-    server_admin_chat(-1, -1, "Server", text);
+    server_admin_chat(-1, -1, (actor_user > SERVER_ID) ? actor_name : "Server", text);
 }
 
 static void run_command(char *line)
@@ -906,8 +962,11 @@ static void run_command(char *line)
         }
     }
     const char *cmd = args[0];
-    const TbBool quiet = (strcasecmp(cmd, "players") == 0) || (strcasecmp(cmd, "stats") == 0) || (strcasecmp(cmd, "say") == 0);
-    if (!quiet)
+    const TbBool quiet = (strcasecmp(cmd, "players") == 0) || (strcasecmp(cmd, "stats") == 0) || (strcasecmp(cmd, "say") == 0) ||
+        ((strcasecmp(cmd, "role") == 0) && (rest != NULL) && (strncasecmp(rest, "reload", 6) == 0));
+    if (actor_user > SERVER_ID)
+        server_admin_log("command", "%s: !%s", actor_name, whole); /* a role's command in game */
+    else if (!quiet)
         server_admin_log("command", "/%s", whole);
     if (strcasecmp(cmd, "players") == 0)
         cmd_players();
@@ -927,6 +986,8 @@ static void run_command(char *line)
         cmd_give(give_name, give_what, give_amount);
     else if ((strcasecmp(cmd, "reset") == 0) && (nargs >= 2))
         cmd_reset(name);
+    else if ((strcasecmp(cmd, "role") == 0) && (rest != NULL) && (actor_user <= SERVER_ID))
+        server_roles_admin(rest); /* the admin's only: roles are never given in game */
     else if ((strcasecmp(cmd, "say") == 0) && (rest != NULL))
         say(rest);
     else if (strcasecmp(cmd, "save") == 0)
@@ -945,6 +1006,125 @@ static void run_command(char *line)
     }
     else
         server_admin_log("warn", "Unknown command: /%s (try /help)", whole);
+}
+
+/** A seated player's in-game "!" command that is one of the admin's: run when a role of theirs allows it (Keeper
+ *  Server's Permissions tab). 1 when it was one of those (run, or refused with a notice saying why); 0 when it isn't
+ *  (the console's own command, which goes on as before). */
+TbBool server_admin_player_command(int user, const char *text)
+{
+    char line[ADMIN_LINE_MAX];
+    snprintf(line, sizeof(line), "%s", (text != NULL) ? text : "");
+    char *s = line;
+    while (*s == ' ')
+        s++;
+    char word[32];
+    size_t wl = 0;
+    while ((s[wl] != '\0') && (s[wl] != ' ') && (wl < sizeof(word) - 1))
+    {
+        word[wl] = s[wl];
+        wl++;
+    }
+    word[wl] = '\0';
+    const int perm = role_permission_by_name(word);
+    if ((perm < 0) || (perm == RolP_Chat) || (perm == RolP_Cheats))
+        return false;
+    if ((user <= SERVER_ID) || (user >= MAX_NET_USERS))
+        return true;
+    const PlayerNumber me = get_user_state(user)->player_id;
+    if ((me < 0) || (me >= PLAYERS_COUNT))
+        return true; /* not seated */
+    char msg[256];
+    if (!server_roles_setting("ingame"))
+    {
+        server_admin_notice(user, "In-game commands are off on this server.");
+        return true;
+    }
+    if (!server_roles_user_can(user, perm))
+    {
+        snprintf(msg, sizeof(msg), "You can't use !%s on this server.", word);
+        server_admin_notice(user, msg);
+        server_admin_log("warn", "%s tried !%s (no role of theirs allows it)", server_admin_player_name(me), s);
+        return true;
+    }
+    /* the target: the rest of the line (give: without its last two words) */
+    const char *rest = s + wl;
+    while (*rest == ' ')
+        rest++;
+    char target[64];
+    snprintf(target, sizeof(target), "%s", rest);
+    for (size_t n = strlen(target); (n > 0) && (target[n - 1] == ' '); n--)
+        target[n - 1] = '\0';
+    if (perm == RolP_Give)
+        for (int k = 0; k < 2; k++)
+        {
+            char *sp = strrchr(target, ' ');
+            if (sp == NULL)
+            {
+                target[0] = '\0';
+                break;
+            }
+            *sp = '\0';
+            for (size_t n = strlen(target); (n > 0) && (target[n - 1] == ' '); n--)
+                target[n - 1] = '\0';
+        }
+    const PlayerNumber tp = (target[0] != '\0') ? seat_by_name(target) : -1;
+    const TbBool acts_on = (perm == RolP_Kick) || (perm == RolP_Ban) || (perm == RolP_Mute) || (perm == RolP_Unmute) ||
+        (perm == RolP_Give) || (perm == RolP_Reset);
+    if (acts_on && (tp >= 0) && (tp != me) && server_roles_setting("hierarchy") && (server_roles_seat_rank(tp) <= server_roles_seat_rank(me)))
+    {
+        snprintf(msg, sizeof(msg), "%s's role (%s) is as high as yours: you can't use !%s on them.", server_admin_player_name(tp),
+            server_roles_seat_top_name(tp), word);
+        server_admin_notice(user, msg);
+        return true;
+    }
+    if (perm == RolP_Players)
+    {
+        const PlayerNumber *seats = NULL;
+        const int n = world_seat_players(&seats);
+        int online = 0;
+        size_t len = 0;
+        char names[200] = "";
+        for (int i = 0; i < n; i++)
+        {
+            if (seat_user(seats[i]) <= SERVER_ID)
+                continue;
+            online++;
+            if (len + strlen(seat_name(seats[i])) + 4 < sizeof(names))
+                len += (size_t)snprintf(names + len, sizeof(names) - len, "%s%s", (online > 1) ? ", " : "", seat_name(seats[i]));
+        }
+        snprintf(msg, sizeof(msg), "Online (%d): %s", online, names);
+        server_admin_notice(user, msg);
+        return true;
+    }
+    if (perm == RolP_Stats)
+    {
+        if (tp < 0)
+            snprintf(msg, sizeof(msg), "No player named %s", target);
+        else
+        {
+            const struct Dungeon *dungeon = get_players_num_dungeon(tp);
+            snprintf(msg, sizeof(msg), "%s: level %d, %d creatures, %d rooms, %s", server_admin_player_name(tp), world_player_level(tp),
+                dungeon_invalid(dungeon) ? 0 : (int)dungeon->num_active_creatrs, seat_rooms(tp),
+                (seat_user(tp) > SERVER_ID) ? "online" : "offline");
+        }
+        server_admin_notice(user, msg);
+        return true;
+    }
+    actor_user = user;
+    snprintf(actor_name, sizeof(actor_name), "%s", server_admin_player_name(me));
+    actor_ok = false;
+    char cmdline[ADMIN_LINE_MAX];
+    snprintf(cmdline, sizeof(cmdline), "%s", s);
+    run_command(cmdline);
+    actor_user = -1;
+    if (actor_ok && server_roles_setting("announce") && (tp >= 0) && ((perm == RolP_Kick) || (perm == RolP_Ban) || (perm == RolP_Mute)))
+    {
+        snprintf(msg, sizeof(msg), "Server: %s was %s by %s.", server_admin_player_name(tp),
+            (perm == RolP_Kick) ? "kicked" : ((perm == RolP_Ban) ? "banned" : "muted"), actor_name);
+        server_admin_notice(-1, msg);
+    }
+    return true;
 }
 
 /******************************************************************************/
@@ -1146,6 +1326,7 @@ void server_admin_poll(void)
 
 void server_admin_turn(void)
 {
+    server_roles_turn(); /* the seats' names and role colours to the clients (also with no admin connected) */
     if ((A.port <= 0) || !network_is_active() || !netstate_is_server())
         return;
     /* play time: the seats a user holds */

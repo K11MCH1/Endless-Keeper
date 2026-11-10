@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include "kfx/renderer/RendererManager.h"
 #include "engine_redraw.h"
+#include "chat_box.h"
 #include "engine_textures.h"
 
 #include "globals.h"
@@ -922,7 +923,7 @@ void redraw_display(void)
     RendererClearDrawFlags(Lb_TEXT_ONE_COLOR);
     int tx_units_per_px = ( (MyScreenHeight < 400) && (dbc_initialized && dbc_enabled) ) ? scale_ui_value(32) : (22 * units_per_pixel) / LbTextLineHeight();
     LbTextSetWindow(0, 0, MyScreenWidth, MyScreenHeight);
-    if ((get_local_user_state()->init_flags & UsrIF_NewMPMessage) != 0)
+    if (((get_local_user_state()->init_flags & UsrIF_NewMPMessage) != 0) && !chat_box_draws_typing())
     {
         char text[sizeof(local_state.mp_message_text) + 4];
         snprintf(text, sizeof(text), ">%s_", local_state.mp_message_text);

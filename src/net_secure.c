@@ -191,7 +191,9 @@ void netsec_server_keyreq(NetUserId source, const char *buf, size_t size)
     memcpy(wp, &magic, 4);
     memcpy(wp + 4, wk_pub, NETSEC_KEY_LEN);
     memcpy(wp + 4 + NETSEC_KEY_LEN, srv_nonce[source], NETSEC_NONCE_LEN);
-    send_message_buffer(source, wp + 4 + NETSEC_KEY_LEN + NETSEC_NONCE_LEN);
+    /* what this server reads in a sealed login beyond the token and password (an older client leaves the byte) */
+    wp[4 + NETSEC_KEY_LEN + NETSEC_NONCE_LEN] = (char)NETSEC_FEAT_PARTY;
+    send_message_buffer(source, wp + 4 + NETSEC_KEY_LEN + NETSEC_NONCE_LEN + 1);
 }
 
 /** The key that seals a login: BLAKE2b over the X25519 secret, keyed by it, of both public keys. */
@@ -212,19 +214,21 @@ static void login_ad(uint8_t ad[8 + NETSEC_KEY_LEN + NETSEC_NONCE_LEN], const ui
 }
 
 int netsec_server_login_ext(NetUserId source, const char *p, const char *end, uint64_t *token, char *password,
-    size_t password_room)
+    size_t password_room, uint64_t *party_key)
 {
+    if (party_key != NULL)
+        *party_key = 0;
     if ((p == NULL) || (p >= end) || (*p != 'K'))
         return 0;
     if ((source <= SERVER_ID) || (source >= MAX_NET_CONNECTIONS) || !srv_nonce_ok[source] || !netsec_server_ready())
         return -1;
     srv_nonce_ok[source] = false; /* one login per nonce */
     const size_t len = (size_t)(end - p);
-    if ((len < NETSEC_EXT_HEAD + 9) || (len > NETSEC_EXT_HEAD + 9 + NETSEC_PW_MAX))
+    if ((len < NETSEC_EXT_HEAD + 9) || (len > NETSEC_EXT_HEAD + 9 + NETSEC_PW_MAX + 8))
         return -1;
     const uint8_t *client_pub = (const uint8_t *)p + 1, *mac = client_pub + NETSEC_KEY_LEN, *ct = mac + NETSEC_MAC_LEN;
     const size_t ct_len = len - NETSEC_EXT_HEAD;
-    uint8_t shared[32], key[32], ad[8 + NETSEC_KEY_LEN + NETSEC_NONCE_LEN], plain[9 + NETSEC_PW_MAX];
+    uint8_t shared[32], key[32], ad[8 + NETSEC_KEY_LEN + NETSEC_NONCE_LEN], plain[9 + NETSEC_PW_MAX + 8];
     static const uint8_t nonce[24]; /* each login's key is new (the client's one-time key) */
     crypto_x25519(shared, wk_sec, client_pub);
     login_key(key, shared, client_pub, wk_pub);
@@ -232,12 +236,15 @@ int netsec_server_login_ext(NetUserId source, const char *p, const char *end, ui
     const int bad = crypto_aead_unlock(plain, mac, key, nonce, ad, sizeof(ad), ct, ct_len);
     crypto_wipe(shared, sizeof(shared));
     crypto_wipe(key, sizeof(key));
-    if ((bad != 0) || ((size_t)plain[8] + 9 != ct_len))
+    /* after the password, a party's key (8 bytes) when the player came with a party (co-op, 2026-11-10) */
+    if ((bad != 0) || (((size_t)plain[8] + 9 != ct_len) && ((size_t)plain[8] + 9 + 8 != ct_len)))
     {
         crypto_wipe(plain, sizeof(plain));
         return -1;
     }
     memcpy(token, plain, 8);
+    if ((party_key != NULL) && ((size_t)plain[8] + 9 + 8 == ct_len))
+        memcpy(party_key, plain + 9 + plain[8], 8);
     const size_t pw = min((size_t)plain[8], (password_room > 0) ? password_room - 1 : 0);
     if (password_room > 0)
     {
@@ -252,6 +259,7 @@ int netsec_server_login_ext(NetUserId source, const char *p, const char *end, ui
 /* the client */
 static uint8_t cl_pub[NETSEC_KEY_LEN], cl_nonce[NETSEC_NONCE_LEN];
 static TbBool cl_have;
+static uint8_t cl_features; /* what the server reads in a sealed login (NETSEC_FEAT_*; 0 from an older server) */
 
 void netsec_client_reset(void)
 {
@@ -273,18 +281,21 @@ void netsec_client_keyinfo(const char *buf, size_t size)
         return;
     memcpy(cl_pub, buf + 4, NETSEC_KEY_LEN);
     memcpy(cl_nonce, buf + 4 + NETSEC_KEY_LEN, NETSEC_NONCE_LEN);
+    cl_features = (size > 4 + NETSEC_KEY_LEN + NETSEC_NONCE_LEN) ? (uint8_t)buf[4 + NETSEC_KEY_LEN + NETSEC_NONCE_LEN] : 0;
     cl_have = true;
 }
 
-size_t netsec_client_login_ext(char *dst, size_t room, uint64_t secret, const char *password)
+size_t netsec_client_login_ext(char *dst, size_t room, uint64_t secret, const char *password, uint64_t party_key)
 {
     if (!cl_have)
         return 0;
     const size_t pw = min(strlen(password), (size_t)NETSEC_PW_MAX);
-    const size_t need = NETSEC_EXT_HEAD + 9 + pw;
+    /* the party's key goes only to a server that reads one (an older one would refuse the longer login) */
+    const size_t extra = ((party_key != 0) && ((cl_features & NETSEC_FEAT_PARTY) != 0)) ? 8 : 0;
+    const size_t need = NETSEC_EXT_HEAD + 9 + pw + extra;
     if (room < need)
         return 0;
-    uint8_t e_sec[32], e_pub[32], shared[32], key[32], ad[8 + NETSEC_KEY_LEN + NETSEC_NONCE_LEN], plain[9 + NETSEC_PW_MAX];
+    uint8_t e_sec[32], e_pub[32], shared[32], key[32], ad[8 + NETSEC_KEY_LEN + NETSEC_NONCE_LEN], plain[9 + NETSEC_PW_MAX + 8];
     static const uint8_t nonce[24];
     netsec_random(e_sec, sizeof(e_sec));
     crypto_x25519_public_key(e_pub, e_sec);
@@ -295,10 +306,12 @@ size_t netsec_client_login_ext(char *dst, size_t room, uint64_t secret, const ch
     memcpy(plain, &token, 8);
     plain[8] = (uint8_t)pw;
     memcpy(plain + 9, password, pw);
+    if (extra != 0)
+        memcpy(plain + 9 + pw, &party_key, 8);
     uint8_t *out = (uint8_t *)dst;
     out[0] = 'K';
     memcpy(out + 1, e_pub, NETSEC_KEY_LEN);
-    crypto_aead_lock(out + NETSEC_EXT_HEAD, out + 1 + NETSEC_KEY_LEN, key, nonce, ad, sizeof(ad), plain, 9 + pw);
+    crypto_aead_lock(out + NETSEC_EXT_HEAD, out + 1 + NETSEC_KEY_LEN, key, nonce, ad, sizeof(ad), plain, 9 + pw + extra);
     crypto_wipe(e_sec, sizeof(e_sec));
     crypto_wipe(shared, sizeof(shared));
     crypto_wipe(key, sizeof(key));

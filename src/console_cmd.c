@@ -81,6 +81,8 @@
 #include "timer.h"
 #include "kfx/save/SaveManager.h"
 #include "world_pages.h"
+#include "net_state.h"
+#include "server_roles.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -161,7 +163,10 @@ static TbBool console_cmd_cheats_allowed(PlayerNumber plyr_idx)
     if (console_cmd_player(plyr_idx) == &local_observer_player) {
         return !network_is_active() || user_cheats_allowed(SERVER_ID);
     }
-    return user_cheats_allowed(console_cmd_user(plyr_idx));
+    const NetUserId user = console_cmd_user(plyr_idx);
+    if (netstate_dedicated() && server_roles_user_can(user, RolP_Cheats))
+        return true; /* an endless server: a role may allow cheats (server_roles.c; the commands run on the server only) */
+    return user_cheats_allowed(user);
 }
 
 static struct Thing *console_cmd_selected_thing(PlayerNumber plyr_idx)
