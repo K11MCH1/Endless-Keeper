@@ -258,21 +258,33 @@ static const unsigned char *cb_dark_remap(int step)
     return map[step];
 }
 
+/** A role's colour at a fade step, kept: the renderer keeps the remap's address and reads it when it draws the frame,
+ *  later (OpenGL), so it must not be a local array (2026-11-10: a stack array here gave the renderer a different,
+ *  garbage remap each frame, which filled its colour table until no role colour showed for that player). */
+static const unsigned char *cb_tint_at_step(const unsigned char *tint, const unsigned char *dark)
+{
+    static struct { TbBool used; unsigned char map[256]; } combos[64];
+    static int next;
+    unsigned char both[256];
+    for (int i = 0; i < 256; i++)
+        both[i] = dark[tint[i]];
+    for (int k = 0; k < (int)(sizeof(combos) / sizeof(combos[0])); k++)
+        if (combos[k].used && (memcmp(combos[k].map, both, sizeof(both)) == 0))
+            return combos[k].map;
+    const int k = next;
+    next = (next + 1) % (int)(sizeof(combos) / sizeof(combos[0]));
+    memcpy(combos[k].map, both, sizeof(both));
+    combos[k].used = true;
+    return combos[k].map;
+}
+
 /** Text in the role's colour (tint, or NULL) and the fade's step (0: as is). */
 static void cb_draw_text(long x, long y, int units, const char *text, const unsigned char *tint, int step)
 {
     const unsigned char *dark = cb_dark_remap(step);
     const unsigned char *map = tint;
-    unsigned char both[256];
     if (dark != NULL)
-    {
-        if (tint != NULL) {
-            for (int i = 0; i < 256; i++)
-                both[i] = dark[tint[i]];
-            map = both;
-        } else
-            map = dark;
-    }
+        map = (tint != NULL) ? cb_tint_at_step(tint, dark) : dark;
     /* the last steps are see-through too */
     RendererSetDrawFlags((step >= CB_FADE_STEPS - 2) ? Lb_SPRITE_TRANSPAR4 : 0);
     if (map == NULL) {

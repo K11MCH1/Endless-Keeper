@@ -272,7 +272,15 @@ int GLUIRenderer::resolve_clut_row(const unsigned char* cmap)
     }
 
     if (m_clut_used >= k_clut_rows)
+    {
+        static bool warned = false;
+        if (!warned)
+        {
+            warned = true;
+            WARNLOG("GLUIRenderer: %d colour remaps in one frame: the rest draw uncoloured", k_clut_rows - 1);
+        }
         return 0; // identity fallback
+    }
 
     const int row_idx = m_clut_used++;
 

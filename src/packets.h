@@ -206,6 +206,7 @@ enum TbPacketAction {
         PckA_SetTimestamp,
         PckA_WorldRespawn,       /* endless world: a defeated keeper starts again (2026-11-08) */
         PckA_SetMapZoom,         /* touch (Android): the zoom a pinch gave this machine's view, for the user's camera (2026-11-09) */
+        PckA_WorldDelete,        /* endless world: !delete dungeon, confirmed in the player's box (party dungeons, 2026-11-10) */
 };
 
 /** Packet flags for non-action player operation. **/

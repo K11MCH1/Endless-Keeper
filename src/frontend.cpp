@@ -223,6 +223,7 @@ struct GuiMenu *menu_list[] = {
     &world_respawn_menu, //53
     &world_party_menu,
     &chat_box_menu, //55
+    &world_delete_menu, //56
     NULL,
 };
 

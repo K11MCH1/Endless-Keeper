@@ -334,7 +334,7 @@ void world_wild_turn(void)
     }
     for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (pl.count < WILD_MAX_ANCHORS); p++)
     {
-        struct Thing *heartng = world_player_is_human(p) ? find_players_dungeon_heart(p) : INVALID_THING;
+        struct Thing *heartng = (world_player_is_human(p) && !world_coop_seat_away(p)) ? find_players_dungeon_heart(p) : INVALID_THING;
         if (thing_exists(heartng) && world_human_heart_loaded(p))
         {
             pl.ax[pl.count] = subtile_slab(heartng->mappos.x.stl.num);

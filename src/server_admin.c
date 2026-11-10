@@ -362,6 +362,9 @@ static size_t stats_json(char *buf, size_t cap, PlayerNumber p)
         (st != NULL) ? (unsigned long)st->hearts : 0UL, (st != NULL) ? (unsigned long)st->outposts : 0UL,
         (st != NULL) ? (unsigned long)st->portals : 0UL, hours, seat_muted(p) ? "true" : "false", ipj,
         dg ? (long)dungeon->total_money_owned : 0L, defeated ? "true" : "false", seat_banned(p) ? "true" : "false");
+    int rtt = 0, loss = 0;
+    if ((n < cap) && (u > SERVER_ID) && (enet_user_link(u, &rtt, &loss) == 0))
+        n += (size_t)snprintf(buf + n, cap - n, ",\"ping\":%d,\"loss\":%d", rtt, loss); /* loss in tenths of a percent */
     if (n < cap)
         n += server_roles_seat_json(buf + n, cap - n, p); /* its roles and name colour */
     return n;
@@ -500,6 +503,18 @@ TbBool server_admin_enabled(void)
 static NetUserId actor_user = -1;
 static char actor_name[40];
 static TbBool actor_ok; /* the command did something (an "admin" line) */
+
+void server_admin_player_event(PlayerNumber plyr_idx, const char *fmt, ...)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX) || !world_player_is_human(plyr_idx))
+        return;
+    char text[ADMIN_LINE_MAX / 2];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(text, sizeof(text), fmt, ap);
+    va_end(ap);
+    server_admin_log("player", "%s", text);
+}
 
 void server_admin_log(const char *kind, const char *fmt, ...)
 {
@@ -721,6 +736,11 @@ static TbBool drop_with(PlayerNumber p, enum NetJoinRejection reason, const char
     return true;
 }
 
+TbBool server_admin_drop_seat(PlayerNumber plyr_idx, const char *text)
+{
+    return drop_with(plyr_idx, NetJoin_Kicked, text);
+}
+
 static void cmd_kick(const char *name)
 {
     const PlayerNumber p = seat_by_name(name);
@@ -871,7 +891,7 @@ static void cmd_reset(const char *name)
     if (mate != PLAYER_NONE)
     {
         char msg[160];
-        server_admin_log("party", "%s and %s are allied keepers no more (the reset)", seat_name(p), seat_name(mate));
+        server_admin_player_event(p, "%s and %s are allied keepers no more (the reset)", seat_name(p), seat_name(mate));
         if (u > SERVER_ID)
         {
             snprintf(msg, sizeof(msg), "You and %s are allied keepers no more.", seat_name(mate));
@@ -1048,6 +1068,8 @@ static void player_help(int user)
             len += (size_t)snprintf(msg + len, sizeof(msg) - len, "%s", item);
     }
     server_admin_notice(user, msg);
+    if (world_mode_active())
+        server_admin_notice(user, "Everyone: !delete dungeon deletes the dungeon you play (it asks first).");
     if (server_roles_user_can(user, RolP_Cheats))
         server_admin_notice(user, "Cheats are allowed for you: the game's ! cheat commands work (Tab completes them).");
     if (!server_roles_user_can(user, RolP_Chat))
@@ -1084,6 +1106,14 @@ TbBool server_admin_player_command_as(int user, const char *text, char prefix)
     {
         if ((user > SERVER_ID) && (user < MAX_NET_USERS))
             player_help(user);
+        return true;
+    }
+    if ((strcasecmp(word, "delete") == 0) && world_mode_active())
+    {
+        /* party dungeons: "!delete dungeon" opens a box in the player's own game, which asks first and sends the
+           request as a packet; a line that comes here was typed in a game without that box */
+        if ((user > SERVER_ID) && (user < MAX_NET_USERS))
+            server_admin_notice(user, "Type !delete dungeon in an up-to-date game: it asks you first, then deletes the dungeon you play.");
         return true;
     }
     const int perm = role_permission_by_name(word);
@@ -1416,7 +1446,7 @@ void server_admin_turn(void)
             {
                 const uint16_t delta = (uint16_t)(now - A.heroes_seen[p]);
                 if ((delta > 0) && (delta < 10000))
-                    server_admin_log("heroes", "%s defeated %u hero%s", server_admin_player_name(p), (unsigned)delta, (delta == 1) ? "" : "es");
+                    server_admin_player_event(p, "%s defeated %u hero%s", server_admin_player_name(p), (unsigned)delta, (delta == 1) ? "" : "es");
             }
             A.heroes_seen[p] = now;
             A.heroes_known[p] = true;

@@ -1407,6 +1407,34 @@ int enet_user_ms_since_receive(int user)
     return -1;
 }
 
+/** A connected user's link as ENet measures it (Keeper Server's player list, 2026-11-10): the round trip in ms and
+ *  the share of reliable packets that had to be sent again, in tenths of a percent (ENet's running estimate over its
+ *  10-second windows). 0 when there is a connection, -1 when not. */
+int enet_user_link(int user, int *rtt_ms, int *loss_permille)
+{
+    if (!host) {
+        return -1;
+    }
+    for (size_t i = 0; i < host->peerCount; i++) {
+        ENetPeer *peer = &host->peers[i];
+        if ((peer->state != ENET_PEER_STATE_CONNECTED) || ((int)reinterpret_cast<ptrdiff_t>(peer->data) != user)) {
+            continue;
+        }
+        enet_uint32 rtt = peer->roundTripTime;
+        if (rtt == 0) {
+            rtt = peer->lastRoundTripTime;
+        }
+        if (rtt_ms != NULL) {
+            *rtt_ms = (int)rtt;
+        }
+        if (loss_permille != NULL) {
+            *loss_permille = (int)((static_cast<unsigned long long>(peer->packetLoss) * 1000ULL) / ENET_PEER_PACKET_LOSS_SCALE);
+        }
+        return 0;
+    }
+    return -1;
+}
+
 int enet_user_address(int user, char *buf, size_t len)
 {
     if ((buf == NULL) || (len == 0)) {

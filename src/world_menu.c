@@ -66,6 +66,7 @@
 #include "gui_parchment.h"
 #include "frontmenu_ingame_tabs.h"
 #include "local_camera.h"
+#include "chat_box.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1776,10 +1777,108 @@ static struct GuiButtonInit world_respawn_buttons[] = {
 struct GuiMenu world_respawn_menu =
  { GMnu_WORLD_RESPAWN, 0, 1, world_respawn_buttons, POS_GAMECTR, POS_GAMECTR, 300, 104, gui_pretty_background, 0, NULL, NULL, 0, 1, 0,};
 
+/* !delete dungeon (party dungeons, the user, 2026-11-10): typed in the chat of an online endless world, it opens this
+   box here (the line isn't sent); Yes sends the request to the server as a packet, which deletes the dungeon this
+   player plays (solo or co-op: its ground is made again) and sends the player back to the World List. */
+static char wd_title[] = "Are you sure?";
+static char wd_yes[] = "Yes";
+static char wd_no[] = "No";
+
+static Uint64 wd_asked_at = 0; /* when this player said Yes (0: not) */
+
+TbBool world_delete_just_asked(void)
+{
+    const TbBool asked = (wd_asked_at != 0) && (SDL_GetTicks() - wd_asked_at < 30000);
+    wd_asked_at = 0;
+    return asked;
+}
+
+static void wd_yes_click(struct GuiButton *gbtn)
+{
+    (void)gbtn;
+    SYNCLOG("World: this player deletes its dungeon");
+    wd_asked_at = SDL_GetTicks();
+    turn_off_menu(GMnu_WORLD_DELETE);
+    set_players_packet_action(get_my_player(), PckA_WorldDelete, 0, 0, 0, 0);
+    if (chat_box_active())
+        chat_box_add(-1, "Deleting your dungeon...");
+}
+
+static void wd_no_click(struct GuiButton *gbtn)
+{
+    (void)gbtn;
+    turn_off_menu(GMnu_WORLD_DELETE);
+}
+
+static struct GuiButtonInit world_delete_buttons[] = {
+  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 0, NULL,         NULL, NULL, 0, 999, 12, 999, 12, 260, 32, gui_area_text, 2, GUIStr_Empty, 0, {.str = wd_title}, 0, NULL },
+  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 1, wd_yes_click, NULL, NULL, 0,  30, 58,  30, 58, 110, 32, gui_area_text, 1, GUIStr_Empty, 0, {.str = wd_yes},   0, NULL },
+  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 1, wd_no_click,  NULL, NULL, 0, 160, 58, 160, 58, 110, 32, gui_area_text, 1, GUIStr_Empty, 0, {.str = wd_no},    0, NULL },
+  {              -1, BID_DEFAULT, 0, 0, NULL,         NULL, NULL, 0,   0,  0,   0,  0,   0,  0, NULL,          0, 0,            0, {0},              0, NULL },
+};
+
+struct GuiMenu world_delete_menu =
+ { GMnu_WORLD_DELETE, 0, 1, world_delete_buttons, POS_GAMECTR, POS_GAMECTR, 300, 104, gui_pretty_background, 0, NULL, NULL, 0, 1, 0,};
+
+TbBool world_delete_command(const char *text)
+{
+    if ((text == NULL) || !world_mode_active() || ((text[0] != '!') && (text[0] != '/')))
+        return false;
+    const char *s = text + 1;
+    while (*s == ' ')
+        s++;
+    if (strncasecmp(s, "delete", 6) != 0)
+        return false;
+    s += 6;
+    while (*s == ' ')
+        s++;
+    if (strncasecmp(s, "dungeon", 7) != 0)
+        return false;
+    s += 7;
+    while (*s == ' ')
+        s++;
+    if (*s != '\0')
+        return false;
+    if (!network_is_active() || !netstate_is_client())
+    {
+        const char *say = "!delete dungeon works when you play in someone's world (a server), not in your own.";
+        if (chat_box_active())
+            chat_box_add(-1, say);
+        else
+            message_add(MsgType_Blank, 0, say);
+        return true;
+    }
+    SYNCLOG("World: !delete dungeon: asking first");
+    if (chat_box_active())
+        chat_box_add(-1, "!delete dungeon: the dungeon you play goes for good, and its ground is made again.");
+    if (get_local_view_type() == PVT_MapScreen)
+        zoom_from_parchment_map(); /* the box's buttons get no clicks on the full-screen map */
+    turn_on_menu(GMnu_WORLD_DELETE);
+    return true;
+}
+
+static void wd_yes_click(struct GuiButton *gbtn);
+
 void world_respawn_prompt_turn(void)
 {
     if (!world_mode_active() || netstate_dedicated() || replay.load_enable || observer_is_active())
         return;
+    {
+        /* test hook KFX_WORLD_DELETEYES=<ms>: !delete dungeon's box answers Yes itself that long after it came up */
+        static Uint64 delete_box_at = 0;
+        const char *yes_ms = getenv("KFX_WORLD_DELETEYES");
+        if ((yes_ms != NULL) && menu_is_active(GMnu_WORLD_DELETE))
+        {
+            if (delete_box_at == 0)
+                delete_box_at = SDL_GetTicks();
+            else if (SDL_GetTicks() - delete_box_at >= (Uint64)atoi(yes_ms))
+            {
+                SYNCLOG("World test: !delete dungeon's Yes clicks itself");
+                delete_box_at = 0;
+                wd_yes_click(NULL);
+            }
+        }
+    }
     struct PlayerInfo *player = get_my_player();
     {
         /* test hook KFX_WORLD_QUITAFTER=<s>: this client leaves the world (as the Quit button) that long after its keeper

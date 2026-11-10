@@ -68,15 +68,17 @@ void message_set_chat_sender(PlayerNumber plyr_idx)
  *  (the nearest the game's palette has), so letters keep their shading and dark edge. A few colours are kept. */
 const unsigned char *message_chat_name_remap(uint32_t rgb)
 {
-    static struct { uint32_t rgb; TbBool made; unsigned char map[256]; } cache[4];
+    /* one per role colour (a server has at most 32 roles): the renderer reads a remap when it draws the frame, so
+       one must not be remade for another colour while a frame still shows it (4 entries did, with 5+ colours) */
+    static struct { uint32_t rgb; TbBool made; unsigned char map[256]; } cache[32];
     static int next;
     if (engine_palette == NULL)
         return NULL;
-    for (int k = 0; k < 4; k++)
+    for (int k = 0; k < (int)(sizeof(cache) / sizeof(cache[0])); k++)
         if (cache[k].made && (cache[k].rgb == rgb))
             return cache[k].map;
     const int k = next;
-    next = (next + 1) % 4;
+    next = (next + 1) % (int)(sizeof(cache) / sizeof(cache[0]));
     const int tr = (int)((rgb >> 16) & 0xFF) >> 2, tg = (int)((rgb >> 8) & 0xFF) >> 2, tb = (int)(rgb & 0xFF) >> 2;
     for (int i = 0; i < 256; i++)
     {

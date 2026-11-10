@@ -992,7 +992,8 @@ TbBool network_thin_client_server_gone(void)
         return false;
     const TbBool timed_out = netstate.users_timed_out[SERVER_ID];
     SYNCLOG("Thin client: the server is gone (%s)", timed_out ? "it stopped answering" : "it closed the connection");
-    const char *why = server_farewell_text();
+    /* !delete dungeon: the server drops the player once the dungeon is gone (its words may come after the drop) */
+    const char *why = world_delete_just_asked() ? "Dungeon deleted" : server_farewell_text();
     if ((why == NULL) && (net_join_rejection >= NetJoin_Kicked) && (net_join_rejection <= NetJoin_BannedJoin))
         why = net_join_error_text(net_join_rejection);
     char lost[320];

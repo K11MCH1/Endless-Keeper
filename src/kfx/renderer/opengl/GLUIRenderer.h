@@ -36,7 +36,19 @@ public:
     /** Render thread: the palette of the frame being drawn (256 RGBA8
      *  entries), used for flat palette colours so they change on the same
      *  frame as everything sampling the palette texture. */
-    void SetFramePalette(const unsigned char* rgba) { m_frame_palette = rgba; }
+    void SetFramePalette(const unsigned char* rgba)
+    {
+        m_frame_palette = rgba;
+        /* a new frame (Endless Keeper, 2026-11-10): the colour rows the last frames used are freed once half the
+           table is taken. Rows were freed only when the palette changed, so in a long game the table filled and
+           every new remap (a chat role colour) drew uncoloured. Last frame's draws are done; this frame's rows
+           are all made after this, so none is overwritten while a batch still needs it. */
+        if (m_clut_used > k_clut_rows / 2)
+        {
+            m_clut_remaps.clear();
+            m_clut_used = 1;
+        }
+    }
     void PaletteColour(unsigned char idx, float* r, float* g, float* b) const;
     /** For GLTextRenderer's glScissor Y-flip (top-left clip rect -> GL's
      *  bottom-left scissor origin). */

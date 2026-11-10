@@ -1144,8 +1144,8 @@ void world_daynight_turn(void)
            its own */
         for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
         {
-            if (!world_player_is_human(p) || (dn_raid_time_for(day, i, n, p) != t))
-                continue;
+            if (!world_player_is_human(p) || world_coop_seat_away(p) || (dn_raid_time_for(day, i, n, p) != t))
+                continue; /* (a co-op dungeon whose player is away is frozen: no raid comes for it) */
             if (dn_raid_happens(day, i, p))
                 dn_raid(day, i, p);
             else if (p == PLAYER0)

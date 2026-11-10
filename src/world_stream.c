@@ -11,6 +11,7 @@
 /******************************************************************************/
 #include "pre_inc.h"
 #include <limits.h>
+#include <time.h>
 #include "world_stream.h"
 #include "chat_box.h"
 #include "world_shift.h"
@@ -143,6 +144,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_PERKS_MAGIC 0x314B5250u /* "PRK1": optional, after PST1 (last): the players' passive upgrades, by token */
 #define WORLD_SKEY_MAGIC 0x3159454Bu /* "KEY1": optional, after PRK1 (last): the world's key, secret half (net_secure.c) */
 #define WORLD_COOP_MAGIC 0x31504F43u /* "COP1": optional, after KEY1 (last): the allied pairs of a party (co-op) */
+#define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
 /* The player's creature limit (imps don't count, as in stock): this many, plus this many per owned portal. */
 #define WORLD_BASE_CREATURES 10
@@ -263,6 +265,67 @@ void world_set_seat_token(PlayerNumber plyr_idx, uint64_t token)
 {
     if ((plyr_idx >= 0) && (plyr_idx < PLAYERS_MAX))
         seat_tokens[plyr_idx] = token;
+}
+
+/******************************************************************************/
+/* Party dungeons (the user, 2026-11-10): a player has a solo dungeon and a co-op dungeon, each a seat of its own with
+   the player's token. A co-op seat also has its partner's token (COOP_SEAT_ORPHAN once the party has ended: the partner
+   was defeated or deleted theirs), and when it was last played (real time, seconds). Two players who haven't partied
+   before start a new pair of co-op dungeons side by side, far out; a party that has played together comes back to its
+   pair. One co-op dungeon a player: a new party needs the old one deleted first (!delete dungeon). A co-op dungeon
+   freezes while its player is away (no caretaker), and one nobody of its party has played for COOP_EXPIRE_DAYS is
+   deleted, its ground made again. Server state, kept in the save (CPS1). */
+#define COOP_EXPIRE_DAYS 15
+static uint64_t seat_partner_tokens[PLAYERS_MAX]; /* 0: a solo seat */
+static uint64_t seat_played_at[PLAYERS_MAX];      /* unix seconds a co-op seat was last played (0: not known yet) */
+static PlayerBitFlags seats_to_free;              /* deleted seats: freed once their player has left them */
+#define SEAT_PLAYED_TO_FREE UINT64_MAX            /* the save's mark of a seat in seats_to_free */
+
+TbBool world_seat_is_coop(PlayerNumber plyr_idx)
+{
+    return (plyr_idx >= 0) && (plyr_idx < PLAYERS_MAX) && (seat_partner_tokens[plyr_idx] != 0);
+}
+
+uint64_t world_seat_partner_token(PlayerNumber plyr_idx)
+{
+    return ((plyr_idx >= 0) && (plyr_idx < PLAYERS_MAX)) ? seat_partner_tokens[plyr_idx] : 0;
+}
+
+void world_set_seat_partner_token(PlayerNumber plyr_idx, uint64_t partner_token)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
+        return;
+    seat_partner_tokens[plyr_idx] = partner_token;
+    seat_played_at[plyr_idx] = (partner_token != 0) ? (uint64_t)time(NULL) : 0;
+}
+
+TbBool world_seat_deleted(PlayerNumber plyr_idx)
+{
+    return (plyr_idx >= 0) && (plyr_idx < PLAYERS_MAX) && pmask_has(seats_to_free, plyr_idx);
+}
+
+PlayerNumber world_coop_seat_of(uint64_t token)
+{
+    if (token == 0)
+        return PLAYER_NONE;
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+        if ((seat_tokens[p] == token) && (seat_partner_tokens[p] != 0) && !pmask_has(seats_to_free, p) &&
+            player_exists(get_player(p)))
+            return p;
+    return PLAYER_NONE;
+}
+
+TbBool world_coop_seat_away(PlayerNumber plyr_idx)
+{
+    return world_seat_is_coop(plyr_idx) && player_exists(get_player(plyr_idx)) &&
+        player_is_placeholder(get_player(plyr_idx));
+}
+
+static void coop_seats_clear(void)
+{
+    memset(seat_partner_tokens, 0, sizeof(seat_partner_tokens));
+    memset(seat_played_at, 0, sizeof(seat_played_at));
+    seats_to_free = pmask_none();
 }
 
 /******************************************************************************/
@@ -3809,7 +3872,12 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
     *home_cx = floor_div(W.home_x, WORLD_CHUNK_SLABS);
     *home_cy = floor_div(W.home_y, WORLD_CHUNK_SLABS);
     cm_want(*home_cx, *home_cy, CM_HEART_RADIUS);
-    const PlayerBitFlags humans = world_human_mask();
+    PlayerBitFlags humans = world_human_mask();
+    /* party dungeons (2026-11-10): a co-op dungeon whose player is away keeps nothing loaded (no caretaker): it freezes,
+       unless another player's creatures or ground keep its chunks */
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+        if (pmask_has(humans, p) && world_coop_seat_away(p))
+            pmask_del(&humans, p);
     struct WgStructRef start;
     if (W.gen != NULL)
         wg_start_ref(W.gen, &start);
@@ -4921,38 +4989,140 @@ static TbBool choose_offset_near(PlayerNumber plyr, int64_t ndx, int64_t ndy, in
     return false;
 }
 
+/* party dungeons (the user, 2026-11-10): co-op starts are 3 times as far from solo starts as solo starts are from each
+   other, and outwards: beyond the farthest solo start */
+#define COOP_SPAWN_GAP (3 * SPAWN_SPACING)
+
+/** Is this start a co-op seat's (a party dungeon)? Starts of seats freed since count as solo ones. */
+static TbBool stamp_is_coop(const struct WorldStamp *st)
+{
+    return (st->plyr >= 0) && (st->plyr < PLAYERS_MAX) && (seat_partner_tokens[st->plyr] != 0);
+}
+
+static int64_t isqrt64(int64_t v)
+{
+    if (v <= 0)
+        return 0;
+    int64_t r = 0, bit = (int64_t)1 << 62;
+    while (bit > v)
+        bit >>= 2;
+    while (bit != 0)
+    {
+        if (v >= r + bit)
+        {
+            v -= r + bit;
+            r = (r >> 1) + bit;
+        } else
+            r >>= 1;
+        bit >>= 2;
+    }
+    return r;
+}
+
+/** The least squared distance from (dx,dy) to a start of the kind (co-op or solo; the level's own start at 0,0 is a
+ *  solo one); INT64_MAX when there is none. */
+static int64_t nearest_start2(PlayerNumber plyr, int64_t dx, int64_t dy, TbBool coop)
+{
+    int64_t nearest = coop ? INT64_MAX : (dx * dx + dy * dy);
+    for (int k = 0; k < W.stamp_count; k++)
+    {
+        if (stamp_is_coop(&W.stamps[k]) != coop)
+            continue;
+        const int64_t ex = dx - W.stamps[k].dx, ey = dy - W.stamps[k].dy;
+        if (ex * ex + ey * ey < nearest)
+            nearest = ex * ex + ey * ey;
+    }
+    return nearest;
+}
+
 static TbBool choose_seat_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
 {
     const int n = W.stamp_count + 1;
-    const long radius = (long)LbSqrL((long)n * SPAWN_SPACING * SPAWN_SPACING);
+    const long radius = (long)isqrt64((int64_t)n * SPAWN_SPACING * SPAWN_SPACING);
     const long angle = (ANGLE_EAST + (long)(n - 1) * SPAWN_GOLDEN_ANGLE) & ANGLE_MASK;
     static const int outs[] = {0, 40, 80, 120, 160, 200, 260};
     static const int turns[] = {0, 40, -40, 80, -80, 120, -120};
-    for (size_t o = 0; o < sizeof(outs) / sizeof(outs[0]); o++)
+    /* the co-op starts' room is kept when the spiral allows it; when it doesn't, a start 1000 slabs off them will do */
+    for (int pass = 0; pass < 2; pass++)
+    {
+        const int64_t coop_gap = (pass == 0) ? COOP_SPAWN_GAP : SPAWN_SPACING;
+        for (size_t o = 0; o < sizeof(outs) / sizeof(outs[0]); o++)
+        {
+            for (size_t t = 0; t < sizeof(turns) / sizeof(turns[0]); t++)
+            {
+                const long r = radius + outs[o];
+                const long a = (angle + turns[t]) & ANGLE_MASK;
+                struct WorldStamp st = {plyr, ((int64_t)LbSinL(a) * r) / 65536, -((int64_t)LbCosL(a) * r) / 65536};
+                if (!stamp_place_free(&st))
+                    continue;
+                /* 1000-2000 slabs from the nearest solo start (the first player's is at offset 0,0), the co-op
+                   starts' gap from those */
+                const int64_t nearest = nearest_start2(plyr, st.dx, st.dy, false);
+                if ((nearest < (int64_t)SPAWN_SPACING * SPAWN_SPACING) || (nearest > (int64_t)SPAWN_MAX_GAP * SPAWN_MAX_GAP))
+                    continue;
+                if (nearest_start2(plyr, st.dx, st.dy, true) < coop_gap * coop_gap)
+                    continue;
+                if (pass > 0)
+                    SYNCLOG("World: player %d's start goes nearer the co-op starts than %d slabs (no room on the spiral)",
+                        (int)plyr, (int)COOP_SPAWN_GAP);
+                *dx = st.dx;
+                *dy = st.dy;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/** A co-op seat's start (the first of a new pair: place_ext_* makes room for the partner's beside it): on a spiral of its
+ *  own, COOP_SPAWN_GAP beyond the farthest solo start, at least COOP_SPAWN_GAP from every solo start and SPAWN_SPACING
+ *  from other parties' starts. */
+static TbBool choose_coop_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
+{
+    int64_t far2 = 0;
+    int coops = 0;
+    for (int k = 0; k < W.stamp_count; k++)
+    {
+        if ((W.stamps[k].plyr == plyr) || (W.stamps[k].plyr < 0))
+            continue; /* (a freed seat's old start, solo or co-op, doesn't push the co-op ring out) */
+        const int64_t d2 = W.stamps[k].dx * W.stamps[k].dx + W.stamps[k].dy * W.stamps[k].dy;
+        if (stamp_is_coop(&W.stamps[k]))
+            coops++;
+        else if (d2 > far2)
+            far2 = d2;
+    }
+    const long radius = (long)(isqrt64(far2) + COOP_SPAWN_GAP);
+    const long angle = (ANGLE_EAST + (long)coops * SPAWN_GOLDEN_ANGLE) & ANGLE_MASK;
+    static const int turns[] = {0, 40, -40, 80, -80, 120, -120, 200, -200, 300, -300};
+    for (long out = 0; out <= 3000; out += 150)
     {
         for (size_t t = 0; t < sizeof(turns) / sizeof(turns[0]); t++)
         {
-            const long r = radius + outs[o];
+            const long r = radius + out;
             const long a = (angle + turns[t]) & ANGLE_MASK;
             struct WorldStamp st = {plyr, ((int64_t)LbSinL(a) * r) / 65536, -((int64_t)LbCosL(a) * r) / 65536};
             if (!stamp_place_free(&st))
                 continue;
-            /* 1000-2000 slabs from the nearest start (the first player's is at offset 0,0) */
-            int64_t nearest = st.dx * st.dx + st.dy * st.dy;
-            for (int k = 0; k < W.stamp_count; k++)
-            {
-                const int64_t ex = st.dx - W.stamps[k].dx, ey = st.dy - W.stamps[k].dy;
-                if (ex * ex + ey * ey < nearest)
-                    nearest = ex * ex + ey * ey;
-            }
-            if ((nearest < (int64_t)SPAWN_SPACING * SPAWN_SPACING) || (nearest > (int64_t)SPAWN_MAX_GAP * SPAWN_MAX_GAP))
+            if (nearest_start2(plyr, st.dx, st.dy, false) < (int64_t)COOP_SPAWN_GAP * COOP_SPAWN_GAP)
+                continue;
+            if (nearest_start2(plyr, st.dx, st.dy, true) < (int64_t)SPAWN_SPACING * SPAWN_SPACING)
                 continue;
             *dx = st.dx;
             *dy = st.dy;
+            SYNCLOG("World: co-op seat %d starts %ld slabs out (the farthest solo start is %ld out)", (int)plyr, r,
+                (long)isqrt64(far2));
             return true;
         }
     }
     return false;
+}
+
+/** Where a seat's new start goes: a co-op seat's far out, a solo one's on the spawn spiral. */
+static TbBool choose_start_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
+{
+    if (world_seat_is_coop(plyr) && choose_coop_offset(plyr, dx, dy))
+        return true;
+    return choose_seat_offset(plyr, dx, dy);
 }
 
 /** Network games: every human seat other than PLAYER0 without a heart gets a copy of the start structure, and the
@@ -4971,8 +5141,8 @@ static PlayerBitFlags make_seat_starts(void)
     wg_start_ref(W.gen, &start);
     for (PlayerNumber p = (respawn_seat == PLAYER0) ? PLAYER0 : 1; p < PLAYERS_COUNT; p++)
     {
-        if (!world_player_is_human(p) || thing_exists(find_players_dungeon_heart(p)))
-            continue;
+        if (!world_player_is_human(p) || thing_exists(find_players_dungeon_heart(p)) || world_seat_deleted(p))
+            continue; /* (a deleted seat waits for its player to go, and is freed: no new start for it) */
         if (W.stamp_count >= WORLD_MAX_STAMPS)
         {
             WARNLOG("World: no start for player %d: the world's %d starts are used up", (int)p, WORLD_MAX_STAMPS);
@@ -5005,12 +5175,12 @@ static PlayerBitFlags make_seat_starts(void)
             {
                 place_ext_x = sx;
                 place_ext_y = sy;
-                placed = choose_seat_offset(p, &dx, &dy);
+                placed = choose_start_offset(p, &dx, &dy);
                 place_ext_x = 0;
                 place_ext_y = 0;
             }
         }
-        if (!placed && !choose_seat_offset(p, &dx, &dy))
+        if (!placed && !choose_start_offset(p, &dx, &dy))
         {
             struct WorldStamp probe = {p, 180, 0};
             int64_t x1, y1, x2, y2;
@@ -5561,6 +5731,8 @@ TbBool world_seat_can_respawn(PlayerNumber p)
     return player_exists(player) && world_player_is_human(p) && (player->victory_state == VicS_LostLevel);
 }
 
+static TbBool seat_delete(PlayerNumber p, const char *farewell, const char *how, char *why, size_t why_len);
+
 TbBool world_seat_respawn(PlayerNumber p)
 {
     if (!world_seat_can_respawn(p))
@@ -5569,6 +5741,15 @@ TbBool world_seat_respawn(PlayerNumber p)
         return false;
     }
     struct PlayerInfo *player = get_player(p);
+    if (world_seat_is_coop(p))
+    {
+        /* party dungeons: a defeated co-op keeper's party has ended, and its dungeon goes; the player joins again (a
+           solo dungeon of theirs, or a new co-op dungeon with a party) */
+        char why[128];
+        SYNCLOG("World: player %d (%s) was a defeated co-op keeper: its dungeon is deleted", (int)p, player->player_name);
+        return seat_delete(p, "Your co-op dungeon is gone. Join the world again: on your own for your solo dungeon, with "
+            "a party for a new co-op dungeon.", "defeated", why, sizeof(why));
+    }
     SYNCLOG("World: player %d (%s) starts again: its seat is freed and taken again with a new start", (int)p, player->player_name);
     /* 1. the seat is freed: its leftovers are nobody's, its records from zero */
     int creatures = 0;
@@ -5864,7 +6045,7 @@ static void seat_users_to_dungeon(PlayerNumber p)
     }
 }
 
-TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
+static TbBool seat_reset_ex(PlayerNumber p, char *why, size_t why_len, TbBool restart)
 {
     if (!W.active || !world_paged || (W.gen == NULL) || (p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX) ||
         !player_exists(get_player(p)) || !world_player_is_human(p))
@@ -5878,13 +6059,13 @@ TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
         snprintf(why, why_len, "the level is over for this player");
         return false;
     }
-    int64_t ndx, ndy;
-    if (!choose_seat_offset(p, &ndx, &ndy))
+    int64_t ndx = 0, ndy = 0;
+    if (restart && !choose_start_offset(p, &ndx, &ndy))
     {
         snprintf(why, why_len, "no place for a new start dungeon");
         return false;
     }
-    if (W.stamp_count >= WORLD_MAX_STAMPS)
+    if (restart && (W.stamp_count >= WORLD_MAX_STAMPS))
     {
         /* checked before anything is wiped (it was found only after the dungeon had gone; audit 2026-11-09) */
         snprintf(why, why_len, "the world's %d start places are used up", WORLD_MAX_STAMPS);
@@ -5892,8 +6073,19 @@ TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
     }
     const uint8_t wown = (p == PLAYER0) ? (uint8_t)WOwn_Player : (uint8_t)(WOwn_HumanBase + p);
     const TbBool cared = world_caretaker_active(p);
-    SYNCLOG("World: player %d (%s): the dungeon is reset (a new start at offset %ld,%ld)", (int)p, player->player_name,
-        (long)ndx, (long)ndy);
+    if (restart)
+        SYNCLOG("World: player %d (%s): the dungeon is reset (a new start at offset %ld,%ld)", (int)p, player->player_name,
+            (long)ndx, (long)ndy);
+    else
+        SYNCLOG("World: player %d (%s): the dungeon is deleted (its ground made again)", (int)p, player->player_name);
+    {
+        /* party dungeons: the party has ended; the partner's co-op dungeon stays theirs */
+        const PlayerNumber mate = world_coop_partner(p);
+        if (world_seat_is_coop(p))
+            seat_partner_tokens[p] = COOP_SEAT_ORPHAN;
+        if ((mate != PLAYER_NONE) && world_seat_is_coop(mate))
+            seat_partner_tokens[mate] = COOP_SEAT_ORPHAN;
+    }
     world_coop_unbond(p); /* co-op: the alliance of a party lasts until this */
     /* the old start's box: its stamp, or the level's own start for player 0 */
     int64_t box[4];
@@ -6030,6 +6222,16 @@ TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
             W.portals[i].owner = -1;
     world_raids_player_retreat(p);
     seat_dungeon_reset(p, true);
+    if (!restart)
+    {
+        /* deleted (party dungeons, 2026-11-10): no new start; the seat is freed once its player has gone */
+        if (cared)
+            world_caretaker_end(p);
+        SYNCLOG("World: player %d's dungeon deleted: %d chunks made again (%d were loaded, %d loaded again; in %d shared "
+            "with other players only its own ground), %d other records freed, %d creatures and %d traps gone", (int)p, remade,
+            nloaded, reloaded, shared, freed, creatures, traps);
+        return true;
+    }
     /* 9. a new start at the next point of the spiral, as a joiner (the kit isn't given again: what was unlocked stays) */
     if (cared)
         world_caretaker_end(p);
@@ -6080,6 +6282,200 @@ TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
             dungeon_invalid(dungeon) ? 0L : (long)dungeon->total_money_owned, world_player_level(p), (unsigned)world_player_xp(p));
     }
     return true;
+}
+
+TbBool world_seat_reset(PlayerNumber p, char *why, size_t why_len)
+{
+    return seat_reset_ex(p, why, why_len, true);
+}
+
+/******************************************************************************/
+/* Party dungeons (2026-11-10): deleting a dungeon (!delete dungeon, a defeated or long-unplayed co-op dungeon). The
+   dungeon is wiped as by a reset, without a new start; the seat stops being its player's, and once its player has gone
+   it is a free seat again, for anyone who joins. */
+
+/** The seat's player, when online (a thin client's user), or INVALID_USER_ID. */
+static NetUserId seat_online_user(PlayerNumber p)
+{
+    if ((p < 0) || (p >= PLAYERS_COUNT))
+        return INVALID_USER_ID;
+    const struct PlayerInfo *player = get_player(p);
+    if (!player_exists(player) || player_is_placeholder(player))
+        return INVALID_USER_ID;
+    const NetUserId u = get_player_primary_user(player);
+    return ((u > SERVER_ID) && (u < MAX_NET_USERS)) ? u : INVALID_USER_ID;
+}
+
+static void seat_notice(PlayerNumber p, const char *text)
+{
+    const NetUserId u = seat_online_user(p);
+    if (u != INVALID_USER_ID)
+        server_admin_notice(u, text);
+}
+
+/** Deletes the seat's dungeon; its player (when online) is sent back to the World List with the farewell. */
+static TbBool seat_delete(PlayerNumber p, const char *farewell, const char *how, char *why, size_t why_len)
+{
+    if (world_seat_deleted(p))
+    {
+        snprintf(why, why_len, "the dungeon is deleted already");
+        return false;
+    }
+    const PlayerNumber mate = world_coop_partner(p);
+    const TbBool coop = world_seat_is_coop(p);
+    char name[64];
+    snprintf(name, sizeof(name), "%s", server_admin_player_name(p));
+    if (!seat_reset_ex(p, why, why_len, false))
+        return false;
+    seat_tokens[p] = 0;
+    seat_partner_tokens[p] = 0;
+    seat_played_at[p] = 0;
+    coop_held[p] = 0;
+    pmask_add(&seats_to_free, p);
+    server_admin_log("world", "%s's %s dungeon was deleted (%s; seat %d)", name, coop ? "co-op" : "solo", how, (int)p);
+    if (coop && (mate != PLAYER_NONE))
+    {
+        char text[200];
+        snprintf(text, sizeof(text), "%s deleted their co-op dungeon: your party has ended. To start a new co-op dungeon "
+            "together, delete yours too (!delete dungeon).", name);
+        seat_notice(mate, text);
+    }
+    if ((farewell != NULL) && (seat_online_user(p) != INVALID_USER_ID))
+        server_admin_drop_seat(p, farewell);
+    return true;
+}
+
+/** A deleted seat whose player has gone: a seat nobody has had (player 0, the level's own, is retired instead: it stays
+ *  a defeated seat nobody comes back to). */
+static void seat_free(PlayerNumber p)
+{
+    struct PlayerInfo *player = get_player(p);
+    pmask_del(&seats_to_free, p);
+    world_caretaker_end(p);
+    struct Dungeon *dungeon = get_players_num_dungeon(p);
+    if (!dungeon_invalid(dungeon) && ((dungeon->computer_enabled & 0x01) != 0))
+        toggle_computer_player(p);
+    world_progress_seat_reset(p);
+    seat_dungeon_reset(p, false);
+    memset(player->player_name, 0, sizeof(player->player_name));
+    if (p == PLAYER0)
+    {
+        player->allocflags &= ~PlaF_CompCtrl;
+        player->allocflags |= PlaF_Placeholder;
+        player->victory_state = VicS_LostLevel;
+    } else
+    {
+        player->allocflags &= ~(PlaF_Allocated | PlaF_Seat | PlaF_Placeholder | PlaF_CompCtrl);
+        player->victory_state = VicS_Undecided;
+    }
+    SYNCLOG("World: seat %d is free again (its dungeon was deleted)", (int)p);
+}
+
+TbBool world_seat_delete_by_player(PlayerNumber p)
+{
+    char why[128] = "";
+    if (!W.active || !world_paged || !netstate_is_server() || (seat_online_user(p) == INVALID_USER_ID))
+    {
+        SYNCLOG("World: player %d can't delete its dungeon here (a server's thin client only)", (int)p);
+        return false;
+    }
+    if (!seat_delete(p, "Dungeon deleted", "by its player", why, sizeof(why)))
+    {
+        char text[160];
+        snprintf(text, sizeof(text), "Your dungeon couldn't be deleted: %s.", why);
+        seat_notice(p, text);
+        return false;
+    }
+    return true;
+}
+
+/** Test hook KFX_WORLD_COOPEXPIRE=<seconds>: how long an unplayed co-op dungeon lasts (default 15 days). */
+static int64_t coop_expire_seconds(void)
+{
+    static int64_t secs = -1;
+    if (secs < 0)
+    {
+        const char *env = getenv("KFX_WORLD_COOPEXPIRE");
+        secs = ((env != NULL) && (atoll(env) > 0)) ? atoll(env) : (int64_t)COOP_EXPIRE_DAYS * 24 * 3600;
+    }
+    return secs;
+}
+
+/** The server, every 32 turns: deleted seats freed once their players have gone; co-op dungeons played now noted; a
+ *  defeated co-op keeper ends its party (and its dungeon goes once its player has); co-op dungeons nobody of the party
+ *  has played for COOP_EXPIRE_DAYS are deleted. */
+static void coop_upkeep(void)
+{
+    if (!W.active || !world_paged || !network_is_active() || !netstate_is_server() || ((game.play_gameturn % 32) != 5))
+        return;
+    const uint64_t now = (uint64_t)time(NULL);
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+    {
+        struct PlayerInfo *player = get_player(p);
+        if (pmask_has(seats_to_free, p))
+        {
+            if (!player_exists(player) || (get_player_primary_user(player) < 0))
+                seat_free(p);
+            continue;
+        }
+        if (!world_seat_is_coop(p) || !player_exists(player))
+            continue;
+        const TbBool online = (seat_online_user(p) != INVALID_USER_ID);
+        {
+            /* said once each time: an away co-op dungeon's heart freezes (unless another player's things keep it) */
+            static PlayerBitFlags said_frozen;
+            const TbBool frozen = !online && !world_human_heart_loaded(p);
+            if (frozen && !pmask_has(said_frozen, p))
+            {
+                pmask_add(&said_frozen, p);
+                SYNCLOG("World: co-op seat %d's player is away: its dungeon is frozen", (int)p);
+            } else if (!frozen && pmask_has(said_frozen, p))
+            {
+                pmask_del(&said_frozen, p);
+                SYNCLOG("World: co-op seat %d's dungeon is loaded again%s", (int)p, online ? " (its player is back)" : "");
+            }
+        }
+        if (online || (seat_played_at[p] == 0))
+            seat_played_at[p] = now;
+        char why[128];
+        if (player->victory_state == VicS_LostLevel)
+        {
+            if (seat_partner_tokens[p] != COOP_SEAT_ORPHAN)
+            {
+                const PlayerNumber mate = world_coop_partner(p);
+                seat_partner_tokens[p] = COOP_SEAT_ORPHAN;
+                if ((mate != PLAYER_NONE) && world_seat_is_coop(mate))
+                {
+                    seat_partner_tokens[mate] = COOP_SEAT_ORPHAN;
+                    char text[200];
+                    snprintf(text, sizeof(text), "%s was defeated: your party has ended. To start a new co-op dungeon "
+                        "together, delete yours (!delete dungeon).", server_admin_player_name(p));
+                    seat_notice(mate, text);
+                }
+                world_coop_unbond(p);
+                server_admin_player_event(p, "%s was defeated: the party has ended", server_admin_player_name(p));
+            }
+            if (!online)
+                seat_delete(p, NULL, "defeated", why, sizeof(why));
+            continue;
+        }
+        if (online || (player->victory_state != VicS_Undecided))
+            continue;
+        const PlayerNumber mate = world_coop_partner(p);
+        uint64_t last = seat_played_at[p];
+        if ((mate != PLAYER_NONE) && world_seat_is_coop(mate))
+        {
+            if (seat_online_user(mate) != INVALID_USER_ID)
+                continue;
+            if (seat_played_at[mate] > last)
+                last = seat_played_at[mate];
+        }
+        if ((now > last) && ((int64_t)(now - last) > coop_expire_seconds()))
+        {
+            SYNCLOG("World: co-op seat %d unplayed for %ld s: deleted", (int)p, (long)(now - last));
+            seat_delete(p, NULL, "nobody of its party played it", why, sizeof(why));
+        }
+    }
 }
 
 /** Test hook KFX_WORLD_TAGDIG: reads the variable once. */
@@ -7801,6 +8197,7 @@ void world_process_turn(void)
     world_mapzoom_hook();
     world_progress_turn();
     world_caretaker_turn(); /* away players' dungeons: the gold held */
+    coop_upkeep(); /* party dungeons: defeats, deleted seats freed, unplayed ones deleted */
     server_admin_turn(); /* a dedicated server's console: play time, status */
     world_open_hook();
     world_testlose_hook();
@@ -7870,6 +8267,7 @@ void world_level_end(void)
     gold_next = 0;
     memset(seat_tokens, 0, sizeof(seat_tokens)); /* a new world's seats have no owners yet (a load sets them after) */
     coop_clear();
+    coop_seats_clear();
     netstate_level_end();
     world_progress_level_end();
     world_levels_reset();
@@ -8478,6 +8876,26 @@ TbBool world_save_blob(unsigned char **data, uint32_t *len)
                 rec_put(&w, &coop_held[p], 8);
             }
         }
+        /* party dungeons: the co-op seats (their partners' tokens, when last played) and deleted seats still to free */
+        uint32_t ncps = 0;
+        for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+            if ((seat_partner_tokens[p] != 0) || pmask_has(seats_to_free, p))
+                ncps++;
+        if (ncps > 0)
+        {
+            rec_u32(&w, WORLD_COOPSEATS_MAGIC);
+            rec_u32(&w, ncps);
+            for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+            {
+                if ((seat_partner_tokens[p] == 0) && !pmask_has(seats_to_free, p))
+                    continue;
+                const uint32_t plyr = (uint32_t)p;
+                const uint64_t played = pmask_has(seats_to_free, p) ? SEAT_PLAYED_TO_FREE : seat_played_at[p];
+                rec_put(&w, &plyr, 4);
+                rec_put(&w, &seat_partner_tokens[p], 8);
+                rec_put(&w, &played, 8);
+            }
+        }
     }
     if ((w.buf == NULL) || w.err)
     {
@@ -8928,6 +9346,29 @@ TbBool world_load_blob(const unsigned char *data, uint32_t len)
                 coop_partner[v[0]] = (int16_t)v[1];
                 coop_held[v[0]] = held;
             }
+        }
+        ok = !r.bad;
+    }
+    if (!blob_resync)
+        coop_seats_clear(); /* a save from before party dungeons: every seat a solo one */
+    if (ok && (r.len - r.pos >= 8) && (rec_peek_u32(&r) == WORLD_COOPSEATS_MAGIC))
+    {
+        rec_get_u32(&r);
+        const uint32_t n = rec_get_u32(&r);
+        for (uint32_t k = 0; (k < n) && !r.bad; k++)
+        {
+            uint32_t plyr = 0;
+            uint64_t partner = 0, played = 0;
+            rec_get(&r, &plyr, 4);
+            rec_get(&r, &partner, 8);
+            rec_get(&r, &played, 8);
+            if (r.bad || blob_resync || (plyr >= PLAYERS_MAX))
+                continue;
+            seat_partner_tokens[plyr] = partner;
+            if (played == SEAT_PLAYED_TO_FREE)
+                pmask_add(&seats_to_free, (PlayerNumber)plyr);
+            else
+                seat_played_at[plyr] = played;
         }
         ok = !r.bad;
     }

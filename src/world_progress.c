@@ -1822,7 +1822,7 @@ void world_add_player_xp(PlayerNumber plyr_idx, uint32_t xp)
     SYNCLOG("World: player %d was given %u XP: %u XP, level %d", (int)plyr_idx, (unsigned)xp, (unsigned)wpl_xp[plyr_idx], after);
     if (after > before)
     {
-        server_admin_log("level", "%s reached level %d", server_admin_player_name(plyr_idx), after);
+        server_admin_player_event(plyr_idx, "%s reached level %d", server_admin_player_name(plyr_idx), after);
         world_perks_level_reached(plyr_idx, after);
     }
 }
@@ -1836,7 +1836,7 @@ void world_player_portal_captured(PlayerNumber plyr_idx, int biome)
         return;
     wps[plyr_idx].portals++;
     SYNCLOG("World: player %d captured a portal (%d so far)", (int)plyr_idx, (int)wps[plyr_idx].portals);
-    server_admin_log("portal", "%s captured a portal (%s)", server_admin_player_name(plyr_idx),
+    server_admin_player_event(plyr_idx, "%s captured a portal (%s)", server_admin_player_name(plyr_idx),
         ((biome >= 0) && (biome < WgB_COUNT)) ? wg_biome_name(biome) : "?");
 }
 
@@ -1974,13 +1974,13 @@ void world_heart_destroyed(const struct Thing *heartng)
     {
         SYNCLOG("World: heart %d of player %d destroyed, by no player", (int)heartng->index, (int)heartng->owner);
         if (world_player_is_human(victim))
-            server_admin_log("death", "%s died: their heart was destroyed", server_admin_player_name(victim));
+            server_admin_player_event(victim, "%s died: their heart was destroyed", server_admin_player_name(victim));
         return;
     }
     const PlayerNumber by = wpl_hits[i].by;
     memset(&wpl_hits[i], 0, sizeof(wpl_hits[i]));
     if (world_player_is_human(victim))
-        server_admin_log("death", "%s died: heart destroyed by %s", server_admin_player_name(victim), server_admin_player_name(by));
+        server_admin_player_event(victim, "%s died: heart destroyed by %s", server_admin_player_name(victim), server_admin_player_name(by));
     /* a keeper's XP: not the heroes' (their creatures, the wild ones) or the neutral player's */
     if ((by < 0) || (by >= PLAYERS_COUNT) || (by == PLAYER_GOOD) || (by == PLAYER_NEUTRAL) || (by == game.neutral_player_num)
         || !player_exists(get_player(by)) || (get_player(by)->victory_state == VicS_LostLevel))
@@ -1993,18 +1993,18 @@ void world_heart_destroyed(const struct Thing *heartng)
     if (victim == PLAYER_GOOD)
     {
         wps[by].outposts++;
-        server_admin_log("defeat", "%s defeated a heroes outpost", server_admin_player_name(by));
+        server_admin_player_event(by, "%s defeated a heroes outpost", server_admin_player_name(by));
     } else
     {
         wps[by].hearts++;
         if (world_player_is_human(victim))
-            server_admin_log("defeat", "%s defeated %s", server_admin_player_name(by), server_admin_player_name(victim));
+            server_admin_player_event(by, "%s defeated %s", server_admin_player_name(by), server_admin_player_name(victim));
         else
-            server_admin_log("defeat", "%s defeated the enemy keeper %s", server_admin_player_name(by), server_admin_player_name(victim));
+            server_admin_player_event(by, "%s defeated the enemy keeper %s", server_admin_player_name(by), server_admin_player_name(victim));
     }
     if (after > before)
     {
-        server_admin_log("level", "%s reached level %d", server_admin_player_name(by), after);
+        server_admin_player_event(by, "%s reached level %d", server_admin_player_name(by), after);
         world_perks_level_reached(by, after);
     }
 }

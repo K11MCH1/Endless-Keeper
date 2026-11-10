@@ -87,6 +87,22 @@ uint64_t world_coop_held_key(PlayerNumber plyr_idx);
 PlayerNumber world_coop_held_seat(uint64_t key);
 /** The held seat has its player now. */
 void world_coop_seat_taken(PlayerNumber plyr_idx);
+/** Party dungeons (2026-11-10): a player's co-op dungeon is a seat of its own (the player's token, and the partner's:
+ *  COOP_SEAT_ORPHAN = 1 once the party has ended); solo seats have none. The server's, kept in the save. */
+#define COOP_SEAT_ORPHAN UINT64_C(1)
+TbBool world_seat_is_coop(PlayerNumber plyr_idx);
+uint64_t world_seat_partner_token(PlayerNumber plyr_idx);
+/** Makes the seat a co-op seat with this partner (0: a solo seat), played now. */
+void world_set_seat_partner_token(PlayerNumber plyr_idx, uint64_t partner_token);
+/** The co-op seat of the player with this seat token (PLAYER_NONE: none). */
+PlayerNumber world_coop_seat_of(uint64_t token);
+/** A co-op seat whose player is away: frozen (no caretaker, keeps no chunk loaded, no raids). */
+TbBool world_coop_seat_away(PlayerNumber plyr_idx);
+/** A deleted seat, freed once its player has gone. */
+TbBool world_seat_deleted(PlayerNumber plyr_idx);
+/** !delete dungeon: the player's dungeon is deleted (its ground made again), the player sent back to the World List. The
+ *  server only. */
+TbBool world_seat_delete_by_player(PlayerNumber plyr_idx);
 /** Start again (2026-11-08): may this defeated keeper's seat start again (an endless world's human seat)? */
 TbBool world_seat_can_respawn(PlayerNumber plyr_idx);
 /** Frees the defeated keeper's seat (its leftovers nobody's, its records from zero) and gives it to the same player

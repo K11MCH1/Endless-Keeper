@@ -109,6 +109,8 @@ TbBool world_caretaker_start(PlayerNumber plyr_idx)
     struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
     if (!player_exists(player) || dungeon_invalid(dungeon))
         return false;
+    if (world_seat_is_coop(plyr_idx))
+        return false; /* party dungeons (2026-11-10): a co-op dungeon has no caretaker; it freezes while its player is away */
     const long model = caretaker_model();
     if (!setup_a_computer_player(plyr_idx, model))
         return false;

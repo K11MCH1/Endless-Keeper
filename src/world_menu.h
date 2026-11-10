@@ -47,6 +47,12 @@ extern struct GuiMenu world_list_menu;
 /** "Start again" or "Quit": the box shown 5 s after this machine's keeper is defeated in an endless world. */
 extern struct GuiMenu world_respawn_menu;
 extern struct GuiMenu world_party_menu;
+/** !delete dungeon's "Are you sure?" Yes/No box (party dungeons, 2026-11-10). */
+extern struct GuiMenu world_delete_menu;
+/** A chat line this machine's player typed: "!delete dungeon" (or /delete dungeon) opens the box and is not sent. */
+TbBool world_delete_command(const char *text);
+/** This player said Yes to !delete dungeon in the last 30 s (read once): the server's drop that follows is the deletion. */
+TbBool world_delete_just_asked(void);
 /** Every world turn (this machine's presentation): shows the box after a defeat, and puts the panel back when the
  *  keeper has started again. */
 void world_respawn_prompt_turn(void);

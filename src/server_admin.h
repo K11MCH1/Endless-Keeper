@@ -30,6 +30,10 @@ void server_admin_turn(void);
 /** A line for keeperserver's console (kind: boot, world, connect, join, leave, death, defeat, level, portal, admin,
  *  warn, error). Kept for an admin that connects later too. */
 void server_admin_log(const char *kind, const char *fmt, ...);
+/** A player's event for Keeper Server's console, kind "player" (PLAYER): heroes defeated, levels, portals, defeats,
+ *  deaths, parties. Only when plyr_idx is a human player's seat; the world's computer keepers are not logged (the
+ *  user, 2026-11-10). */
+void server_admin_player_event(PlayerNumber plyr_idx, const char *fmt, ...);
 /** A chat line someone sent (logged with the sender's seat, for its colour). */
 void server_admin_chat(int user, int plyr_idx, const char *name, const char *msg);
 /** Is this user muted? (its chat goes nowhere and it is told so) */
@@ -38,6 +42,8 @@ TbBool server_admin_user_muted(int user);
 TbBool server_admin_banned(uint64_t token, const char *name, const char *ip);
 /** A notice from the server to one user (user >= 0) or to everyone (-1). */
 void server_admin_notice(int user, const char *text);
+/** Sends a seated player back to the World List with these words (as a kick's; party dungeons: a deleted dungeon). */
+TbBool server_admin_drop_seat(PlayerNumber plyr_idx, const char *text);
 /** A user left the server (how: 0 left, 1 timed out, 2 dropped). */
 void server_admin_user_left(int user, int how);
 /** A seated player's in-game "!" command that is one of the admin's, run when a role allows it (server_roles.c): 1 when

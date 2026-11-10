@@ -869,6 +869,11 @@ TbBool process_user_global_packet_action(NetUserId user)
       if (!netstate_thin_mode() || network_is_host())
           world_seat_respawn(plyr_idx);
       return 1;
+  case PckA_WorldDelete:
+      /* !delete dungeon (the player said Yes): a thin-client server deletes the dungeon and sends the player back */
+      if (netstate_thin_mode() && network_is_host())
+          world_seat_delete_by_player(plyr_idx);
+      return 1;
   case PckA_QuitToMainMenu:
       if ((user == get_local_user()) && !replay.load_enable)
       {
