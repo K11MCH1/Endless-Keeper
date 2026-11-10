@@ -128,6 +128,8 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 ## 🗺️ Roadmap
 
 - **[Misdeeds](roadmap/MISDEEDS.md)**: creatures remember what they did, earn vices for it, and can be named.
+- **[Circles of Hell](roadmap/CIRCLES-OF-HELL.md)**: the land around every dungeon is cut into named circles, each
+  with stronger residents and better loot than the last.
 
 ---
 
