@@ -14,6 +14,8 @@ if [ ! -f "$IMGUI/imgui.h" ]; then
 fi
 SDL="$(ls -d "$ROOT"/out/deps/sdl3/SDL3-*/i686-w64-mingw32 | head -1)"
 OUT="${1:-$ROOT/out/launcher}"
+mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)" # (a full path: the resources are compiled from the launcher's folder)
 OBJ="$OUT/obj"
 mkdir -p "$OBJ"
 CXX=i686-w64-mingw32-g++

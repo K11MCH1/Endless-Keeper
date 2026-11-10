@@ -991,10 +991,18 @@ static void settings_window(float w, float h)
             if (left > 0)
                 ImGui::Dummy(ImVec2(0, left));
             ImGui::Separator();
-            centred(T("Credits"), 20 * S, C_GOLD);
-            centred(T("Endless Keeper is built on KeeperFX, the work of the KeeperFX team and its community."), 16 * S, C_TEXT);
-            centred_link("kfx", "https://keeperfx.net", "https://keeperfx.net");
-            centred_link("discord", T("Discord - Keeper Klan (English)"), "https://discord.gg/hE4p7vy2Hb");
+            /* the credits: on the left */
+            auto left_line = [&](const char *text, float size, ImU32 col) {
+                const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(size, 4000.0f, 0.0f, text);
+                text_shadow(ImGui::GetWindowDrawList(), size, ImGui::GetCursorScreenPos(), col, text);
+                ImGui::Dummy(ts);
+            };
+            left_line(T("Credits"), 20 * S, C_GOLD);
+            left_line(T("Endless Keeper is built on KeeperFX, the work of the KeeperFX team and its community."), 16 * S, C_TEXT);
+            if (link("kfx", "https://keeperfx.net", 17 * S, C_GOLD))
+                open_url("https://keeperfx.net");
+            if (link("discord", "Discord - Keeper Klan", 17 * S, C_GOLD))
+                open_url("https://discord.gg/hE4p7vy2Hb");
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
