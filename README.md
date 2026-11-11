@@ -232,7 +232,6 @@ gameplay stays exactly as Dungeon Keeper players know it, and the new systems ar
 | 🔑 | **Sealed logins** | A player's seat belongs to a secret token, not a nickname, and the login is encrypted for each world. |
 | 📶 | **Bad connections** | Each turn is also sent as a second, unordered copy. With 2% packet loss, visible stalls fell from about 13 to about 1 every 20 seconds. |
 | 🖥️ | **Graphics cards that refuse big textures** | The game tries smaller sprite sheets, then a fallback, instead of drawing nothing. |
-| 🚪 | **Doors, traps and lairs at chunk edges** | Frozen chunks keep hidden traps hidden, lairs in place and doors standing when their neighbour freezes first. |
 
 ### 📦 Efficiency
 
