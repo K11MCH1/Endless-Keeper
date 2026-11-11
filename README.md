@@ -147,16 +147,7 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 ## 🗺️ Roadmap
 
-Three systems from the roadmap arrived with release 8 and keep growing. Their pages tell where each is heading:
-
-- **[Misdeeds](roadmap/MISDEEDS.md)**: creatures remember what they did, earn vices for it, and can be named.
-  Still to come: longer names.
-- **[Circles of Hell](roadmap/CIRCLES-OF-HELL.md)**: the land around every dungeon is cut into named circles, each
-  with stronger residents and better loot than the last. Still to come: rival keepers that grow while left alone.
-- **[Amenity Mastery](roadmap/AMENITY-MASTERY.md)**: rooms, spells and traps are mastered over time with experience
-  from duplicate books, worth more the deeper they were found. Still to come: levels shown on trap icons.
-
-  There is more! Just not polished and outlined here.
+Coming soon!
 
 ---
 
