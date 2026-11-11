@@ -82,6 +82,7 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 | 🎲 | **Procedural generation** | Every run is a new world built from a seed: rock masses, caves, lakes, rivers, gold seams and rare gems. Nothing is sealed off: everything can be reached by digging. |
 | 🏔️ | **Eight biomes** | Earthen Caverns, Rocky Depths, Volcanic Rifts, Flooded Grottos, Frozen Hollows, Sandstone Wastes and the rare Crystal Caverns and Ancient Ruins. Each has its own textures, liquids, riches and creatures. |
 | 🏯 | **A keep to start in** | Every run starts in a walled keep round your Dungeon Heart, with 8 imps and 10,000 gold. The ground around it is cleared in a natural shape. |
+| 🔥 | **Circles of Hell** | The land round every dungeon lies in circles. The further out a circle is, the stronger the heroes, wild packs and rival keepers you meet there. A banner greets your first dig into each circle, and the full-screen map draws the circles as faint dotted lines, with a circle's name once you have breached it. |
 | 🗺️ | **Full-screen map** | The map fills the whole screen and glides over everything you have discovered: **W A S D** or drag to move (**Shift** for faster), the mouse wheel to zoom from a wide overview down to single creatures, **H** for home, **[** and **]** to jump between your battles, click to go there. |
 
 <div align="center">
@@ -99,26 +100,30 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 | ⚔️ | **Heroes outposts** | Heavily trapped hero bases hidden in the world. Break the gate, fight through the guards and destroy the Heroes Heart for XP and a spellbook. Their traps stay hidden until they go off. |
 | 📐 | **Five sizes** | Fortresses and outposts are Small, Moderate, Medium, Large or Massive, matched to your strongest creature when you find them. Bigger ones hold more books, and from Medium up the heroes pour out of hero portals when you break into their rooms. |
 | 👑 | **Rival keepers** | Computer keepers sleep in their dungeons until you come close. Then they wake up and fight back. Defeat them for their research books. |
+| 🧟 | **Zombies** | A new creature that roams every biome in wild packs. It sleeps under a gravestone, smells enemies from far off and hunts them, fights harder beside other Zombies, burns easily and is hard to heal. Its abilities are Armour, a slowing bite, a draining bite and, at level 10, Frenzy. A keeper gets Zombies only by imprisoning them and converting them in the Torture Chamber. |
 
 ### 📈 Progression
 
 | | Feature | What it means |
 |:-:|---|---|
 | 📚 | **Research books** | Start with the Treasury, Lair, Hatchery, Summon Imp and Possession. Everything else is learnt from research books found in the world: each book offers up to three things to learn and you pick one. The further you travel, the better the books get. |
-| 🏰 | **Room levels** | A book for a Lair, Hatchery, Library or Training Room you already have lets that room reach level 2 and 3 once your Library has researched it: faster healing, longer-lasting food, more training experience, faster research. |
-| ✨ | **Spell levels** | The same goes for Create Imp, Sight of Evil, Speed Monster, Conceal Monster, Heal, Lightning Strike and Protect Monster: higher-level imps, wider sight, stronger and longer-lasting casts. Room and spell icons show their level. |
+| 🏰 | **Amenity Mastery: rooms** | A book for a room you already have gives that room experience, more the deeper the book was found. A full bar lets the room reach its next level once your Library has researched it. The Lair, Hatchery, Library, Training Room, Treasury, Workshop, Prison, Torture Chamber, Barracks and Graveyard all have levels, each with its own reward. |
+| ✨ | **Amenity Mastery: spells and traps** | The same goes for Create Imp, Sight of Evil, Speed Monster, Conceal Monster, Heal, Lightning Strike and Protect Monster, and for the Poison Gas, Lightning, Word of Power and Lava traps, whose levels the Workshop builds. Room and spell icons show their level and a small bar for the next one. What each level gives is for you to find out. |
 | 🧪 | **Levels up to 100** | Creatures and heroes can grow all the way to level 100, learning new abilities along the way. |
 | ⛏️ | **Imps learn by mining** | Every turn spent mining gold makes your imps a little more experienced. |
 | 🏅 | **Player levels** | Every Dungeon Heart you destroy (keeper or heroes) earns you XP and player levels. |
+| 📜 | **Misdeeds** | Every creature keeps a record of what it has done, shown on the Rap Sheet, a new tab of the creature panel. High-level creatures earn vices picked from what they did most, and can be renamed once. |
+| 🩸 | **Veterans matter** | A veteran speeds up the training of newcomers of its kind. When one falls, your imps can carry its body home to the Graveyard, and a veteran lost for good passes a vice on to the next creature of its kind. |
 
 ### 🌗 Day and night
 
 | | Feature | What it means |
 |:-:|---|---|
 | ☀️ | **Day** | 12 minutes. Hero raiding parties may break in through the ceiling and dig towards your heart. How many parties land, and who is in them, follows your strongest creature: Thieves and Tunnellers at first, later Knights, Wizards, Giants and the other heroes of the biome they land in. |
-| 📖 | **Raiders carry books** | A raid can bring a research book with it. Kill the hero who carries it and it is yours. |
-| 🏃 | **Raids end** | No new raid comes while the heroes of the last one are still around, and raiders who haven't been dealt with walk home at dawn after their third night. |
-| 🌙 | **Night** | 8 minutes. Packs of wild creatures (spiders, skeletons, beetles, flies and worse) crawl out of the dirt paths and water. At dawn they fade away. |
+| 📖 | **Raiders carry books** | The first raid of every day always comes, and it brings a research book with it. Kill the hero who carries it and it is yours. |
+| 🏃 | **Raids end** | Raiders who haven't been dealt with walk home at the next dawn, a party whose leader falls leaves at once, and raids leave you breathing room between them. |
+| 🌙 | **Night** | 8 minutes. Packs of wild creatures (spiders, skeletons, beetles, flies, zombies and worse) crawl out of the dirt paths and water. At dawn they fade away. |
+| 🕳️ | **Burrows** | From the second night, packs also break out of burrows in the earth near your dungeon, and their Beetles dig a tunnel towards it. Empty burrows and tunnels fall in again at dawn. Wild creatures drop gold when they die. |
 | 🕰️ | **Sun and moon dial** | An animated dial shows the time of day at a glance. |
 | 💾 | **Autosave** | Your run is saved at every dawn and when you quit. |
 
@@ -143,11 +148,14 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 ## 🗺️ Roadmap
 
+Three systems from the roadmap arrived with release 8 and keep growing. Their pages tell where each is heading:
+
 - **[Misdeeds](roadmap/MISDEEDS.md)**: creatures remember what they did, earn vices for it, and can be named.
+  Still to come: longer names.
 - **[Circles of Hell](roadmap/CIRCLES-OF-HELL.md)**: the land around every dungeon is cut into named circles, each
-  with stronger residents and better loot than the last.
+  with stronger residents and better loot than the last. Still to come: rival keepers that grow while left alone.
 - **[Amenity Mastery](roadmap/AMENITY-MASTERY.md)**: rooms, spells and traps are mastered over time with experience
-  from duplicate books, worth more the deeper they were found.
+  from duplicate books, worth more the deeper they were found. Still to come: levels shown on trap icons.
 
   There is more! Just not polished and outlined here.
 
@@ -158,7 +166,7 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 | | Requirement |
 |:-:|---|
 | 💻 | **Windows 10 or 11**. 64-bit is recommended: big worlds can use up to 4 GB of memory. |
-| 💿 | **An original copy of Dungeon Keeper** (GOG, Steam or the original CD). Endless Keeper contains none of the original game's art, sound or music. |
+| 💿 | **An original copy of Dungeon Keeper** (GOG, Steam or the original CD). Endless Keeper does not include the original game: its art, sound and music come from your copy. Only the Zombie brings its own sprites and voice, with a few parts adapted from the original. |
 | 🔥 | **KeeperFX 1.4.0 (stable).** Endless Keeper is built on it. The setup downloads it for you (about 360 MB) from KeeperFX's own GitHub releases, so you need an internet connection during setup. |
 | 🌐 | **For hosting over the internet:** port 5556 open (UDP) on your router or firewall. |
 
