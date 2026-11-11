@@ -223,6 +223,41 @@ gameplay stays exactly as Dungeon Keeper players know it, and the new systems ar
 - ✅ **Tested against the classic game.** Recorded replays of original campaign levels are played back after every
   change to make sure the original game still plays the same.
 
+### 🧱 Stability
+
+| | What was done | What it means |
+|:-:|---|---|
+| 🔁 | **No desyncs by design** | Only the server simulates. Players receive the result, so a slow or frozen player never stalls the others and nobody drifts out of step. |
+| 🧪 | **Every speed-up is checked against the old code** | Each optimisation that must not change the game was run both ways side by side and compared: hundreds of thousands of comparisons, no differences. The optimised build was shown to reach the same game state as the plain one, on 32-bit and 64-bit. |
+| 🔍 | **Code audits** | The whole codebase was audited several times for bugs and slow spots, and the findings fixed release by release. |
+| 💾 | **Careful saves** | Saves carry a version and are converted when the format grows, so older saves keep loading. A save or load that fails does so cleanly, and the world is saved at every dawn. |
+| 🔑 | **Sealed logins** | A player's seat belongs to a secret token, not a nickname, and the login is encrypted for each world. |
+| 📶 | **Bad connections** | Each turn is also sent as a second, unordered copy. With 2% packet loss, visible stalls fell from about 13 to about 1 every 20 seconds. |
+| 🖥️ | **Graphics cards that refuse big textures** | The game tries smaller sprite sheets, then a fallback, instead of drawing nothing. |
+| 🚪 | **Doors, traps and lairs at chunk edges** | Frozen chunks keep hidden traps hidden, lairs in place and doors standing when their neighbour freezes first. |
+
+### 📦 Efficiency
+
+| | What was done | What it means |
+|:-:|---|---|
+| 🎯 | **Each player gets only their part of the world** | Their own creatures, what is near them and what is in their hand. Creature details of the whole world are no longer sent to everyone. |
+| 🗜️ | **Smaller network traffic** | From 13.7 KB to 2.3 KB a turn for a real player (about 46 KB a second), with Zstandard compression and dictionaries trained on real play. |
+| 🧠 | **Less memory** | A thing in the world takes 196 bytes, down from 2,244. The server keeps a sparse copy for each player in place of a full 27.6 MB one. |
+| 🗄️ | **Faster compression and checksums** | libdeflate and XXH3 replace the slower stock routines where the world is streamed and saved. |
+| 🏗️ | **64-bit build** | A 64-bit game ships beside the 32-bit one for busy servers and big worlds. 32-bit and 64-bit players can share a world and its saves. |
+
+### 🚀 Performance
+
+| | What was done | What it means |
+|:-:|---|---|
+| 💯 | **100 busy dungeons at full speed** | A dedicated server runs 100 active keepers in one world without slowing the game down. |
+| 🧵 | **The stream runs on all processor cores** | Comparing and compressing the world for the players went from 16.2 ms to 5.7 ms a turn. |
+| 🔦 | **Searches look nearby first** | Creatures looking for enemies no longer scan the whole world. With 100 keepers a turn went from 40.8 ms to 26.8 ms, and the worst turn from 95 ms to 56 ms. |
+| ⏱️ | **Chunk work on a budget** | Loading and freezing chunks is queued and spread over turns, so exploring does not cause hitches. |
+| ⚙️ | **Link-time optimisation** | The whole game is optimised as one program: about a quarter less time per turn. |
+| 🌍 | **Faster world generation** | The generator remembers ground it has already worked out, with exactly the same result for every seed. |
+| 🔬 | **Measured, not guessed** | The engine is profiled with Tracy, and each round of speed-ups starts from what the profile shows. |
+
 👉 Want to build it yourself or dig into the code? Read the **[Development Guide](docs/DEVELOPMENT.md)** for
 setting up a development environment and building KeeperFX from source.
 
