@@ -215,7 +215,7 @@ ifeq ($(filter -j% --jobserver%,$(MAKEFLAGS)),)
   MAKEFLAGS += -j$(shell nproc)
 endif
 MAKEFLAGS += -rR
-include prebuilds.mk
+include build/make/prebuilds.mk
 .DELETE_ON_ERROR:
 .PHONY: all standard heavylog package tools tests cppcheck docs docsdox FORCE
 .PHONY: clean clean-build deep-clean
@@ -281,7 +281,7 @@ docs: docsdox
 docsdox: docs/doxygen.conf
 	VERSION=$(VER_STRING) $(DOXYTOOL) docs/doxygen.conf
 deep-clean: deep-clean-tools deep-clean-package
-	$(MAKE) -f libexterns.mk deep-clean-libexterns
+	$(MAKE) -f build/make/libexterns.mk deep-clean-libexterns
 clean: submodule clean-build clean-tools clean-libexterns clean-package
 submodule:
 	-git submodule init && git submodule update
@@ -354,10 +354,10 @@ src/ver_defs.h: FORCE version.mk Makefile
 		> "$@.tmp"
 	@cmp -s "$@.tmp" "$@" || $(MV) "$@.tmp" "$@"; $(RM) "$@.tmp"
 tests: $(TEST_BIN) $(TEST_BIN:%.exe=%.map)
-libexterns: libexterns.mk
-	$(MAKE) -f libexterns.mk
-clean-libexterns: libexterns.mk
-	-$(MAKE) -f libexterns.mk clean-libexterns
+libexterns: build/make/libexterns.mk
+	$(MAKE) -f build/make/libexterns.mk
+clean-libexterns: build/make/libexterns.mk
+	-$(MAKE) -f build/make/libexterns.mk clean-libexterns
 	-$(RM) -rf \
 		deps/enet6 deps/zlib deps/spng deps/astronomy deps/centijson \
 		deps/luajit deps/miniupnpc deps/libnatpmp deps/libcurl
@@ -455,12 +455,12 @@ cppcheck:
 		-DDEBUG_NETWORK_PACKETS=1 \
 		$(addprefix --suppress=,$(CPSUPPRESS)) \
 		src 2>cppcheck.log
-include tool_png2ico.mk
-include tool_pngpal2raw.mk
-include tool_png2bestpal.mk
-include tool_po2ngdat.mk
-include tool_sndbanker.mk
-include tool_rnctools.mk
+include build/make/tool_png2ico.mk
+include build/make/tool_pngpal2raw.mk
+include build/make/tool_png2bestpal.mk
+include build/make/tool_po2ngdat.mk
+include build/make/tool_sndbanker.mk
+include build/make/tool_rnctools.mk
 PKG_GOALS = \
 	package \
 	pkg-% \
@@ -473,9 +473,9 @@ ifneq ($(filter $(PKG_GOALS) pkg/% tools/% sfx/%,$(MAKECMDGOALS)),)
 CAMPAIGNS = $(patsubst campgns/%.cfg,%,$(wildcard campgns/*.cfg))
 MAPPACKS = $(patsubst levels/%.cfg,%,$(filter-out %/personal.cfg,$(wildcard levels/*.cfg)))
 LANGS = eng chi cht cze dut fre ger ita jpn kor lat pol rus spa swe
-include pkg_lang.mk
-include pkg_gfx.mk
-include pkg_sfx.mk
-include package.mk
+include build/make/pkg_lang.mk
+include build/make/pkg_gfx.mk
+include build/make/pkg_sfx.mk
+include build/make/package.mk
 endif
 export RM CP MKDIR MV ECHO

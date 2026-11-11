@@ -24,7 +24,7 @@ SDL_EXTENSION_LIBRARIES = \
 	sdl/lib/libSDL3_mixer.dll.a \
 	sdl/lib/libSDL3_image.dll.a
 
-include prebuilds.mk
+include build/make/prebuilds.mk
 
 .PHONY: clean-libsdl deep-clean-libsdl
 
