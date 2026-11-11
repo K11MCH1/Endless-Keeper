@@ -247,7 +247,7 @@ gameplay stays exactly as Dungeon Keeper players know it, and the new systems ar
 
 | | What was done | What it means |
 |:-:|---|---|
-| 💯 | **100 busy dungeons at full speed** | A dedicated server runs 100 active keepers in one world without slowing the game down. |
+| 💯 | **100 busy dungeons at full speed** | A dedicated server runs 100 active keepers in one world without slowing the game down. (Not stress tested with real Players yet) |
 | 🧵 | **The stream runs on all processor cores** | Comparing and compressing the world for the players went from 16.2 ms to 5.7 ms a turn. |
 | 🔦 | **Searches look nearby first** | Creatures looking for enemies no longer scan the whole world. With 100 keepers a turn went from 40.8 ms to 26.8 ms, and the worst turn from 95 ms to 56 ms. |
 | ⏱️ | **Chunk work on a budget** | Loading and freezing chunks is queued and spread over turns, so exploring does not cause hitches. |
