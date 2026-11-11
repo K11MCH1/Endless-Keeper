@@ -59,6 +59,12 @@ keeps players hooked in today's most popular games:
 All of it in an endless world you can share with your friends. Picture Dungeon Keeper meets Minecraft:
 every run is new, every tunnel can lead somewhere, and your dungeon keeps growing for as long as you keep it alive.
 
+<div align="center">
+
+# [⬇️ DOWNLOAD HERE](https://github.com/K11MCH1/Endless-Keeper/releases/latest)
+
+</div>
+
 ---
 
 > [!NOTE]
