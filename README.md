@@ -100,7 +100,6 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 | ⚔️ | **Heroes outposts** | Heavily trapped hero bases hidden in the world. Break the gate, fight through the guards and destroy the Heroes Heart for XP and a spellbook. Their traps stay hidden until they go off. |
 | 📐 | **Five sizes** | Fortresses and outposts are Small, Moderate, Medium, Large or Massive, matched to your strongest creature when you find them. Bigger ones hold more books, and from Medium up the heroes pour out of hero portals when you break into their rooms. |
 | 👑 | **Rival keepers** | Computer keepers sleep in their dungeons until you come close. Then they wake up and fight back. Defeat them for their research books. |
-| 🧟 | **Zombies** | A new creature that roams every biome in wild packs. It sleeps under a gravestone, smells enemies from far off and hunts them, fights harder beside other Zombies, burns easily and is hard to heal. Its abilities are Armour, a slowing bite, a draining bite and, at level 10, Frenzy. A keeper gets Zombies only by imprisoning them and converting them in the Torture Chamber. |
 
 ### 📈 Progression
 
