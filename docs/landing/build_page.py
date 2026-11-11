@@ -23,6 +23,8 @@ def slug(value, separator='-'):
 
 def build(out):
     src = open(os.path.join(ROOT, 'README.md'), encoding='utf-8').read().replace('\r\n', '\n')
+    # the page's title is the name alone (the README's has a pickaxe before it)
+    src = re.sub(r'^# \S+ Endless Keeper$', '# Endless Keeper', src, count=1, flags=re.M)
     # markdown inside the README's HTML blocks
     src = re.sub(r'<div align="center">', '<div class="center" markdown="1">', src)
     src = src.replace('<details>', '<details markdown="1">')
