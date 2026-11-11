@@ -90,6 +90,8 @@
   thead th:empty { padding: 0; }
   td:first-child { white-space: nowrap; }
   td strong { color: #fff3d6; }
+  /* the name column of a three-column table is wide enough for a short name on one line */
+  @media (min-width: 701px) { td:nth-child(2):not(:last-child) { width: 30%; min-width: 250px; } }
   blockquote {
     margin: 18px 0; padding: 14px 18px; background: var(--earth);
     border: 1px solid var(--seam); border-left: 4px solid var(--gold); border-radius: 6px;
