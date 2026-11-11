@@ -59,6 +59,7 @@
 #include "world_colours.h"
 #include "world_stream.h"
 #include "world_progress.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 #include "creature_states_lair.h"
 
@@ -241,6 +242,7 @@ long check_out_unclaimed_dead_bodies(struct Thing *spdigtng, long range)
         i = thing->next_of_class;
         // Per-thing code
         if (corpse_ready_for_collection(thing) && thing_revealed(thing, spdigtng->owner)
+         && !world_misdeeds_body_not_for(thing, spdigtng->owner) /* endless: Unfinished Business */
          && players_creatures_tolerate_each_other(spdigtng->owner,get_slab_owner_thing_is_on(thing)))
         {
             if ((range < 0) || get_chessboard_distance(&thing->mappos, &spdigtng->mappos) < range)
@@ -1707,7 +1709,8 @@ short creature_picks_up_corpse(struct Thing *creatng)
     struct Thing* picktng = thing_get(cctrl->pickup_object_id);
     TRACE_THING(picktng);
     if (!thing_exists(picktng) || (flag_is_set(picktng->alloc_flags,TAlF_IsDragged))
-        || (get_chessboard_distance(&creatng->mappos, &picktng->mappos) >= subtile_coord(2, 0)))
+        || (get_chessboard_distance(&creatng->mappos, &picktng->mappos) >= subtile_coord(2, 0))
+        || world_misdeeds_body_not_for(picktng, creatng->owner)) /* endless: Unfinished Business */
     {
         set_start_state(creatng);
         return 0;
@@ -1915,8 +1918,11 @@ short creature_drops_corpse_in_graveyard(struct Thing *creatng)
     }
     // Do the dropping
     creature_drop_dragged_object(creatng, deadtng);
+    if (!world_misdeeds_body_home(deadtng, room)) /* endless: Unfinished Business brings the creature back instead */
+    {
     deadtng->owner = creatng->owner;
     add_body_to_graveyard(deadtng, room);
+    }
     // The action of moving object is now finished
     set_start_state(creatng);
     if (game.conf.rules[creatng->owner].workers.digger_work_experience != 0)

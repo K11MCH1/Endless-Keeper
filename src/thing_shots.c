@@ -60,6 +60,7 @@
 #include "keeperfx.hpp"
 #include "world_progress.h"
 #include "world_stream.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -123,6 +124,8 @@ TbBool detonate_shot(struct Thing *shotng, TbBool destroy)
             exp_level = cctrl->exp_level;
         }
         long dist = compute_creature_attack_range(shotst->area_range * COORD_PER_STL, luck, exp_level);
+        if (thing_exists(castng) && (castng->class_id == TCls_Trap)) /* endless: a trap's level may widen its blast */
+            dist = dist * (100 + world_trap_bonus(castng->owner, castng->model, WTB_AreaPercent)) / 100;
         if (flag_is_set(shotst->model_flags, ShMF_StrengthBased))
         {
             if (shotst->area_damage == 0)
@@ -1113,6 +1116,9 @@ long melee_shot_hit_creature_at(struct Thing *shotng, struct Thing *trgtng, stru
     struct Thing* shooter = get_parent_thing(shotng);
     struct CreatureControl* tgcctrl = creature_control_get_from_thing(trgtng);
     long damage = get_damage_of_melee_shot(shotng, trgtng, flag_is_set(shotst->model_flags, ShMF_NeverBlock));
+    damage = world_misdeeds_adjust_damage(trgtng, shooter, damage); /* endless: the vices */
+    if (flag_is_set(shotst->model_flags, ShMF_Fire))
+        damage = creature_fire_adjust_damage(trgtng, damage);
     if (damage > 0)
     {
         if (shotst->hit_creature.sndsample_idx > 0)
@@ -1306,10 +1312,13 @@ long shot_hit_creature_at(struct Thing *shotng, struct Thing *trgtng, struct Coo
     if (shotng->shot.damage != 0)
     {
         HitPoints damage_done;
+        HitPoints vice_damage = world_misdeeds_adjust_damage(trgtng, shooter, shotng->shot.damage); /* endless: the vices */
+        if (flag_is_set(shotst->model_flags, ShMF_Fire))
+            vice_damage = creature_fire_adjust_damage(trgtng, vice_damage);
         if (thing_exists(shooter)) {
-            damage_done = apply_damage_to_thing_and_display_health(trgtng, shotng->shot.damage, shooter->owner);
+            damage_done = apply_damage_to_thing_and_display_health(trgtng, vice_damage, shooter->owner);
         } else {
-            damage_done = apply_damage_to_thing_and_display_health(trgtng, shotng->shot.damage, -1);
+            damage_done = apply_damage_to_thing_and_display_health(trgtng, vice_damage, -1);
         }
         if (shotst->model_flags & ShMF_LifeDrain)
         {
@@ -1861,6 +1870,9 @@ TngUpdateRet update_shot(struct Thing *thing)
                   {
                       shotst = get_shot_model_stats(ShM_GodLightBall);
                       draw_lightning(&thing->mappos,&target->mappos, shotst->effect_spacing, shotst->effect_id);
+                      /* endless: the trap's level: a second bolt, a chain */
+                      world_trap_lightning_extras(thing, target, shotst->damage, get_shot_model_stats(thing->model)->max_range,
+                          shotst->effect_spacing, shotst->effect_id);
                       apply_damage_to_thing_and_display_health(target, shotst->damage, thing->owner);
                   }
                 }
@@ -1983,14 +1995,10 @@ static TngUpdateRet affect_thing_by_wind(struct Thing *thing, ModTngFilterParam 
                     creature_distance = origin_distance;
 
                     // Check the the spell instance for already affected creatures
-                    for (int i = 0; i < shotng->shot.num_wind_affected; i++)
+                    if (wind_list_has(shotng, cctrl->index))
                     {
-                        if (shotng->shot.wind_affected_creature[i] == cctrl->index)
-                        {
-                            creatureAlreadyAffected = true;
-                            set_flag(cctrl->spell_flags, CSAfF_Wind);
-                            break;
-                        }
+                        creatureAlreadyAffected = true;
+                        set_flag(cctrl->spell_flags, CSAfF_Wind);
                     }
                 }
                 if ((creature_distance < blow_distance) && !creature_is_immune_to_spell_effect(thing, CSAfF_Wind) && !creatureAlreadyAffected)
@@ -2000,11 +2008,10 @@ static TngUpdateRet affect_thing_by_wind(struct Thing *thing, ModTngFilterParam 
                     apply_velocity = true;
                     set_flag(cctrl->spell_flags, CSAfF_Wind);
                 } // If weight_affect_push_rule is on.
-                else if (game.conf.rules[thing->owner].magic.weight_calculate_push > 0 && creature_distance >= blow_distance && !creatureAlreadyAffected &&
-                    (shotng->shot.num_wind_affected < WIND_AFFECTED_MAX))
+                else if (game.conf.rules[thing->owner].magic.weight_calculate_push > 0 && creature_distance >= blow_distance && !creatureAlreadyAffected)
                 {
-                    // Add creature index to wind_affected_creature array.
-                    shotng->shot.wind_affected_creature[shotng->shot.num_wind_affected++] = cctrl->index;
+                    // Add creature index to the shot's list of wind affected creatures (until it is full).
+                    wind_list_add(shotng, cctrl->index);
                 }
             }
             break;

@@ -33,6 +33,11 @@ cmake --build out64 --target keeperfx > /dev/null
 echo "== game data"
 make "${VER[@]}" pkg-assemble > /dev/null
 
+echo "== the Zombie's eye palette (its mod is in mods/zombie, switched on by mods/load_order.cfg)"
+mkdir -p pkg/data
+cp config/mods/zombie/data/zompal.pal pkg/data/
+rm -rf pkg/mods/zombie/data
+
 echo "== launcher (EndlessKeeper.exe: what players start)"
 launcher/build.sh out/launcher > /dev/null
 cp out/launcher/EndlessKeeper.exe pkg/

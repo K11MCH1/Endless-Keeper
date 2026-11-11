@@ -55,6 +55,7 @@
 #include "world_pages.h"
 #include "world_caretaker.h"
 #include "kfx/profiling/KfxProfilingC.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2243,7 +2244,8 @@ int add_unclaimed_dead_bodies_to_imp_stack(struct Dungeon *dungeon, int max_task
             break;
         }
         if (!thing_is_dragged_or_pulled(thing) && (thing->active_state == DCrSt_Dead)
-           && (!corpse_laid_to_rest(thing)) && corpse_is_rottable(thing))
+           && (!corpse_laid_to_rest(thing)) && (corpse_is_rottable(thing) || world_misdeeds_body_keep(thing))
+           && !world_misdeeds_body_not_for(thing, dungeon->owner)) /* endless: Unfinished Business */
         {
             if (thing_revealed(thing, dungeon->owner))
             {
@@ -2765,7 +2767,7 @@ struct Thing *check_place_to_pickup_dead_body(struct Thing *creatng, long stl_x,
         }
         i = thing->next_on_mapblk;
         // Per thing code start
-        if (corpse_ready_for_collection(thing))
+        if (corpse_ready_for_collection(thing) && !world_misdeeds_body_not_for(thing, creatng->owner))
         {
             return thing;
         }

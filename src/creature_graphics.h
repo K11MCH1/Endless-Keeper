@@ -57,6 +57,11 @@ enum CreatureGraphicsInstances {
     CGI_RangedAttack = 23,
     CGI_Custom       = 24,
 };
+/* Lair animations (creature property LAIR_ANIMATIONS): two entries the engine never plays by itself are
+ * read as "going to sleep" and "coming out of sleep" for such a creature. No new entries, so the size
+ * of the per-creature animation table, and with it saved games, stays as it is. */
+#define CGI_GoToSleep CGI_Custom
+#define CGI_WakeUp    CGI_Smoke
 /******************************************************************************/
 #pragma pack(1)
 

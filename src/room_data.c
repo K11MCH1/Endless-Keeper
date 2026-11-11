@@ -1992,6 +1992,28 @@ struct Room *find_nearest_room_of_role_for_thing_with_spare_capacity(struct Thin
                 }
                 i = room->next_of_owner;
                 // Per-room code
+                if (thing->class_id == TCls_Creature)
+                {
+                    /* A creature takes the room with the shortest walk, not the one whose centre is nearest in a
+                       straight line (that one can be behind a wall, with other rooms passed on the way to it).
+                       The straight line to the same spot is never longer than the walk, so a room that is not
+                       nearer in a straight line than the best walk so far needs no route. */
+                    if (room->used_capacity + spare <= room->total_capacity)
+                    {
+                        struct Coord3d pos;
+                        if (find_first_valid_position_for_thing_anywhere_in_room(thing, room, &pos)
+                            && (get_2d_distance(&thing->mappos, &pos) < neardistance))
+                        {
+                            long walk = get_thing_navigation_distance(thing, &pos, (nav_flags & NavRtF_NoOwner) != 0);
+                            if (walk < neardistance)
+                            {
+                                neardistance = walk;
+                                nearoom = room;
+                            }
+                        }
+                    }
+                } else
+                {
                 // Compute simplified distance - without use of mul or div
                 long distance = grid_distance(thing->mappos.x.stl.num, thing->mappos.y.stl.num, room->central_stl_x, room->central_stl_y);
                 if ((neardistance > distance) && (room->used_capacity + spare <= room->total_capacity))
@@ -1999,13 +2021,10 @@ struct Room *find_nearest_room_of_role_for_thing_with_spare_capacity(struct Thin
                     struct Coord3d pos;
                     if (find_first_valid_position_for_thing_anywhere_in_room(thing, room, &pos))
                     {
-                        if ((thing->class_id != TCls_Creature)
-                        || creature_can_navigate_to(thing, &pos, nav_flags))
-                        {
-                            neardistance = distance;
-                            nearoom = room;
-                        }
+                        neardistance = distance;
+                        nearoom = room;
                     }
+                }
                 }
                 // Per-room code ends
                 k++;

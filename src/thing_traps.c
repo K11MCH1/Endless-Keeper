@@ -48,6 +48,7 @@
 #include "player_instances.h"
 #include "room_workshop.h"
 #include "world_pages.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -446,6 +447,8 @@ void activate_trap_shot_head_for_target90(struct Thing *traptng, struct Thing *c
     struct Thing* shotng = create_shot(&shot_origin, trapst->created_itm_model, traptng->owner);
     if (!thing_is_invalid(shotng))
     {
+        /* endless: the trap's level may add to its damage */
+        shotng->shot.damage = shotng->shot.damage * (100 + world_trap_bonus(traptng->owner, traptng->model, WTB_DamagePercent)) / 100;
         {
             MapCoord trpos_x = traptng->mappos.x.val;
             MapCoord trpos_y = traptng->mappos.y.val;
@@ -532,6 +535,8 @@ void activate_trap_shot_on_trap(struct Thing *traptng)
     shot_origin.z.val += trapst->shot_shift_z;
     struct Thing* shotng = create_shot(&shot_origin, trapst->created_itm_model, traptng->owner);
     if (!thing_is_invalid(shotng)) {
+        /* endless: the trap's level may add to its damage */
+        shotng->shot.damage = shotng->shot.damage * (100 + world_trap_bonus(traptng->owner, traptng->model, WTB_DamagePercent)) / 100;
         shotng->shot.hit_type = trapst->hit_type;
         shotng->parent_idx = traptng->index;
         shotng->veloc_push_add.x.val += trapst->shotvector.x;
@@ -551,6 +556,17 @@ void activate_trap_slab_change(struct Thing *traptng)
     {
         // deleting the room also deletes the trap
         delete_room_slab(subtile_slab(stl_x), subtile_slab(stl_y), true);
+    }
+    {
+        /* endless: a Lava Trap of level 2 goes off with an explosion, too */
+        const int blast = (strcmp(trap_code_name(traptng->model), "LAVA") == 0) ?
+            world_trap_bonus(traptng->owner, traptng->model, WTB_Special) : 0;
+        if (blast > 0)
+        {
+            create_effect(&traptng->mappos, TngEff_Explosion4, traptng->owner);
+            explosion_affecting_area(traptng, &traptng->mappos, 2 * COORD_PER_SLB, blast, 0,
+                hit_type_to_hit_targets(THit_CrtrsNObjctsNotOwn));
+        }
     }
     place_slab_type_on_map(slab, stl_x, stl_y, game.neutral_player_num, 0);
     // TODO
@@ -921,6 +937,8 @@ TbBool rearm_trap(struct Thing *traptng)
 {
     struct TrapConfigStats *trapst = get_trap_model_stats(traptng->model);
     traptng->trap.num_shots = trapst->shots;
+    if (trapst->shots > 0) /* endless: the trap's level may give more charges */
+        traptng->trap.num_shots += world_trap_bonus(traptng->owner, traptng->model, WTB_Shots);
 
     clear_flag(traptng->rendering_flags, TRF_Transpar_Flags);
     set_flag(traptng->rendering_flags, trapst->transparency_flag);

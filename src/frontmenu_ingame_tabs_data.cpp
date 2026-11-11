@@ -38,6 +38,8 @@
 #include "frontmenu_ingame_opts.h"
 #include "sprites.h"
 #include "player_instances.h"
+#include "world_stream.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -400,9 +402,16 @@ struct GuiButtonInit creature_query_buttons2[] = {
   {              -1,    BID_DEFAULT, 0, 0, NULL,                                NULL,                                               NULL,               0,   0,   0,   0,   0,  0,  0, NULL,                              0,   0,                     0,       {0},               0, NULL },
 };
 
+/** The fourth tab's "more" button: on to the Rap Sheet in endless worlds, else back to the first tab as ever. */
+static void query4_more_maintain(struct GuiButton *gbtn)
+{
+    gbtn->parent_menu = world_mode_active() ? &creature_query_menu5 : &creature_query_menu1;
+}
+
 struct GuiButtonInit creature_query_buttons3[] = {
   {LbBtnT_NormalBtn,    BID_DEFAULT,    0, 1, NULL,                                NULL,                                               NULL,               0,  44, 374,  44, 374, 52, 20, gui_area_new_normal_button, GPS_rpanel_rpanel_btn_nxpage_act, GUIStr_MoreInformation,&creature_query_menu4,          {0}, 0, NULL },
   {LbBtnT_NormalBtn,    BID_DEFAULT,    0, 0, gui_query_next_creature_of_owner,    gui_query_next_creature_of_owner_and_model,         NULL,               0,   4, 204,   4, 204,126, 14, NULL,                              0, GUIStr_NameAndHealthDesc,0,       {0},               0, NULL },
+  {LbBtnT_EditBox,      BID_DEFAULT,    0, 0, world_misdeeds_rename_done,          NULL,                                               NULL,               0, 118, 205, 118, 205, 12, 12, world_misdeeds_pencil_draw,        0, GUIStr_Empty,            0,       {0}, WORLD_MISDEED_NAME_MAX, world_misdeeds_pencil_maintain }, /* endless worlds: Rename */
   {LbBtnT_NormalBtn,    BID_QUERY_INFO, 0, 0, NULL,                                NULL,                                               NULL,               0,   4, 226,   4, 226, 60, 24, gui_area_stat_button, GPS_crspell_heal_std_s, GUIStr_CreatureHealthDesc,     0,         {CrLStat_Health}, 0, NULL },
   {LbBtnT_NormalBtn,    BID_QUERY_INFO, 0, 0, NULL,                                NULL,                                               NULL,               0,  72, 226,  72, 226, 60, 24, gui_area_stat_button, GPS_symbols_creatr_stat_strength_std, GUIStr_CreatureStrengthDesc,   0,       {CrLStat_Strength}, 0, NULL },
   {LbBtnT_NormalBtn,    BID_QUERY_INFO, 0, 0, NULL,                                NULL,                                               NULL,               0,   4, 256,   4, 256, 60, 24, gui_area_stat_button, GPS_symbols_creatr_stat_armor_std, GUIStr_CreatureArmourDesc,     0,         {CrLStat_Armour}, 0, NULL },
@@ -417,8 +426,9 @@ struct GuiButtonInit creature_query_buttons3[] = {
 };
 
 struct GuiButtonInit creature_query_buttons4[] = {
-  {LbBtnT_NormalBtn,    BID_DEFAULT,    0, 1, NULL,                                NULL,                                               NULL,               0,  44, 374,  44, 374, 52, 20, gui_area_new_normal_button, GPS_rpanel_rpanel_btn_nxpage_act, GUIStr_MoreInformation,&creature_query_menu1,           {0}, 0, NULL },
+  {LbBtnT_NormalBtn,    BID_DEFAULT,    0, 1, NULL,                                NULL,                                               NULL,               0,  44, 374,  44, 374, 52, 20, gui_area_new_normal_button, GPS_rpanel_rpanel_btn_nxpage_act, GUIStr_MoreInformation,&creature_query_menu1,           {0}, 0, query4_more_maintain },
   {LbBtnT_NormalBtn,    BID_DEFAULT,    0, 0, gui_query_next_creature_of_owner,    gui_query_next_creature_of_owner_and_model,         NULL,               0,   4, 204,   4, 204,126, 14, NULL,                              0, GUIStr_NameAndHealthDesc,0,       {0},               0, NULL },
+  {LbBtnT_EditBox,      BID_DEFAULT,    0, 0, world_misdeeds_rename_done,          NULL,                                               NULL,               0, 118, 205, 118, 205, 12, 12, world_misdeeds_pencil_draw,        0, GUIStr_Empty,            0,       {0}, WORLD_MISDEED_NAME_MAX, world_misdeeds_pencil_maintain }, /* endless worlds: Rename */
   {LbBtnT_NormalBtn,    BID_QUERY_INFO, 0, 0, NULL,                                NULL,                                               NULL,               0,   4, 226,   4, 226, 60, 24, gui_area_stat_button, GPS_crspell_speedup_dis_s, GUIStr_CreatureSpeedDesc,       0,          {CrLStat_Speed}, 0, NULL },
   {LbBtnT_NormalBtn,    BID_QUERY_INFO, 0, 0, NULL,                                NULL,                                               NULL,               0,  72, 226,  72, 226, 60, 24, gui_area_stat_button, GPS_crspell_whip_std_s, GUIStr_CreatureLoyaltyDesc,     0,        {CrLStat_Loyalty}, 0, NULL },
   {LbBtnT_NormalBtn,    BID_QUERY_INFO, 0, 0, NULL,                                NULL,                                               NULL,               0,   4, 256,   4, 256, 60, 24, gui_area_stat_button, GPS_room_research_std_s, GUIStr_CreatureResrchSkillDesc,  0,  {CrLStat_ResearchSkill}, 0, NULL },
@@ -429,6 +439,16 @@ struct GuiButtonInit creature_query_buttons4[] = {
   {LbBtnT_NormalBtn,    BID_QUERY_INFO, 0, 0, NULL,                                NULL,                                               NULL,               0,  72, 316,  72, 316, 60, 24, gui_area_stat_button, GPS_symbols_creatr_stat_scavngcst_std, GUIStr_CreatureScavngCostDesc,  0,   {CrLStat_ScavengeCost}, 0, NULL },
   {LbBtnT_NormalBtn,    BID_QUERY_INFO, 0, 0, NULL,                                NULL,                                               NULL,               0,   4, 346,   4, 346, 60, 24, gui_area_stat_button, GPS_trapdoor_trap_boulder_std_s, GUIStr_CreatureWeightDesc,      0,         {CrLStat_Weight}, 0, NULL },
   {LbBtnT_NormalBtn,    BID_QUERY_INFO, 0, 0, NULL,                                NULL,                                               NULL,               0,  72, 346,  72, 346, 60, 24, gui_area_stat_button, GPS_symbols_creatr_stat_blood_std, GUIStr_CreatureBloodTypeDesc,   0,      {CrLStat_BloodType}, 0, NULL },
+  {              -1,    BID_DEFAULT,    0, 0, NULL,                                NULL,                                               NULL,               0,   0,   0,   0,   0,  0,  0, NULL,                              0,   0,                            0,                      {0}, 0, NULL },
+};
+
+/* endless worlds: the Rap Sheet (world_misdeeds.c draws it in the menu's background) */
+struct GuiButtonInit creature_query_buttons5[] = {
+  {LbBtnT_NormalBtn,    BID_DEFAULT,    0, 1, NULL,                                NULL,                                               NULL,               0,  44, 374,  44, 374, 52, 20, gui_area_new_normal_button, GPS_rpanel_rpanel_btn_nxpage_act, GUIStr_MoreInformation,&creature_query_menu1,           {0}, 0, NULL },
+  {LbBtnT_NormalBtn,    BID_DEFAULT,    0, 0, gui_query_next_creature_of_owner,    gui_query_next_creature_of_owner_and_model,         NULL,               0,   4, 204,   4, 204,126, 14, NULL,                              0, GUIStr_NameAndHealthDesc,0,       {0},               0, NULL },
+  {LbBtnT_EditBox,      BID_DEFAULT,    0, 0, world_misdeeds_rename_done,          NULL,                                               NULL,               0, 118, 205, 118, 205, 12, 12, world_misdeeds_pencil_draw,        0, GUIStr_Empty,            0,       {0}, WORLD_MISDEED_NAME_MAX, world_misdeeds_pencil_maintain }, /* endless worlds: Rename */
+  {LbBtnT_NormalBtn,    BID_DEFAULT,    0, 0, world_misdeeds_pick_click,           NULL,                                               NULL,               0,   4, 300,   4, 300,132, 14, world_misdeeds_pick_draw,          0, GUIStr_Empty,            0,       {0},               0, world_misdeeds_pick_maintain },
+  {LbBtnT_NormalBtn,    BID_DEFAULT,    0, 0, world_misdeeds_pick_click,           NULL,                                               NULL,               0,   4, 316,   4, 316,132, 14, world_misdeeds_pick_draw,          0, GUIStr_Empty,            0,       {1},               0, world_misdeeds_pick_maintain },
   {              -1,    BID_DEFAULT,    0, 0, NULL,                                NULL,                                               NULL,               0,   0,   0,   0,   0,  0,  0, NULL,                              0,   0,                            0,                      {0}, 0, NULL },
 };
 
@@ -456,6 +476,8 @@ struct GuiMenu creature_query_menu3 =
  {GMnu_CREATURE_QUERY3, 0, 1, creature_query_buttons3,              0,   0, 140, 400, gui_creature_query_background2,0,NULL,   NULL,                    0, 0, 1,};
 struct GuiMenu creature_query_menu4 =
  {GMnu_CREATURE_QUERY4, 0, 1, creature_query_buttons4,              0,   0, 140, 400, gui_creature_query_background2,0,NULL,   NULL,                    0, 0, 1,};
+struct GuiMenu creature_query_menu5 =
+ {GMnu_CREATURE_QUERY5, 0, 1, creature_query_buttons5,              0,   0, 140, 400, world_misdeeds_rap_background, 0,NULL,   NULL,                    0, 0, 1,};
 struct GuiMenu spell_menu2 =
  {          GMnu_SPELL2, 0, 1, spell_menu2_buttons,                 0,   0, 140, 400, NULL,                        0, NULL,    NULL,                    0, 0, 1,};
  struct GuiMenu room_menu2 =

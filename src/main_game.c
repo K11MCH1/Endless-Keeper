@@ -12,6 +12,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include <stdlib.h>
 #include "kfx/renderer/RendererManager.h"
 #include "keeperfx.hpp"
 
@@ -601,6 +602,12 @@ void init_seeds()
     {
         // Unsynced seeds - these values will be different per-player in multiplayer
         unsigned long calender_time = (unsigned long)LbTimeSec();
+        {
+            /* test hook KFX_TEST_SEED=n: the random seeds from n, not the clock (two runs then play alike) */
+            const char *test_seed = getenv("KFX_TEST_SEED");
+            if (test_seed != NULL)
+                calender_time = strtoul(test_seed, NULL, 10);
+        }
         game.unsync_random_seed = calender_time * 9007 + 9011;  // Use prime multipliers for different seeds
         game.sound_random_seed = calender_time * 7919 + 7927;
 

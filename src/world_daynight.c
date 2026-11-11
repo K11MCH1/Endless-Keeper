@@ -9,12 +9,13 @@
  * from game.play_gameturn and the world seed.
  *
  * By day, heroes break in through the ceiling (the FALL spawn of scripts) at open spots about 100 slabs from the
- * player's heart: parties of a Tunneller that digs its way to the heart and its followers (2-6 in all). Each possible
- * raid comes one time in two. The player's best creature sets their levels, how many parties land at once and who
+ * player's heart: parties of a Tunneller that digs its way to the heart and its followers (2-6 in all). The first
+ * raid of a day always comes, the day's others one time in two (2026-11-11), at least four minutes apart. The player's best creature sets their levels, how many parties land at once and who
  * follows (2026-11-08: 1 party up to level 3, 1-2 to level 5, 1-3 to level 8, 2-4 to level 12, then 3-5; Thieves
  * and Tunnellers, then Dwarves, Archers, Barbarians, Monks, and from level 9 the heroes of the landing's biome).
- * A raid's heroes stay until the dawn after their third night, then walk back to where they landed and leave; no
- * new raid comes for a player while the last one's heroes are still there (the invasions are saved: RDS1).
+ * A raid's heroes stay until the next dawn, then walk back to where they landed and leave, and a party whose leader
+ * dies goes home at once (2026-11-11; it was the dawn after their third night); no new raid comes for a player while
+ * the last one's heroes are still there (the invasions are saved: RDS1).
  */
 /******************************************************************************/
 #include "pre_inc.h"
@@ -112,6 +113,12 @@ long world_day_number(void)
     dn_read_lengths();
     dn_time(game.play_gameturn, &day, &t);
     return day;
+}
+
+long world_day_turns(void)
+{
+    dn_read_lengths();
+    return (long)(dn_day_turns + dn_night_turns);
 }
 
 TbBool world_is_day(void)
@@ -344,7 +351,10 @@ static const char *const dn_biome_heroes[WgB_COUNT][2] = {
 #define DN_SPAWN_MIN_DIST 40
 #define DN_PARTY_GAP 8               /* slabs at least between two parties' landings */
 #define DN_MAX_PARTIES 5
-#define DN_RETREAT_NIGHTS 3          /* raiders go home at the dawn after their third night */
+#define DN_RETREAT_NIGHTS 1          /* raiders go home at the next dawn (2026-11-11; it was after their third night) */
+#define DN_RAID_GAP (4 * 60 * 20)    /* turns at least between two raids of a day on a player, where the day has room */
+/* A raider whose party's leader died: it goes home at once (the mark is saved and streamed with the creature) */
+#define DN_FLEEING_MARK CHeroTsk_DefendParty
 #define DN_HOME_DIST 2               /* slabs from a landing spot a raider going home leaves at */
 #define DN_RETREAT_TURNS (2 * 60 * 20) /* after this long going home, the raiders left leave wherever they are */
 
@@ -372,11 +382,11 @@ static uint32_t dn_rand(struct DnRng *r, uint32_t n)
     return (n > 0) ? (uint32_t)(r->s % n) : 0;
 }
 
-/** Possible tunnel-ins on a day: 1 on day 1, one more every 2 days, at most 4 (each comes one time in two). */
+/** Possible tunnel-ins on a day (2026-11-11): 1 on day 1, 2 to day 4, 3 to day 8, then 4. The first always comes,
+ *  the others one time in two. */
 static int dn_raids_on_day(long day)
 {
-    long n = 1 + (day - 1) / 2;
-    return (n > 4) ? 4 : (int)n;
+    return (day <= 1) ? 1 : (day < 5) ? 2 : (day < 9) ? 3 : 4;
 }
 
 /** Time of day of raid i of n: one in each part of the day, at a time fixed by the seed. The first day's raid
@@ -391,13 +401,24 @@ static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_
 {
     const GameTurnDelta edge = dn_day_turns / 20;
     const GameTurnDelta start = (day == 1) ? dn_day_turns / 2 : edge;
-    GameTurnDelta slot = (dn_day_turns - edge - start) / n;
+    const GameTurnDelta span = dn_day_turns - edge - start;
+    /* breathing room (2026-11-11): DN_RAID_GAP between two raids, or as much as the day has room for (four raids
+       don't fit four minutes apart in a 12-minute day); what is left over is shared out as each raid's leeway */
+    GameTurnDelta gap = 0;
+    if (n > 1)
+    {
+        gap = DN_RAID_GAP;
+        const GameTurnDelta most = span * 4 / 5 / (n - 1);
+        if (gap > most)
+            gap = most;
+    }
+    GameTurnDelta slot = (span - gap * (n - 1)) / n;
     if (slot < 1)
         slot = 1;
     uint64_t h = dn_mix(world_seed() ^ dn_mix((uint64_t)day * 0x632BE59BD9B4E019ULL + (uint64_t)i));
     if (plyr_idx != PLAYER0)
         h = dn_mix(h ^ dn_player_salt(plyr_idx));
-    return start + slot * i + (GameTurnDelta)(h % (uint64_t)slot);
+    return start + (gap + slot) * i + (GameTurnDelta)(h % (uint64_t)slot);
 }
 
 /** The slabs the landing search reads: a box of engine slabs (world_read_slab_box), loaded or not. */
@@ -536,6 +557,8 @@ static uint64_t dn_player_salt(PlayerNumber plyr_idx)
 
 static TbBool dn_raid_happens(long day, int i, PlayerNumber plyr_idx)
 {
+    if (i == 0)
+        return (dn_raid_chance > 0); /* the first raid of a day always comes (2026-11-11; a test's 0% still means none) */
     const uint64_t h = dn_mix(world_seed() ^ dn_mix((uint64_t)day * 0x2545F4914F6CDD1DULL + (uint64_t)i + 77) ^
         dn_player_salt(plyr_idx));
     return (int)(h % 100) < dn_raid_chance;
@@ -571,9 +594,15 @@ struct DnInvasion {
     uint8_t active, retreating, nspots;
     int32_t day;                       /* the day it landed */
     GameTurn retreat_turn;
+    GameTurn flee_turn;                /* when a party's leader last died (not saved: a load starts it again) */
     int64_t spot_x[DN_MAX_PARTIES], spot_y[DN_MAX_PARTIES]; /* the parties' landings, world slabs */
 };
 static struct DnInvasion dn_inv[PLAYERS_MAX];
+/** The day whose first raid a player is still owed: it couldn't come while the last raid's heroes were on their way
+ *  home, and comes when they are gone (that day only; not saved). 0: none. */
+static int32_t dn_owed_day[PLAYERS_MAX];
+
+TbBool world_raid_hero(const struct Thing *thing);
 
 /** The invasion a raider belongs to: its target's, else the one whose landing is nearest; -1 none. */
 static int dn_raider_invasion(const struct Thing *thing)
@@ -617,7 +646,7 @@ static void dn_raider_leaves(struct Thing *thing)
 
 /** A raider of a retreating invasion: on its way to the nearest landing, or gone when it is there (or can't get
  *  there, or has taken too long). Returns true when it was dealt with (it goes home or has left). */
-static TbBool dn_raider_go_home(struct Thing *thing, struct DnInvasion *inv)
+static TbBool dn_raider_go_home(struct Thing *thing, struct DnInvasion *inv, TbBool in_update)
 {
     if (creature_is_being_unconscious(thing) || creature_is_dying(thing) || thing_is_picked_up(thing) ||
         thing_is_dragged_or_pulled(thing) || creature_is_kept_in_custody(thing))
@@ -641,7 +670,9 @@ static TbBool dn_raider_go_home(struct Thing *thing, struct DnInvasion *inv)
             found = true;
         }
     }
-    const TbBool late = ((GameTurnDelta)(game.play_gameturn - inv->retreat_turn) > DN_RETREAT_TURNS);
+    /* how long it has been going home: since the raid turned back, or since its party's leader died */
+    const GameTurn since = inv->retreating ? inv->retreat_turn : inv->flee_turn;
+    const TbBool late = ((GameTurnDelta)(game.play_gameturn - since) > DN_RETREAT_TURNS);
     if (!found && !late)
     {
         /* its landing's ground went: it comes back, and the raider goes there next time */
@@ -651,6 +682,8 @@ static TbBool dn_raider_go_home(struct Thing *thing, struct DnInvasion *inv)
     }
     if (!found || (best_d <= DN_HOME_DIST) || late)
     {
+        if (in_update)
+            return true; /* called from the creature's own update: it leaves on the invasions' turn, not inside it */
         SYNCLOG("World: a raiding %s leaves %s", thing_model_name(thing),
             !found ? "(its landing is off the map)" : (best_d <= DN_HOME_DIST) ? "where it landed" : "where it is (too long on its way)");
         dn_raider_leaves(thing);
@@ -670,25 +703,64 @@ static TbBool dn_raider_go_home(struct Thing *thing, struct DnInvasion *inv)
     return true;
 }
 
+/** A raider whose party lost its leader. */
+static TbBool dn_raider_fleeing(const struct Thing *thing)
+{
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    return !creature_control_invalid(cctrl) && (cctrl->party.original_objective == DN_FLEEING_MARK);
+}
+
+void world_raid_creature_died(struct Thing *thing)
+{
+    if (!world_raid_hero(thing) || !creature_is_group_leader(thing))
+        return;
+    /* the leader of a raiding party died: the rest of the party goes home at once (2026-11-11) */
+    const int p = dn_raider_invasion(thing);
+    if (p < 0)
+        return;
+    int fled = 0;
+    long guard = 0;
+    struct Thing *memb = get_first_follower_creature_in_group(thing);
+    while (thing_exists(memb) && (guard++ < CREATURES_COUNT))
+    {
+        struct CreatureControl *mctrl = creature_control_get_from_thing(memb);
+        if (creature_control_invalid(mctrl))
+            break;
+        struct Thing *next = (mctrl->next_in_group > 0) ? thing_get(mctrl->next_in_group) : INVALID_THING;
+        if ((memb != thing) && world_raid_hero(memb))
+        {
+            mctrl->party.original_objective = DN_FLEEING_MARK;
+            mctrl->party.objective = CHeroTsk_DefendParty;
+            fled++;
+        }
+        memb = next;
+    }
+    if (fled == 0)
+        return;
+    dn_inv[p].flee_turn = game.play_gameturn; /* (the chunk manager wants their landings from now on) */
+    SYNCLOG("World: the leader (%s) of a party raiding player %d died: its %d heroes go home", thing_model_name(thing), p,
+        fled);
+}
+
 TbBool world_raid_hero_goes_home(struct Thing *thing)
 {
     if (!world_raid_hero(thing))
         return false;
     const int p = dn_raider_invasion(thing);
-    if ((p < 0) || !dn_inv[p].retreating)
+    if ((p < 0) || (!dn_inv[p].retreating && !dn_raider_fleeing(thing)))
         return false;
-    return dn_raider_go_home(thing, &dn_inv[p]);
+    return dn_raider_go_home(thing, &dn_inv[p], true);
 }
 
-/** Every 16 turns: invasions end when their raiders are gone, turn back after their third night; raiders of an
- *  older save (no invasion yet) start one. */
+/** Every 16 turns: invasions end when their raiders are gone, turn back at the next dawn; raiders of an older save
+ *  (no invasion yet) start one. */
 static void dn_invasions_turn(long day, GameTurnDelta t)
 {
     if ((game.play_gameturn % 16) != 5)
         return;
     static int count[PLAYERS_MAX];
     memset(count, 0, sizeof(count));
-    /* turn back at dawn after the third night */
+    /* turn back at the next dawn */
     for (int p = 0; p < PLAYERS_COUNT; p++)
     {
         struct DnInvasion *inv = &dn_inv[p];
@@ -696,8 +768,9 @@ static void dn_invasions_turn(long day, GameTurnDelta t)
         {
             inv->retreating = 1;
             inv->retreat_turn = game.play_gameturn;
-            for (int s = 0; s < inv->nspots; s++)
-                world_load_chunks_round_world(inv->spot_x[s], inv->spot_y[s], 1);
+            /* (their landings are loaded by the chunk manager, which wants them from now on - see
+               world_daynight_want_chunks - and no longer all at once here: every raid turns back on the same
+               turn after dawn, which was up to nine chunks a landing in one turn; audit 2026-11-11) */
             SYNCLOG("World: the heroes raiding player %d since day %d go home (day %ld)", p, (int)inv->day, day);
         }
     }
@@ -739,8 +812,8 @@ static void dn_invasions_turn(long day, GameTurnDelta t)
                 p = tp;
             }
             count[p]++;
-            if (dn_inv[p].retreating)
-                dn_raider_go_home(thing, &dn_inv[p]);
+            if (dn_inv[p].retreating || dn_raider_fleeing(thing))
+                dn_raider_go_home(thing, &dn_inv[p], false);
         }
     }
     for (int p = 0; p < PLAYERS_COUNT; p++)
@@ -749,6 +822,7 @@ static void dn_invasions_turn(long day, GameTurnDelta t)
         {
             SYNCLOG("World: the raid on player %d (day %d) is over", p, (int)dn_inv[p].day);
             memset(&dn_inv[p], 0, sizeof(dn_inv[p]));
+            world_progress_raid_over(p);
         }
     }
 }
@@ -757,10 +831,14 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
 {
     if (dn_invasion_on(plyr_idx))
     {
-        SYNCLOG("World: day %ld raid %d doesn't come for player %d: the last raid's heroes are still here", day, idx + 1,
-            (int)plyr_idx);
+        SYNCLOG("World: day %ld raid %d doesn't come for player %d: the last raid's heroes are still here%s", day, idx + 1,
+            (int)plyr_idx, (idx == 0) ? " (it comes when they are gone)" : "");
+        if (idx == 0)
+            dn_owed_day[plyr_idx] = (int32_t)day; /* the day's first raid always comes (2026-11-11) */
         return;
     }
+    if (idx == 0)
+        dn_owed_day[plyr_idx] = 0;
     struct DnRng rng = {dn_mix(world_seed() ^ ((uint64_t)day << 8) ^ (uint64_t)idx ^ 0x5A1D5A1D5A1DULL ^
         dn_player_salt(plyr_idx))};
     struct Thing *heartng = find_players_dungeon_heart(plyr_idx);
@@ -997,7 +1075,8 @@ TbBool world_raid_hero(const struct Thing *thing)
         return false;
     const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
     /* only day raids set an original objective in endless levels: fortress heroes keep the default */
-    return !creature_control_invalid(cctrl) && (cctrl->party.original_objective == CHeroTsk_AttackEnemies);
+    return !creature_control_invalid(cctrl) && ((cctrl->party.original_objective == CHeroTsk_AttackEnemies) ||
+        (cctrl->party.original_objective == DN_FLEEING_MARK));
 }
 
 /* saving: the invasions on */
@@ -1066,6 +1145,7 @@ TbBool world_raids_load(const uint8_t *buf, size_t len)
         inv->retreating = s.retreating;
         inv->nspots = s.nspots;
         inv->retreat_turn = game.play_gameturn - s.retreat_age;
+        inv->flee_turn = game.play_gameturn;
         memcpy(inv->spot_x, s.spot_x, sizeof(s.spot_x));
         memcpy(inv->spot_y, s.spot_y, sizeof(s.spot_y));
     }
@@ -1075,6 +1155,124 @@ TbBool world_raids_load(const uint8_t *buf, size_t len)
 void world_raids_reset(void)
 {
     memset(dn_inv, 0, sizeof(dn_inv));
+    memset(dn_owed_day, 0, sizeof(dn_owed_day));
+}
+
+/* The RDX1 extra of the world save: what RDS1 has no room for (audit 2026-11-11: after a load or a resync the day's
+ * owed first raid never came, and fleeing raiders got their two minutes again). Per player with something to keep:
+ * the player, the day whose first raid is owed (0 none), the turns since a party's leader died (UINT32_MAX none). */
+#pragma pack(1)
+struct DnExtraSaved {
+    uint32_t plyr;
+    int32_t owed_day;
+    uint32_t flee_age;
+};
+#pragma pack()
+
+static TbBool dn_extra_wanted(PlayerNumber p)
+{
+    return (dn_owed_day[p] != 0) || (dn_inv[p].active && !dn_inv[p].retreating && (dn_inv[p].flee_turn != 0));
+}
+
+void world_raids_extra_reset(void)
+{
+    memset(dn_owed_day, 0, sizeof(dn_owed_day)); /* (the raids themselves were read from RDS1 before this) */
+}
+
+size_t world_raids_extra_save_size(void)
+{
+    size_t n = 0;
+    for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+        if (dn_extra_wanted(p))
+            n++;
+    return (n > 0) ? 4 + n * sizeof(struct DnExtraSaved) : 0;
+}
+
+void world_raids_extra_save(uint8_t *buf)
+{
+    uint32_t n = 0;
+    uint8_t *at = buf + 4;
+    for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+    {
+        if (!dn_extra_wanted(p))
+            continue;
+        struct DnExtraSaved s;
+        s.plyr = (uint32_t)p;
+        s.owed_day = dn_owed_day[p];
+        s.flee_age = (dn_inv[p].active && (dn_inv[p].flee_turn != 0)) ? (uint32_t)(game.play_gameturn - dn_inv[p].flee_turn) :
+            UINT32_MAX;
+        memcpy(at, &s, sizeof(s));
+        at += sizeof(s);
+        n++;
+    }
+    memcpy(buf, &n, 4);
+}
+
+TbBool world_raids_extra_load(const uint8_t *buf, size_t len)
+{
+    world_raids_extra_reset();
+    uint32_t n = 0;
+    if (len < 4)
+        return false;
+    memcpy(&n, buf, 4);
+    if ((n > PLAYERS_MAX) || (len < 4 + (size_t)n * sizeof(struct DnExtraSaved)))
+        return false;
+    for (uint32_t k = 0; k < n; k++)
+    {
+        struct DnExtraSaved s;
+        memcpy(&s, buf + 4 + (size_t)k * sizeof(s), sizeof(s));
+        if (s.plyr >= PLAYERS_MAX)
+            continue;
+        dn_owed_day[s.plyr] = s.owed_day;
+        if ((s.flee_age != UINT32_MAX) && dn_inv[s.plyr].active)
+            dn_inv[s.plyr].flee_turn = game.play_gameturn - s.flee_age;
+    }
+    return true;
+}
+
+/** Test hook KFX_WORLD_KILLLEADER=<turns>: that long after it was made, the leader of a raiding party is killed (the
+ *  party must go home). */
+static void dn_killleader_hook(void)
+{
+    static long after = -1;
+    if (after < 0)
+    {
+        const char *v = getenv("KFX_WORLD_KILLLEADER");
+        after = (v != NULL) ? atol(v) : 0;
+    }
+    if ((after <= 0) || ((game.play_gameturn % 16) != 9))
+        return;
+    struct Dungeon *heroes = get_players_num_dungeon(PLAYER_GOOD);
+    if (dungeon_invalid(heroes))
+        return;
+    long i = heroes->creatr_list_start;
+    TbBool diggers = false;
+    long guard = 0;
+    while (guard++ < CREATURES_COUNT)
+    {
+        if (i <= 0)
+        {
+            if (diggers)
+                break;
+            diggers = true;
+            i = heroes->digger_list_start;
+            continue;
+        }
+        struct Thing *thing = thing_get(i);
+        if (!thing_exists(thing))
+            break;
+        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        if (creature_control_invalid(cctrl))
+            break;
+        i = cctrl->players_next_creature_idx;
+        if (world_raid_hero(thing) && creature_is_group_leader(thing) && !creature_is_dying(thing) &&
+            ((long)(game.play_gameturn - thing->creation_turn) > after))
+        {
+            SYNCLOG("World test: killing the raid leader %s (index %d)", thing_model_name(thing), (int)thing->index);
+            kill_creature(thing, INVALID_THING, -1, CrDed_NoUnconscious);
+            return;
+        }
+    }
 }
 
 void world_raids_player_retreat(PlayerNumber plyr_idx)
@@ -1124,8 +1322,27 @@ void world_daynight_turn(void)
         server_admin_log("world", "Night %ld begins", day);
     }
     dn_invasions_turn(day, t);
+    dn_killleader_hook();
     if (t >= dn_day_turns)
         return;
+    /* a first raid that waited for the last raid's heroes to go: it comes now, if its time has passed */
+    if ((game.play_gameturn % 16) == 13)
+    {
+        for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+        {
+            if ((dn_owed_day[p] != (int32_t)day) || dn_invasion_on(p))
+                continue;
+            if (!world_player_is_human(p) || world_coop_seat_away(p))
+            {
+                dn_owed_day[p] = 0;
+                continue;
+            }
+            SYNCLOG("World: day %ld's first raid comes for player %d now: the last raid's heroes are gone", day, (int)p);
+            dn_raid(day, 0, p);
+            if (!dn_invasion_on(p))
+                dn_owed_day[p] = 0; /* it couldn't land: not again today */
+        }
+    }
     /* by day, read the raid search box ahead a few chunks at a time (the first raid of a run would otherwise
        generate about 200 chunks in one turn); it changes nothing in the game */
     if (world_is_chunked() && ((game.play_gameturn % 4) == 2))
@@ -1168,7 +1385,9 @@ void world_daynight_want_chunks(void (*want)(int64_t wx, int64_t wy, int r))
     for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
     {
         const struct DnInvasion *inv = &dn_inv[p];
-        if (!inv->active || !inv->retreating)
+        /* going home: the whole raid after dawn, or a party whose leader died not long ago */
+        const TbBool fleeing = (inv->flee_turn != 0) && ((GameTurnDelta)(game.play_gameturn - inv->flee_turn) <= DN_RETREAT_TURNS);
+        if (!inv->active || (!inv->retreating && !fleeing))
             continue;
         for (int s = 0; s < inv->nspots; s++)
             want(inv->spot_x[s], inv->spot_y[s], 1);

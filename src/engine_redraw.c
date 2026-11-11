@@ -71,6 +71,7 @@
 #include "packets.h"
 #include "custom_sprites.h"
 #include "keeperfx.hpp"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1028,6 +1029,7 @@ void redraw_display(void)
         LbTextDrawResized(0/pixel_size, 0/pixel_size, tx_units_per_px, text);
         LbTextSetWindow(0/pixel_size, 0/pixel_size, MyScreenWidth/pixel_size, MyScreenHeight/pixel_size);
     }
+    world_misdeeds_draw_overlay(); /* endless worlds: the hovered creature's name above its flower */
     draw_eastegg();
     if (map_fade == PVT_None) {
         RendererBeginOverlayCapture(OVERLAY_CAPTURE_TOOLTIP);

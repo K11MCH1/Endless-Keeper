@@ -188,7 +188,7 @@ void netstate_server_sim_time(int64_t ns)
 
 /* the server's view of each client: its copy of the things it was sent. Sparse: a thing without a copy is all zero
    to the client (a keyframe zeroes the things not sent; a thing leaving goes back to zero). A copy costs a Thing
-   (2244 bytes); a whole array was 27.6 MB a client. */
+   (196 bytes since the wind lists left it; it was 2244, a whole array 27.6 MB a client). */
 struct NsClientState {
     uint16_t *slot;          /* per thing index: 0 none, else 1 + its copy in pool */
     struct Thing *pool;
@@ -202,7 +202,7 @@ static ThingIndex live_hi = THINGS_COUNT - 1;
    thing that is the same needs no compare (every copy is brought up to date each turn, or rebuilt by a keyframe) */
 static uint64_t thing_hash[THINGS_COUNT];
 static uint8_t thing_same[THINGS_COUNT];
-/* the live things of the turn, in index order, with what deciding a client's interest needs: scanning 2244-byte things
+/* the live things of the turn, in index order, with what deciding a client's interest needs: scanning every thing slot
    for every client cost a cache miss a slot */
 struct NsLive {
     ThingIndex idx;
@@ -1586,6 +1586,10 @@ static uint8_t *simcheck_cc;
 #define NS_WIRE_ZSTD 0x80000000u    /* in NsWire.raw_len */
 #define NS_CAP_DUAL1 0x2u           /* takes each turn twice: reliably, and an unreliable copy (the first to come is used) */
 #define NS_CAP_ROLES1 NETSTATE_CAP_ROLES /* reads NETMSG_ROLES (2026-11-10) */
+/* the game state's layout (2026-11-11): things of 196 bytes, the wind shots' lists in Game.wind_nodes. A client
+   without it has things of 2244 bytes: it can't use this server's state (its keyframe check says so in its log only),
+   so the server turns it away as a different version */
+#define NS_CAP_LAYOUT2 0x8u
 #define NS_WIRE_COPY 0x40000000u    /* in NsWire.raw_len: this is the unreliable copy of a turn */
 #define NS_ZSTD_LEVEL 3
 static uint32_t ns_caps[MAX_NET_CONNECTIONS];
@@ -1640,6 +1644,13 @@ void netstate_server_caps(NetUserId source, const char *buffer, size_t size)
         return;
     uint32_t caps;
     memcpy(&caps, buffer, 4);
+    if ((caps & NS_CAP_LAYOUT2) == 0)
+    {
+        WARNLOG("Thin-client server: user %d is an older version (its game state has another layout): turned away", (int)source);
+        if ((netstate.sp != NULL) && (netstate.sp->drop_user != NULL))
+            netstate.sp->drop_user(source, NetJoin_Version);
+        return;
+    }
     if ((caps & NS_CAP_ZSTD1) && !ns_zstd_ready())
         caps &= ~NS_CAP_ZSTD1;
     if (ns_caps[source] != caps)
@@ -2943,6 +2954,24 @@ void netstate_server_after_turn(void)
         if (!numask_has(clients, c))
             ns_caps[c] = 0;
     }
+    {
+        /* A record carries the game turn, and a client takes each turn once. On a pass where the turn hasn't moved
+           (the host paused) a second record of the same turn was made: clients dropped it as had already, while the
+           shadows here took its changes, so those were never sent again - the pause itself, and whatever packets did
+           in that pass (audit 2026-11-11; since the unreliable copies, 7e0bc6c). Such a pass makes no record: what
+           changed goes out with the next turn's. If a client is waiting for its first keyframe on such a pass,
+           everyone gets a keyframe instead: nobody is left with a record it can't take. */
+        static GameTurn last_record_turn;
+        static TbBool last_record_known = false;
+        if (last_record_known && (game.play_gameturn == last_record_turn))
+        {
+            if (numask_count(keyframe_wanted) == 0)
+                return;
+            keyframe_wanted = clients;
+        }
+        last_record_turn = game.play_gameturn;
+        last_record_known = true;
+    }
     /* the shared part of the turn: everything but the things, and the chunk pages' changes (kept per page) */
     rec_begin(0);
     KFX_C_PLOT("Stream: clients", numask_count(clients));
@@ -3933,7 +3962,8 @@ static void client_apply(const uint8_t *data, size_t len)
         {
             /* what this client reads: zstd with the dictionaries (KFX_NET_NOZSTD=1: zlib only, as older clients) */
             const uint32_t caps = ((getenv("KFX_NET_NOZSTD") != NULL) ? 0u : NS_CAP_ZSTD1) |
-                ((getenv("KFX_NET_NODUAL") != NULL) ? 0u : NS_CAP_DUAL1) | NS_CAP_ROLES1;
+                ((getenv("KFX_NET_NODUAL") != NULL) ? 0u : NS_CAP_DUAL1) | NS_CAP_ROLES1 |
+                ((getenv("KFX_NET_OLDLAYOUT") != NULL) ? 0u : NS_CAP_LAYOUT2); /* test hook: as an older client says */
             char *wp = begin_net_message(NETMSG_STATE_CAPS);
             memcpy(wp, &caps, 4);
             send_message_buffer(SERVER_ID, wp + 4);

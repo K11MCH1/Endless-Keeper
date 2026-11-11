@@ -67,6 +67,8 @@ extern struct GuiMenu creature_query_menu1;
 extern struct GuiMenu creature_query_menu2;
 extern struct GuiMenu creature_query_menu3;
 extern struct GuiMenu creature_query_menu4;
+extern struct GuiMenu creature_query_menu5;
+void gui_creature_query_background2(struct GuiMenu *gmnu);
 extern struct TiledSprite status_panel;
 extern struct Around const draw_square[];
 extern struct GuiMenu spell_menu2;

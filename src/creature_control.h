@@ -368,6 +368,7 @@ struct CreatureControl {
     unsigned char joining_age;
     unsigned char blood_type;
     char creature_name[CREATURE_NAME_MAX];
+    unsigned short misdeed_id; /* endless worlds: its Misdeeds record (world_misdeeds.c); 0: none */
     struct Coord3d flee_pos;
     int32_t flee_start_turn;
     struct MemberPos followers_pos[GROUP_MEMBERS_COUNT];

@@ -39,6 +39,8 @@
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
 #include "keeperfx.hpp"
+#include "world_progress.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -91,7 +93,7 @@ TbBool corpse_laid_to_rest(const struct Thing* thing)
 */
 TbBool corpse_ready_for_collection(const struct Thing* thing)
 {
-    if (!corpse_is_rottable(thing))
+    if (!corpse_is_rottable(thing) && !world_misdeeds_body_keep(thing))
         return false;
     if (corpse_laid_to_rest(thing))
         return false;
@@ -168,8 +170,11 @@ void remove_body_from_graveyard(struct Thing *thing)
     dungeon->lvstats.graveyard_bodys++;
     if (creature_count_below_map_limit(0))
     {
-        if (dungeon->bodies_rotten_for_vampire >= game.conf.rules[dungeon->owner].rooms.bodies_for_vampire) {
-            dungeon->bodies_rotten_for_vampire -= game.conf.rules[dungeon->owner].rooms.bodies_for_vampire;
+        /* endless: the Graveyard's level asks for a corpse or two fewer */
+        const int bodies_needed = max(1, (int)game.conf.rules[dungeon->owner].rooms.bodies_for_vampire -
+            world_room_bonus(dungeon->owner, WRB_GraveyardCorpses));
+        if (dungeon->bodies_rotten_for_vampire >= bodies_needed) {
+            dungeon->bodies_rotten_for_vampire -= bodies_needed;
             create_vampire_in_room(room);
         }
     }
@@ -262,6 +267,7 @@ TngUpdateRet update_dead_creature(struct Thing *thing)
             corpse_age = get_gameturn() - thing->creation_turn;
             #define VANISH_EFFECT_DELAY 60
             if (((corpse_age > game.conf.rules[thing->owner].creature.body_remains_for) ||(!corpse_is_rottable(thing) && (corpse_age > VANISH_EFFECT_DELAY)))
+                && !world_misdeeds_body_keep(thing) /* endless: Unfinished Business */
                 && !(user_controls_thing(ANY_USER, thing, UCT_Direct | UCT_Passenger | UCT_PossessionEntryZoom)))
             {
                 delete_corpse(thing);
@@ -507,8 +513,10 @@ struct Thing *destroy_creature_and_create_corpse(struct Thing *thing, long crpsc
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     CrtrExpLevel exp_level = cctrl->exp_level;
     remove_creature_score_from_owner(thing);
+    const uint16_t misdeed_body = world_misdeeds_corpse_begin(thing); /* endless: Unfinished Business */
     delete_thing_structure(thing, 0);
     struct Thing* deadtng = create_dead_creature(&pos, crmodel, crpscondition, owner, exp_level);
+    world_misdeeds_corpse_made(deadtng, misdeed_body);
     if (thing_is_invalid(deadtng))
     {
         ERRORLOG("Could not create dead thing while killing %s index %d owned by player %d.",creature_code_name(crmodel),(int)prev_idx,(int)owner);

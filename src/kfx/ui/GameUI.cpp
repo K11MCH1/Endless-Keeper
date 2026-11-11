@@ -21,6 +21,7 @@
 #include "local_camera.h"
 #include "observer.h"
 #include "world_daynight.h"
+#include "world_circles.h"
 #include "chat_box.h"
 
 #include "post_inc.h"
@@ -61,6 +62,7 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
     }
     
     message_draw();
+    world_circles_draw(); /* endless worlds: a breached circle's name */
     chat_box_draw_faded();
     draw_power_hand();
     gui_draw_all_boxes();

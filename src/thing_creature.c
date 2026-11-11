@@ -109,7 +109,9 @@
 #include "slab_data.h"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_daynight.h"
 #include "world_stream.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -209,6 +211,9 @@ long check_for_first_person_barrack_party(struct Thing *grthing)
     long n = 0;
     long i = room->creatures_list;
     unsigned long k = 0;
+    const struct Thing *party[GROUP_MEMBERS_COUNT + 1]; /* endless: who is in, for the Barracks' level */
+    int party_num = 0;
+    party[party_num++] = grthing;
     while (i != 0)
     {
         struct Thing* thing = thing_get(i);
@@ -221,7 +226,12 @@ long check_for_first_person_barrack_party(struct Thing *grthing)
         }
         i = cctrl->next_in_room;
         // Per creature code
-        if (thing->index != grthing->index) {
+        TbBool may_join = true;
+        for (int m = 0; m < party_num; m++)
+            may_join = may_join && world_barracks_may_group(party[m], thing);
+        if (may_join && (thing->index != grthing->index) && (party_num <= GROUP_MEMBERS_COUNT))
+            party[party_num++] = thing;
+        if (may_join && (thing->index != grthing->index)) {
             if (n == 0) {
                 add_creature_to_group_as_leader(grthing, thing);
                 n++;
@@ -997,6 +1007,17 @@ TbBool set_thing_spell_flags_f(struct Thing *thing, SpellKind spell_idx, GameTur
         }
         affected = true;
     }
+    // FRENZY.
+    if (flag_is_set(spconf->spell_flags, CSAfF_Frenzy)
+    && (!creature_is_immune_to_spell_effect(thing, CSAfF_Frenzy)))
+    {
+        if (!creature_under_spell_effect(thing, CSAfF_Frenzy))
+        {
+            set_flag(cctrl->spell_flags, CSAfF_Frenzy);
+            creature_frenzy_start_effects(thing, duration);
+        }
+        affected = true;
+    }
     // REBOUND.
     if (flag_is_set(spconf->spell_flags, CSAfF_Rebound)
     && (!creature_is_immune_to_spell_effect(thing, CSAfF_Rebound)))
@@ -1210,13 +1231,13 @@ TbBool set_thing_spell_flags_f(struct Thing *thing, SpellKind spell_idx, GameTur
         HitPoints healing_recovery;
         if (spconf->linked_power == PwrK_None)
         {
-            healing_recovery = (thing->health + spconf->healing_recovery);
+            healing_recovery = (thing->health + creature_heal_spell_adjust(thing, spconf->healing_recovery));
         }
         else
         {
             /* endless worlds: a keeper's Heal level raises the strongest cast to 1150 / 1400, the others in proportion */
-            healing_recovery = (thing->health + world_heal_amount(world_power_caster, powerst->strength[spell_level],
-                powerst->strength, POWER_MAX_LEVEL + 1)); /* a keeper casts at most power level 8 */
+            healing_recovery = (thing->health + creature_heal_spell_adjust(thing, world_heal_amount(world_power_caster,
+                powerst->strength[spell_level], powerst->strength, POWER_MAX_LEVEL + 1))); /* a keeper casts at most power level 8 */
         }
         if (healing_recovery < 0)
         {
@@ -1270,6 +1291,13 @@ TbBool clear_thing_spell_flags_f(struct Thing *thing, unsigned long spell_flags,
     {
         clear_flag(cctrl->spell_flags, CSAfF_Armour);
         delete_armour_effects_attached_to_creature(thing);
+        cleared = true;
+    }
+    // FRENZY.
+    if (flag_is_set(spell_flags, CSAfF_Frenzy)
+    && (creature_under_spell_effect(thing, CSAfF_Frenzy)))
+    {
+        clear_flag(cctrl->spell_flags, CSAfF_Frenzy);
         cleared = true;
     }
     // REBOUND.
@@ -2610,6 +2638,8 @@ TngUpdateRet process_creature_state(struct Thing *thing)
     KFX_C_ZONE_BEGIN_COLOR(ctx_combat, "CreatureAI: CombatLookup", KFX_COLOR_AI);
     KFX_C_ZONE_BEGIN_COLOR(ctx_combat_gate, "CreatureAI: CombatLookup.AvailableGate", KFX_COLOR_AI);
     TbBool combat_gate_open = creature_available_for_combat_this_turn(thing);
+    if (combat_gate_open && creature_sleeps_with_lair_animations(thing))
+        combat_gate_open = false; // comes out of its lair first: creature_sleep() watches for enemies
     KFX_C_ZONE_END(ctx_combat_gate);
     if (combat_gate_open)
     {
@@ -2626,6 +2656,8 @@ TngUpdateRet process_creature_state(struct Thing *thing)
             fighting = creature_look_for_enemy_object_combat(thing);
             KFX_C_ZONE_END(ctx_combat_obj);
         }
+        if (!fighting && flag_is_set(model_flags, CMF_Superosmia))
+            creature_smell_hunt(thing); // no enemy in sight or earshot: follow its nose
     }
     KFX_C_ZONE_END(ctx_combat);
 
@@ -3341,6 +3373,8 @@ struct Thing* cause_creature_death(struct Thing *thing, CrDeathFlags flags)
 
     creature_throw_out_gold(thing);
     if (!flag_is_set(flags, CrDed_NotReallyDying))
+        world_misdeeds_dying(thing); /* endless: Unfinished Business, Bad Blood */
+    if (!flag_is_set(flags, CrDed_NotReallyDying))
         world_progress_creature_died(thing); /* endless: a raid's book (not for a raider leaving or a freeze) */
     // Beyond this point, the creature thing is bound to be deleted
     if ((!flag_is_set(flags,CrDed_NotReallyDying)) || (flag_is_set(game.conf.rules[thing->owner].gameplay.classic_bugs_flags,ClscBug_ResurrectRemoved)))
@@ -3478,6 +3512,20 @@ struct Thing *kill_creature(struct Thing *creatng, struct Thing *killertng, Play
 {
     SYNCDBG(18, "Starting");
     TRACE_THING(creatng);
+    /* endless: a raiding party whose leader falls goes home (before the clean-up below takes it out of its group) */
+    if (!flag_is_set(flags, CrDed_NotReallyDying) && thing_exists(creatng))
+        world_raid_creature_died(creatng);
+    if (!flag_is_set(flags, CrDed_NotReallyDying) && thing_exists(creatng) && (getenv("KFX_TRAIT_LOG") != NULL))
+    { /* test switch: one line per creature death, with what killed it */
+        struct CreatureControl *dcctrl = creature_control_get_from_thing(creatng);
+        if (!thing_is_invalid(killertng) && thing_is_creature(killertng))
+            SYNCLOG("Death: %s level %d owner %d killed by %s level %d owner %d", thing_model_name(creatng),
+                (int)dcctrl->exp_level + 1, (int)creatng->owner, thing_model_name(killertng),
+                (int)creature_control_get_from_thing(killertng)->exp_level + 1, (int)killertng->owner);
+        else
+            SYNCLOG("Death: %s level %d owner %d killed by player %d", thing_model_name(creatng),
+                (int)dcctrl->exp_level + 1, (int)creatng->owner, (int)killer_plyr_idx);
+    }
     force_any_creature_dragging_thing_to_drop_it(creatng);
     cleanup_creature_state_and_interactions(creatng);
     if (!thing_is_invalid(killertng))
@@ -3529,6 +3577,7 @@ struct Thing *kill_creature(struct Thing *creatng, struct Thing *killertng, Play
         }
     }
     update_kills_counters(creatng, killertng, killer_plyr_idx, flags);
+    world_misdeeds_on_kill(creatng, killertng); /* endless: Misdeeds */
 
     // 'killertng' could be a trap, so verify if it has valid creature control before increasing the kill count and adjusting its anger.
     struct CreatureControl* cctrlgrp = creature_control_get_from_thing(killertng);
@@ -3828,6 +3877,8 @@ void thing_fire_shot(struct Thing *firing, struct Thing *target, ThingModel shot
             damage = calculate_shot_damage(firing, shot_model);
         }
     }
+    damage = creature_pack_adjust_damage(firing, damage);
+    damage = creature_frenzy_adjust_damage(firing, damage);
     if ((shotst->model_flags & ShMF_Disarming) && thing_is_deployed_trap(target))
     {
         hit_type = THit_TrapsAll;
@@ -4202,6 +4253,8 @@ TbBool creature_instance_has_reset_at(const struct Thing *thing, const struct Cr
     if ((thing->alloc_flags & TAlF_IsControlled) != 0) {
         ritime = inst_inf->fp_reset_time;
     }
+    if (flag_is_set(inst_inf->instance_property_flags, InstPF_ReadyFromStart) && (cctrl->instance_use_turn[inst_idx] == 0))
+        return true; // never used: no waiting from the start of the game (for abilities with a long reset time)
     ritime += cctrl->inst_total_turns - cctrl->inst_action_turns;
     return (GameTurnDelta)(turn - cctrl->instance_use_turn[inst_idx]) >= ritime;
 }
@@ -4255,6 +4308,11 @@ void get_creature_instance_times(const struct Thing *thing, long inst_idx, int32
     {
         aitime *= 2;
         itime *= 2;
+    }
+    if (creature_under_spell_effect(thing, CSAfF_Frenzy))
+    {
+        aitime = (aitime * 100) / (100 + FRENZY_ATTACK_SPEED_PERCENT);
+        itime = (itime * 100) / (100 + FRENZY_ATTACK_SPEED_PERCENT);
     }
     if (creature_under_spell_effect(thing, CSAfF_Speed))
     {
@@ -6194,7 +6252,7 @@ void check_for_creature_escape_from_lava(struct Thing *thing)
     if (((thing->alloc_flags & TAlF_IsControlled) == 0) && ((thing->movement_flags & TMvF_IsOnLava) != 0) && !creature_is_being_unconscious(thing))
     {
         struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-        if (crconf->hurt_by_lava > 0)
+        if ((crconf->hurt_by_lava > 0) && !world_misdeeds_lava_proof(thing))
         {
             struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
             if ((!creature_is_escaping_death(thing)) && (cctrl->lava_escape_since + 64 < get_gameturn()))
@@ -6347,7 +6405,8 @@ void process_landscape_affecting_creature(struct Thing *thing)
         if (cube_is_lava(i))
         {
             struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-            apply_damage_to_thing_and_display_health(thing, crconf->hurt_by_lava, -1);
+            if (!world_misdeeds_lava_proof(thing)) /* endless: the vice Asbestos Hide */
+                apply_damage_to_thing_and_display_health(thing, creature_fire_adjust_damage(thing, crconf->hurt_by_lava), -1);
             thing->movement_flags |= TMvF_IsOnLava;
         } else
         if (cube_is_water(i))
@@ -6358,6 +6417,7 @@ void process_landscape_affecting_creature(struct Thing *thing)
         process_creature_standing_on_corpses_at(thing, &thing->mappos);
     }
     check_for_creature_escape_from_lava(thing);
+    world_misdeeds_creature_tick(thing); /* endless: Misdeeds, sampled */
     SYNCDBG(19,"Finished");
 }
 
@@ -7552,7 +7612,8 @@ TbBool thing_is_pickable_by_digger(struct Thing *picktng, struct Thing *creatng)
     }
     else if (thing_is_dead_creature(picktng))
     {
-        return ( (get_room_of_role_slabs_count(creatng->owner, RoRoF_DeadStorage) > 0) && (corpse_ready_for_collection(picktng)) );
+        return ( (get_room_of_role_slabs_count(creatng->owner, RoRoF_DeadStorage) > 0) && (corpse_ready_for_collection(picktng))
+            && !world_misdeeds_body_not_for(picktng, creatng->owner) ); /* endless: Unfinished Business */
     }
     else if (thing_can_be_picked_to_place_in_player_room_of_role(picktng, creatng->owner, RoRoF_PowersStorage, TngFRPickF_Default))
     {
@@ -7762,6 +7823,10 @@ void query_creature(NetUserId user, ThingIndex index, TbBool reset, TbBool zoom)
             else if (menu_is_active(GMnu_CREATURE_QUERY4))
             {
                 menu = GMnu_CREATURE_QUERY4;
+            }
+            else if (menu_is_active(GMnu_CREATURE_QUERY5))
+            {
+                menu = GMnu_CREATURE_QUERY5;
             }
             else
             {

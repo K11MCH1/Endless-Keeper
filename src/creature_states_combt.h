@@ -90,6 +90,20 @@ CrAttackType check_for_possible_combat_with_enemy_creature_within_distance(struc
 CrAttackType check_for_possible_combat_with_enemy_object_within_distance(struct Thing* fightng, struct Thing** outenmtng, long maxdist);
 TbResult creature_retreat_from_combat(struct Thing *figtng, struct Thing *enmtng, CrtrStateId continue_state, long try_opposite_direction);
 TbBool creature_can_see_combat_path(const struct Thing *creatng, const struct Thing *enmtng, MapCoordDelta dist);
+
+/* Creature traits switched on by creature properties (see config_creature.h). */
+void creature_smell_hunt(struct Thing *creatng);
+HitPoints creature_fire_adjust_damage(const struct Thing *trgtng, HitPoints damage);
+HitPoints creature_pack_adjust_damage(const struct Thing *creatng, HitPoints damage);
+HitPoints creature_heal_spell_adjust(const struct Thing *creatng, HitPoints healed);
+
+/* The spell effect FRENZY (CSAfF_Frenzy). */
+#define FRENZY_DAMAGE_PERCENT        20  /* more damage dealt */
+#define FRENZY_ATTACK_SPEED_PERCENT  50  /* faster attacks: an attack takes 100/(100+this) of its time */
+#define FRENZY_SPARK_OBJECT "FRENZY_ARMOUR" /* the object that circles the creature; the Armour one if it is not defined */
+HitPoints creature_frenzy_adjust_damage(const struct Thing *creatng, HitPoints damage);
+void creature_frenzy_start_effects(struct Thing *creatng, GameTurnDelta duration);
+TbBool frenzy_spark_has_expired(const struct Thing *objtng);
 long get_combat_distance(const struct Thing *thing, const struct Thing *enemy);
 TbBool set_creature_in_combat_to_the_death(struct Thing *fighter, struct Thing *enemy, CrAttackType attack_type);
 CrAttackType find_fellow_creature_to_fight_in_room(struct Thing *fighter, struct Room *room,short crmodel[], struct Thing **enemytng);

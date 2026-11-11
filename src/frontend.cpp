@@ -211,7 +211,7 @@ struct GuiMenu *menu_list[] = {
     &frontend_select_level_menu,//40
     &frontend_select_campaign_menu,
     &frontend_error_box,
-    NULL,
+    &creature_query_menu5, // endless worlds: the Rap Sheet
     &frontend_select_mappack_menu,
     &message_box,
     &spell_menu2,
@@ -2102,6 +2102,7 @@ short is_toggleable_menu(short mnu_idx)
   case GMnu_CREATURE_QUERY2:
   case GMnu_CREATURE_QUERY3:
   case GMnu_CREATURE_QUERY4:
+  case GMnu_CREATURE_QUERY5:
   case GMnu_BATTLE:
   case GMnu_SPELL_LOST:
       return true;
@@ -2664,7 +2665,8 @@ void frontend_load_data_reset(void)
 void initialise_tab_tags(MenuID menu_id)
 {
     info_tag =  (menu_id == GMnu_QUERY) || (menu_id == GMnu_CREATURE_QUERY1) ||
-        (menu_id == GMnu_CREATURE_QUERY2) || (menu_id == GMnu_CREATURE_QUERY3) || (menu_id == GMnu_CREATURE_QUERY4);
+        (menu_id == GMnu_CREATURE_QUERY2) || (menu_id == GMnu_CREATURE_QUERY3) || (menu_id == GMnu_CREATURE_QUERY4) ||
+        (menu_id == GMnu_CREATURE_QUERY5);
     if (menu_id == GMnu_ROOM)
     {
         room_tag = 1;

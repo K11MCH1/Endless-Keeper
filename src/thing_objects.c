@@ -30,6 +30,7 @@
 #include "config_effects.h"
 #include "config_magic.h"
 #include "config_objects.h"
+#include "creature_states_combt.h"
 #include "config_spritecolors.h"
 #include "config_strings.h"
 #include "config_terrain.h"
@@ -1441,6 +1442,13 @@ static TngUpdateRet object_update_call_to_arms(struct Thing *thing)
 // Both armour sparkles and disease flies use this function.
 static TngUpdateRet object_update_armour(struct Thing *objtng)
 {
+    if (frenzy_spark_has_expired(objtng))
+    {
+        if (getenv("KFX_TRAIT_LOG") != NULL) /* test switch */
+            SYNCLOG("Frenzy: spark thing %d removed", (int)objtng->index);
+        delete_thing_structure(objtng, 0);
+        return TUFRet_Deleted;
+    }
     struct Thing* thing = thing_get(objtng->armor.belongs_to);
     if (thing_is_picked_up(thing))
     {

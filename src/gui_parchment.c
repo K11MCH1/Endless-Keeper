@@ -71,6 +71,7 @@
 #include "roomspace_input.h"
 #include "front_input.h"
 #include "creature_battle.h"
+#include "world_circles.h"
 #include "post_inc.h"
 
 /** The full-screen map's view in slabs: the map, or in paged mode (chunked endless world, no fixed map size) a
@@ -856,6 +857,57 @@ static void draw_overhead_world_map(const struct TbRect *map_area, long block_si
         }
         draw_overhead_style_row(omap_scratch + (size_t)ty * block_size * buf_w, buf_w, styles, tiles_x, block_size);
     }
+    /* Circles of Hell (2026-11-11): faint dotted lines where one circle ends and the next begins. The distance to
+       the nearest start is taken on a coarse grid (every eighth slab) and interpolated: the lines are smooth curves,
+       and the map may show a great many slabs. */
+    enum { CIRCLE_GRID = 8, CIRCLE_LABELS = 6 };
+    int label_x[CIRCLE_LABELS], label_y[CIRCLE_LABELS], label_circle[CIRCLE_LABELS], labels = 0;
+    {
+        const int gx = (int)tiles_x / CIRCLE_GRID + 2, gy = (int)tiles_y / CIRCLE_GRID + 2;
+        float *dist = (float *)KfxAlloc(sizeof(float) * (size_t)gx * (size_t)gy);
+        signed char *above = (signed char *)KfxAlloc((size_t)tiles_x);
+        if ((dist != NULL) && (above != NULL))
+        {
+            for (int j = 0; j < gy; j++)
+                for (int i = 0; i < gx; i++)
+                {
+                    int64_t wx, wy;
+                    world_slab_to_world(view_x + i * CIRCLE_GRID, view_y + j * CIRCLE_GRID, &wx, &wy);
+                    dist[j * gx + i] = (float)world_dist_to_nearest_start(wx, wy);
+                }
+            const TbPixel line_col = colours[9][3][2];
+            const MapSlabCoord mid_y = tiles_y / 2;
+            memset(above, 0, (size_t)tiles_x);
+            for (MapSlabCoord ty = 0; ty < tiles_y; ty++)
+            {
+                const int j = (int)ty / CIRCLE_GRID;
+                const float fy = (float)(ty % CIRCLE_GRID) / CIRCLE_GRID;
+                int left = 0;
+                for (MapSlabCoord tx = 0; tx < tiles_x; tx++)
+                {
+                    const int i = (int)tx / CIRCLE_GRID;
+                    const float fx = (float)(tx % CIRCLE_GRID) / CIRCLE_GRID;
+                    const float *g = &dist[j * gx + i];
+                    const float dd = (g[0] * (1 - fx) + g[1] * fx) * (1 - fy) + (g[gx] * (1 - fx) + g[gx + 1] * fx) * fy;
+                    const int circle = world_circle_of_distance(dd);
+                    const TbBool edge = ((tx > 0) && (circle != left)) || ((ty > 0) && (circle != above[tx]));
+                    if (edge && ((block_size > 1) || (((tx + ty) & 1) == 0)))
+                        omap_scratch[(size_t)ty * block_size * buf_w + (size_t)tx * block_size] = line_col;
+                    if (edge && (ty == mid_y) && (tx > 0) && (circle != left) && (labels < CIRCLE_LABELS))
+                    {
+                        /* where the line crosses the middle of the map: the outer circle's name goes there */
+                        label_x[labels] = (int)(tx * block_size - off_x);
+                        label_y[labels] = (int)(ty * block_size - off_y);
+                        label_circle[labels++] = max(circle, left);
+                    }
+                    left = circle;
+                    above[tx] = (signed char)circle;
+                }
+            }
+        }
+        KfxFree(dist);
+        KfxFree(above);
+    }
     struct RendererPresentImageDesc d = {0};
     d.format = PRESENT_FORMAT_INDEXED8;
     d.palette = PRESENT_PALETTE_GAME;
@@ -869,6 +921,22 @@ static void draw_overhead_world_map(const struct TbRect *map_area, long block_si
     KfxFree(styles);
     KfxFree(omap_scratch);
     RendererSetDrawFlags(0);
+    /* a circle's name, once this keeper has breached it (never before) */
+    if (labels > 0)
+    {
+        LbTextSetFont(winfont);
+        const int name_units_per_px = (11 * units_per_pixel) / max(1, (int)LbTextLineHeight());
+        LbTextSetWindow(map_area->left, map_area->top, map_w, map_h);
+        for (int l = 0; l < labels; l++)
+        {
+            const char *name = world_circles_map_name(label_circle[l]);
+            if ((name == NULL) || (name[0] == 0))
+                continue;
+            const int tw = LbTextStringWidth(name) * name_units_per_px / 16;
+            const int x = max(0, min(label_x[l] - tw / 2, map_w - tw));
+            LbTextDrawResized(x, max(0, label_y[l] + 4 * units_per_pixel / 16), name_units_per_px, name);
+        }
+    }
     pmap_draw_ns += get_time_tick_ns() - draw_start;
     pmap_draw_count++;
 }

@@ -20,6 +20,8 @@ struct Thing;
 /** Day number (1 = the first day) and whether it is day now; both follow from the game turn. */
 long world_day_number(void);
 TbBool world_is_day(void);
+/** A day and its night, in game turns. */
+long world_day_turns(void);
 
 /** Once per game turn in endless levels (from world_process_turn): day/night changes and the day's raids. */
 void world_daynight_turn(void);
@@ -33,6 +35,13 @@ TbBool world_raid_hero(const struct Thing *thing);
 /** A raid hero whose raid is over (after its third night) walks back to its landing and leaves; true when this one
  *  was seen to (the hero AI then leaves it alone). */
 TbBool world_raid_hero_goes_home(struct Thing *thing);
+/** The RDX1 extra of the world save: the day's owed first raid and the fleeing parties' clock. */
+void world_raids_extra_reset(void);
+size_t world_raids_extra_save_size(void);
+void world_raids_extra_save(uint8_t *buf);
+TbBool world_raids_extra_load(const uint8_t *buf, size_t len);
+/** A creature died: when it led a raiding party, the rest of the party goes home at once (2026-11-11). */
+void world_raid_creature_died(struct Thing *thing);
 /** The raids going on (saved with the world, RDS1). */
 size_t world_raids_save_size(void);
 void world_raids_save(uint8_t *buf);

@@ -74,6 +74,7 @@
 #include "world_pages.h"
 
 #include "world_colours.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -5513,6 +5514,9 @@ void draw_status_sprites(long scrpos_x, long scrpos_y, struct Thing *thing)
                     dx -= dw;
                 }
             }
+            /* endless worlds: its name above the flower while the hand is over it (Misdeeds) */
+            RendererClearDrawFlags(Lb_SPRITE_FLIP_HORIZ);
+            world_misdeeds_draw_label(thing, scrpos_x, scrpos_y - max(flower_h, h) - h_add, max(flower_h, h), is_thing_under_hand);
         }
     }
     RendererSetDrawFlags(flg_mem);

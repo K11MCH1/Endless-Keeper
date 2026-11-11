@@ -29,6 +29,7 @@
 #include "config_creature.h"
 #include "creature_instances.h"
 #include "creature_states.h"
+#include "creature_states_lair.h"
 #include "engine_lenses.h"
 #include "engine_arrays.h"
 #include "gui_draw.h"
@@ -519,7 +520,18 @@ void update_creature_graphic_anim(struct Thing *thing, const struct CreatureCont
         if (thing->active_state == CrSt_CreatureSleep)
         {
             thing->rendering_flags &= ~(TRF_Transpar_Flags);
-            update_creature_anim(thing, 128, CGI_Sleep);
+            switch (creature_lair_animation_phase(thing))
+            {
+            case LairAnim_GoingToSleep:
+                update_creature_anim(thing, LAIR_ANIM_SLEEP_SPEED, CGI_GoToSleep);
+                break;
+            case LairAnim_WakingUp:
+                update_creature_anim(thing, creature_lair_wake_is_hurried(thing) ? 2 * LAIR_ANIM_WAKE_SPEED : LAIR_ANIM_WAKE_SPEED, CGI_WakeUp);
+                break;
+            default:
+                update_creature_anim(thing, creature_sleeps_with_lair_animations(thing) ? LAIR_ANIM_BREATHE_SPEED : 128, CGI_Sleep);
+                break;
+            }
         } else
         if (cctrl->distance_to_destination == 0)
         {

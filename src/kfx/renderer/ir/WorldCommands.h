@@ -196,6 +196,10 @@ struct IRWorldLensCmd
     // the world is captured at full screen resolution, but only this
     // sub-rect is ever written to the real backbuffer.
     int viewport_x = 0, viewport_y = 0, viewport_w = 0, viewport_h = 0;
+
+    // Blur (LensConfig::blur): radius in viewport pixels, 0 = sharp. Applied by the plain-copy
+    // composite, so it shows for a lens with no other pixel effect.
+    float blur_radius = 0.0f;
 };
 
 /******************************************************************************/

@@ -58,6 +58,7 @@ enum CreatureSpellAffectedFlags {
     CSAfF_Timebomb     = 0x010000,
     CSAfF_Wind         = 0x020000,
     CSAfF_SpellBlocks  = 0x040000,
+    CSAfF_Frenzy       = 0x080000, // Berserk: more damage and faster attacks, with sparks of its own round the creature.
 };
 
 enum SpellPropertiesFlags {
@@ -130,6 +131,7 @@ enum ShotModelFlags {
     ShMF_WindImmune      = 0x80000,
     ShMF_FixedDamage     = 0x100000,
     ShMF_HiddenProjectile = 0x200000,
+    ShMF_Fire             = 0x400000, // Fire damage: creatures with the FLAMMABLE property take more of it.
 };
 
 #define PwCast_None           (0LL)

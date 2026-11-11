@@ -151,6 +151,8 @@ void world_remove_thing_quietly(struct Thing *thing);
 TbBool world_chunk_made(int32_t cx, int32_t cy);
 /** Slabs from a world slab to the nearest player start. */
 double world_dist_to_nearest_start(int64_t x, int64_t y);
+/** The keeper whose start is nearest a world slab (PLAYER_NONE: none); circles (world_circles.c) go by it. */
+PlayerNumber world_nearest_start_player(int64_t wx, int64_t wy);
 /** The world's generator (NULL outside a world). */
 struct WgWorld *world_generator(void);
 /** The other human seats' copies of the start: how many, and does one lie in this box of world slabs? */

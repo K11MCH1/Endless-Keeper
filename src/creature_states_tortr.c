@@ -41,6 +41,7 @@
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
 #include "world_pages.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -613,6 +614,7 @@ CrCheckRet process_torture_function(struct Thing *creatng)
     update_torture_points(creatng, room);
     // Torture must take some time before it has any affect.
     long convert_time = compute_torture_convert_time(creatng);
+    convert_time = convert_time * (100 + world_room_bonus(room->owner, WRB_TortureConvert)) / 100; /* endless: its level */
     if ((convert_time < crconf->torture_break_time) || (cctrl->tortured.assigned_torturer == 0))
     {
         return CrCkRet_Available;

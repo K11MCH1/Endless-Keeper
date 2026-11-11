@@ -494,7 +494,7 @@ private:
     GLint  m_lens_overlay_loc_src_x = -1, m_lens_overlay_loc_view_size = -1, m_lens_overlay_loc_alpha = -1;
 
     GpuResourceHandle m_lens_shader_copy_handle = kInvalidGpuResource;
-    GLint  m_lens_copy_loc_src_x = -1, m_lens_copy_loc_view_size = -1;
+    GLint  m_lens_copy_loc_src_x = -1, m_lens_copy_loc_view_size = -1, m_lens_copy_loc_blur = -1;
 
     // Uploaded-texture caches, so upload_lens_textures_if_dirty() can skip
     // a re-upload when *_version hasn't changed since last frame.

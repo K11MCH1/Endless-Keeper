@@ -41,6 +41,14 @@
 #include "player_data.h"
 #include "dungeon_data.h"
 #include "thing_data.h"
+#include "thing_list.h"
+#include "thing_shots.h"
+#include "player_instances.h"
+#include "thing_creature.h"
+#include "thing_effects.h"
+#include "creature_control.h"
+#include "config_creature.h"
+#include "config.h"
 #include "post_inc.h"
 
 static unsigned long highmem_reserved_kb = 0;
@@ -282,8 +290,118 @@ static void test_cast_check(void)
     }
 }
 
+/** Test hook KFX_TEST_WIND="turn[,crowd]": at that turn the push-by-weight rule goes on (WeightCalculatePush 200, the
+ *  only rule under which a wind shot keeps its list of creatures) and a crowd of `crowd` creatures (30) is made round
+ *  player 0's heart; then every 25 turns, 12 times, six of them fire a wind shot each at their neighbour. Every 5 turns
+ *  a fingerprint of every creature (place, health, state, spell flags) and of the wind shots' lists goes to the log:
+ *  two builds that treat wind alike log the same lines. */
+#ifdef WIND_NODES_COUNT
+#define TEST_WIND_COUNT(t) ((int)(t)->shot.wind_count)
+#else
+#define TEST_WIND_COUNT(t) ((int)(t)->shot.num_wind_affected)
+#endif
+static void test_wind_hook(void)
+{
+    static long base = -2;
+    static int crowd = 30;
+    if (base == -2)
+    {
+        const char *v = getenv("KFX_TEST_WIND");
+        base = (v != NULL) ? atol(v) : -1;
+        if ((v != NULL) && (strchr(v, ',') != NULL))
+            crowd = atoi(strchr(v, ',') + 1);
+    }
+    static long last_turn = -1; /* once a turn (the hooks also run while the turn waits) */
+    if ((base < 0) || ((long)game.play_gameturn < base) || ((long)game.play_gameturn == last_turn))
+        return;
+    last_turn = (long)game.play_gameturn;
+    const long t = (long)game.play_gameturn - base;
+    if (t == 0)
+    {
+        for (int p = 0; p < PLAYERS_COUNT; p++)
+            game.conf.rules[p].magic.weight_calculate_push = 200;
+        const struct Thing *heart = find_players_dungeon_heart(PLAYER0);
+        if (!thing_exists(heart))
+        {
+            JUSTMSG("Test wind: no heart of player 0");
+            base = -1;
+            return;
+        }
+        static const char *models[] = {"DRAGON", "FLY", "BILE_DEMON", "TROLL", "DEMONSPAWN", "SORCEROR", "SPIDER", "BUG", "HELL_HOUND", "ORC"};
+        int made = 0;
+        for (int i = 0; i < crowd; i++)
+        {
+            struct Coord3d pos;
+            pos.x.val = heart->mappos.x.val + ((i % 6) - 3) * 200 + 100;
+            pos.y.val = heart->mappos.y.val + ((i / 6) % 6 - 3) * 200 + 100;
+            pos.z.val = 0;
+            pos.z.val = get_floor_height_at(&pos);
+            const long model = get_id(creature_desc, models[i % 10]);
+            if (model <= 0)
+                continue;
+            if (thing_exists(create_creature(&pos, (ThingModel)model, PLAYER0)))
+                made++;
+        }
+        JUSTMSG("Test wind: rule on, %d creatures made at turn %lu, sizeof(struct Thing) %u", made,
+            (unsigned long)game.play_gameturn, (unsigned)sizeof(struct Thing));
+    }
+    if ((t >= 20) && (t < 20 + 25 * 12) && (((t - 20) % 25) == 0))
+    {
+        /* six of player 0's creatures (the lowest indices that aren't imps) fire at the next creature in index order */
+        ThingIndex found[7];
+        int n = 0;
+        for (ThingIndex i = 1; (i < THINGS_COUNT) && (n < 7); i++)
+        {
+            const struct Thing *c = &game.things_data[i];
+            if (thing_exists(c) && (c->class_id == TCls_Creature) && (c->owner == PLAYER0) &&
+                (c->model != get_id(creature_desc, "IMP")) && !thing_is_picked_up(c))
+                found[n++] = i;
+        }
+        for (int k = 0; k + 1 < n; k++)
+            thing_fire_shot(&game.things_data[found[k]], &game.things_data[found[k + 1]], ShM_Wind, 5, THit_CrtrsOnly);
+    }
+    if ((t % 5) == 0)
+    {
+        uint64_t h = 1469598103934665603ULL;
+        int creatures = 0, shots = 0, listed = 0, most = 0;
+        for (ThingIndex i = 1; i < THINGS_COUNT; i++)
+        {
+            const struct Thing *c = &game.things_data[i];
+            if (!thing_exists(c))
+                continue;
+            uint32_t w[8] = {0};
+            if (c->class_id == TCls_Creature)
+            {
+                const struct CreatureControl *cctrl = creature_control_get_from_thing(c);
+                w[0] = (uint32_t)i; w[1] = (uint32_t)c->mappos.x.val; w[2] = (uint32_t)c->mappos.y.val;
+                w[3] = (uint32_t)c->mappos.z.val; w[4] = (uint32_t)c->health; w[5] = c->active_state;
+                w[6] = cctrl->spell_flags; w[7] = c->model;
+                creatures++;
+            } else if ((c->class_id == TCls_Shot) && (c->model == ShM_Wind))
+            {
+                w[0] = (uint32_t)i; w[1] = (uint32_t)c->mappos.x.val; w[2] = (uint32_t)c->mappos.y.val;
+                w[3] = (uint32_t)TEST_WIND_COUNT(c); w[4] = (uint32_t)c->health;
+                shots++;
+                listed += TEST_WIND_COUNT(c);
+                if (TEST_WIND_COUNT(c) > most)
+                    most = TEST_WIND_COUNT(c);
+            } else
+                continue;
+            for (int k = 0; k < 8; k++)
+            {
+                h ^= w[k];
+                h *= 1099511628211ULL;
+            }
+        }
+        JUSTMSG("Test wind: turn %lu: %d creatures, %d wind shots holding %d creatures (most %d), state %016llx, seeds %08lx",
+            (unsigned long)game.play_gameturn, creatures, shots, listed, most, (unsigned long long)h,
+            (unsigned long)game.action_random_seed);
+    }
+}
+
 void test_hooks_turn(void)
 {
+    test_wind_hook();
 #ifdef _WIN32
     static int sampling = -1;
     if (sampling < 0)

@@ -165,6 +165,7 @@ SAVE_STRUCT(CreatureControl, struct CreatureControl,
     SAVE_FIELD(struct CreatureControl, joining_age, SV_U8),
     SAVE_FIELD(struct CreatureControl, blood_type, SV_U8),
     SAVE_STRING(struct CreatureControl, creature_name),  /* plain-char */
+    SAVE_FIELD(struct CreatureControl, misdeed_id, SV_U16),
     SAVE_SUB(struct CreatureControl, flee_pos, Coord3d),
     SAVE_FIELD(struct CreatureControl, flee_start_turn, SV_I32),
     SAVE_SUB_ARRAY(struct CreatureControl, followers_pos, MemberPos),
@@ -302,8 +303,11 @@ SAVE_STRUCT(Thing_shot, struct Thing,
     SAVE_FIELD(struct Thing, shot.target_idx, SV_I16),
     SAVE_FIELD(struct Thing, shot.shot_level, SV_U8),
     SAVE_SUB(struct Thing, shot.originpos, Coord3d),
-    SAVE_FIELD(struct Thing, shot.num_wind_affected, SV_I32),
-    SAVE_ARRAY(struct Thing, shot.wind_affected_creature, SV_U16),
+    /* the list of wind affected creatures was here (shot.num_wind_affected, shot.wind_affected_creature[1024]) up to
+       format minor 16: such a save's lists are dropped (new names: they load as empty), the shots push those creatures
+       again */
+    SAVE_FIELD(struct Thing, shot.wind_list, SV_U16),
+    SAVE_FIELD(struct Thing, shot.wind_count, SV_U16),
 );
 
 SAVE_STRUCT(Thing_shot_effect, struct Thing,

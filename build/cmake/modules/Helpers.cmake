@@ -56,7 +56,16 @@ function(apply_keeperfx_link_flags TARGET)
         if(CMAKE_SIZEOF_VOID_P EQUAL 4)
             target_link_options(${TARGET} PRIVATE -Wl,--large-address-aware)
         endif()
-        target_link_libraries(${TARGET} PUBLIC -static stdc++ winpthread -dynamic)
+        # "-dynamic" is no linker toggle to the gcc driver: it reads it as -d with the letters "ynamic", and the "a"
+        # among them is -da, "dump every RTL pass". A plain link compiles nothing, so nothing came of it. A link-time
+        # optimised link compiles the whole program, and wrote every pass of every unit to disk: over 100 GB a link
+        # (2026-11-11: C: filled up and WSL would not start). Left out for those builds; the others keep the line as it
+        # was (it mirrors the Makefile).
+        if(KFX_LTO)
+            target_link_libraries(${TARGET} PUBLIC -static stdc++ winpthread)
+        else()
+            target_link_libraries(${TARGET} PUBLIC -static stdc++ winpthread -dynamic)
+        endif()
     else()
         target_link_options(${TARGET} PRIVATE -g -rdynamic)
     endif()

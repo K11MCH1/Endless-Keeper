@@ -217,6 +217,12 @@ static void APIENTRY GLDebugCallback(GLenum source, GLenum type, GLuint id, GLen
     // same ids develop's own callback filters.
     if (id == 131169 || id == 131185 || id == 131218 || id == 131204)
         return;
+    // A driver's hints and notes are no faults: Intel's says "Redundant state change in glBindFramebuffer" for
+    // every bind of a framebuffer that is bound already, several times a frame, which filled the log and the
+    // screen. Only what a driver calls medium or high is logged.
+    if (severity != GL_DEBUG_SEVERITY_HIGH && severity != GL_DEBUG_SEVERITY_MEDIUM
+        && (type == GL_DEBUG_TYPE_PERFORMANCE || type == GL_DEBUG_TYPE_OTHER || type == GL_DEBUG_TYPE_MARKER))
+        return;
 
     const char* src = source == GL_DEBUG_SOURCE_API             ? "API"
                      : source == GL_DEBUG_SOURCE_WINDOW_SYSTEM   ? "WindowSys"

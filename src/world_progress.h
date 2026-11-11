@@ -71,24 +71,53 @@ void world_progress_book_shelved(struct Thing *thing, struct Room *room);
  *  there (up to WORLD_BOX_MAX_UPGRADES upgrades, then a second box starts). */
 #define WORLD_BOX_MAX_UPGRADES 10
 
-/** Room levels (2026-11-09): a book that would give a Lair, Hatchery, Library or Training Room the keeper already has
- *  raises the level that room may reach (up to 3); the Library then researches it again, next in line, at twice and
- *  three times the room's research. Level 2 / 3: Lair heals 10% / 20% faster; Hatchery: hunger comes 10% / 20% later
- *  and food heals 5% / 10% more; Training Room +5% / +10% experience; Library researches 5% / 10% faster. */
+/** Room levels: a book that would give a room the keeper already has goes towards that room's next level; the
+ *  Library then researches the level, next in line. What a level gives is one of these. */
 enum WorldRoomBonus {
     WRB_LairHeal = 0,
     WRB_HatcheryHunger,
     WRB_HatcheryHeal,
     WRB_TrainingXp,
     WRB_LibraryResearch,
+    /* Amenity Mastery (2026-11-11) */
+    WRB_TreasuryPay,       /* percent less pay */
+    WRB_WorkshopSpeed,     /* percent more manufacture */
+    WRB_PrisonSkeleton,    /* percent sooner a prisoner starves */
+    WRB_TortureConvert,    /* percent sooner a tortured creature converts */
+    WRB_GraveyardCorpses,  /* corpses fewer for a vampire */
+    WRB_BarracksMixed,     /* 1: creatures that dislike each other group; 2: the Horned Reaper groups with anyone */
+    WRB_COUNT
 };
+/** Amenity Mastery: a keeper's level of a trap (1 for a trap without levels), and what the level gives. */
+enum WorldTrapBonus {
+    WTB_DamagePercent = 0,
+    WTB_Shots,
+    WTB_AreaPercent,
+    WTB_Special,           /* the trap's own extra */
+};
+int world_trap_level(PlayerNumber plyr_idx, int trap_kind);
+int world_trap_bonus(PlayerNumber plyr_idx, int trap_kind, enum WorldTrapBonus what);
+/** The Barracks' level. In endless worlds a Barracks party (made when its leader is possessed) does not mix lair
+ *  enemies, and the Horned Reaper only joins his own kind, until the room's level allows it. */
+TbBool world_barracks_may_group(const struct Thing *a, const struct Thing *b);
+/** A gas cloud hurt a creature: a Poison Gas Trap of a high enough level leaves a lasting poison. */
+void world_trap_gas_hit(const struct Thing *efftng, struct Thing *creatng, HitPoints damage);
+/** The Lightning Trap's bolt struck `first`: the extra bolts its level gives. */
+void world_trap_lightning_extras(struct Thing *shotng, struct Thing *first, HitPoints damage, long range, long spacing, long effect_id);
+/** The Workshop's work goes into a trap's next level (true while it does). */
+TbBool world_trap_level_manufacture(PlayerNumber plyr_idx);
+/** A room's (class 0), spell's (1) or trap's (2) mastery bar for the panel: false when it has none to show. */
+TbBool world_amenity_bar(PlayerNumber plyr_idx, int kind_class, int kind, int *xp, int *need);
+/** A book came out of a frozen chunk: it is stamped with the circle it lies in, if it has none. */
+void world_progress_book_thawed(struct Thing *thing);
+/** The mastery bars, kept in the world save's extras (AMX1). */
+void world_amenity_reset(void);
+size_t world_amenity_save_size(void);
+void world_amenity_save(uint8_t *buf);
+TbBool world_amenity_load(const uint8_t *buf, size_t len);
 /** The percent a keeper's room level adds (0 outside endless worlds). */
 int world_room_bonus(PlayerNumber plyr_idx, enum WorldRoomBonus what);
-/** Spell levels (2026-11-09), from duplicate books like the rooms', researched at twice and four times the spell's
- *  research. Level 2 / 3: Create Imp makes level 2 / 3 imps; Sight of Evil reaches 3% / 6% wider; Speed Monster 3% /
- *  6% faster; Conceal Monster lasts 10 / 20 seconds longer; Heal's strongest cast heals 1150 / 1400 (830 at level
- *  1, the others in proportion); Lightning Strike 2% / 5% more damage; Protect Monster 3% more armour, and at level
- *  3 20 seconds longer too. Disease is off in endless worlds. */
+/** Spell levels, from duplicate books like the rooms'. Disease is off in endless worlds. */
 enum WorldPowerBonus {
     WPB_ImpLevels = 0,  /* levels the new imp gets on top */
     WPB_SightRadius,    /* percent */
@@ -123,8 +152,10 @@ TbBool world_room_level_research_bar(PlayerNumber plyr_idx, int *required, int *
 void world_progress_box_shelved(struct Thing *thing, struct Room *room);
 /** How many times a box works: 1 + its upgrades (endless worlds' Increase Level and Steal Hero boxes), else 1. */
 int world_progress_box_power(const struct Thing *thing);
-/** A day raid came for a player: the first raid of a day from day 2 carries a book one time in two. */
+/** A day raid came for a player: the first raid of every day carries a book (2026-11-11). */
 void world_progress_raid(PlayerNumber plyr_idx, long day, int raid_idx, uint64_t world_seed);
+/** A raid on a player is over (its heroes dead or gone): a book it still carried is gone with it. */
+void world_progress_raid_over(PlayerNumber plyr_idx);
 /** A creature died: a raid hero drops its party's book. */
 void world_progress_creature_died(struct Thing *creatng);
 

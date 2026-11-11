@@ -125,6 +125,7 @@ const struct NamedCommand creaturetype_instance_properties[] = {
   {"DISPLAY_SWIPE",        InstPF_UsesSwipe},
   {"RANGED_BUFF",          InstPF_RangedBuff},
   {"NEEDS_TARGET",         InstPF_NeedsTarget},
+  {"READY_FROM_START",     InstPF_ReadyFromStart},
   {NULL,                     0},
   };
 
@@ -206,6 +207,8 @@ const struct NamedCommand creature_graphics_desc[] = {
   {"CASTSPELL",         1+CGI_CastSpell   },
   {"RANGEDATTACK",      1+CGI_RangedAttack},
   {"CUSTOM",            1+CGI_Custom      },
+  {"GOTOSLEEP",         1+CGI_GoToSleep   }, // lair animations: same entry as CUSTOM
+  {"WAKEUP",            1+CGI_WakeUp      }, // lair animations: same entry as SMOKE
   {NULL,                                 0},
   };
 

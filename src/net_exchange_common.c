@@ -40,6 +40,7 @@
 #include "net_state.h"
 #include "net_secure.h"
 #include "world_stream.h"
+#include "world_circles.h"
 #include "server_admin.h"
 #include "gui_msgs.h"
 #include "server_roles.h"
@@ -193,6 +194,8 @@ static TbError handle_chat_message(NetUserId source, char *read_pos, size_t mess
            drops this player (kicked, banned), which the menu shows */
         if (sender_byte == SERVER_FAREWELL_SENDER) {
             server_farewell_set(message);
+        } else if (world_circles_net_notice(message)) {
+            /* endless worlds: this player breached a circle (world_circles.c); not chat */
         } else if (chat_box_active()) {
             chat_box_add(-1, message); /* the chat box (chat_box.c) */
         } else {

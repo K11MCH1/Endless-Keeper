@@ -31,6 +31,7 @@
 #include "config_effects.h"
 #include "thing_stats.h"
 #include "thing_effects.h"
+#include "thing_shots.h"
 #include "creature_graphics.h"
 #include "game_legacy.h"
 #include "engine_arrays.h"
@@ -168,9 +169,59 @@ TbBool i_can_allocate_free_thing_structure(unsigned char class_id)
     return false;
 }
 
+TbBool wind_list_has(const struct Thing *shotng, CctrlIndex creature)
+{
+    /* the count bounds the walk (a chain can't be longer), so a bad link can't loop */
+    uint16_t n = shotng->shot.wind_list;
+    for (int i = 0; (i < shotng->shot.wind_count) && (n != 0) && (n < WIND_NODES_COUNT); i++)
+    {
+        if (game.wind_nodes[n].creature == creature)
+            return true;
+        n = game.wind_nodes[n].next;
+    }
+    return false;
+}
+
+TbBool wind_list_add(struct Thing *shotng, CctrlIndex creature)
+{
+    if (shotng->shot.wind_count >= WIND_AFFECTED_MAX)
+        return false;
+    uint16_t n = game.wind_free_head;
+    if ((n != 0) && (n < WIND_NODES_COUNT))
+        game.wind_free_head = game.wind_nodes[n].next;
+    else if (game.wind_nodes_used < WIND_NODES_COUNT - 1)
+        n = ++game.wind_nodes_used;
+    else
+        return false; /* every node is in a list: this shot remembers no more */
+    game.wind_nodes[n].creature = creature;
+    game.wind_nodes[n].next = shotng->shot.wind_list;
+    shotng->shot.wind_list = n;
+    shotng->shot.wind_count++;
+    return true;
+}
+
+void wind_list_free(struct Thing *shotng)
+{
+    uint16_t n = shotng->shot.wind_list;
+    for (int i = 0; (i < shotng->shot.wind_count) && (n != 0) && (n < WIND_NODES_COUNT); i++)
+    {
+        const uint16_t next = game.wind_nodes[n].next;
+        game.wind_nodes[n].creature = 0;
+        game.wind_nodes[n].next = game.wind_free_head;
+        game.wind_free_head = n;
+        n = next;
+    }
+    shotng->shot.wind_list = 0;
+    shotng->shot.wind_count = 0;
+}
+
 void delete_thing_structure_f(struct Thing *thing, TbBool deleting_everything, const char *func_name)
 {
     TRACE_THING(thing);
+    /* a wind shot's list goes back to the game's nodes (any shot model can have the wind logic; a shot without it
+       keeps these bytes of the union zero: the other arm shots use, shot_lizard, ends before them) */
+    if ((thing->class_id == TCls_Shot) && (thing->shot.wind_list != 0))
+        wind_list_free(thing);
     if ((thing->alloc_flags & TAlF_InDungeonList) != 0) {
         remove_first_creature(thing);
     }

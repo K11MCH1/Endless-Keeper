@@ -1057,6 +1057,10 @@ void switch_to_next_video_mode_wrapper(void)
   {
     vid_change_query_menu = GMnu_CREATURE_QUERY4;
   }
+  else if (menu_is_active(GMnu_CREATURE_QUERY5))
+  {
+    vid_change_query_menu = GMnu_CREATURE_QUERY5;
+  }
   reinit_all_menus();
   if (reload_video)
   {

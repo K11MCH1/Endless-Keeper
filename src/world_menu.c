@@ -452,6 +452,15 @@ static void wm_load_game_maintain(struct GuiButton *gbtn)
 /** A seed nobody has played: wall clock and timer mixed, 1..99999999 (so it fits the autosave name). */
 static void wm_fresh_seed(char *seed, size_t len)
 {
+    {
+        /* test switch KFX_WORLD_SEED=<n>: a new run's world has that seed (to compare two runs or two builds) */
+        const char *test_seed = getenv("KFX_WORLD_SEED");
+        if ((test_seed != NULL) && (atol(test_seed) > 0))
+        {
+            snprintf(seed, len, "%lu", (unsigned long)atol(test_seed) % 99999999UL);
+            return;
+        }
+    }
     uint64_t x = ((uint64_t)time(NULL) << 20) ^ (uint64_t)LbTimerClock() ^ ((uint64_t)rand() << 40);
     x ^= x >> 33;
     x *= 0xff51afd7ed558ccdULL;

@@ -70,6 +70,7 @@ enum GUI_Menus {
   GMnu_FELEVEL_SELECT     = 40,
   GMnu_FECAMPAIGN_SELECT  = 41,
   GMnu_FEERROR_BOX        = 42,
+  GMnu_CREATURE_QUERY5    = 43, /* endless worlds: the Rap Sheet (world_misdeeds.c) */
   GMnu_MAPPACK_SELECT     = 44,
   GMnu_MSG_BOX            = 45,
   GMnu_SPELL2             = 46,

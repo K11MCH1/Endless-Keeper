@@ -44,6 +44,7 @@
 #include "lua_triggers.h"
 
 #include "world_progress.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -824,7 +825,7 @@ long calculate_correct_creature_maxspeed(const struct Thing *thing)
         if (player_uses_power_obey(thing->owner))
             speed = 5 * speed / 4;
     }
-    return speed;
+    return world_misdeeds_speed(thing, speed); /* endless: the vices */
 }
 
 long calculate_correct_creature_loyalty(const struct Thing *thing)
@@ -858,6 +859,7 @@ GoldAmount calculate_correct_creature_pay(const struct Thing *thing)
         // If torturing creature of that model, change the salary with a percentage set in rules.cfg.
         if (dungeon->tortured_creatures[thing->model] > 0)
             pay = (pay * game.conf.rules[dungeon->owner].gameplay.torture_payday) / 100;
+        pay = pay * (100 - world_room_bonus(thing->owner, WRB_TreasuryPay)) / 100; /* endless: the Treasury's level */
     }
     return pay;
 }
@@ -1199,6 +1201,7 @@ HitPoints apply_damage_to_thing(struct Thing *thing, HitPoints dmg, PlayerNumber
     {
     case TCls_Creature:
         cdamage = apply_damage_to_creature(thing, dmg);
+        world_misdeeds_on_damage(thing, cdamage); /* endless: Misdeeds */
         if (thing->health < 0)
         {
             struct CreatureControl* cctrl = creature_control_get_from_thing(thing);

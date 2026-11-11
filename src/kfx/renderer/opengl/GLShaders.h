@@ -993,9 +993,28 @@ void main()
 // pixel effect (palette-only or custom lens) -- the software fallback's
 // CopyBuffer(). Unit 0 = captured scene.
 constexpr const char* LENS_COPY_FRAGMENT_SHADER = LENS_FRAGMENT_COMMON R"glsl(
+uniform float u_blur;        // blur radius in pixels, 0 = plain copy
 void main()
 {
-    fragColor = vec4(lens_scene(lens_dest_pixel()), 1.0);
+    ivec2 d = lens_dest_pixel();
+    if (u_blur <= 0.0)
+    {
+        fragColor = vec4(lens_scene(d), 1.0);
+        return;
+    }
+    // 5x5 Gaussian over the captured scene, taps spread across the radius
+    const float w[3] = float[3](0.375, 0.25, 0.0625);
+    ivec2 size = ivec2(u_view_size);
+    vec3 sum = vec3(0.0);
+    for (int j = -2; j <= 2; j++)
+    {
+        for (int i = -2; i <= 2; i++)
+        {
+            ivec2 o = ivec2(round(vec2(float(i), float(j)) * u_blur * 0.5));
+            sum += lens_scene(clamp(d + o, ivec2(0), size - 1)) * (w[abs(i)] * w[abs(j)]);
+        }
+    }
+    fragColor = vec4(sum, 1.0);
 }
 )glsl";
 

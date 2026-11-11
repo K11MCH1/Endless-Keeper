@@ -18,6 +18,8 @@
 /******************************************************************************/
 #include "pre_inc.h"
 #include "creature_states_combt.h"
+#include "config_objects.h"
+#include "thing_objects.h"
 #include "globals.h"
 
 #include "bflib_math.h"
@@ -3543,3 +3545,174 @@ TbBool creature_requires_cleansing(const struct Thing* thing, SpellKind spell_id
 }
 
 /******************************************************************************/
+
+/******************************************************************************/
+/* Creature traits switched on by creature properties. The numbers are fixed here. */
+#define SUPEROSMIA_RANGE_STL   30  /* SUPEROSMIA: a square reaching 10 slabs each way */
+#define SUPEROSMIA_TURNS_MASK  31  /* ...sniffed once every 32 turns */
+#define FLAMMABLE_PERCENT      15  /* FLAMMABLE: extra damage from fire */
+#define PACK_PERCENT_EACH       2  /* PACK_FIGHTER: extra damage per packmate... */
+#define PACK_RANGE_STL          3  /* ...within one slab... */
+#define PACK_MATES_MAX         20  /* ...up to this many */
+#define WEAK_HEALING_PERCENT   50  /* WEAK_HEALING: share of a healing spell that works */
+
+/** SUPEROSMIA: the creature smells the nearest enemy creature within a 10 slab square, walls or not,
+ *  and walks there. Once the enemy is within its normal senses the usual combat takes over.
+ *  Called for creatures that are free to fight and found no fight this turn. */
+void creature_smell_hunt(struct Thing *creatng)
+{
+    if (((get_gameturn() + creatng->index) & SUPEROSMIA_TURNS_MASK) != 0)
+        return;
+    struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
+    if (cctrl->combat_flags != 0)
+        return;
+    if (!can_change_from_state_to(creatng, creatng->active_state, CrSt_SeekTheEnemy))
+        return;
+    struct Thing *enmtng = get_nearest_enemy_creature_possible_to_attack_by(creatng);
+    if (thing_is_invalid(enmtng))
+        return;
+    MapSubtlDelta dx = abs((MapSubtlDelta)enmtng->mappos.x.stl.num - (MapSubtlDelta)creatng->mappos.x.stl.num);
+    MapSubtlDelta dy = abs((MapSubtlDelta)enmtng->mappos.y.stl.num - (MapSubtlDelta)creatng->mappos.y.stl.num);
+    if ((dx > SUPEROSMIA_RANGE_STL) || (dy > SUPEROSMIA_RANGE_STL))
+        return;
+    if (setup_person_move_close_to_position(creatng, enmtng->mappos.x.stl.num, enmtng->mappos.y.stl.num, NavRtF_Default))
+    {
+        if (getenv("KFX_TRAIT_LOG") != NULL) /* test switch: one line per scent picked up */
+            SYNCLOG("Superosmia: %s index %d owner %d smells %s index %d owner %d, %d by %d subtiles away",
+                thing_model_name(creatng), (int)creatng->index, (int)creatng->owner, thing_model_name(enmtng),
+                (int)enmtng->index, (int)enmtng->owner, (int)dx, (int)dy);
+        creatng->continue_state = CrSt_SeekTheEnemy;
+        cctrl->seek_enemy.enemy_idx = enmtng->index;
+        cctrl->seek_enemy.enemy_creation_turn = enmtng->creation_turn;
+    }
+}
+
+/** FLAMMABLE: damage from a fire source, raised for a creature with the property. */
+HitPoints creature_fire_adjust_damage(const struct Thing *trgtng, HitPoints damage)
+{
+    if ((damage <= 0) || !thing_is_creature(trgtng))
+        return damage;
+    if (!flag_is_set(get_creature_model_flags(trgtng), CMF_Flammable))
+        return damage;
+    return damage + (damage * FLAMMABLE_PERCENT) / 100;
+}
+
+/** PACK_FIGHTER: damage dealt by the creature, raised for each other creature of its kind and owner
+ *  standing within one slab. */
+HitPoints creature_pack_adjust_damage(const struct Thing *creatng, HitPoints damage)
+{
+    if ((damage <= 0) || !thing_is_creature(creatng))
+        return damage;
+    if (!flag_is_set(get_creature_model_flags(creatng), CMF_PackFighter))
+        return damage;
+    long mates = 0;
+    MapSubtlCoord cx = creatng->mappos.x.stl.num;
+    MapSubtlCoord cy = creatng->mappos.y.stl.num;
+    for (MapSubtlCoord sy = cy - PACK_RANGE_STL; sy <= cy + PACK_RANGE_STL; sy++)
+    {
+        for (MapSubtlCoord sx = cx - PACK_RANGE_STL; sx <= cx + PACK_RANGE_STL; sx++)
+        {
+            struct Map *mapblk = get_map_block_at(sx, sy);
+            if (map_block_invalid(mapblk))
+                continue;
+            long i = get_mapwho_thing_index(mapblk);
+            unsigned long k = 0;
+            while (i != 0)
+            {
+                struct Thing *thing = thing_get(i);
+                if (thing_is_invalid(thing))
+                    break;
+                i = thing->next_on_mapblk;
+                if ((thing->index != creatng->index) && thing_is_creature(thing) && (thing->model == creatng->model)
+                    && (thing->owner == creatng->owner) && !creature_is_dying(thing) && !creature_is_being_unconscious(thing))
+                    mates++;
+                k++;
+                if (k > THINGS_COUNT)
+                    break;
+            }
+        }
+    }
+    if (mates > PACK_MATES_MAX)
+        mates = PACK_MATES_MAX;
+    return damage + (damage * PACK_PERCENT_EACH * mates) / 100;
+}
+
+/** WEAK_HEALING: health given by a healing spell, cut for a creature with the property. */
+HitPoints creature_heal_spell_adjust(const struct Thing *creatng, HitPoints healed)
+{
+    if ((healed <= 0) || !thing_is_creature(creatng))
+        return healed;
+    if (!flag_is_set(get_creature_model_flags(creatng), CMF_WeakHealing))
+        return healed;
+    return (healed * WEAK_HEALING_PERCENT) / 100;
+}
+
+/******************************************************************************/
+/* The spell effect FRENZY: while it lasts the creature deals more damage and attacks faster, and two
+ * sparks circle it the way the Armour sparks do. The sparks are the object FRENZY_SPARK_OBJECT (a mod
+ * can make it a red copy of the Armour object); they need no bookkeeping in the creature: each one
+ * removes itself when its creature is gone or no longer in a frenzy (frenzy_spark_has_expired). */
+HitPoints creature_frenzy_adjust_damage(const struct Thing *creatng, HitPoints damage)
+{
+    if ((damage <= 0) || !thing_is_creature(creatng) || !creature_under_spell_effect(creatng, CSAfF_Frenzy))
+        return damage;
+    return damage + (damage * FRENZY_DAMAGE_PERCENT) / 100;
+}
+
+static ThingModel frenzy_spark_model(void)
+{
+    ThingModel model = object_model_id(FRENZY_SPARK_OBJECT);
+    return (model > 0) ? model : ObjMdl_LightBall;
+}
+
+void creature_frenzy_start_effects(struct Thing *creatng, GameTurnDelta duration)
+{
+    if (getenv("KFX_TRAIT_LOG") != NULL) /* test switch */
+        SYNCLOG("Frenzy: %s index %d owner %d goes into a frenzy for %d turns (spark object %d)", thing_model_name(creatng),
+            (int)creatng->index, (int)creatng->owner, (int)duration, (int)frenzy_spark_model());
+    struct Coord3d pos;
+    struct ComponentVector cvect;
+    long angle = 0;
+    for (int k = 0; k < 2; k++)
+    {
+        set_coords_to_cylindric_shift(&pos, &creatng->mappos, 32, angle, k * (creatng->clipbox_size_z >> 1));
+        struct Thing *ntng = create_object(&pos, frenzy_spark_model(), creatng->owner, -1);
+        if (!thing_is_invalid(ntng))
+        {
+            ntng->health = duration + 1;
+            ntng->armor.belongs_to = creatng->index;
+            ntng->armor.shspeed = k;
+            ntng->move_angle_xy = creatng->move_angle_xy;
+            ntng->move_angle_z = creatng->move_angle_z;
+            angles_to_vector(ntng->move_angle_xy, ntng->move_angle_z, 32, &cvect);
+            ntng->veloc_push_add.x.val += cvect.x;
+            ntng->veloc_push_add.y.val += cvect.y;
+            ntng->veloc_push_add.z.val += cvect.z;
+            ntng->state_flags |= TF1_PushAdd;
+            if (getenv("KFX_TRAIT_LOG") != NULL) /* test switch */
+                SYNCLOG("Frenzy: spark %d is thing %d, model %d, animation %d, draw class %d, flags 0x%x, health %d", k, (int)ntng->index,
+                    (int)ntng->model, (int)ntng->anim_sprite, (int)ntng->draw_class, (unsigned)ntng->rendering_flags, (int)ntng->health);
+        }
+        angle += DEGREES_120;
+    }
+}
+
+/** True for a frenzy spark whose creature is gone or has come out of its frenzy. Only sparks made from
+ *  the frenzy's own object are judged; where that object is not defined the Armour object stands in and
+ *  such a spark is told apart by its creature not having the Armour effect. */
+TbBool frenzy_spark_has_expired(const struct Thing *objtng)
+{
+    const ThingModel model = object_model_id(FRENZY_SPARK_OBJECT);
+    const struct Thing *creatng = thing_get(objtng->armor.belongs_to);
+    if (model > 0)
+    {
+        if (objtng->model != model)
+            return false;
+    } else
+    {
+        if ((objtng->model != ObjMdl_LightBall) || !thing_exists(creatng) || !thing_is_creature(creatng)
+            || creature_under_spell_effect(creatng, CSAfF_Armour))
+            return false;
+    }
+    return !thing_exists(creatng) || !thing_is_creature(creatng) || !creature_under_spell_effect(creatng, CSAfF_Frenzy);
+}

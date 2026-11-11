@@ -1143,7 +1143,10 @@ TbBool server_admin_player_command_as(int user, const char *text, char prefix)
         rest++;
     char target[64];
     snprintf(target, sizeof(target), "%s", rest);
-    for (size_t n = strlen(target); (n > 0) && (target[n - 1] == ' '); n--)
+    /* trimmed as the command itself trims its name: a trailing tab or line end hid the target from the rank check
+       below while the command still found it (audit 2026-11-11) */
+    for (size_t n = strlen(target); (n > 0) && ((target[n - 1] == ' ') || (target[n - 1] == '\t') || (target[n - 1] == '\r') ||
+        (target[n - 1] == '\n')); n--)
         target[n - 1] = '\0';
     if (perm == RolP_Give)
         for (int k = 0; k < 2; k++)

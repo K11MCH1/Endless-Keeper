@@ -38,6 +38,7 @@
 #include "world_wild.h"
 #include "world_progress.h"
 #include "world_daynight.h"
+#include "world_circles.h"
 #include "bflib_basics.h"
 #include "bflib_math.h"
 #include "config.h"
@@ -2375,6 +2376,8 @@ static int op_gate_spawn(const struct OpPlan *p, int g, int n, TbBool knight, in
     MapSlabCoord sx, sy;
     if (!world_engine_slab(p->x0 + p->gx[g], p->y0 + p->gy[g], &sx, &sy))
         return -1;
+    /* circles (world_circles.c): the heroes a portal sends are as strong as the circle it stands in */
+    level = world_circles_level_at_slab(sx, sy, world_circles_hero_floor_at_slab(sx, sy), "an outpost's heroes");
     int made = 0;
     int wsum = 0;
     for (int k = 0; k < SH_ANY_HEROES; k++)

@@ -37,6 +37,119 @@
 
 #include "post_inc.h"
 
+/* Test switches (research, candidate 2): the range coder on traffic that is mostly zstd already.
+   KFX_NET_NORANGE=1: a hosting side keeps the compressor installed (incoming compressed datagrams still decode) but
+   never compresses what it sends. KFX_NET_NORANGE=2: it skips only datagrams whose bytes look compressed already
+   (norange_flatness below; the threshold in percent in KFX_NET_RANGEFLAT, default 150).
+   KFX_NET_RANGESTAT=1: time and bytes of the compress callback go to the log every ten seconds, by datagram size and
+   by flatness. ENet calls the callback from enet_host_service/enet_host_flush, on the thread that owns the host. */
+#include <chrono>
+static int norange_off = 0;
+static int norange_stat = 0;
+static unsigned norange_flat_limit = 150;
+#define NR_BUCKETS 6
+struct NrBucket { unsigned long long calls, kept, in, out, ns; };
+static NrBucket nr_all, nr_size[NR_BUCKETS], nr_flat[NR_BUCKETS];
+static const unsigned nr_size_edge[NR_BUCKETS] = {64, 200, 500, 900, 1250, 0xffffffffu};
+static const unsigned nr_flat_edge[NR_BUCKETS] = {110, 125, 150, 200, 400, 0xffffffffu};
+static std::chrono::steady_clock::time_point nr_last;
+
+/** How far the byte histogram of a datagram is from flat, in percent: 100 is what random bytes give (compressed
+ *  data), text or repeated structure gives several hundred. Integer arithmetic only. */
+static unsigned norange_flatness(const ENetBuffer *inBuffers, size_t inBufferCount, size_t inLimit)
+{
+    unsigned short count[256] = {0};
+    size_t left = inLimit;
+    for (size_t i = 0; (i < inBufferCount) && (left > 0); i++)
+    {
+        const unsigned char *d = (const unsigned char *)inBuffers[i].data;
+        size_t n = inBuffers[i].dataLength;
+        if (n > left) n = left;
+        if ((inLimit - left) + n > 60000) return 0xffffffffu; /* never a datagram; the counters are 16 bits */
+        for (size_t k = 0; k < n; k++)
+            count[d[k]]++;
+        left -= n;
+    }
+    const unsigned long long total = inLimit - left;
+    if (total < 64)
+        return 0xffffffffu; /* too short to tell: let the coder try */
+    unsigned long long sumsq = 0;
+    for (int v = 0; v < 256; v++)
+        sumsq += (unsigned long long)count[v] * count[v];
+    /* random bytes: the expected sum of squares is total + total*total/256 */
+    return (unsigned)((sumsq * 256 * 100) / (total * total + 256 * total));
+}
+
+static void nr_add(NrBucket *b, size_t inLimit, size_t result, unsigned long long ns)
+{
+    b->calls++;
+    b->in += inLimit;
+    b->ns += ns;
+    if ((result > 0) && (result < inLimit)) { b->kept++; b->out += result; } else { b->out += inLimit; }
+}
+
+static size_t ENET_CALLBACK norange_compress(void *context, const ENetBuffer *inBuffers, size_t inBufferCount, size_t inLimit,
+    enet_uint8 *outData, size_t outLimit)
+{
+    if (!norange_stat)
+    {
+        if (norange_off == 1)
+            return 0;
+        if ((norange_off == 2) && (norange_flatness(inBuffers, inBufferCount, inLimit) < norange_flat_limit))
+            return 0;
+        return enet_range_coder_compress(context, inBuffers, inBufferCount, inLimit, outData, outLimit);
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    const unsigned flat = norange_flatness(inBuffers, inBufferCount, inLimit);
+    size_t result = 0;
+    if ((norange_off == 0) || ((norange_off == 2) && (flat >= norange_flat_limit)))
+        result = enet_range_coder_compress(context, inBuffers, inBufferCount, inLimit, outData, outLimit);
+    const unsigned long long ns = (unsigned long long)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
+    nr_add(&nr_all, inLimit, result, ns);
+    for (int i = 0; i < NR_BUCKETS; i++)
+        if (inLimit < nr_size_edge[i]) { nr_add(&nr_size[i], inLimit, result, ns); break; }
+    for (int i = 0; i < NR_BUCKETS; i++)
+        if (flat < nr_flat_edge[i]) { nr_add(&nr_flat[i], inLimit, result, ns); break; }
+    return result;
+}
+
+static void norange_setup(ENetHost *h)
+{
+    const char *v = getenv("KFX_NET_NORANGE");
+    /* 2 by default (2026-11-11, after the test of candidate 2): a hosting side skips the range coder for datagrams
+       whose bytes look compressed already (the zstd state turns), where it cost time and saved nothing; the rest
+       is still range coded. KFX_NET_NORANGE=0 puts every datagram through the coder as before. */
+    norange_off = (v != NULL) ? atoi(v) : 2;
+    v = getenv("KFX_NET_RANGESTAT");
+    norange_stat = (v != NULL) && (atoi(v) != 0);
+    v = getenv("KFX_NET_RANGEFLAT");
+    if ((v != NULL) && (atoi(v) > 0))
+        norange_flat_limit = (unsigned)atoi(v);
+    if ((h == NULL) || (h->compressor.context == NULL) || (!norange_off && !norange_stat))
+        return;
+    h->compressor.compress = norange_compress;
+    nr_all = NrBucket();
+    for (int i = 0; i < NR_BUCKETS; i++) { nr_size[i] = NrBucket(); nr_flat[i] = NrBucket(); }
+    nr_last = std::chrono::steady_clock::now();
+    LbNetLog("ENet: range coder test: mode %d, flat limit %u, statistics %s\n", norange_off, norange_flat_limit, norange_stat ? "on" : "off");
+}
+
+static void norange_report(void)
+{
+    if (!norange_stat)
+        return;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - nr_last < std::chrono::seconds(10))
+        return;
+    nr_last = now;
+    LbNetLog("ENet: range coder: turn %lu datagrams %llu kept %llu bytes in %llu out %llu time %llu us\n",
+        (unsigned long)get_gameturn(), nr_all.calls, nr_all.kept, nr_all.in, nr_all.out, nr_all.ns / 1000);
+    for (int i = 0; i < NR_BUCKETS; i++)
+        LbNetLog("ENet: range coder: size<%u: n %llu kept %llu in %llu out %llu us %llu | flat<%u: n %llu kept %llu in %llu out %llu us %llu\n",
+            nr_size_edge[i], nr_size[i].calls, nr_size[i].kept, nr_size[i].in, nr_size[i].out, nr_size[i].ns / 1000,
+            nr_flat_edge[i], nr_flat[i].calls, nr_flat[i].kept, nr_flat[i].in, nr_flat[i].out, nr_flat[i].ns / 1000);
+}
+
 #define NUM_CHANNELS 2
 #define HOLEPUNCH_CONNECT_DELAY_MS 1000
 #define HAPPY_EYEBALLS_DELAY_MS 250
@@ -373,6 +486,7 @@ namespace
             LbNetLog("ENet: host created (IPv4) on port %d\n", (int)address.port);
         }
         enet_host_compress_with_range_coder(host);
+        norange_setup(host);
         port_forward_set_mapping(address.port);
         external_ipv4_port = holepunch_stun_query(host, external_ipv4_address, sizeof(external_ipv4_address));
         enet_host_set_intercept_callback(host, intercept_punch);
@@ -869,6 +983,7 @@ namespace
         }
         ENetEvent enet_event;
         NetUserId user_id;
+        norange_report();
         int service_result = enet_host_service(host, &enet_event, timeout);
         if (service_result == 0)
             return 0;

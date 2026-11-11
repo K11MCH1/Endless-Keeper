@@ -54,6 +54,7 @@ struct LensConfig {
     short displace_period;
     char overlay_file[DISKPATH_SIZE];
     short overlay_alpha;
+    short blur; /**< 0..100: how blurred the view is. 0 = sharp. Only drawn by the OpenGL renderer. */
 };
 
 struct LensesConfig {

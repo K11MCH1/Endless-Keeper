@@ -18,6 +18,8 @@
 #include "world_gen.h"
 #include "world_daynight.h"
 #include "world_wild.h"
+#include "world_circles.h"
+#include "world_misdeeds.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -108,6 +110,8 @@
 #include "world_attract.h"
 #include "kfx_deflate.h"
 #include "net_secure.h"
+#define XXH_INLINE_ALL
+#include "../deps/xxhash/xxhash.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -145,6 +149,16 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_PERKS_MAGIC 0x314B5250u /* "PRK1": optional, after PST1 (last): the players' passive upgrades, by token */
 #define WORLD_SKEY_MAGIC 0x3159454Bu /* "KEY1": optional, after PRK1 (last): the world's key, secret half (net_secure.c) */
 #define WORLD_COOP_MAGIC 0x31504F43u /* "COP1": optional, after KEY1 (last): the allied pairs of a party (co-op) */
+#define WORLD_EXTRAS_MAGIC 0x32525458u /* "XTR2" (not XTR1: that is the lair waits' section above; audit 2026-11-11):
+                                          optional, the very last: tagged records (tag, length, bytes) of later
+                                          systems, so that one more never needs a place in this order. Game state:
+                                          also in a resync. Unknown tags are skipped. */
+#define WORLD_EXTRA_MISDEEDS 0x3144534Du /* "MSD1": the creatures' Misdeeds records */
+#define WORLD_EXTRA_WILD 0x31544257u   /* "WBT1": the wild packs' burrows and tunnels */
+#define WORLD_EXTRA_RAIDS 0x31584452u  /* "RDX1": the raids' owed first raid and fleeing clock */
+#define WORLD_EXTRA_AMENITY 0x31584D41u /* "AMX1": Amenity Mastery's bars */
+#define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
+static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
 /* The player's creature limit (imps don't count, as in stock): this many, plus this many per owned portal. */
@@ -1473,6 +1487,70 @@ int world_coop_level_bonus_at(int64_t wx, int64_t wy)
     return world_coop_level_bonus(nearest);
 }
 
+/** Circles (world_circles.c): the keeper whose start is nearest a world slab. */
+PlayerNumber world_nearest_start_player(int64_t wx, int64_t wy)
+{
+    if (!W.active || (W.gen == NULL))
+        return PLAYER_NONE;
+    struct WgStructRef start;
+    wg_start_ref(W.gen, &start);
+    PlayerNumber nearest = PLAYER_NONE;
+    double best = 1e30;
+    if (!seat_has_stamp(PLAYER0))
+    {
+        /* the level's own start is player 0's */
+        const double dx = (double)(wx - start.heart_x), dy = (double)(wy - start.heart_y);
+        best = dx * dx + dy * dy;
+        nearest = PLAYER0;
+    }
+    for (int n = 0; n < W.stamp_count; n++)
+    {
+        if (W.stamps[n].plyr < 0)
+            continue; /* a start given up */
+        const double dx = (double)(wx - (start.heart_x + W.stamps[n].dx)), dy = (double)(wy - (start.heart_y + W.stamps[n].dy));
+        if (dx * dx + dy * dy < best)
+        {
+            best = dx * dx + dy * dy;
+            nearest = (PlayerNumber)W.stamps[n].plyr;
+        }
+    }
+    return nearest;
+}
+
+/** Circles (world_circles.c): the heroes and computer keepers' creatures in a chunk's record get the level of the
+ *  circle they stand in (never below the level they have; imps stay as they are). Returns how many changed. */
+static int circles_grade_chunk(struct WorldChunkData *cd)
+{
+    int changed = 0, seen = 0, lo = 255, hi = 0, cmin = WC_CIRCLES, cmax = 1;
+    for (int t = 0; t < cd->thing_count; t++)
+    {
+        struct WorldThing *th = &cd->things[t];
+        if ((th->oclass != TCls_Creature) || (th->level == 0))
+            continue;
+        const TbBool keeper = (th->owner >= WOwn_Keeper0) && (th->owner < WOwn_HumanBase);
+        if ((th->owner != WOwn_Heroes) && !keeper)
+            continue;
+        if (keeper && ((game.conf.crtr_conf.model[th->model].model_flags & CMF_IsSpecDigger) != 0))
+            continue;
+        const int64_t wx = (int64_t)cd->cx * WG_CHUNK + floor_div(th->x / COORD_PER_STL, STL_PER_SLB);
+        const int64_t wy = (int64_t)cd->cy * WG_CHUNK + floor_div(th->y / COORD_PER_STL, STL_PER_SLB);
+        int circle = 1;
+        const int level = world_circles_level_at_world(wx, wy, (int)th->level, &circle);
+        seen++;
+        changed += (level != (int)th->level) ? 1 : 0;
+        th->level = (uint8_t)level;
+        lo = min(lo, level);
+        hi = max(hi, level);
+        cmin = min(cmin, circle);
+        cmax = max(cmax, circle);
+    }
+    if (seen > 0)
+        SYNCLOG("World circles: chunk (%d,%d), circle %d-%d: %d heroes and keepers' creatures at levels %d-%d (%d changed; "
+            "nearest keeper %d)", (int)cd->cx, (int)cd->cy, cmin, cmax, seen, lo, hi, changed,
+            (int)world_nearest_start_player((int64_t)cd->cx * WG_CHUNK + WG_CHUNK / 2, (int64_t)cd->cy * WG_CHUNK + WG_CHUNK / 2));
+    return changed;
+}
+
 int world_coop_level_bonus_at_slab(MapSlabCoord slb_x, MapSlabCoord slb_y)
 {
     return world_coop_level_bonus_at(world_slab_x_of(slb_x), world_slab_y_of(slb_y));
@@ -1790,6 +1868,8 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
     place_books(&ch, cx, cy, cd);
     decorate_rewards(&ch, cx, cy, cd);
     apply_outposts(cx, cy, cd);
+    if (!world_attract_active())
+        circles_grade_chunk(cd); /* circles (world_circles.c): enemies as strong as the circle they stand in */
     {
         /* co-op: the enemies of ground nearest a party's start are a level higher */
         const int bonus = world_coop_level_bonus_at((int64_t)cx * WG_CHUNK + WG_CHUNK / 2, (int64_t)cy * WG_CHUNK + WG_CHUNK / 2);
@@ -2297,6 +2377,11 @@ static void freeze_thing(const struct Thing *thing, MapSubtlCoord stl_x0, MapSub
                 e->kills_num_allied = cctrl->kills_num_allied;
                 e->kills_num_enemy = cctrl->kills_num_enemy;
                 e->blood_type = cctrl->blood_type;
+                {
+                    const uint16_t md = world_misdeeds_freeze(thing); /* Misdeeds: its record's number */
+                    e->spare[0] = (uint8_t)(md & 0xFF);
+                    e->spare[1] = (uint8_t)(md >> 8);
+                }
             }
             if (creature_is_kept_in_prison(thing))
                 th->flags |= WTF_Prisoner;
@@ -2342,8 +2427,8 @@ static void freeze_thing(const struct Thing *thing, MapSubtlCoord stl_x0, MapSub
             th->gold = (uint32_t)thing->valuable.gold_stored;
         if (object_is_hero_gate(thing))
             th->extra = thing->hero_gate.number;
-        else if (thing_is_special_box(thing))
-            th->extra = thing->custom_box.box_kind; /* custom boxes' kind; Library-fused boxes' upgrades */
+        else if (thing_is_special_box(thing)) /* custom boxes' kind; Library-fused boxes' upgrades; a book's circle */
+            th->extra = (uint16_t)(thing->custom_box.box_kind | ((uint16_t)thing->custom_box.box_circle << 8));
         break;
     case TCls_Door:
         if (thing->door.is_locked)
@@ -2823,6 +2908,7 @@ static void place_world_thing(const struct WorldThing *th, const struct WorldCre
             cctrl->kills_num_allied = ext->kills_num_allied;
             cctrl->kills_num_enemy = ext->kills_num_enemy;
             cctrl->blood_type = ext->blood_type;
+            world_misdeeds_thaw(thing, (uint16_t)(ext->spare[0] | (ext->spare[1] << 8)));
         }
         if ((th->flags & (WTF_Prisoner | WTF_Tortured)) && !creature_control_invalid(cctrl))
         {
@@ -2866,7 +2952,11 @@ static void place_world_thing(const struct WorldThing *th, const struct WorldCre
         if (object_is_hero_gate(thing))
             thing->hero_gate.number = (unsigned char)th->extra;
         else if (thing_is_special_box(thing))
+        {
             thing->custom_box.box_kind = (unsigned char)th->extra;
+            thing->custom_box.box_circle = (unsigned char)(th->extra >> 8);
+            world_progress_book_thawed(thing);
+        }
         if ((th->gold > 0) && object_is_gold_pile(thing))
         {
             thing->valuable.gold_stored = 0;
@@ -3906,6 +3996,7 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
     }
     /* retreating raiders' landings stay while they walk back (they were frozen and loaded again, 9 a landing) */
     world_daynight_want_chunks(cm_want_world);
+    world_misdeeds_want_chunks(cm_want_world); /* bodies waiting to be carried home */
     /* the human players' creatures and imps, and raid heroes (the creature list: the same set as a scan of every slot,
        in another order, which a table of keys doesn't mind) */
     const struct StructureList *creatures = get_list_for_thing_class(TCls_Creature);
@@ -4352,11 +4443,32 @@ static void cm_plan_pass(uint32_t now)
     }
 }
 
+/** Test switch KFX_WORLD_CMBUDGET=<n>: a turn does at most n queued chunk loads and freezes, counted, instead of
+ *  stopping after CM_TURN_BUDGET_NS of wall-clock time. With the time budget the turn a chunk comes in or goes
+ *  depends on how fast the machine (or the build) is, so two runs of one world differ and a replay of a chunked
+ *  world goes out of sync; with the count they are the same on every machine. 0 or unset: the time budget. */
+static int cm_count_budget(void)
+{
+    static int budget = -1;
+    if (budget < 0)
+    {
+        const char *v = getenv("KFX_WORLD_CMBUDGET");
+        budget = (v != NULL) ? max(0, atoi(v)) : 0;
+    }
+    return budget;
+}
+
 static void cm_do_queued(uint32_t now, int *loaded, int *ngone)
 {
     const int64_t t0 = get_time_tick_ns();
+    const int count_budget = cm_count_budget();
     while ((cm_load_i < cm_load_n) || (cm_freeze_i < cm_freeze_n))
     {
+        if (count_budget > 0)
+        {
+            if (*loaded + *ngone >= count_budget)
+                break;
+        } else
         if ((*loaded + *ngone > 0) && (get_time_tick_ns() - t0 >= CM_TURN_BUDGET_NS))
             break;
         if (cm_load_i < cm_load_n)
@@ -5038,11 +5150,19 @@ static int64_t nearest_start2(PlayerNumber plyr, int64_t dx, int64_t dy, TbBool 
 
 static TbBool choose_seat_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
 {
-    const int n = W.stamp_count + 1;
-    const long radius = (long)isqrt64((int64_t)n * SPAWN_SPACING * SPAWN_SPACING);
-    const long angle = (ANGLE_EAST + (long)(n - 1) * SPAWN_GOLDEN_ANGLE) & ANGLE_MASK;
+    /* the solo spiral counts the solo starts only: counting the co-op ones too put the next solo start beyond
+       reach of every solo start (two parties and one solo start: radius 2236 against the 2000 allowed), and every
+       later solo joiner was left without a dungeon. A place that is taken tries the next ones (audit 2026-11-11) */
+    int solo = 0;
+    for (int k = 0; k < W.stamp_count; k++)
+        if (!stamp_is_coop(&W.stamps[k]))
+            solo++;
     static const int outs[] = {0, 40, 80, 120, 160, 200, 260};
     static const int turns[] = {0, 40, -40, 80, -80, 120, -120};
+    for (int n = solo + 1; n <= solo + 65; n++)
+    {
+    const long radius = (long)isqrt64((int64_t)n * SPAWN_SPACING * SPAWN_SPACING);
+    const long angle = (ANGLE_EAST + (long)(n - 1) * SPAWN_GOLDEN_ANGLE) & ANGLE_MASK;
     /* the co-op starts' room is kept when the spiral allows it; when it doesn't, a start 1000 slabs off them will do */
     for (int pass = 0; pass < 2; pass++)
     {
@@ -5071,6 +5191,7 @@ static TbBool choose_seat_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
                 return true;
             }
         }
+    }
     }
     return false;
 }
@@ -5129,6 +5250,81 @@ static TbBool choose_start_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
 /** Network games: every human seat other than PLAYER0 without a heart gets a copy of the start structure, and the
  *  chunks round its heart load now. Returns the seats that got one (bit p). */
 static void cameras_to_hearts(PlayerNumber only);
+
+/** Circles (world_circles.c), "the Welcome Mat": a new keeper's start appeared; the heroes and computer keepers'
+ *  creatures that already exist within a circle's width of it come down to the first circle's strength (on the map,
+ *  and in the stored chunks). Farther out, what exists stays as strong as it was. */
+static void circles_welcome_mat(PlayerNumber p, int64_t sx, int64_t sy)
+{
+    const int level = world_circles_welcome_level(p);
+    const double reach2 = (double)WC_CIRCLE_SLABS * (double)WC_CIRCLE_SLABS;
+    int live = 0, stored = 0, chunks = 0;
+    /* on the map */
+    const struct StructureList *slist = get_list_for_thing_class(TCls_Creature);
+    long guard = 0;
+    for (ThingIndex i = slist->index; (i > 0) && (guard++ < THINGS_COUNT);)
+    {
+        struct Thing *thing = thing_get(i);
+        if (thing_is_invalid(thing))
+            break;
+        i = thing->next_of_class;
+        TbBool enemy = (thing->owner == PLAYER_GOOD) && !world_raid_hero(thing);
+        for (int k = 0; (k < W.keeper_count) && !enemy; k++)
+            enemy = (W.keepers[k].slot == thing->owner);
+        if (!enemy || ((get_creature_model_flags(thing) & CMF_IsSpecDigger) != 0))
+            continue;
+        const double dx = (double)(world_slab_x_of(subtile_slab(thing->mappos.x.stl.num)) - sx);
+        const double dy = (double)(world_slab_y_of(subtile_slab(thing->mappos.y.stl.num)) - sy);
+        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        if ((dx * dx + dy * dy > reach2) || creature_control_invalid(cctrl) || ((int)cctrl->exp_level + 1 <= level))
+            continue;
+        set_creature_level(thing, (CrtrExpLevel)(level - 1));
+        if (thing->health > cctrl->max_health)
+            thing->health = cctrl->max_health;
+        live++;
+    }
+    /* stored chunks (the ones on the map are stored again, as they are, when they leave it) */
+    static struct WorldChunkData mat;
+    const int32_t span = WC_CIRCLE_SLABS / WG_CHUNK + 1;
+    const int32_t ccx = (int32_t)floor_div(sx, WG_CHUNK), ccy = (int32_t)floor_div(sy, WG_CHUNK);
+    for (int32_t cy = ccy - span; cy <= ccy + span; cy++)
+    {
+        for (int32_t cx = ccx - span; cx <= ccx + span; cx++)
+        {
+            if (world_paged && (wp_page(engine_chunk_of(cx), engine_chunk_of(cy)) != NULL))
+                continue;
+            if ((table_find(&W.store, cx, cy) == NULL) || !load_chunk_record(cx, cy, &mat))
+                continue;
+            int n = 0;
+            for (int t = 0; t < mat.thing_count; t++)
+            {
+                struct WorldThing *th = &mat.things[t];
+                if ((th->oclass != TCls_Creature) || ((int)th->level <= level))
+                    continue;
+                const TbBool keeper = (th->owner >= WOwn_Keeper0) && (th->owner < WOwn_HumanBase);
+                if ((th->owner != WOwn_Heroes) && !keeper)
+                    continue;
+                if (keeper && ((game.conf.crtr_conf.model[th->model].model_flags & CMF_IsSpecDigger) != 0))
+                    continue;
+                const double dx = (double)((int64_t)cx * WG_CHUNK + floor_div(th->x / COORD_PER_STL, STL_PER_SLB) - sx);
+                const double dy = (double)((int64_t)cy * WG_CHUNK + floor_div(th->y / COORD_PER_STL, STL_PER_SLB) - sy);
+                if (dx * dx + dy * dy > reach2)
+                    continue;
+                th->level = (uint8_t)level;
+                th->health = -1; /* full, at its new level */
+                n++;
+            }
+            if ((n > 0) && store_chunk_record(&mat))
+            {
+                stored += n;
+                chunks++;
+            }
+        }
+    }
+    SYNCLOG("World circles: player %d's new start at world slab (%ld,%ld): %d enemies on the map and %d in %d stored "
+        "chunks within %d slabs brought down to level %d", (int)p, (long)sx, (long)sy, live, stored, chunks,
+        WC_CIRCLE_SLABS, level);
+}
 
 /* the seat starting again right now (PLAYER_NONE: none): PLAYER0 then gets a start like the other seats */
 static PlayerNumber respawn_seat = PLAYER_NONE;
@@ -5198,6 +5394,7 @@ static PlayerBitFlags make_seat_starts(void)
         st->dx = dx;
         st->dy = dy;
         pmask_add(&made, p);
+        world_circles_player_reset(p); /* a new dungeon: only the first circle is breached */
     }
     /* their ground comes once every new start has its place (a pair's two are in the same chunks) */
     for (int n = 0; n < W.stamp_count; n++)
@@ -5210,6 +5407,7 @@ static PlayerBitFlags make_seat_starts(void)
         SYNCLOG("World: player %d starts at world slab (%ld,%ld), %d chunks loaded%s", (int)st->plyr,
             (long)(start.heart_x + st->dx), (long)(start.heart_y + st->dy), loaded,
             (world_coop_partner(st->plyr) != PLAYER_NONE) ? " (an allied keeper's start)" : "");
+        circles_welcome_mat((PlayerNumber)st->plyr, start.heart_x + st->dx, start.heart_y + st->dy);
     }
     return made;
 }
@@ -6555,6 +6753,134 @@ static void world_testgold(void)
     SYNCLOG("World test: %d earth slabs at heart%+d,%+d (%dx%d) are gold", made, dx, dy, w, h);
 }
 
+/** Test hook KFX_WORLD_EXPLORE="dig_turns,party_turns[,reach]": makes player 0 explore, for unattended balance
+ *  runs where the computer assistant plays (it never leaves its first cave by itself).
+ *  Every dig_turns turns four corridors, two slabs wide, are marked for digging eight slabs further out from
+ *  the heart (north, east, south, west), up to reach slabs (default 100); the slabs are revealed first, as a
+ *  player who has seen them could mark them.
+ *  Every party_turns turns each of the player's fighters that is free walks to the nearest enemy creature
+ *  within 60 slabs, if there is a way: a player sending a party out. Only read in world levels. */
+static void world_explore_hook(void)
+{
+    static int dig_turns = -1, party_turns = 0, reach = 100;
+    if (dig_turns < 0)
+    {
+        const char *env = getenv("KFX_WORLD_EXPLORE");
+        dig_turns = 0;
+        if ((env != NULL) && (sscanf(env, "%d,%d,%d", &dig_turns, &party_turns, &reach) < 1))
+            dig_turns = 0;
+    }
+    if ((dig_turns <= 0) || (game.play_gameturn < 600))
+        return;
+    struct Dungeon *dungeon = get_players_num_dungeon(PLAYER0);
+    struct Thing *heart = dungeon_invalid(dungeon) ? INVALID_THING : thing_get(dungeon->dnheart_idx);
+    if (!thing_exists(heart))
+        return;
+    if ((game.play_gameturn % dig_turns) == 0)
+    {
+        const MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
+        int far = 8 * (int)(game.play_gameturn / dig_turns);
+        if (far > reach)
+            far = reach;
+        static const int ddx[4] = {0, 1, 0, -1}, ddy[4] = {-1, 0, 1, 0};
+        int tagged = 0;
+        for (int d = 0; d < 4; d++)
+        {
+            for (int n = 3; n <= far; n++)
+            {
+                for (int side = 0; side < 2; side++)
+                {
+                    const MapSlabCoord sx = hx + ddx[d] * n + ((ddx[d] == 0) ? side : 0);
+                    const MapSlabCoord sy = hy + ddy[d] * n + ((ddy[d] == 0) ? side : 0);
+                    if ((sx < 1) || (sy < 1) || (sx >= game.map_tiles_x - 1) || (sy >= game.map_tiles_y - 1))
+                        continue;
+                    for (int k = 0; k < STL_PER_SLB * STL_PER_SLB; k++)
+                        reveal_map_subtile(slab_subtile(sx, k % STL_PER_SLB), slab_subtile(sy, k / STL_PER_SLB), PLAYER0);
+                    if (tag_blocks_for_digging_in_area(slab_subtile(sx, 0), slab_subtile(sy, 0), PLAYER0))
+                        tagged++;
+                }
+            }
+        }
+        /* The assistant marks gold it sees but no way to it. Like a player, mark a corridor from the heart to
+         * the nearest marked slab that lies off the four corridors: along the heart row, then up or down. */
+        long best = -1;
+        MapSlabCoord bx = 0, by = 0;
+        const long imax = min((long)dungeon->highest_task_number, (long)MAPTASKS_COUNT);
+        for (long t = 0; t < imax; t++)
+        {
+            const struct MapTask *mtask = &dungeon->task_list[t];
+            if (mtask->kind == 0)
+                continue;
+            const MapSlabCoord tx = subtile_slab(stl_num_decode_x(mtask->coords)), ty = subtile_slab(stl_num_decode_y(mtask->coords));
+            if ((tx == hx) || (tx == hx + 1) || (ty == hy) || (ty == hy + 1))
+                continue;
+            const long dist = labs((long)tx - hx) + labs((long)ty - hy);
+            if ((dist >= 6) && (dist <= 160) && ((best < 0) || (dist < best)))
+            {
+                best = dist;
+                bx = tx;
+                by = ty;
+            }
+        }
+        int linked = 0;
+        if (best >= 0)
+        {
+            MapSlabCoord sx = hx, sy = hy;
+            while ((sx != bx) || (sy != by))
+            {
+                if (sx != bx)
+                    sx += (bx > sx) ? 1 : -1;
+                else
+                    sy += (by > sy) ? 1 : -1;
+                if ((sx < 1) || (sy < 1) || (sx >= game.map_tiles_x - 1) || (sy >= game.map_tiles_y - 1))
+                    break;
+                for (int k = 0; k < STL_PER_SLB * STL_PER_SLB; k++)
+                    reveal_map_subtile(slab_subtile(sx, k % STL_PER_SLB), slab_subtile(sy, k / STL_PER_SLB), PLAYER0);
+                if (tag_blocks_for_digging_in_area(slab_subtile(sx, 0), slab_subtile(sy, 0), PLAYER0))
+                    linked++;
+            }
+        }
+        if ((tagged > 0) || (linked > 0))
+            SYNCLOG("World explore: %d slabs marked for digging, corridors %d slabs out; %d slabs marked towards a marked spot %ld slabs away",
+                tagged, far, linked, best);
+    }
+    if ((party_turns > 0) && ((game.play_gameturn % party_turns) == 0))
+    {
+        int sent = 0, free_fighters = 0;
+        unsigned long k = 0;
+        int i = dungeon->creatr_list_start;
+        while (i != 0)
+        {
+            struct Thing *thing = thing_get(i);
+            struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+            if (thing_is_invalid(thing) || creature_control_invalid(cctrl))
+                break;
+            i = cctrl->players_next_creature_idx;
+            if (++k > CREATURES_COUNT)
+                break;
+            if ((cctrl->combat_flags != 0) || creature_is_kept_in_custody(thing) || creature_is_being_unconscious(thing)
+                || creature_is_dying(thing) || thing_is_picked_up(thing))
+                continue;
+            if (!can_change_from_state_to(thing, thing->active_state, CrSt_SeekTheEnemy))
+                continue;
+            free_fighters++;
+            struct Thing *enmtng = get_nearest_enemy_creature_possible_to_attack_by(thing);
+            if (thing_is_invalid(enmtng))
+                continue;
+            const long dx = abs((long)enmtng->mappos.x.stl.num - (long)thing->mappos.x.stl.num);
+            const long dy = abs((long)enmtng->mappos.y.stl.num - (long)thing->mappos.y.stl.num);
+            if ((dx > 60 * STL_PER_SLB) || (dy > 60 * STL_PER_SLB))
+                continue;
+            if (setup_person_move_close_to_position(thing, enmtng->mappos.x.stl.num, enmtng->mappos.y.stl.num, NavRtF_Default))
+            {
+                thing->continue_state = CrSt_SeekTheEnemy;
+                sent++;
+            }
+        }
+        SYNCLOG("World explore: %d of %d free fighters sent at the nearest enemy", sent, free_fighters);
+    }
+}
+
 static void world_tagdig(void)
 {
     const char *env = world_tagdig_env();
@@ -6718,6 +7044,137 @@ static void world_profkeepers(void)
             (long)refs[i].heart_y, refs[i].distance);
     }
     SYNCLOG("World profkeepers: %d chunks loaded for %d keepers (%d found)", loaded, min(n, want), found);
+}
+
+/** Test switch KFX_WORLD_STATEHASH=<n>: every n turns a fingerprint of the simulation's state goes to the log, in
+ *  parts, so that two runs (or two builds) can be compared and a difference placed: every synced thing (the whole
+ *  struct), every creature's control block, the loaded pages (map, slabs, slab extras; their navigation colours,
+ *  static lights and lightness apart), the three synced random seeds and every player's gold. "light" (the
+ *  subtiles' lightness) is the renderer's cache and follows what was drawn: it is not simulation state.
+ *  Read only: it changes nothing. */
+static void world_statehash(void)
+{
+    static int every = -1;
+    if (every < 0)
+    {
+        const char *v = getenv("KFX_WORLD_STATEHASH");
+        every = (v != NULL) ? max(0, atoi(v)) : 0;
+    }
+    if ((every <= 0) || !W.active || ((game.play_gameturn % every) != 0))
+        return;
+    {
+        /* KFX_WORLD_STATEDUMP="<turn>[+<turn>...],<file>": at those turns every synced thing (index, struct) goes
+           to <file>.<turn> and every creature's control block (thing index, struct) to <file>.<turn>.cc, to find
+           which bytes differ between two runs */
+        const char *dump = getenv("KFX_WORLD_STATEDUMP");
+        TbBool dump_now = false;
+        if ((dump != NULL) && (strchr(dump, ',') != NULL))
+        {
+            for (const char *t = dump; (t != NULL) && (t < strchr(dump, ',')); t = strchr(t, '+') ? strchr(t, '+') + 1 : NULL)
+                if ((GameTurn)atol(t) == game.play_gameturn)
+                    dump_now = true;
+        }
+        if (dump_now)
+        {
+            char path[600];
+            snprintf(path, sizeof(path), "%s.%lu", strchr(dump, ',') + 1, (unsigned long)game.play_gameturn);
+            FILE *ft = fopen(path, "wb");
+            snprintf(path, sizeof(path), "%s.%lu.cc", strchr(dump, ',') + 1, (unsigned long)game.play_gameturn);
+            FILE *fc = fopen(path, "wb");
+            for (int32_t i = 1; (i < THINGS_COUNT) && (ft != NULL) && (fc != NULL); i++)
+            {
+                const struct Thing *thing = thing_get(i);
+                if (!thing_index_synced(i) || !thing_exists(thing))
+                    continue;
+                fwrite(&i, 4, 1, ft);
+                fwrite(thing, sizeof(struct Thing), 1, ft);
+                const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+                if ((thing->class_id == TCls_Creature) && !creature_control_invalid(cctrl))
+                {
+                    fwrite(&i, 4, 1, fc);
+                    fwrite(cctrl, sizeof(struct CreatureControl), 1, fc);
+                }
+            }
+            if (ft != NULL) fclose(ft);
+            if (fc != NULL) fclose(fc);
+            SYNCLOG("World statehash: state dumped (thing %d bytes, creature control %d bytes)", (int)sizeof(struct Thing),
+                (int)sizeof(struct CreatureControl));
+        }
+    }
+    uint64_t h_things = 0, h_cctrl = 0, h_pages = 0, h_light = 0, h_statlight = 0, h_nav = 0, h_gold = 0;
+    long n_things = 0, n_creatures = 0, n_pages = 0;
+    for (long i = 1; i < THINGS_COUNT; i++)
+    {
+        if (!thing_index_synced(i))
+            continue;
+        const struct Thing *thing = thing_get(i);
+        if (!thing_exists(thing))
+            continue;
+        n_things++;
+        /* without this machine's drawing and sound bookkeeping (the fields the thin-client stream leaves out too:
+           net_state.c excl_setup): the renderer writes them, at the rate it draws */
+        static struct Thing tcopy;
+        memcpy(&tcopy, thing, sizeof(tcopy));
+        tcopy.last_turn_drawn = 0;
+        tcopy.snd_emitter_id = 0;
+        tcopy.state_flags &= ~TF1_DoFootsteps; /* the three creatures nearest this machine's camera (game_update.cpp) */
+        if (tcopy.draw_class == ODC_RoomStatusFlag)
+        {
+            /* a room's status flag: the renderer counts the turns it was drawn in a row (engine_render.c) */
+            tcopy.roomflag.last_turn_drawn = 0;
+            tcopy.roomflag.display_timer = 0;
+        }
+        h_things = XXH3_64bits_withSeed(&tcopy, sizeof(struct Thing), h_things);
+        if (thing->class_id == TCls_Creature)
+        {
+            const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+            if (!creature_control_invalid(cctrl))
+            {
+                n_creatures++;
+                static struct CreatureControl ccopy;
+                memcpy(&ccopy, cctrl, sizeof(ccopy));
+                ccopy.thought_bubble_last_turn_drawn = 0;
+                ccopy.thought_bubble_display_timer = 0;
+                ccopy.footstep_variant = 0;
+                ccopy.footstep_counter = 0;
+                /* two heights in the route data that the engine never sets (it fills x and y of these positions and
+                   leaves z as it was on the stack): leftover memory, different from run to run or build to build,
+                   and read by nothing (found 2026-11-11 comparing builds) */
+                ccopy.arid.endpos.z.val = 0;
+                ccopy.arid.manoeuvre_requested_position.z.val = 0;
+                h_cctrl = XXH3_64bits_withSeed(&ccopy, sizeof(struct CreatureControl), h_cctrl);
+            }
+        }
+    }
+    if (world_paged)
+    {
+        /* the list's order is the order of loading: summed, so only the set of pages and their contents count */
+        for (const struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+        {
+            const uint64_t key = ((uint64_t)(uint32_t)pg->cx << 32) | (uint32_t)pg->cy;
+            uint64_t h = XXH3_64bits_withSeed(pg->map, sizeof(pg->map), key);
+            h = XXH3_64bits_withSeed(pg->slab, sizeof(pg->slab), h);
+            h = XXH3_64bits_withSeed(pg->ext, sizeof(pg->ext), h);
+            h = XXH3_64bits_withSeed(pg->ext_initial, sizeof(pg->ext_initial), h);
+            h_pages += h;
+            h_statlight += XXH3_64bits_withSeed(pg->stat_light, sizeof(pg->stat_light), key);
+            h_light += XXH3_64bits_withSeed(pg->lightness, sizeof(pg->lightness), key);
+            h_nav += XXH3_64bits_withSeed(pg->nav, sizeof(pg->nav), key);
+            n_pages++;
+        }
+    }
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        const struct Dungeon *dungeon = get_dungeon(p);
+        const int64_t gold = dungeon_invalid(dungeon) ? 0 : (int64_t)dungeon->total_money_owned;
+        h_gold = XXH3_64bits_withSeed(&gold, sizeof(gold), h_gold);
+    }
+    SYNCLOG("World statehash turn %lu: things %016llx (%ld) creatures %016llx (%ld) pages %016llx (%ld) light %016llx "
+        "statlight %016llx nav %016llx gold %016llx seeds %08lx %08lx %08lx stored %lu",
+        (unsigned long)game.play_gameturn, (unsigned long long)h_things, n_things, (unsigned long long)h_cctrl,
+        n_creatures, (unsigned long long)h_pages, n_pages, (unsigned long long)h_light, (unsigned long long)h_statlight, (unsigned long long)h_nav,
+        (unsigned long long)h_gold, (unsigned long)game.action_random_seed, (unsigned long)game.ai_random_seed,
+        (unsigned long)game.player_random_seed, (unsigned long)W.store.count);
 }
 
 static void world_sendimp(void)
@@ -7823,6 +8280,86 @@ static void world_teststrong_hook(void)
     }
 }
 
+/** Test hook KFX_WORLD_TREASURYTEST="T": at T a walled scene south-east of player 0's heart: Treasury A two slabs
+ *  north of an imp through rock (the walk to it goes round, about 36 slabs), Treasury B on the imp's corridor (about
+ *  5 slabs), and the imp carrying gold. Logged: which room the search gives the imp, the walk to both; at T+400 the
+ *  gold in both. */
+static void world_treasurytest_hook(void)
+{
+    static long base = -2;
+    static RoomIndex room_a = 0, room_b = 0;
+    if (base == -2)
+    {
+        const char *v = getenv("KFX_WORLD_TREASURYTEST");
+        base = (v != NULL) ? atol(v) : -1;
+    }
+    if ((base < 0) || (W.gen == NULL))
+        return;
+    const long t = (long)game.play_gameturn - base;
+    if ((t != 0) && (t != 400))
+        return;
+    if (t == 400)
+    {
+        const struct Room *ra = room_get(room_a), *rb = room_get(room_b);
+        SYNCLOG("World treasury test: gold behind the wall %d, gold on the way %d",
+            room_is_invalid(ra) ? -1 : (int)ra->capacity_used_for_storage, room_is_invalid(rb) ? -1 : (int)rb->capacity_used_for_storage);
+        return;
+    }
+    struct Thing *heart = get_player_soul_container(PLAYER0);
+    if (!thing_exists(heart))
+        return;
+    const MapSlabCoord bx = subtile_slab(heart->mappos.x.stl.num) + 8, by = subtile_slab(heart->mappos.y.stl.num) + 8;
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 20; x++)
+        {
+            SlabKind kind = SlbT_ROCK;
+            if (((y == 6) && (x >= 1) && (x <= 18)) || ((x == 18) && (y >= 1) && (y <= 6)) || ((y == 1) && (x >= 2) && (x <= 18)))
+                kind = SlbT_CLAIMED;
+            if (((x == 2) || (x == 3)) && ((y == 2) || (y == 3)))
+                kind = SlbT_TREASURE; /* A: behind the wall */
+            if (((x == 8) || (x == 9)) && ((y == 4) || (y == 5)))
+                kind = SlbT_TREASURE; /* B: on the way */
+            place_slab_type_on_map(kind, slab_subtile_center(bx + x), slab_subtile_center(by + y),
+                (kind == SlbT_ROCK) ? game.neutral_player_num : PLAYER0, 0);
+        }
+    const RoomKind rkind = (RoomKind)get_id(room_desc, "TREASURE");
+    struct Room *ra = create_room(PLAYER0, rkind, slab_subtile_center(bx + 2), slab_subtile_center(by + 2));
+    struct Room *rb = create_room(PLAYER0, rkind, slab_subtile_center(bx + 8), slab_subtile_center(by + 4));
+    if (room_is_invalid(ra) || room_is_invalid(rb))
+    {
+        SYNCLOG("World treasury test: no rooms");
+        return;
+    }
+    do_room_integration(ra);
+    do_room_integration(rb);
+    room_a = ra->index;
+    room_b = rb->index;
+    struct Coord3d pos;
+    pos.x.val = subtile_coord_center(slab_subtile_center(bx + 3));
+    pos.y.val = subtile_coord_center(slab_subtile_center(by + 6));
+    pos.z.val = 0;
+    pos.z.val = get_floor_height_at(&pos);
+    struct Thing *imp = create_creature(&pos, (ThingModel)get_id(creature_desc, "IMP"), PLAYER0);
+    if (thing_is_invalid(imp))
+    {
+        SYNCLOG("World treasury test: no imp");
+        return;
+    }
+    imp->creature.gold_carried = 300;
+    struct Coord3d pa, pb;
+    long walk_a = -1, walk_b = -1;
+    if (find_first_valid_position_for_thing_anywhere_in_room(imp, ra, &pa))
+        walk_a = get_thing_navigation_distance(imp, &pa, 0);
+    if (find_first_valid_position_for_thing_anywhere_in_room(imp, rb, &pb))
+        walk_b = get_thing_navigation_distance(imp, &pb, 0);
+    const struct Room *pick = find_nearest_room_of_role_for_thing_with_spare_capacity(imp, PLAYER0, RoRoF_GoldStorage, NavRtF_Default, 1);
+    SYNCLOG("World treasury test: behind the wall: centre %d subtiles away in a straight line, walk %ld; on the way: "
+        "centre %d subtiles, walk %ld; the imp is sent to the one %s",
+        (int)grid_distance(imp->mappos.x.stl.num, imp->mappos.y.stl.num, ra->central_stl_x, ra->central_stl_y), walk_a / COORD_PER_STL,
+        (int)grid_distance(imp->mappos.x.stl.num, imp->mappos.y.stl.num, rb->central_stl_x, rb->central_stl_y), walk_b / COORD_PER_STL,
+        (pick == ra) ? "BEHIND THE WALL" : (pick == rb) ? "ON THE WAY" : "elsewhere (another room)");
+}
+
 /** Test hook KFX_WORLD_TESTBOX="T": at T a Library of player 0's east of the heart and boxes shelved in it one by one
  *  (12 Increase Level, 2 Steal Hero: they fuse); T+20 the boxes are listed; T+30 the strongest Increase Level box is
  *  opened (imp levels before and after) and the Steal Hero box (creatures before and after). */
@@ -8208,14 +8745,19 @@ void world_process_turn(void)
     world_testoutpost_hook();
     world_teststrong_hook();
     world_testbox_hook();
+    world_treasurytest_hook();
     world_testfreeze_hook();
     world_daynight_turn();
     world_wild_turn();
+    world_circles_turn();
+    world_misdeeds_turn();
     world_outposts_turn();
     world_testgold();
     world_tagdig();
+    world_explore_hook();
     world_sendimp();
     world_profkeepers();
+    world_statehash();
     world_assist_hook();
     {
         /* test hook: KFX_WORLD_FASTFORWARD=n runs n turns per drawn frame, as fast as the machine allows (pacing
@@ -8272,6 +8814,7 @@ void world_level_end(void)
     coop_seats_clear();
     netstate_level_end();
     world_progress_level_end();
+    world_extras_reset();
     world_levels_reset();
     world_perks_reset();
     world_caretaker_reset();
@@ -8548,6 +9091,92 @@ static void sync_camera_after_zoom(void)
 
 /******************************************************************************/
 /* Saves */
+
+/** The extras: each system that has something to keep writes one tagged record. */
+struct WorldExtra {
+    uint32_t tag;
+    size_t (*size)(void);
+    void (*save)(uint8_t *buf);
+    TbBool (*load)(const uint8_t *buf, size_t len);
+    void (*reset)(void);
+};
+static const struct WorldExtra world_extras[] = {
+    {WORLD_EXTRA_WILD, world_wild_save_size, world_wild_save, world_wild_load, world_wild_reset},
+    {WORLD_EXTRA_RAIDS, world_raids_extra_save_size, world_raids_extra_save, world_raids_extra_load, world_raids_extra_reset},
+    {WORLD_EXTRA_AMENITY, world_amenity_save_size, world_amenity_save, world_amenity_load, world_amenity_reset},
+    {WORLD_EXTRA_CIRCLES, world_circles_save_size, world_circles_save, world_circles_load, world_circles_reset},
+    {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
+};
+#define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
+
+static void world_extras_reset(void)
+{
+    for (int i = 0; i < WORLD_EXTRAS; i++)
+        world_extras[i].reset();
+}
+
+static void world_extras_write(struct RecWriter *w)
+{
+    uint32_t count = 0;
+    for (int i = 0; i < WORLD_EXTRAS; i++)
+        if (world_extras[i].size() > 0)
+            count++;
+    if (count == 0)
+        return;
+    rec_u32(w, WORLD_EXTRAS_MAGIC);
+    rec_u32(w, count);
+    for (int i = 0; i < WORLD_EXTRAS; i++)
+    {
+        const size_t n = world_extras[i].size();
+        if (n == 0)
+            continue;
+        uint8_t *buf = (uint8_t *)malloc(n);
+        if (buf == NULL)
+        {
+            w->err = true;
+            return;
+        }
+        world_extras[i].save(buf);
+        rec_u32(w, world_extras[i].tag);
+        rec_u32(w, (uint32_t)n);
+        rec_put(w, buf, (uint32_t)n);
+        free(buf);
+    }
+}
+
+static void rec_skip(struct RecReader *r, uint32_t n);
+static uint32_t rec_get_u32(struct RecReader *r);
+static uint32_t rec_peek_u32(const struct RecReader *r);
+
+static TbBool world_extras_read(struct RecReader *r)
+{
+    world_extras_reset();
+    if (r->bad || (r->len - r->pos < 8) || (rec_peek_u32(r) != WORLD_EXTRAS_MAGIC))
+        return !r->bad;
+    rec_get_u32(r);
+    const uint32_t count = rec_get_u32(r);
+    for (uint32_t k = 0; (k < count) && !r->bad; k++)
+    {
+        const uint32_t tag = rec_get_u32(r), n = rec_get_u32(r);
+        if (r->bad || (n > r->len - r->pos))
+        {
+            r->bad = true;
+            break;
+        }
+        for (int i = 0; i < WORLD_EXTRAS; i++)
+            if (world_extras[i].tag == tag)
+            {
+                if (!world_extras[i].load(r->buf + r->pos, n))
+                    WARNLOG("World: the saved extra %08x could not be read: left out", (unsigned)tag);
+                else
+                    SYNCLOG("World: loaded the extra %c%c%c%c (%u bytes)", (char)(tag & 0xFF), (char)((tag >> 8) & 0xFF),
+                        (char)((tag >> 16) & 0xFF), (char)((tag >> 24) & 0xFF), (unsigned)n);
+                break;
+            }
+        rec_skip(r, n);
+    }
+    return !r->bad;
+}
 
 static void blob_table(struct RecWriter *w, const struct ChunkTable *t)
 {
@@ -8899,6 +9528,7 @@ TbBool world_save_blob(unsigned char **data, uint32_t *len)
             }
         }
     }
+    world_extras_write(&w);
     if ((w.buf == NULL) || w.err)
     {
         free(w.buf);
@@ -9374,6 +10004,8 @@ TbBool world_load_blob(const unsigned char *data, uint32_t len)
         }
         ok = !r.bad;
     }
+    if (ok)
+        ok = world_extras_read(&r);
     free(raw);
     if (!ok || !world_init_state())
     {

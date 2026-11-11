@@ -56,6 +56,7 @@
 #include "keeperfx.hpp"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_circles.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -691,6 +692,7 @@ long instf_dig(struct Thing *creatng, int32_t *param)
         creatng->creature.gold_carried += gold;
         dungeon->lvstats.gold_mined += gold;
         mine_out_block(stl_x, stl_y, creatng->owner);
+        world_circles_dug(creatng->owner, stl_x, stl_y); /* endless worlds: digging through a circle's line */
         if (dig_has_revealed_area(stl_x, stl_y, creatng->owner))
         {
             EventIndex evidx = event_create_event_or_update_nearby_existing_event(
@@ -704,6 +706,7 @@ long instf_dig(struct Thing *creatng, int32_t *param)
     if (taskkind == SDDigTask_DigEarth)
     {
         dig_out_block(stl_x, stl_y, creatng->owner);
+        world_circles_dug(creatng->owner, stl_x, stl_y); /* endless worlds: digging through a circle's line */
 
         if (dig_has_revealed_area(stl_x, stl_y, creatng->owner))
         {
@@ -1138,6 +1141,7 @@ long instf_tunnel(struct Thing *creatng, int32_t *param)
         slb->health--;
         } else {
         dig_out_block(stl_x, stl_y, creatng->owner);
+        world_circles_dug(creatng->owner, stl_x, stl_y); /* endless worlds: digging through a circle's line */
         }
     return 1;
 }

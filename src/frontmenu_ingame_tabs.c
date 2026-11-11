@@ -694,7 +694,8 @@ void gui_set_page(struct GuiButton* gbtn)
 {
     short menu_id = gbtn->content.lval;
     info_tag = (menu_id == GMnu_QUERY) || (menu_id == GMnu_CREATURE_QUERY1) ||
-        (menu_id == GMnu_CREATURE_QUERY2) || (menu_id == GMnu_CREATURE_QUERY3) || (menu_id == GMnu_CREATURE_QUERY4);
+        (menu_id == GMnu_CREATURE_QUERY2) || (menu_id == GMnu_CREATURE_QUERY3) || (menu_id == GMnu_CREATURE_QUERY4) ||
+        (menu_id == GMnu_CREATURE_QUERY5);
     if (menu_id == GMnu_ROOM)
     {
         room_tag = 1;
@@ -776,6 +777,19 @@ static void draw_level_badge(struct GuiButton *gbtn, int number, TbBool reached)
     LbTextDrawResized(0, gbtn->height / 16, tx_units_per_px, level_text);
 }
 
+/** Endless worlds, Amenity Mastery: the bar of a room (class 0) or spell (1) along the foot of its icon: how far its
+ *  next level is. Nothing while the bar is empty or the amenity is at its top. */
+static void draw_mastery_bar(struct GuiButton *gbtn, int kind_class, int kind)
+{
+    int xp = 0, need = 0;
+    if (!world_amenity_bar(my_player_number, kind_class, kind, &xp, &need) || (xp <= 0) || (need <= 0))
+        return;
+    const int w = gbtn->width * 6 / 10, h = max(2, gbtn->height / 14);
+    const int x = gbtn->scr_pos_x + gbtn->width / 8, y = gbtn->scr_pos_y + gbtn->height - h - gbtn->height / 7;
+    LbDrawBox(x - 1, y - 1, w + 2, h + 2, colours[0][0][0]);
+    LbDrawBox(x, y, max(1, w * min(xp, need) / need), h, colours[15][11][2]);
+}
+
 void gui_area_spell_button(struct GuiButton *gbtn)
 {
     unsigned short flg_mem = RendererGetDrawFlags();
@@ -820,6 +834,7 @@ void gui_area_spell_button(struct GuiButton *gbtn)
             TbBool level_reached = false;
             if (world_power_level_badge(my_player_number, pwkind, &level_number, &level_reached))
                 draw_level_badge(gbtn, level_number, level_reached);
+            draw_mastery_bar(gbtn, 1, pwkind);
         } else
         {
             if ((pwkind == PwrK_HOLDAUDNC) && (dungeon->magic_level[pwkind] > 0)) {
@@ -1722,6 +1737,7 @@ void gui_area_room_button(struct GuiButton *gbtn)
             TbBool level_reached = false;
             if (world_room_level_badge(my_player_number, rkind, &level_number, &level_reached))
                 draw_level_badge(gbtn, level_number, level_reached);
+            draw_mastery_bar(gbtn, 0, rkind);
         } else
         {
             // Draw a question mark over the button, to indicate it can be researched

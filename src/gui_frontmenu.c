@@ -32,6 +32,7 @@
 #include "gui_boxmenu.h"
 
 #include "keeperfx.hpp"
+#include "world_stream.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -159,6 +160,7 @@ void turn_off_query_menus(void)
     turn_off_menu(GMnu_CREATURE_QUERY2);
     turn_off_menu(GMnu_CREATURE_QUERY3);
     turn_off_menu(GMnu_CREATURE_QUERY4);
+    turn_off_menu(GMnu_CREATURE_QUERY5);
 }
 
 void turn_off_all_panel_menus(void)
@@ -216,6 +218,10 @@ void turn_off_all_panel_menus(void)
   if ( menu_is_active(GMnu_CREATURE_QUERY4) )
   {
     turn_off_menu(GMnu_CREATURE_QUERY4);
+  }
+  if ( menu_is_active(GMnu_CREATURE_QUERY5) )
+  {
+    turn_off_menu(GMnu_CREATURE_QUERY5);
   }
   if ( menu_is_active(GMnu_SPELL_LOST) )
   {
@@ -386,7 +392,7 @@ void turn_on_menu(MenuID mnu_idx)
 
 void update_query_menu()
 {
-    if(!(menu_is_active(GMnu_CREATURE_QUERY1) || menu_is_active(GMnu_CREATURE_QUERY2) || menu_is_active(GMnu_CREATURE_QUERY3) || menu_is_active(GMnu_CREATURE_QUERY4)))
+    if(!(menu_is_active(GMnu_CREATURE_QUERY1) || menu_is_active(GMnu_CREATURE_QUERY2) || menu_is_active(GMnu_CREATURE_QUERY3) || menu_is_active(GMnu_CREATURE_QUERY4) || menu_is_active(GMnu_CREATURE_QUERY5)))
         return;
     struct Thing* thing = thing_get(get_user_state(get_displayed_user())->influenced_thing_idx);
 
@@ -455,12 +461,23 @@ void update_query_menu()
             update_wheel_scrolled();
         }
     }
+    if (menu_is_active(GMnu_CREATURE_QUERY5))
+    {
+        /* endless worlds: the Rap Sheet, after the fourth tab */
+        if (wheel_scrolled_down || wheel_scrolled_up)
+        {
+            turn_off_menu(GMnu_CREATURE_QUERY5);
+            turn_on_menu(wheel_scrolled_down ? GMnu_CREATURE_QUERY1 : GMnu_CREATURE_QUERY4);
+            fake_button_click(0);
+            update_wheel_scrolled();
+        }
+    }
     if (menu_is_active(GMnu_CREATURE_QUERY4))
     {
         if (wheel_scrolled_down)
         {
             turn_off_menu(GMnu_CREATURE_QUERY4);
-            turn_on_menu(GMnu_CREATURE_QUERY1);
+            turn_on_menu(world_mode_active() ? GMnu_CREATURE_QUERY5 : GMnu_CREATURE_QUERY1);
             fake_button_click(0);
             update_wheel_scrolled();
         }

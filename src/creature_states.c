@@ -87,6 +87,7 @@
 #include "kfx/ai/TargetSearchProbe.h"
 #include "world_stream.h"
 #include "world_colours.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -4346,7 +4347,15 @@ TbBool process_creature_hunger(struct Thing *thing)
     if (game.conf.rules[thing->owner].health.turns_per_hunger_health_loss > 0)
     {
         // Make sure every creature loses health on different turn.
-        if (((get_gameturn() + thing->index) % game.conf.rules[thing->owner].health.turns_per_hunger_health_loss) == 0) {
+        long hunger_every = game.conf.rules[thing->owner].health.turns_per_hunger_health_loss;
+        if (creature_is_kept_in_prison(thing))
+        {
+            /* endless: a Prison's level starves its prisoners (and so turns them to skeletons) sooner */
+            const struct Room *prison = get_room_thing_is_on(thing);
+            if (!room_is_invalid(prison))
+                hunger_every = max(1L, hunger_every * 100 / (100 + world_room_bonus(prison->owner, WRB_PrisonSkeleton)));
+        }
+        if (((get_gameturn() + thing->index) % hunger_every) == 0) {
             SYNCDBG(9,"The %s index %d lost %d health due to hunger",thing_model_name(thing), (int)thing->index, (int)game.conf.rules[thing->owner].health.hunger_health_loss);
             remove_health_from_thing_and_display_health(thing, game.conf.rules[thing->owner].health.hunger_health_loss);
             return true;

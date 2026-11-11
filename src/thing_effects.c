@@ -39,6 +39,7 @@
 #include "gui_topmsg.h"
 #include "keeperfx.hpp"
 #include "map_blocks.h"
+#include "creature_states_combt.h"
 #include "map_data.h"
 #include "player_utils.h"
 #include "player_instances.h"
@@ -1037,6 +1038,8 @@ TbBool explosion_affecting_thing(struct Thing *tngsrc, struct Thing *tngdst, con
                 if (max_damage > 0)
                 {
                     HitPoints damage = get_radially_decaying_value(max_damage, max_dist / 4, 3 * max_dist / 4, distance) + 1;
+                    if (flag_is_set(shotst->model_flags, ShMF_Fire))
+                        damage = creature_fire_adjust_damage(tngdst, damage);
                     SYNCDBG(7,"Causing %d damage to %s at distance %d",(int)damage,thing_model_name(tngdst),(int)distance);
                     apply_damage_to_thing_and_display_health(tngdst, damage, owner);
                     if (flag_is_set(shotst->model_flags,ShMF_LifeDrain))
@@ -1474,6 +1477,7 @@ TbBool poison_cloud_affecting_thing(struct Thing *tngsrc, struct Thing *tngdst, 
                         HitPoints damage;
                         damage = get_radially_decaying_value(max_damage, max_dist / 4, 3 * max_dist / 4, distance) + 1;
                         SYNCDBG(7, "Causing %d damage to %s at distance %d", (int)damage, thing_model_name(tngdst), (int)distance);
+                        world_trap_gas_hit(tngsrc, tngdst, damage); /* endless: a level 5 gas trap's lasting poison */
                         apply_damage_to_thing_and_display_health(tngdst, damage, tngsrc->owner);
                     }
                     break;
@@ -1483,6 +1487,7 @@ TbBool poison_cloud_affecting_thing(struct Thing *tngsrc, struct Thing *tngdst, 
                         HitPoints damage;
                         damage = get_radially_decaying_value(max_damage, 3 * max_dist / 4, max_dist / 4, distance) + 1;
                         SYNCDBG(7, "Causing %d damage to %s at distance %d", (int)damage, thing_model_name(tngdst), (int)distance);
+                        world_trap_gas_hit(tngsrc, tngdst, damage); /* endless: a level 5 gas trap's lasting poison */
                         apply_damage_to_thing_and_display_health(tngdst, damage, tngsrc->owner);
                     }
                     spconf = get_spell_config(spell_idx);
@@ -1628,7 +1633,13 @@ TngUpdateRet update_effect(struct Thing *efftng)
         case AAffT_GasDamage:
         case AAffT_GasDamageEffect:
         case AAffT_GasEffect:
-            poison_cloud_affecting_area(efftng, &efftng->mappos, 5 * COORD_PER_STL, 120, effcst->area_affect_type, effcst->spell_effect);
+        {
+            /* endless: a gas trap's cloud does more by the trap's level */
+            long gas_damage = 120;
+            if (efftng->shot_effect.parent_class_id == TCls_Trap)
+                gas_damage = gas_damage * (100 + world_trap_bonus(efftng->owner, efftng->shot_effect.parent_model, WTB_DamagePercent)) / 100;
+            poison_cloud_affecting_area(efftng, &efftng->mappos, 5 * COORD_PER_STL, gas_damage, effcst->area_affect_type, effcst->spell_effect);
+        }
             break;
         case AAffT_WOPDamage:
             word_of_power_affecting_area(efftng, subtng, &efftng->mappos);

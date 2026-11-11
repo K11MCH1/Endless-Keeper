@@ -43,6 +43,7 @@
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
 #include "world_progress.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -586,6 +587,7 @@ CrStateRet training(struct Thing *thing)
     {
         long work_value = compute_creature_work_value_for_room_role(thing, RoRoF_CrTrainExp, room->efficiency);
         work_value = work_value * (100 + world_room_bonus(room->owner, WRB_TrainingXp)) / 100; /* endless: its level */
+        work_value = work_value * (100 + world_misdeeds_train_bonus(thing)) / 100; /* endless: Bad Influence */
         SYNCDBG(19,"The %s index %d produced %d training points",thing_model_name(thing),(int)thing->index,(int)work_value);
         cctrl->exp_points += work_value;
         dungeon->total_experience_creatures_gained += work_value;

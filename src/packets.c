@@ -111,6 +111,7 @@
 #include "keeperfx.hpp"
 #include "world_stream.h"
 #include "world_menu.h"
+#include "world_misdeeds.h"
 #include "world_pages.h"
 #include "net_state.h"
 #include "post_inc.h"
@@ -873,6 +874,15 @@ TbBool process_user_global_packet_action(NetUserId user)
       /* !delete dungeon (the player said Yes): a thin-client server deletes the dungeon and sends the player back */
       if (netstate_thin_mode() && network_is_host())
           world_seat_delete_by_player(plyr_idx);
+      return 1;
+  case PckA_WorldMisdeedName:
+      /* game state: the thin-client server (or every machine of a lockstep game) does it */
+      if (!netstate_thin_mode() || network_is_host())
+          world_misdeeds_packet_rename(plyr_idx, (uint32_t)pckt->actn_par1, (uint32_t)pckt->actn_par2);
+      return 1;
+  case PckA_WorldMisdeedPick:
+      if (!netstate_thin_mode() || network_is_host())
+          world_misdeeds_packet_pick(plyr_idx, (ThingIndex)pckt->actn_par1, (int)pckt->actn_par2);
       return 1;
   case PckA_QuitToMainMenu:
       if ((user == get_local_user()) && !replay.load_enable)

@@ -389,9 +389,19 @@ struct Game {
     /** Endless worlds (2026-11-09): each player's rooms and spells with levels (Lair, Hatchery, Library, Training Room;
      *  Create Imp, Sight of Evil, Speed Monster, Conceal Monster, Heal, Lightning Strike, Protect Monster): the level
      *  researched and the level duplicate books allow (0 counts as 1; saved with the world's progress, PRG1). */
-    uint8_t world_room_level[PLAYERS_MAX][12];
-    uint8_t world_room_allowed[PLAYERS_MAX][12];
+    uint8_t world_room_level[PLAYERS_MAX][24];
+    uint8_t world_room_allowed[PLAYERS_MAX][24];
     uint8_t world_room_researching[PLAYERS_MAX]; /* 1 + the entry whose next level the Library researches now, 0 none */
+    uint16_t world_room_xp[PLAYERS_MAX][24];     /* Amenity Mastery: each entry's bar (here so that thin clients get it) */
+    /* Misdeeds: the records live on the server. For each player, the record of the creature their query panel shows
+       (0: none), copied here by the server so that a thin client's Rap Sheet has it. */
+    uint16_t world_misdeed_view_thing[PLAYERS_MAX];
+    uint8_t world_misdeed_view[PLAYERS_MAX][128];
+    /** The wind shots' lists of the creatures they pushed (thing_data.h; they were in every thing). wind_nodes_used:
+     *  the highest node ever handed out; wind_free_head: the chain of nodes given back (0: none). All zero is empty. */
+    struct WindNode wind_nodes[WIND_NODES_COUNT];
+    uint16_t wind_nodes_used;
+    uint16_t wind_free_head;
 };
 
 #pragma pack()

@@ -1,0 +1,5 @@
+[creature_zombie]
+ENG = "Zombie"
+
+[zombie_frenzy_tooltip]
+ENG = "Frenzy: The creature goes berserk. For ten seconds it hits harder and attacks faster."

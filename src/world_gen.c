@@ -312,6 +312,7 @@ struct WgWorld {
     struct SeamEntry *seam;
     int seam_count;
     struct ReachSet *reach;
+    struct GroundMemo *gmemo;        /* version 7: ground7 of slabs asked for lately (the same answers, sooner) */
     struct Cand start;
     struct Layout *start_layout;
     struct CandEntry *cand;
@@ -809,6 +810,22 @@ static double floor_int(double v, int64_t *iv)
 {
     const double magic = 6755399441055744.0; /* 0x1.8p52 */
     double t;
+#ifndef WG_NO_FAST_FLOOR
+    /* RESEARCH #7: |v| < 2^30 (every noise input of a world inside the int32 chunk range): truncate to an int32
+     * (cvttsd2si: exact), back to a double (exact), and step down when that is above v. The same t and *iv as the
+     * path below for these v: both are the floor, and neither can give -0.0 (an int32 converts to +0.0). No 64-bit
+     * integer work, which is what costs on a 32-bit build. */
+    if (v > -1073741824.0 && v < 1073741824.0) {
+        int32_t i = (int32_t)v;
+        t = (double)i;
+        if (t > v) {
+            t -= 1.0;
+            i--;
+        }
+        *iv = i;
+        return t;
+    }
+#endif
     if (!(fabs(v) < 1125899906842624.0)) { /* 2^50 */
         t = floor(v);
         *iv = (int64_t)t;
@@ -1391,11 +1408,53 @@ static int biome7_of(const struct Clim7 *c)
     return c->special >= 0 ? c->special : c->base;
 }
 
+/** RESEARCH #7: a memo of version 7's ground (before the gold seams) per world slab. ground7 is a pure function of
+ *  the seed and the slab, and the seams' reachability floods ask for the same slabs again and again (each flood
+ *  starts from nothing), as does the chunk's own terrain afterwards. Direct mapped: a newer slab replaces an older
+ *  one in its slot, which changes speed only, never an answer. One per WgWorld (not shared between threads). */
+#define GMEMO_BITS 16
+#define GMEMO_CAP (1 << GMEMO_BITS)
+struct GroundMemo {
+    int64_t x[GMEMO_CAP], y[GMEMO_CAP];
+    uint8_t g[GMEMO_CAP]; /* 0: empty; else 1 + the WgSlab */
+};
+
+static uint32_t gmemo_slot(int64_t x, int64_t y)
+{
+    return (uint32_t)((((uint64_t)x * WG_P1) ^ ((uint64_t)y * WG_P2)) >> (64 - GMEMO_BITS));
+}
+
+/** ground7 at a slab, from the memo or worked out (c: the slab's climate if the caller has it, or NULL). */
+static uint8_t ground7_memo(const struct WgWorld *w, int64_t x, int64_t y, const struct Clim7 *c)
+{
+    struct GroundMemo *m = w->gmemo;
+    struct Clim7 own;
+    uint32_t i;
+    uint8_t g;
+    if (m == NULL) {
+        if (c == NULL) {
+            climate7(w, x, y, &own);
+            c = &own;
+        }
+        return ground7(w, x, y, c);
+    }
+    i = gmemo_slot(x, y);
+    if (m->g[i] != 0 && m->x[i] == x && m->y[i] == y)
+        return (uint8_t)(m->g[i] - 1);
+    if (c == NULL) {
+        climate7(w, x, y, &own);
+        c = &own;
+    }
+    g = ground7(w, x, y, c);
+    m->x[i] = x;
+    m->y[i] = y;
+    m->g[i] = (uint8_t)(g + 1);
+    return g;
+}
+
 static int is_rock7(const struct WgWorld *w, int64_t x, int64_t y)
 {
-    struct Clim7 c;
-    climate7(w, x, y, &c);
-    return ground7(w, x, y, &c) == WgS_Rock;
+    return ground7_memo(w, x, y, NULL) == WgS_Rock;
 }
 
 /** Version 7: does a structure of this type fit here? Never in Dead Man's Land; in an ocean or a river province
@@ -1425,9 +1484,7 @@ static int fits7(const struct WgWorld *w, int type, int64_t ox, int64_t oy)
 static uint8_t ground_base_v(const struct WgWorld *w, int64_t x, int64_t y)
 {
     if (w->version >= 7) {
-        struct Clim7 c;
-        climate7(w, x, y, &c);
-        return ground7(w, x, y, &c);
+        return ground7_memo(w, x, y, NULL);
     } else {
         double clim[4];
         climate(w, x, y, clim);
@@ -2314,7 +2371,7 @@ static uint8_t terrain7(struct WgWorld *w, int64_t xi, int64_t yi, const struct 
     g = seam_gold(w, xi, yi);
     if (g != 0)
         return (uint8_t)g;
-    return ground7(w, xi, yi, c);
+    return ground7_memo(w, xi, yi, c);
 }
 
 /** Python's list[i] = v for a list of 256: a negative index counts from the end; past the end Python raises
@@ -3333,6 +3390,8 @@ struct WgWorld *wg_world_create_version(uint64_t seed, int version)
     for (i = 0; i < WgT_COUNT; i++)
         w->spec_salt[i] = salt2("structure:", type_names[i], strlen(type_names[i]));
     w->version = version >= 7 ? 7 : 6;
+    if (w->version >= 7)
+        w->gmemo = (struct GroundMemo *)calloc(1, sizeof(struct GroundMemo)); /* NULL: it works without */
     if (w->version >= 7) {
         uint64_t h;
         for (i = 0; i < V7_COUNT; i++)
@@ -3373,6 +3432,7 @@ void wg_world_destroy(struct WgWorld *w)
             free(w->seam[i].cells);
     free(w->seam);
     free(w->reach);
+    free(w->gmemo);
     free(w->start_layout);
     free(w);
 }

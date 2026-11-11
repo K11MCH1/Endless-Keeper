@@ -85,6 +85,11 @@ SAVE_STRUCT(DesyncChecksums, struct DesyncChecksums,
     SAVE_FIELD(struct DesyncChecksums, game_turn, SV_U32),
 );
 
+SAVE_STRUCT(WindNode, struct WindNode,
+    SAVE_FIELD(struct WindNode, creature, SV_U16),
+    SAVE_FIELD(struct WindNode, next, SV_U16),
+);
+
 SAVE_STRUCT(Game, struct Game,
     SAVE_FIELD(struct Game, continue_level_number, SV_I32),
     SAVE_FIELD(struct Game, run_after_victory, SV_BOOL8),
@@ -236,6 +241,9 @@ SAVE_STRUCT(Game, struct Game,
     SAVE_DERIVED(struct Game, around_slab_eight, "set_map_size"),
     SAVE_DERIVED(struct Game, small_around_slab, "set_map_size"),
     SAVE_RUNTIME(struct Game, skip_initial_input_turns),
+    SAVE_SUB_ARRAY(struct Game, wind_nodes, WindNode),  /* missing in older saves: empty */
+    SAVE_FIELD(struct Game, wind_nodes_used, SV_U16),
+    SAVE_FIELD(struct Game, wind_free_head, SV_U16),
     SAVE_SUB_EX(struct Game, host_checksums, DesyncChecksums, .flags = SVF_SYNC),
     SAVE_SUB_EX(struct Game, log_snapshot, LogDetailedSnapshot, .flags = SVF_SYNC),
 );

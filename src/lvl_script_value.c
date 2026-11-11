@@ -601,6 +601,41 @@ void script_process_value(unsigned long var_index, unsigned long plr_range_id, l
               clear_flag(crconf->model_flags, CMF_CannotPossess);
           }
           break;
+      case 40: // LAIR_ANIMATIONS
+          if (param3 >= 1) {
+              set_flag(crconf->model_flags, CMF_LairAnimations);
+          } else {
+              clear_flag(crconf->model_flags, CMF_LairAnimations);
+          }
+          break;
+      case 41: // SUPEROSMIA
+          if (param3 >= 1) {
+              set_flag(crconf->model_flags, CMF_Superosmia);
+          } else {
+              clear_flag(crconf->model_flags, CMF_Superosmia);
+          }
+          break;
+      case 42: // WEAK_HEALING
+          if (param3 >= 1) {
+              set_flag(crconf->model_flags, CMF_WeakHealing);
+          } else {
+              clear_flag(crconf->model_flags, CMF_WeakHealing);
+          }
+          break;
+      case 43: // FLAMMABLE
+          if (param3 >= 1) {
+              set_flag(crconf->model_flags, CMF_Flammable);
+          } else {
+              clear_flag(crconf->model_flags, CMF_Flammable);
+          }
+          break;
+      case 44: // PACK_FIGHTER
+          if (param3 >= 1) {
+              set_flag(crconf->model_flags, CMF_PackFighter);
+          } else {
+              clear_flag(crconf->model_flags, CMF_PackFighter);
+          }
+          break;
       default:
           SCRPTERRLOG("Unknown creature property '%ld'", param2);
           break;

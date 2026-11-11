@@ -295,6 +295,12 @@ void LensManager::BuildActiveGPULensCmd(long viewport_w, long viewport_h, IRWorl
             effect->BuildGPUParams(out, viewport_w, viewport_h);
         }
     }
+
+    // Blur = 0..100 in lenses.cfg. 100 is a radius of 1/72 of the view's height (10 pixels at 720),
+    // so the same number looks the same at every resolution.
+    const struct LensConfig* blur_cfg = get_lens_config(m_applied_lens);
+    if (blur_cfg != NULL && blur_cfg->blur > 0)
+        out.blur_radius = (float)blur_cfg->blur * (float)viewport_h / 7200.0f;
 }
 
 void LensManager::LoadAccessibilityConfig()

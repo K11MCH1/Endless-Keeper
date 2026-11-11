@@ -53,6 +53,15 @@ TbBool creature_move_to_home_lair(struct Thing *creatng);
 short creature_going_home_to_sleep(struct Thing *thing);
 short creature_sleep(struct Thing *thing);
 long process_lair_enemy(struct Thing *thing, struct Room *room);
+
+/* Lair animations (creature property LAIR_ANIMATIONS). */
+#define LAIR_ANIM_SLEEP_SPEED  96  /* animation speed of going to sleep; 256 = one frame a turn */
+#define LAIR_ANIM_WAKE_SPEED  128  /* animation speed of coming out; doubled with an enemy near */
+#define LAIR_ANIM_BREATHE_SPEED 48 /* animation speed while asleep (the stock speed is 128) */
+enum LairAnimationPhases { LairAnim_None = 0, LairAnim_GoingToSleep, LairAnim_WakingUp, };
+TbBool creature_sleeps_with_lair_animations(const struct Thing *thing);
+int creature_lair_animation_phase(const struct Thing *thing);
+TbBool creature_lair_wake_is_hurried(const struct Thing *thing);
 /******************************************************************************/
 #ifdef __cplusplus
 }

@@ -947,6 +947,10 @@ void clear_things_and_persons_data(void)
     struct Thing *thing;
     long i;
     memset(game.thing_lists, 0, sizeof(game.thing_lists));
+    /* no thing, no wind shot: every list node is free */
+    memset(game.wind_nodes, 0, sizeof(game.wind_nodes));
+    game.wind_nodes_used = 0;
+    game.wind_free_head = 0;
     game.ambient_sound_thing_idx = 0;
     game.nodungeon_creatr_list_start = 0;
     for (i=0; i < THINGS_COUNT; i++)

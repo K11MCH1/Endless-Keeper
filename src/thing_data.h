@@ -24,8 +24,13 @@
 
 /** Max amount of creatures supported on any map. */
 #define CREATURES_COUNT       4096 /* creature controls (1024 before: endless worlds with many dungeons need more) */
-/** Creatures a wind shot remembers it has pushed (it was CREATURES_COUNT, 1024: kept, so a thing keeps its size). */
+/** Creatures a wind shot remembers it has pushed (it was CREATURES_COUNT, 1024: kept, the same limit a shot). */
 #define WIND_AFFECTED_MAX     1024
+/** The wind shots' lists live in game.wind_nodes (2026-11-11), not in every thing: a thing was 2244 bytes, 2048 of
+ *  them this list, hashed, compared and copied for every thing every turn. A list is a chain of nodes from the shot's
+ *  shot.wind_list (0: none); node 0 is never used. All wind shots together can remember this many creatures less one;
+ *  past that a shot stops remembering, as it does past its own WIND_AFFECTED_MAX. */
+#define WIND_NODES_COUNT      32768
 
 
 #ifdef __cplusplus
@@ -146,6 +151,7 @@ struct Thing {
       } food;
       struct {
         unsigned char box_kind;
+        unsigned char box_circle; /* endless worlds: the circle (1-9) a research book was found in; 0 not known */
       } custom_box;
       struct {
         short belongs_to;
@@ -191,8 +197,8 @@ struct Thing {
         short target_idx;
         CrtrExpLevel shot_level;
         struct Coord3d originpos;
-        int num_wind_affected;
-        CctrlIndex wind_affected_creature[WIND_AFFECTED_MAX];  //list of wind affected Creatures
+        uint16_t wind_list;   /**< the first node of the wind affected creatures in game.wind_nodes, 0: none */
+        uint16_t wind_count;  /**< how many it holds (at most WIND_AFFECTED_MAX) */
       } shot;
       struct {
         int32_t x;
@@ -314,6 +320,32 @@ struct Thing {
     uint32_t random_seed;
     PlayerNumber holding_player;
 };
+
+/* a thing must stay small (the wind shots' lists made it 2244 bytes): it is hashed, compared and copied every turn */
+#ifdef __cplusplus
+static_assert(sizeof(struct Thing) == 196, "struct Thing changed its size");
+#else
+_Static_assert(sizeof(struct Thing) == 196, "struct Thing changed its size");
+#endif
+
+/** One creature a wind shot has pushed: a node of the shot's chain, or of the free chain. */
+struct WindNode {
+    CctrlIndex creature;
+    uint16_t next;
+};
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+/** Has this wind shot the creature (its control's index) in its list? */
+TbBool wind_list_has(const struct Thing *shotng, CctrlIndex creature);
+/** Adds the creature to the wind shot's list; false when the shot or the game holds no more. */
+TbBool wind_list_add(struct Thing *shotng, CctrlIndex creature);
+/** Gives the wind shot's list back (the shot is deleted). */
+void wind_list_free(struct Thing *shotng);
+#ifdef __cplusplus
+}
+#endif
 
 #define INVALID_THING (&game.things_data[0])
 

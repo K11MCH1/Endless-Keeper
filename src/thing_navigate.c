@@ -40,6 +40,7 @@
 #include "player_data.h"
 #include "local_camera.h"
 #include "world_pages.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -398,7 +399,7 @@ TbBool creature_can_travel_over_lava(const struct Thing *creatng)
     const struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
     // Check if a creature can fly in this moment - we don't care if it's natural ability
     // or temporary spell effect
-    return (crconf->hurt_by_lava <= 0) || flag_is_set(creatng->movement_flags, TMvF_Flying);
+    return (crconf->hurt_by_lava <= 0) || flag_is_set(creatng->movement_flags, TMvF_Flying) || world_misdeeds_lava_proof(creatng);
 }
 
 TbBool can_step_on_unsafe_terrain_at_position(const struct Thing *creatng, MapSubtlCoord stl_x, MapSubtlCoord stl_y)

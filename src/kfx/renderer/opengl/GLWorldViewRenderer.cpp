@@ -509,6 +509,7 @@ bool GLWorldViewRenderer::init_lens_shaders()
             glUniform1i(glGetUniformLocation(prog->id, "u_scene"), 0);
             m_lens_copy_loc_src_x     = glGetUniformLocation(prog->id, "u_src_x");
             m_lens_copy_loc_view_size = glGetUniformLocation(prog->id, "u_view_size");
+            m_lens_copy_loc_blur      = glGetUniformLocation(prog->id, "u_blur");
             glUseProgram(0);
             any_ok = true;
         }
@@ -855,6 +856,7 @@ void GLWorldViewRenderer::ResolveLensComposite()
             glUseProgram(prog->id);
             glUniform1f(m_lens_copy_loc_src_x, vp_x);
             glUniform2f(m_lens_copy_loc_view_size, vp_w, vp_h);
+            glUniform1f(m_lens_copy_loc_blur, m_rt_lens_cmd.blur_radius);
             glDrawArrays(GL_TRIANGLES, 0, 6);
         }
     }

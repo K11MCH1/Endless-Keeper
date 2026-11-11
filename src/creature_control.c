@@ -34,6 +34,7 @@
 #include "sounds.h"
 #include "bflib_sound.h"
 #include "game_legacy.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -117,6 +118,7 @@ struct CreatureControl *allocate_free_control_structure(void)
 
 void delete_control_structure(struct CreatureControl *cctrl)
 {
+    world_misdeeds_on_delete(cctrl); /* endless: its Misdeeds record goes with it */
     memset(cctrl, 0, sizeof(struct CreatureControl));
 }
 

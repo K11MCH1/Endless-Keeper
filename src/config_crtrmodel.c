@@ -137,6 +137,11 @@ const struct NamedCommand creatmodel_properties_commands[] = {
   {"CANNOT_PICK_UP",    37},
   {"DROP_ON_PATH",      38},
   {"CANNOT_POSSESS",    39},
+  {"LAIR_ANIMATIONS",   40},
+  {"SUPEROSMIA",        41},
+  {"WEAK_HEALING",      42},
+  {"FLAMMABLE",         43},
+  {"PACK_FIGHTER",      44},
   {NULL,                 0},
   };
 
@@ -774,6 +779,26 @@ TbBool parse_creaturemodel_attributes_blocks(long crtr_model,char *buf,long len,
                 break;
             case 39: // CANNOT_POSSESS
                 crconf->model_flags |= CMF_CannotPossess;
+                n++;
+                break;
+            case 40: // LAIR_ANIMATIONS
+                crconf->model_flags |= CMF_LairAnimations;
+                n++;
+                break;
+            case 41: // SUPEROSMIA
+                crconf->model_flags |= CMF_Superosmia;
+                n++;
+                break;
+            case 42: // WEAK_HEALING
+                crconf->model_flags |= CMF_WeakHealing;
+                n++;
+                break;
+            case 43: // FLAMMABLE
+                crconf->model_flags |= CMF_Flammable;
+                n++;
+                break;
+            case 44: // PACK_FIGHTER
+                crconf->model_flags |= CMF_PackFighter;
                 n++;
                 break;
             default:

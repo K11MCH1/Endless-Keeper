@@ -39,6 +39,7 @@
 #include "keeperfx.hpp"
 #include "api.h"
 #include "world_colours.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -606,6 +607,8 @@ static short process_player_manufacturing(PlayerNumber plyr_idx)
     {
         return true;
     }
+    if (world_trap_level_manufacture(plyr_idx))
+        return true; /* endless: the Workshop builds a trap's next level before the next crate */
     if (dungeon->manufacture_class == TCls_Empty)
     {
         if (get_next_manufacture(dungeon))

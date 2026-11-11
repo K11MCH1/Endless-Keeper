@@ -35,6 +35,7 @@
 #include "config_terrain.h"
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 #include <stdint.h>
 
@@ -68,6 +69,7 @@ struct Thing *create_creature_at_entrance(struct Room * room, ThingModel crkind)
         }
     }
     mark_creature_joined_dungeon(creatng);
+    world_misdeeds_attracted(creatng); /* endless: Bad Blood */
     if (room->owner != game.neutral_player_num)
     {
         dungeon->lvstats.creatures_attracted++;

@@ -68,6 +68,11 @@ enum CreatureModelFlags {
     CMF_CannotPickUp      = 0x400000, // Creature cannot be picked up by the hand.
     CMF_DropOnPath        = 0x800000, // Creature can be dropped on unclaimed path
     CMF_CannotPossess     = 0x1000000, // Creature cannot be possessed.
+    CMF_LairAnimations    = 0x2000000, // Plays the GoToSleep animation at its lair and the WakeUp animation when it stops sleeping.
+    CMF_Superosmia        = 0x4000000, // Smells enemy creatures within a 10 slab square, through walls, and goes to hunt them.
+    CMF_WeakHealing       = 0x8000000, // Healing spells restore only half as much health.
+    CMF_Flammable         = 0x10000000, // Takes 15% more damage from fire: shots with the FIRE property, and lava.
+    CMF_PackFighter       = 0x20000000, // Deals 2% more damage per other creature of its kind and owner within one slab.
 };
 
 // Before C23 standard, we cannot specify the underlaying type (in this case we want 64bit int) of enum.
@@ -159,6 +164,7 @@ enum InstancePropertiesFlags {
     InstPF_UsesSwipe          = 0x0200,
     InstPF_RangedBuff         = 0x0400,
     InstPF_NeedsTarget        = 0x0800,
+    InstPF_ReadyFromStart     = 0x1000, // Can be used at once by a creature that has never used it: its reset time does not count from turn 0.
 };
 
 enum InstancePrimaryTargets {

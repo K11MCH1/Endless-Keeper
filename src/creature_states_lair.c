@@ -18,6 +18,8 @@
 /******************************************************************************/
 #include "pre_inc.h"
 #include "creature_states_lair.h"
+#include "engine_render.h"
+#include "creature_graphics.h"
 #include "globals.h"
 
 #include "bflib_math.h"
@@ -444,6 +446,65 @@ short creature_choose_room_for_lair_site(struct Thing *thing)
     return 1;
 }
 
+
+/******************************************************************************/
+/* Lair animations (creature property LAIR_ANIMATIONS).
+ * Such a creature plays its GoToSleep animation once when it arrives at its lair, and its WakeUp
+ * animation once before it leaves its sleep, twice as fast with an enemy near. Both run inside the
+ * sleep state, so the creature stays on its lair for them. The phase is kept in the creature's
+ * countdown, which the sleep state does not use otherwise: above zero = turns of going to sleep left,
+ * below zero = turns of coming out left. Creatures without the property are not touched. */
+#define LAIR_ANIM_ENEMY_RANGE 12 /* subtiles */
+
+static long lair_animation_turns(const struct Thing *thing, unsigned short seq_idx, long speed)
+{
+    if (!flag_is_set(get_creature_model_flags(thing), CMF_LairAnimations))
+        return 0;
+    long anim = game.conf.crtr_conf.creature_graphics[thing->model][seq_idx];
+    if ((anim == ANIMATION_NONE) || (anim <= 0))
+        return 0;
+    long turns = get_lifespan_of_animation(anim, speed) - 1;
+    if (turns > 400)
+        turns = 400;
+    return (turns > 0) ? turns : 0;
+}
+
+TbBool creature_sleeps_with_lair_animations(const struct Thing *thing)
+{
+    return (thing->active_state == CrSt_CreatureSleep)
+        && flag_is_set(get_creature_model_flags(thing), CMF_LairAnimations);
+}
+
+int creature_lair_animation_phase(const struct Thing *thing)
+{
+    if (!creature_sleeps_with_lair_animations(thing))
+        return LairAnim_None;
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    if (cctrl->countdown > 0)
+        return LairAnim_GoingToSleep;
+    if (cctrl->countdown < 0)
+        return LairAnim_WakingUp;
+    return LairAnim_None;
+}
+
+TbBool creature_lair_wake_is_hurried(const struct Thing *thing)
+{
+    struct Thing *enmtng = get_creature_in_range_who_is_enemy_of_able_to_attack_and_not_specdigger(
+        thing->mappos.x.val, thing->mappos.y.val, LAIR_ANIM_ENEMY_RANGE, thing->owner);
+    return !thing_is_invalid(enmtng);
+}
+
+/** Starts the coming-out animation. Gives false if this creature has none: then it just wakes. */
+static TbBool lair_animation_begin_wake(struct Thing *thing)
+{
+    long turns = lair_animation_turns(thing, CGI_WakeUp, LAIR_ANIM_WAKE_SPEED);
+    if (turns <= 0)
+        return false;
+    struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    cctrl->countdown = -turns;
+    return true;
+}
+
 short at_lair_to_sleep(struct Thing *thing)
 {
     TRACE_THING(thing);
@@ -478,6 +539,8 @@ short at_lair_to_sleep(struct Thing *thing)
     {
         internal_set_thing_state(thing, CrSt_CreatureSleep);
         cctrl->turns_at_job = 200;
+        if (flag_is_set(get_creature_model_flags(thing), CMF_LairAnimations))
+            cctrl->countdown = lair_animation_turns(thing, CGI_GoToSleep, LAIR_ANIM_SLEEP_SPEED);
         thing->movement_flags &= ~TMvF_Flying;
     }
     process_lair_enemy(thing, room);
@@ -549,6 +612,36 @@ short creature_sleep(struct Thing *thing)
         return 0;
     }
     thing->movement_flags &= ~0x0020;
+    if (flag_is_set(get_creature_model_flags(thing), CMF_LairAnimations))
+    {
+        if ((cctrl->countdown > 400) || (cctrl->countdown < -400))
+            cctrl->countdown = 0; // left over from another state
+        if (cctrl->countdown < 0)
+        {
+            // coming out of sleep: twice as fast with an enemy near
+            cctrl->countdown += creature_lair_wake_is_hurried(thing) ? 2 : 1;
+            if (cctrl->countdown >= 0)
+            {
+                cctrl->countdown = 0;
+                set_start_state(thing);
+                return 1;
+            }
+            return 0;
+        }
+        if (cctrl->countdown > 0)
+            cctrl->countdown--;
+        // Fights do not pull this creature out of its sleep directly (see process_creature_state):
+        // it looks for enemies itself and comes out first.
+        if ((((get_gameturn() + thing->index) & 3) == 0) && creature_lair_wake_is_hurried(thing))
+        {
+            if (!lair_animation_begin_wake(thing))
+            {
+                set_start_state(thing);
+                return 1;
+            }
+            return 0;
+        }
+    }
     struct CreatureModelConfig *crconf = creature_stats_get_from_thing(thing);
     // Recovery is disabled if frequency is set to 0 on rules.cfg.
     if (game.conf.rules[thing->owner].creature.recovery_frequency > 0)
@@ -606,6 +699,8 @@ short creature_sleep(struct Thing *thing)
     {
         if ((thing->health >= crconf->heal_threshold * cctrl->max_health / 256) && (!cctrl->turns_at_job))
         {
+            if (lair_animation_begin_wake(thing))
+                return 0; // comes out of its lair first
             set_start_state(thing);
             return 1;
         }
