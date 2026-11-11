@@ -61,7 +61,7 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 <div align="center">
 
-# [⬇️ DOWNLOAD HERE](https://github.com/K11MCH1/Endless-Keeper/releases/latest)
+# [⬇️ DOWNLOAD HERE](https://github.com/K11MCH1/Endless-Keeper/releases)
 
 </div>
 
