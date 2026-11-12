@@ -147,7 +147,26 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 ## 🗺️ Roadmap
 
-Coming soon!
+Three systems from the roadmap arrived with release 8 and keep growing. Their pages tell where each is heading:
+
+- **[Misdeeds](roadmap/MISDEEDS.md)**: creatures remember what they did, earn vices for it, and can be named.
+- **[Circles of Hell](roadmap/CIRCLES-OF-HELL.md)**: the land around every dungeon is cut into circles, each with
+  stronger residents and better loot than the last.
+- **[Amenity Mastery](roadmap/AMENITY-MASTERY.md)**: rooms, spells and traps are mastered over time with experience
+  from duplicate books, worth more the deeper they were found.
+
+Planned next:
+
+- **[Alarm Bells](roadmap/ALARM-BELLS.md)**: gold mined near a hero fortress rings its bell, and the heroes come for
+  your mine.
+- **[Threats](roadmap/THREATS.md)**: laws for each circle, ground where your Hand has no power, crusades that spread,
+  rivals with ambitions, scars from lost fights, and raids sized by everything you own.
+- **[The Keeper's Progression](roadmap/KEEPER-PROGRESSION.md)**: a record of your own feats, a Hand that grows with
+  your level, anniversaries of your Heart, and one loyal creature that follows you through a defeat.
+- **[The Dungeon and Its Rooms](roadmap/THE-DUNGEON.md)**: rooms that care what they touch, unions of mastered
+  amenities, heresies that rewrite your dungeon's rules, secret sacrifices, and traps linked together.
+- **[Creatures](roadmap/CREATURES.md)**: a choice for every prisoner, contracts instead of plain wages, a reason to
+  possess each kind, and virtues that are flaws.
 
 ---
 
