@@ -147,26 +147,16 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 
 ## 🗺️ Roadmap
 
-Three systems from the roadmap arrived with release 8 and keep growing. Their pages tell where each is heading:
+Arrived and still growing:
 
-- **[Misdeeds](roadmap/MISDEEDS.md)**: creatures remember what they did, earn vices for it, and can be named.
-- **[Circles of Hell](roadmap/CIRCLES-OF-HELL.md)**: the land around every dungeon is cut into circles, each with
-  stronger residents and better loot than the last.
-- **[Amenity Mastery](roadmap/AMENITY-MASTERY.md)**: rooms, spells and traps are mastered over time with experience
-  from duplicate books, worth more the deeper they were found.
+- [Misdeeds](roadmap/MISDEEDS.md) · [Circles of Hell](roadmap/CIRCLES-OF-HELL.md) · [Amenity Mastery](roadmap/AMENITY-MASTERY.md) · [New Creatures](roadmap/NEW-CREATURES.md)
 
-Planned next:
+Planned:
 
-- **[Alarm Bells](roadmap/ALARM-BELLS.md)**: gold mined near a hero fortress rings its bell, and the heroes come for
-  your mine.
-- **[Threats](roadmap/THREATS.md)**: laws for each circle, ground where your Hand has no power, crusades that spread,
-  rivals with ambitions, scars from lost fights, and raids sized by everything you own.
-- **[The Keeper's Progression](roadmap/KEEPER-PROGRESSION.md)**: a record of your own feats, a Hand that grows with
-  your level, anniversaries of your Heart, and one loyal creature that follows you through a defeat.
-- **[The Dungeon and Its Rooms](roadmap/THE-DUNGEON.md)**: rooms that care what they touch, unions of mastered
-  amenities, heresies that rewrite your dungeon's rules, secret sacrifices, and traps linked together.
-- **[Creatures](roadmap/CREATURES.md)**: a choice for every prisoner, contracts instead of plain wages, a reason to
-  possess each kind, and virtues that are flaws.
+- **Threats:** [Alarm Bells](roadmap/ALARM-BELLS.md) · [Circle Laws](roadmap/CIRCLE-LAWS.md) · [Consecrated Ground](roadmap/CONSECRATED-GROUND.md) · [The Crusade Road](roadmap/THE-CRUSADE-ROAD.md) · [Rivals with Ambitions](roadmap/RIVALS-WITH-AMBITIONS.md) · [Scars](roadmap/SCARS.md) · [The Ledger of Dread](roadmap/THE-LEDGER-OF-DREAD.md)
+- **The keeper:** [The Keeper's Rap Sheet](roadmap/THE-KEEPERS-RAP-SHEET.md) · [The Hand Grows](roadmap/THE-HAND-GROWS.md) · [Anniversaries of the Heart](roadmap/ANNIVERSARIES-OF-THE-HEART.md) · [The Last Loyalist](roadmap/THE-LAST-LOYALIST.md)
+- **The dungeon:** [Neighbours](roadmap/NEIGHBOURS.md) · [Unholy Unions](roadmap/UNHOLY-UNIONS.md) · [Heresies](roadmap/HERESIES.md) · [The Unholy Cookbook](roadmap/THE-UNHOLY-COOKBOOK.md) · [Rigging](roadmap/RIGGING.md)
+- **Creatures:** [A Prisoner's Fate](roadmap/A-PRISONERS-FATE.md) · [Contracts](roadmap/CONTRACTS.md) · [Seeing Through Their Eyes](roadmap/SEEING-THROUGH-THEIR-EYES.md) · [Virtues](roadmap/VIRTUES.md)
 
 ---
 
