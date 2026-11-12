@@ -229,6 +229,8 @@ void clear_creature_pool(void);
 void reset_creature_max_levels(void);
 void reset_script_timers_and_flags(void);
 void add_creature_to_pool(ThingModel kind, int32_t amount);
+/** A keeper's creature back to the pool it came from (endless worlds: the keeper's own). */
+void add_creature_to_pool_of(PlayerNumber plyr_idx, ThingModel kind, int32_t amount);
 
 short zoom_to_next_annoyed_creature(void);
 

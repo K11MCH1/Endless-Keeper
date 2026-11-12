@@ -69,6 +69,7 @@
 #include "scrcapt.h"
 #include "gui_parchment.h"
 #include "world_colours.h"
+#include "net_anticheat.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -142,6 +143,9 @@ struct NsPageShadow {
     uint32_t seen;
     struct NsPageShadow *next;
     NetUserMask known;              /* clients that have this page */
+    PlayerBitFlags fog_players;     /* players that have revealed something in this chunk (sampled, fog_refresh_pages) */
+    NetUserMask fog_near;           /* clients whose player has revealed this chunk or one beside it: they may have it */
+    uint8_t fog_looked;             /* fog_players has been looked up at least once */
     uint32_t diff_pass, diff_off, diff_len; /* this turn's lines of it, in the shared record */
     uint8_t stale;                  /* no client had it, so it wasn't compared: data is older than the page */
     uint8_t data[];
@@ -1732,9 +1736,14 @@ static TbBool sim_view(NetUserId c, MapSubtlCoord *vx, MapSubtlCoord *vy)
 struct NsInterest {
     TbBool all;                 /* spectators, and a player whose map is open */
     PlayerNumber plyr;
+    TbBool fog;                 /* a player: only what its keeper (or its ally) has revealed */
+    PlayerBitFlags vision;      /* the players whose revealed ground counts for it */
     TbBool view, heart;
     int32_t vcx, vcy, hcx, hcy; /* chunks */
 };
+
+static TbBool fog_filter_on(void);
+static void fog_forget_user(NetUserId c);
 
 static void interest_of(NetUserId c, struct NsInterest *in)
 {
@@ -1758,6 +1767,11 @@ static void interest_of(NetUserId c, struct NsInterest *in)
     }
     in->plyr = get_net_user_player_number(c);
     const struct UserState *ustate = get_user_state(c);
+    if ((in->plyr >= 0) && !user_state_invalid(ustate) && fog_filter_on())
+    {
+        in->fog = true;
+        in->vision = get_player_vision_mask(in->plyr);
+    }
     if ((in->plyr < 0) || user_state_invalid(ustate) || (get_user_view_type(c) == PVT_MapScreen))
     {
         in->all = true;
@@ -1791,6 +1805,115 @@ static TbBool chunk_in_interest(const struct NsInterest *in, int32_t cx, int32_t
     return in->heart && (abs(cx - in->hcx) <= NS_HEART_CHUNKS) && (abs(cy - in->hcy) <= NS_HEART_CHUNKS);
 }
 
+/******************************************************************************/
+/* Fog of war in the stream (anti-cheat). A player's game draws only what its keeper has revealed, but a changed game
+ * could draw everything it is sent. So a player is sent:
+ *  - a chunk's page only when its keeper (or its ally) has revealed something in that chunk or in one beside it
+ *    (the chunks round its own heart always): a changed game sees at most one chunk past what the keeper has seen;
+ *  - a thing that is not its own only when it stands on revealed ground, and an enemy's trap only once it is
+ *    revealed.
+ * Spectators and simulated test clients get everything. KFX_NET_NOFOG=1 turns the filter off (for comparing). */
+static TbBool fog_filter_on(void)
+{
+    static int on = -1;
+    if (on < 0)
+    {
+        const char *v = getenv("KFX_NET_NOFOG");
+        on = ((v != NULL) && (atoi(v) != 0)) ? 0 : 1;
+    }
+    return on != 0;
+}
+
+/** The players that have revealed something in a loaded chunk: one map block a slab is looked at. */
+static PlayerBitFlags fog_players_of_chunk(int32_t cx, int32_t cy)
+{
+    PlayerBitFlags players = pmask_none();
+    for (int sy = 1; sy < WP_CHUNK_STL; sy += STL_PER_SLB)
+    {
+        for (int sx = 1; sx < WP_CHUNK_STL; sx += STL_PER_SLB)
+        {
+            const struct Map *mapblk = get_map_block_at(cx * WP_CHUNK_STL + sx, cy * WP_CHUNK_STL + sy);
+            if (!map_block_invalid(mapblk))
+                players = pmask_or(players, mapblk->revealed);
+        }
+    }
+    return players;
+}
+
+/** Once a turn (main thread): a share of the pages have their revealed-by set looked up again; a new page at once. */
+static void fog_refresh_pages(void)
+{
+    if (!fog_filter_on())
+        return;
+    const uint32_t phase = (uint32_t)game.play_gameturn & 7;
+    for (int b = 0; b < NS_PAGE_BUCKETS; b++)
+    {
+        for (struct NsPageShadow *ps = page_shadows[b]; ps != NULL; ps = ps->next)
+        {
+            const uint32_t h = ((uint32_t)ps->cx * 31u + (uint32_t)ps->cy * 17u) & 7;
+            if ((h == phase) || !ps->fog_looked)
+            {
+                ps->fog_players = fog_players_of_chunk(ps->cx, ps->cy);
+                ps->fog_looked = 1;
+            }
+        }
+    }
+}
+
+static TbBool fog_chunk_revealed_to(int32_t cx, int32_t cy, PlayerBitFlags vision)
+{
+    const struct NsPageShadow *ps = *page_slot(cx, cy);
+    return (ps != NULL) && pmask_intersects(ps->fog_players, vision);
+}
+
+/** A client's pages (main thread, before its record is made): the ones in its area that it may not have yet are
+ *  looked at again; once a page is allowed it stays allowed (revealed ground stays revealed). */
+static void fog_update_client(NetUserId c, const struct NsInterest *in)
+{
+    if (!in->fog)
+        return;
+    for (int b = 0; b < NS_PAGE_BUCKETS; b++)
+    {
+        for (struct NsPageShadow *ps = page_shadows[b]; ps != NULL; ps = ps->next)
+        {
+            if (numask_has(ps->fog_near, c) || !chunk_in_interest(in, ps->cx, ps->cy))
+                continue;
+            TbBool near = false;
+            for (int dy = -1; (dy <= 1) && !near; dy++)
+                for (int dx = -1; (dx <= 1) && !near; dx++)
+                    near = fog_chunk_revealed_to(ps->cx + dx, ps->cy + dy, in->vision);
+            if (near)
+                numask_add(&ps->fog_near, c);
+        }
+    }
+}
+
+/** May this client have this page? */
+static TbBool fog_page_ok(const struct NsInterest *in, const struct NsPageShadow *ps, NetUserId c)
+{
+    if (!in->fog || numask_has(ps->fog_near, c))
+        return true;
+    return in->heart && (abs(ps->cx - in->hcx) <= NS_HEART_CHUNKS) && (abs(ps->cy - in->hcy) <= NS_HEART_CHUNKS);
+}
+
+/** May this client have this thing (one that is not its own)? */
+static TbBool fog_thing_ok(const struct NsInterest *in, const struct Thing *t)
+{
+    if (!in->fog || pmask_has(in->vision, t->owner))
+        return true;
+    if ((t->class_id == TCls_Trap) && !t->trap.revealed)
+        return false;
+    return map_block_revealed_to_players(get_map_block_at(t->mappos.x.stl.num, t->mappos.y.stl.num), in->vision);
+}
+
+/** A user left or its seat has a new occupant: nothing is allowed to it any more. */
+static void fog_forget_user(NetUserId c)
+{
+    for (int b = 0; b < NS_PAGE_BUCKETS; b++)
+        for (struct NsPageShadow *ps = page_shadows[b]; ps != NULL; ps = ps->next)
+            numask_del(&ps->fog_near, c);
+}
+
 static TbBool thing_in_interest(const struct NsInterest *in, const struct Thing *t)
 {
     return chunk_in_interest(in, t->mappos.x.stl.num / WP_CHUNK_STL, t->mappos.y.stl.num / WP_CHUNK_STL);
@@ -1799,7 +1922,9 @@ static TbBool thing_in_interest(const struct NsInterest *in, const struct Thing 
 /** Whether a client gets a live thing: its own, one in its area, or one in its hand (a body carried out of it). */
 static TbBool thing_relevant(const struct NsInterest *in, const struct Thing *t)
 {
-    if (in->all || (t->owner == in->plyr) || thing_in_interest(in, t))
+    if (t->owner == in->plyr)
+        return true;
+    if ((in->all || thing_in_interest(in, t)) && fog_thing_ok(in, t))
         return true;
     return (in->plyr >= 0) && ((t->alloc_flags & TAlF_IsInLimbo) != 0) && thing_is_in_power_hand_list(t, in->plyr);
 }
@@ -2133,7 +2258,10 @@ static void client_thing_leaves(struct NsWriter *w, NetUserId c, const struct Ns
     static const struct Thing zero_thing;
     const uint16_t idx = (uint16_t)i;
     const TbBool me = (mine->alloc_flags & TAlF_Exists) != 0;
-    if (!me || !thing_in_interest(in, mine))
+    /* (a thing that walked from revealed ground into the fog is gone to the client at once: it is still in the
+       client's area, and would otherwise be followed there) */
+    const TbBool fogged = in->fog && me && (mine->owner != in->plyr) && !fog_thing_ok(in, &game.things_data[i]);
+    if (!me || fogged || !thing_in_interest(in, mine))
     {
         struct Thing target = zero_thing;
         keep_client_bytes(&target, mine);
@@ -2155,6 +2283,8 @@ static void diff_client_things(struct NsWriter *w, NetUserId c, const struct NsI
         const ThingIndex i = li->idx;
         struct Thing *mine = cl_copy(c, i);
         TbBool rel = in->all || (li->owner == in->plyr) || chunk_in_interest(in, li->cx, li->cy);
+        if (rel && in->fog && (li->owner != in->plyr) && !fog_thing_ok(in, &game.things_data[i]))
+            rel = false; /* on ground its keeper has not revealed */
         if (!rel && li->limbo && (in->plyr >= 0))
             rel = thing_is_in_power_hand_list(&game.things_data[i], in->plyr);
         if (!rel)
@@ -2218,6 +2348,7 @@ static void build_keyframe_for(NetUserId c)
 {
     struct NsInterest in;
     interest_of(c, &in);
+    fog_update_client(c, &in);
     ns_caps[c] = 0; /* it says again what it reads once it has this keyframe */
     if (!cl_init(c))
     {
@@ -2277,7 +2408,7 @@ static void build_keyframe_for(NetUserId c)
         for (struct NsPageShadow *ps = page_shadows[b]; ps != NULL; ps = ps->next)
         {
             numask_del(&ps->known, c);
-            if (!chunk_in_interest(&in, ps->cx, ps->cy))
+            if (!chunk_in_interest(&in, ps->cx, ps->cy) || !fog_page_ok(&in, ps, c))
                 continue;
             page_fresh(ps);
             rec_u8(NsK_PageAdd);
@@ -2787,6 +2918,8 @@ static void stream_clients(NetUserMask clients, size_t shared_end)
         struct NsClientJob *j = &cjobs[cjob_count++];
         j->c = c;
         interest_of(c, &j->in);
+        if (j->in.all ? ((((uint32_t)game.play_gameturn + (uint32_t)c) & 15) == 0) : ((((uint32_t)game.play_gameturn + (uint32_t)c) & 3) == 0))
+            fog_update_client(c, &j->in); /* a player with the map open has every loaded page in its area: less often */
         j->own_len = 0;
         j->z_len = 0;
         j->failed = false;
@@ -2796,7 +2929,7 @@ static void stream_clients(NetUserMask clients, size_t shared_end)
         {
             for (struct NsPageShadow *ps = page_shadows[b]; ps != NULL; ps = ps->next)
             {
-                const TbBool want = chunk_in_interest(&j->in, ps->cx, ps->cy), has = numask_has(ps->known, c);
+                const TbBool want = chunk_in_interest(&j->in, ps->cx, ps->cy) && fog_page_ok(&j->in, ps, c), has = numask_has(ps->known, c);
                 if (want && has)
                 {
                     if ((ps->diff_pass == page_pass) && (ps->diff_len > 0))
@@ -2887,6 +3020,7 @@ void netstate_server_after_turn(void)
     }
     const int64_t t0 = get_time_tick_ns();
     const NetUserMask clients = client_mask();
+    fog_refresh_pages();
     {
         /* diagnostics (2026-11-08, cameras jumping on far dig orders): a player's camera that moved more than 16
            slabs since the last turn (a minimap click, or something wrong), with what this turn's packet held */
@@ -3128,6 +3262,8 @@ void netstate_server_user_reset(NetUserId user)
     clear_user_packet_history(user);
     numask_del(&known_clients, user); /* a keyframe goes to the new occupant */
     kf_next_turn[user] = 0;
+    anticheat_user_reset(user);
+    fog_forget_user(user);
 }
 
 void netstate_server_request_keyframe(NetUserId user)
@@ -3197,7 +3333,8 @@ void netstate_server_take_input(NetUserId user, struct Packet *out)
         if (later && !packet_has_event(best))
             continue; /* superseded by a later input: a backlog drains */
         *out = *best;
-        last_input[user] = *best;
+        anticheat_check_packet(user, out); /* a command the player may not give never reaches the simulation */
+        last_input[user] = *out;
         idle_turns[user] = 0;
         out->turn = turn;
         return;
@@ -4005,7 +4142,9 @@ static void client_apply(const uint8_t *data, size_t len)
                 const char *end = strchr(colon + 1, '|');
                 char text[128];
                 snprintf(text, sizeof(text), "%.*s", (int)((end != NULL) ? (size_t)(end - colon - 1) : strlen(colon + 1)), colon + 1);
-                if (strncmp(text, "#cb ", 4) == 0)
+                if (strncmp(text, "#cheat ", 7) == 0)
+                    anticheat_test(text + 7); /* the anti-cheat: a client that sends what a changed game would */
+                else if (strncmp(text, "#cb ", 4) == 0)
                     chat_box_test(text + 4); /* the chat box: "#cb eye", "#cb type hello", ... */
                 else if (strcmp(text, "#grab") == 0)
                     world_colours_test_grab(); /* co-op: an imp into the hand */

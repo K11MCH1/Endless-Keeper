@@ -996,7 +996,7 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
             r -= dn_party_weights[i];
         }
         int levels[6];
-        dn_party_levels(&rng, n, best, day, levels);
+        dn_party_levels(&rng, n, best, world_seat_day(plyr_idx), levels); /* the dungeon's own days */
         /* co-op: the heroes that come for a keeper in a party are a level higher */
         for (int j = 0; (j < n) && (coop_bonus > 0); j++)
             levels[j] = min(levels[j] + coop_bonus, DN_LEVEL_CAP);
@@ -1057,8 +1057,9 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         made_all += made;
         const long dist = (long)floor(sqrt((double)(sx - hx) * (sx - hx) + (double)(sy - hy) * (sy - hy)) + 0.5);
         SYNCLOG("World: day %ld raid %d party %d of %d: %d heroes tunnel in at engine slab (%d,%d), %ld slabs from the"
-            " heart, %s: %s (player's best level %d%s)", day, idx + 1, s + 1, nspots, made, (int)sx, (int)sy, dist,
-            wg_biome_name(biome), desc, best, (coop_bonus > 0) ? "; a level higher: the keeper is in a party" : "");
+            " heart, %s: %s (player's best level %d, the dungeon's day %ld%s)", day, idx + 1, s + 1, nspots, made, (int)sx,
+            (int)sy, dist, wg_biome_name(biome), desc, best, world_seat_day(plyr_idx),
+            (coop_bonus > 0) ? "; a level higher: the keeper is in a party" : "");
     }
     if (made_all == 0)
         return;
@@ -1289,6 +1290,58 @@ void world_raids_player_retreat(PlayerNumber plyr_idx)
     SYNCLOG("World: the heroes raiding player %d go home (its keeper starts again)", (int)plyr_idx);
 }
 
+/******************************************************************************/
+/* Days per dungeon (2026-11-12): the clock is the world's, but each dungeon counts its own days from the day it
+   began (again after Start again or a reset). The raids read them: how many may come in a day, the leader's
+   level, the grade of the raid's book. A newcomer on the world's 31st day meets day-1 raids. */
+static int32_t dn_seat_first_day[PLAYERS_MAX]; /* the world's day the dungeon began (0: the first) */
+
+void world_daynight_seat_started(PlayerNumber plyr_idx)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
+        return;
+    dn_seat_first_day[plyr_idx] = (int32_t)world_day_number();
+    SYNCLOG("World: player %d's dungeon counts its days from the world's day %d", (int)plyr_idx, (int)dn_seat_first_day[plyr_idx]);
+}
+
+long world_seat_day(PlayerNumber plyr_idx)
+{
+    const long day = world_day_number();
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX) || (dn_seat_first_day[plyr_idx] <= 0))
+        return day; /* a dungeon of a world saved before: as old as the world */
+    return max(1L, day - (long)dn_seat_first_day[plyr_idx] + 1);
+}
+
+void world_seatdays_reset(void)
+{
+    memset(dn_seat_first_day, 0, sizeof(dn_seat_first_day));
+}
+
+size_t world_seatdays_save_size(void)
+{
+    return 4 + sizeof(dn_seat_first_day);
+}
+
+void world_seatdays_save(uint8_t *buf)
+{
+    const uint32_t n = PLAYERS_MAX;
+    memcpy(buf, &n, 4);
+    memcpy(buf + 4, dn_seat_first_day, sizeof(dn_seat_first_day));
+}
+
+TbBool world_seatdays_load(const uint8_t *buf, size_t len)
+{
+    world_seatdays_reset();
+    uint32_t n = 0;
+    if (len < 4)
+        return false;
+    memcpy(&n, buf, 4);
+    if ((size_t)n * 4 + 4 > len)
+        return false;
+    memcpy(dn_seat_first_day, buf + 4, 4 * (size_t)min((uint32_t)PLAYERS_MAX, n));
+    return true;
+}
+
 void world_daynight_level_end(void)
 {
     dn_dawn_save = false;
@@ -1357,15 +1410,17 @@ void world_daynight_turn(void)
             world_peek_warm(hx - reach, hy - reach, hx + reach, hy + reach, 2);
         }
     }
-    const int n = dn_raids_on_day(day);
-    for (int i = 0; i < n; i++)
+    /* every human player gets its day's raids (as many as its dungeon's own days allow), each at its own time in the
+       raid's part of the day, rolled on its own */
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
-        /* every human player gets the day's raids, each at its own time in the raid's part of the day, rolled on
-           its own */
-        for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+        if (!world_player_is_human(p) || world_coop_seat_away(p))
+            continue; /* (a co-op dungeon whose player is away is frozen: no raid comes for it) */
+        const int n = dn_raids_on_day(world_seat_day(p));
+        for (int i = 0; i < n; i++)
         {
-            if (!world_player_is_human(p) || world_coop_seat_away(p) || (dn_raid_time_for(day, i, n, p) != t))
-                continue; /* (a co-op dungeon whose player is away is frozen: no raid comes for it) */
+            if (dn_raid_time_for(day, i, n, p) != t)
+                continue;
             if (dn_raid_happens(day, i, p))
                 dn_raid(day, i, p);
             else if (p == PLAYER0)

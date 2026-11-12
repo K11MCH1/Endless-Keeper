@@ -320,6 +320,8 @@ TbBool process_dungeon_control_packet_dungeon_control(NetUserId user)
                         ERRORLOG("Door thing not found at map pos (%d,%d)",(int)ustate->cursor_clicked_subtile_x,(int)ustate->cursor_clicked_subtile_y);
                         break;
                     }
+                    if (thing->owner != plyr_idx)
+                        break; /* only the keeper whose door it is turns its key (the cursor state comes from the packet) */
                     if (thing->door.is_locked)
                         unlock_door(thing);
                     else

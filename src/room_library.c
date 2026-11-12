@@ -38,6 +38,7 @@
 #include "game_legacy.h"
 #include "api.h"
 #include "world_progress.h"
+#include "world_caretaker.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -291,6 +292,9 @@ static void process_player_research(PlayerNumber plyr_idx)
     struct Dungeon* dungeon = get_dungeon(plyr_idx);
     if (!player_has_room_of_role(plyr_idx, RoRoF_Research)) {
         return;
+    }
+    if (world_caretaker_active(plyr_idx)) {
+        return; /* endless worlds: the Library (and Amenity Mastery levels) wait for the player to come back */
     }
     if (world_room_level_research(plyr_idx)) {
         return; /* endless world: the Library works on a room's next level */

@@ -50,6 +50,8 @@ uint64_t netsec_local_world_token(uint64_t local_secret);
 /** This machine answers key requests now: an endless world it hosts. Also turns the tokens of users logged in
  *  before the world had its key into this world's. */
 TbBool netsec_server_ready(void);
+/** Whether this server takes sealed logins only (the rule; KFX_NET_ALLOWRAW=1 lets unsealed ones in, for tests). */
+TbBool netsec_require_sealed(void);
 
 /* the login */
 /** The server: a client asks for the key (NETMSG_KEYREQ). */

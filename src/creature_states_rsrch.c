@@ -40,6 +40,7 @@
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
 #include "world_progress.h"
+#include "world_caretaker.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -227,6 +228,8 @@ CrCheckRet process_research_function(struct Thing *creatng)
     long work_value = compute_creature_work_value_for_room_role(creatng, RoRoF_Research, room->efficiency);
     work_value = work_value * (100 + world_room_bonus(room->owner, WRB_LibraryResearch)) / 100; /* endless: its level */
     SYNCDBG(19,"The %s index %d produced %d research points",thing_model_name(creatng),(int)creatng->index,(int)work_value);
+    if (world_caretaker_active(creatng->owner))
+        return CrCkRet_Available; /* endless worlds: the Library is paused while the caretaker keeps the dungeon */
     dungeon->total_research_points += work_value;
     dungeon->research_progress += work_value;
     return CrCkRet_Available;

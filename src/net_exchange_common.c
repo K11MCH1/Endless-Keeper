@@ -44,6 +44,7 @@
 #include "server_admin.h"
 #include "gui_msgs.h"
 #include "server_roles.h"
+#include "net_anticheat.h"
 #include "post_inc.h"
 /******************************************************************************/
 
@@ -201,6 +202,10 @@ static TbError handle_chat_message(NetUserId source, char *read_pos, size_t mess
         } else {
             message_add(MsgType_Blank, 0, message);
         }
+        return Lb_OK;
+    }
+    if ((netstate.my_id == SERVER_ID) && (source != SERVER_ID) && (source < MAX_NET_USERS) && !anticheat_chat_allowed(source)) {
+        server_admin_notice(source, "You are sending messages too fast.");
         return Lb_OK;
     }
     if ((netstate.my_id == SERVER_ID) && (source != SERVER_ID) && netstate_dedicated() && (source < MAX_NET_USERS)) {
@@ -597,6 +602,8 @@ void process_peer_msgs(NetUserId peer_id, void *server_buf, size_t frame_size)
         return;
     }
     while (!netstate.resync_pending && netstate.pending_spectator_id == INVALID_USER_ID && netstate.sp->msgready(peer_id, 0)) {
+        if (!anticheat_message_allowed(peer_id))
+            break; /* a flood: the rest waits in the connection's queue */
         process_network_message(peer_id, server_buf, frame_size, NETMSG_GAMEPLAY_UNSEQUENCED, NULL);
     }
 }

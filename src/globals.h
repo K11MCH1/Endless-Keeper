@@ -352,7 +352,7 @@ typedef uint8_t EventKind;
 typedef uint16_t SpecialKind;
 /** Type which stores index of the new event, or negative index of updated event, in map events array. */
 typedef uint8_t EventIndex;
-typedef uint8_t BattleIndex;
+typedef uint16_t BattleIndex; /* 16 bits since 2026-11-12: more than 255 battles */
 typedef int32_t HitPoints;
 /** Type which stores TUFRet_* values. */
 typedef int16_t TngUpdateRet;

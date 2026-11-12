@@ -1518,18 +1518,33 @@ long creature_tunnel_to(struct Thing *creatng, struct Coord3d *pos, short speed)
         return 0;
     }
     // If the tunneler tries to tunnel the same distance for 150 times, he must be stuck. So push him.
-    static struct TunnelDistance tunnel;
-    tunnel.creatid = creatng->index;
-    tunnel.newdist = dist;
+    /* Endless Keeper (2026-11-12): the last distance is each creature's own (one shared by every tunneller let two
+       of them reset or feed each other's count). A tunneller in a one-slab tunnel could stall just short of a
+       wall-hugging point its body can't reach (the same 47 units for 150 turns, every raid at the same corner): if
+       the point is that close and not in a wall, it steps onto it; otherwise it is pushed as before. */
+    static MapCoordDelta olddist[CREATURES_COUNT];
     static unsigned long identical[CREATURES_COUNT];
-    if (tunnel.olddist == tunnel.newdist)
+    if (olddist[creatng->ccontrol_idx] == dist)
     {
         identical[creatng->ccontrol_idx] += 1;
     }
     else
     {
-        tunnel.olddist = tunnel.newdist;
+        olddist[creatng->ccontrol_idx] = dist;
         identical[creatng->ccontrol_idx] = 0;
+    }
+    if ((identical[creatng->ccontrol_idx] >= 30) && (dist < COORD_PER_STL / 2))
+    {
+        struct Coord3d step = cctrl->navi.pos_next;
+        step.z.val = get_thing_height_at(creatng, &step);
+        if (!thing_in_wall_at(creatng, &step))
+        {
+            move_thing_in_map(creatng, &step);
+            identical[creatng->ccontrol_idx] = 0;
+            SYNCDBG(8, "%s index %d stalled %d short of its next step: stepped onto it", thing_model_name(creatng),
+                (int)creatng->index, (int)dist);
+            return 0;
+        }
     }
     if ( identical[creatng->ccontrol_idx] >= 150)
     {

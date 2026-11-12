@@ -43,6 +43,7 @@
 #include "power_hand.h"
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -58,6 +59,8 @@ TbBool creature_can_do_scavenging(const struct Thing *creatng)
     if (is_neutral_thing(creatng)) {
         return false;
     }
+    if (world_mode_active())
+        return false; /* endless worlds (2026-11-12): no Scavenger Room, a room left in an old save does nothing */
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
     return (crconf->scavenge_value > 0);
 }
@@ -236,7 +239,7 @@ TbBool can_scavenge_creature_from_pool(const struct Dungeon * dungeon, ThingMode
 {
     SYNCDBG(11, "Starting for creature kind %s", creature_code_name(crtr_kind));
 
-    if (game.pool.crtr_kind[crtr_kind] <= 0) {
+    if (creature_pool_count(dungeon->owner, crtr_kind) <= 0) {
         return false;
     }
     if (dungeon->num_active_creatrs >= dungeon->max_creatures_attracted) {
@@ -455,7 +458,7 @@ TbBool creature_scavenge_from_creature_pool(struct Thing *calltng)
         WARNLOG("Room %s owned by player %d is bad work place for %s index %d owner %d",room_code_name(room->kind),(int)room->owner,thing_model_name(calltng),(int)calltng->index,(int)calltng->owner);
         return false;
     }
-    if (game.pool.crtr_kind[calltng->model] <= 0) {
+    if (creature_pool_count(calltng->owner, calltng->model) <= 0) {
         ERRORLOG("Tried to generate %s but it is not in pool",thing_model_name(calltng));
         return false;
     }
@@ -473,7 +476,7 @@ TbBool creature_scavenge_from_creature_pool(struct Thing *calltng)
         ERRORLOG("Tried to generate %s but creation failed",thing_model_name(calltng));
         return false;
     }
-    if (!remove_creature_from_generate_pool(calltng->model))
+    if (!remove_creature_from_generate_pool(calltng->model, calltng->owner))
     {
         ERRORLOG("Could not remove %s from pool",thing_model_name(calltng));
         return false;

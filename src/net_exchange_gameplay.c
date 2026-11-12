@@ -157,6 +157,9 @@ TbError process_network_unpause_message(NetUserId source, size_t buffer_size)
     if (network_user_is_spectator(netstate.my_id) || netstate_is_client()) {
         return Lb_OK;
     }
+    if (netstate_thin_mode() && (source != SERVER_ID)) {
+        return Lb_OK; /* a world its server alone runs: a player can't pause it, and can't end the server's pause */
+    }
     if ((game.operation_flags & GOF_Paused) == 0) {
         MULTIPLAYER_LOG("ProcessMessage NETMSG_UNPAUSE: ignoring, not paused");
         return Lb_OK;

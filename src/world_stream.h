@@ -41,6 +41,17 @@ TbBool world_request(const char *seed_text);
 void world_set_next_seed(const char *seed_text);
 /** The seed the next world level will use instead of its script's ("" when none). */
 const char *world_next_seed_text(void);
+/** Generator versions: a world keeps the one it was made with (saved with it; older saves are version 6). */
+#define WORLD_GEN_OLDEST 6
+/** The version this build gives a new world (test hook KFX_WORLD_GENVERSION=6 or 7). */
+#define WORLD_NEW_GEN_VERSION 7 /* since 2026-11-12 (6 before) */
+int world_new_gen_version(void);
+/** A replay or a network game's host says which version the next new world has (0: this build's). */
+void world_set_next_gen_version(int version);
+/** The version the next new world will have. */
+int world_next_gen_version(void);
+/** The world's generator version (0: no world). */
+int world_gen_version(void);
 /** The seed as written (script or New Run), for save names. */
 const char *world_seed_text(void);
 /** After the level's map files are loaded: generates the first window around the start. */
@@ -55,6 +66,8 @@ uint64_t world_seat_token(PlayerNumber plyr_idx);
 /** An imp's swing at gold (endless worlds): experience from mining. */
 void world_imp_mined_gold(struct Thing *creatng);
 void world_set_seat_token(PlayerNumber plyr_idx, uint64_t token);
+/** The box made in place of one of this model at a place (endless worlds: no Reveal Map box). */
+ThingModel world_box_kind(ThingModel model, MapCoord x, MapCoord y);
 /** A player joined the running world (server): a new start dungeon, gold, the kit, and the view on the heart. */
 void world_seat_joined(PlayerNumber plyr_idx);
 /* Co-op (2026-11-10): two players who made a party in the World List are allied keepers in the world they enter: allied
@@ -125,6 +138,14 @@ TbBool world_pays_at_nearest_treasury(PlayerNumber plyr_idx);
 uint64_t world_seed(void);
 /** The biome at an engine subtile (world levels). */
 int world_biome_at_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+/** Generator version 7's five provinces count as their parent biome wherever a table has the eight biomes of
+ *  versions 2-6: lava ocean and lava rivers are Volcanic, flooded ocean and flooded rivers Flooded, Dead Man's Land
+ *  Earthen. The eight are themselves. */
+int world_biome_parent(int biome);
+/** Version 7 worlds: is the land in this box of world slabs fit to build on: no Dead Man's Land and no ocean (nor,
+ *  with no_provinces, the river provinces either), its biomes sampled every 8 slabs? Always true in a version 6
+ *  world. */
+TbBool world_land_fits(int64_t x1, int64_t y1, int64_t x2, int64_t y2, TbBool no_provinces);
 int world_biome_at_engine_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 TbBool world_player_heart_loaded(void);
 /** Network resync: the host's world over this machine's (no exploration or heart binding after it), and then,

@@ -1,9 +1,10 @@
 # The Five Provinces
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> The ground of the provinces is in the game: newly created worlds have them. Their own rules are still planned, and
+> details may change before they arrive.
 
-Five kinds of province are coming to the world, and each one has a job:
+Five kinds of province make up the world's ground, and each one is meant to have a job:
 
 - **Lava oceans** keep most things out. The only ways across are a Bridge, wings, or creatures that lava does not
   burn, and the islands are where the rewards for crossing lie.
@@ -14,8 +15,11 @@ Five kinds of province are coming to the world, and each one has a job:
 - **Dead Man's Land** is the empty country in between. It has no gold, no wild packs and no heroes. What it does
   have lies underneath: the remains of dungeons that fell.
 
-The provinces change the ground itself, so they arrive in newly created worlds; worlds that already exist keep their
-ground.
+The ground is already here. Newly created worlds have lava oceans, flooded oceans, river lands and Dead Man's Land;
+worlds that already exist keep their ground. For now a province plays like the land it belongs to: lava like the
+volcanic lands, water like the flooded lands, Dead Man's Land like plain earth with no wild packs. New keepers never
+start in an ocean or in Dead Man's Land. The rules above are still planned: who can cross what, fords as places to
+hold, and what lies under Dead Man's Land.
 
 ## Still being decided
 

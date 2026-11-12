@@ -1092,18 +1092,20 @@ void sync_initial_network_seed(void)
    }
    /* the endless world's seed travels with it: the host's pending seed (a random one for a new run), so every
       machine generates the host's world (sent before the level and its world are loaded) */
-   struct { uint32_t action_seed; int32_t timestamp_tz; int64_t timestamp; char world_seed[64]; } initial;
+   struct { uint32_t action_seed; int32_t timestamp_tz; int64_t timestamp; char world_seed[64]; int32_t world_gen; } initial;
    memset(&initial, 0, sizeof(initial));
    initial.action_seed = game.action_random_seed;
    initial.timestamp_tz = game.timestamp_tz;
    initial.timestamp = game.timestamp;
    snprintf(initial.world_seed, sizeof(initial.world_seed), "%s", world_next_seed_text());
+   initial.world_gen = world_next_gen_version(); /* the host's generator version for a new world */
    if (!LbNetwork_Resync(&initial, sizeof(initial))) {
       ERRORLOG("Initial sync failed");
       return;
    }
    initial.world_seed[sizeof(initial.world_seed) - 1] = '\0';
    world_set_next_seed(initial.world_seed);
+   world_set_next_gen_version(initial.world_gen);
    game.action_random_seed = initial.action_seed;
    game.timestamp = initial.timestamp;
    game.timestamp_tz = initial.timestamp_tz;

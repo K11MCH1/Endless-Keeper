@@ -376,6 +376,7 @@ TbBool startup_saved_packet_game(void)
     /* an endless world plays the seed the replay was recorded with (a New Run's random seed) */
     replay.head.world_seed[sizeof(replay.head.world_seed) - 1] = '\0';
     world_set_next_seed((replay.head.world_seed[0] != '\0') ? replay.head.world_seed : NULL);
+    world_set_next_gen_version(flag_is_set(replay.head.flags, PSHF_WorldGen7) ? 7 : 6);
     RendererSetDrawColour(colours[15][15][15]);
     replay.pckt_gameturn = 0;
 #if (BFDEBUG_LEVEL > 0)

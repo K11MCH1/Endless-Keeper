@@ -44,6 +44,7 @@
 #include "game_legacy.h"
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_caretaker.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -58,6 +59,11 @@ TbBool creature_can_be_trained(const struct Thing *thing)
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     // Creatures without training value can't be trained
     if (crconf->training_value <= 0)
+        return false;
+    /* endless worlds: not while the caretaker keeps an away player's dungeon (it would grow for free: the caretaker
+       refunds what is spent). A trainee leaves the room, none takes the job, and none is angry for being untrained
+       (process_training_need asks the same) */
+    if (world_caretaker_active(thing->owner))
         return false;
     if ((cctrl->exp_level >= game.conf.rules[thing->owner].rooms.training_room_max_level-1) &! (game.conf.rules[thing->owner].rooms.training_room_max_level == 0))
         return false;

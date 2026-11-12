@@ -110,6 +110,8 @@ const char *player_state_code_name(int wrkstate)
 
 struct PlayerStateConfigStats *get_player_state_stats(PlayerState plyr_state)
 {
+    if (plyr_state >= PSt_ListEnd)
+        plyr_state = PSt_None; /* a state from a packet */
     return &game.conf.plyr_conf.plrst_cfg_stats[plyr_state];
 }
 

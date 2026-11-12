@@ -46,13 +46,14 @@ TbBool reset_roomspace = false;
 
 static int get_packet_roomspace_size(const struct Packet *pckt, int size)
 {
+    /* a size from a packet is never trusted further than the grid a roomspace has */
     switch (pckt->action) {
     case PckA_SetRoomspaceMan:
     case PckA_SetRoomspaceDefault:
-        return pckt->actn_par1;
+        return max(0, min(pckt->actn_par1, MAX_ROOMSPACE_WIDTH - 1));
     case PckA_SetRoomspaceHighlight:
     case PckA_ApplyRoomspaceDigTag:
-        return pckt->actn_par2;
+        return max(0, min(pckt->actn_par2, MAX_ROOMSPACE_WIDTH - 1));
     }
     return size;
 }
@@ -325,9 +326,9 @@ struct RoomSpace check_roomspace_for_diggable_slabs(struct RoomSpace roomspace, 
     if (roomspace.untag_mode) {
         dig_tag_mode = DigTagMode_Untag;
     }
-    for (int y = 0; y < roomspace.height; y++) {
+    for (int y = 0; (y < roomspace.height) && (y < MAX_ROOMSPACE_WIDTH); y++) {
         int current_y = roomspace.top + y;
-        for (int x = 0; x < roomspace.width; x++) {
+        for (int x = 0; (x < roomspace.width) && (x < MAX_ROOMSPACE_WIDTH); x++) {
             int current_x = roomspace.left + x;
             if (roomspace_slab_matches_dig_tag_mode(plyr_idx, current_x, current_y, dig_tag_mode, prediction)) {
                 roomspace.slab_grid[x][y] = true;
@@ -920,7 +921,7 @@ void apply_roomspace_packet_action(NetUserId user, const struct Packet *pckt)
 {
     struct UserState* ustate = get_user_state(user);
     if (pckt->action == PckA_SetRoomspaceMan || pckt->action == PckA_SetRoomspaceDefault) {
-        ustate->roomspace_width = ustate->roomspace_height = pckt->actn_par1;
+        ustate->roomspace_width = ustate->roomspace_height = max(1, min(pckt->actn_par1, MAX_ROOMSPACE_WIDTH - 1));
     }
     switch (pckt->action) {
     case PckA_RoomspaceHighlightToggle:

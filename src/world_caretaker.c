@@ -25,6 +25,19 @@
 #include "world_stream.h"
 #include "server_admin.h"
 #include "net_game.h"
+#include "slab_data.h"
+#include "map_blocks.h"
+#include "room_util.h"
+#include "thing_creature.h"
+#include "creature_states.h"
+#include "creature_states_train.h"
+#include "config_creature.h"
+#include "thing_list.h"
+#include "thing_data.h"
+#include "creature_control.h"
+#include "room_data.h"
+#include "config_terrain.h"
+#include "room_library.h"
 #include "post_inc.h"
 
 /* what it keeps of a computer keeper, by name (the rest - building, digging, attacking, spells, money - is left out) */
@@ -181,10 +194,108 @@ static void caretaker_release(PlayerNumber p, struct PlayerInfo *player, struct 
     pmask_del(&caretaker_on, p);
 }
 
+/** Test hook KFX_CARETAKER_TEST=1 (a server): the first seat played gets, 40 turns in, a Training Room east of its
+ *  heart and a Library west of it, two Demon Spawn (they train on their own), two Warlocks (they research) and gold;
+ *  every 100 turns the log says what they gain, while the player plays and once the caretaker keeps the dungeon. */
+static void caretaker_test(void)
+{
+    static int on = -1;
+    static PlayerNumber seat = -1;
+    static GameTurn built_at = 0;
+    static ThingIndex made[4];
+    if (on < 0)
+        on = (getenv("KFX_CARETAKER_TEST") != NULL) ? 1 : 0;
+    if (!on)
+        return;
+    if (seat < 0)
+    {
+        for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (seat < 0); p++)
+            if (world_player_is_human(p) && seat_played(p) && thing_exists(find_players_dungeon_heart(p)))
+                seat = p;
+        if (seat >= 0)
+            built_at = game.play_gameturn + 40;
+        return;
+    }
+    const struct Thing *heart = find_players_dungeon_heart(seat);
+    if (!thing_exists(heart))
+        return;
+    const MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
+    if (game.play_gameturn == built_at)
+    {
+        for (int dy = -1; dy <= 1; dy++)
+        {
+            for (int dx = 4; dx <= 6; dx++)
+            {
+                const SlabKind kinds[2] = {SlbT_TRAINING, SlbT_LIBRARY};
+                for (int k = 0; k < 2; k++)
+                {
+                    const MapSlabCoord x = (k == 0) ? hx + dx : hx - dx, y = hy + dy;
+                    place_slab_type_on_map(kinds[k], slab_subtile_center(x), slab_subtile_center(y), seat, 0);
+                }
+            }
+        }
+        const char *rooms[2] = {"TRAINING", "RESEARCH"};
+        for (int k = 0; k < 2; k++)
+        {
+            struct Room *room = create_room(seat, (RoomKind)get_id(room_desc, rooms[k]),
+                slab_subtile_center((k == 0) ? hx + 5 : hx - 5), slab_subtile_center(hy));
+            if (!room_is_invalid(room))
+                do_room_integration(room);
+            else
+                SYNCLOG("Caretaker test: no %s", rooms[k]);
+        }
+        const char *names[4] = {"DEMONSPAWN", "DEMONSPAWN", "SORCEROR", "SORCEROR"};
+        for (int i = 0; i < 4; i++)
+        {
+            struct Coord3d pos = heart->mappos;
+            pos.x.val += (MapCoord)((i % 2) ? 2 : -2) * COORD_PER_STL;
+            pos.y.val += (MapCoord)((i < 2) ? 2 : -2) * COORD_PER_STL;
+            pos.z.val = 0;
+            struct Thing *crtng = create_creature(&pos, (ThingModel)get_id(creature_desc, names[i]), seat);
+            made[i] = thing_exists(crtng) ? crtng->index : 0;
+        }
+        player_add_offmap_gold(seat, 50000);
+        {
+            /* something to research that takes long: the Temple (a huge amount, so it never completes in the test) */
+            struct Dungeon *dg = get_players_num_dungeon(seat);
+            const long temple = get_id(room_desc, "TEMPLE");
+            if (!dungeon_invalid(dg) && (temple > 0))
+            {
+                dg->room_resrchable[temple] = 1;
+                dg->room_buildable[temple] &= ~1;
+                add_research_to_player(seat, RsCat_Room, temple, 1000000);
+                dg->current_research_idx = dg->research_num - 1;
+            }
+        }
+        SYNCLOG("Caretaker test: player %d gets a Training Room, a Library, 2 Demon Spawn (%d, %d) and 2 Warlocks (%d, %d)",
+            (int)seat, (int)made[0], (int)made[1], (int)made[2], (int)made[3]);
+        return;
+    }
+    if ((game.play_gameturn <= built_at) || (((game.play_gameturn - built_at) % 100) != 0))
+        return;
+    const struct Dungeon *dungeon = get_players_num_dungeon(seat);
+    char line[400];
+    int n = snprintf(line, sizeof(line), "Caretaker test: player %d, caretaker %s, gold %ld, creatures' training XP %ld, "
+        "research %ld (progress %ld):", (int)seat, world_caretaker_active(seat) ? "ON" : "off", (long)dungeon->total_money_owned,
+        (long)dungeon->total_experience_creatures_gained, (long)dungeon->total_research_points, (long)(dungeon->research_progress >> 8));
+    for (int i = 0; (i < 4) && (n < (int)sizeof(line) - 80); i++)
+    {
+        const struct Thing *crtng = thing_get(made[i]);
+        const struct CreatureControl *cctrl = creature_control_get_from_thing(crtng);
+        if (!thing_exists(crtng) || creature_control_invalid(cctrl))
+            continue;
+        n += snprintf(line + n, sizeof(line) - n, " %s %d L%d xp %ld st %d trainable %d untrained-count %d;",
+            thing_model_name(crtng), (int)crtng->index, (int)cctrl->exp_level + 1, (long)cctrl->exp_points,
+            (int)get_creature_state_besides_move(crtng), (int)creature_can_be_trained(crtng), (int)cctrl->annoy_untrained_turn);
+    }
+    SYNCLOG("%s", line);
+}
+
 void world_caretaker_turn(void)
 {
     if (!world_mode_active())
         return;
+    caretaker_test();
     for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
     {
         if (!world_player_is_human(p))

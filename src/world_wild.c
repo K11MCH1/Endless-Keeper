@@ -103,7 +103,7 @@ struct WildBiome {
  * about two thirds as common as Spiders, and more common where the undead already are. */
 #define WILD_ZOMBIES {"ZOMBIE", 65, 4, 6}
 #define WILD_ZOMBIES_MANY {"ZOMBIE", 110, 4, 6}
-static const struct WildBiome wild_biomes[WgB_COUNT] = {
+static const struct WildBiome wild_biomes[WG_V6_BIOMES] = { /* version 7's provinces: world_biome_parent */
     {{{WILD_BASE, {NULL, 0, 0, 0}, WILD_ZOMBIES}, {WILD_FLIES}}},                                        /* Earthen Caverns */
     {{{WILD_BASE, {NULL, 0, 0, 0}, WILD_ZOMBIES}, {WILD_FLIES}}},                                        /* Rocky Depths */
     {{{WILD_BASE, {"HELL_HOUND", 10, 1, 2}, WILD_ZOMBIES}, {WILD_FLIES}}},                               /* Volcanic Rifts */
@@ -163,7 +163,7 @@ TbBool world_wild_creature(const struct Thing *thing)
 static int wild_ground_of(const struct Thing *thing)
 {
     const char *name = creature_code_name(thing->model);
-    for (int b = 0; b < WgB_COUNT; b++)
+    for (int b = 0; b < WG_V6_BIOMES; b++)
         for (int k = 0; k < WILD_KINDS; k++)
             if ((wild_biomes[b].on[WiG_Water][k].name != NULL) && (strcmp(wild_biomes[b].on[WiG_Water][k].name, name) == 0))
                 return WiG_Water;
@@ -281,8 +281,9 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
     if ((ground < 0) || (counts[ground] >= wild_caps[ground]))
         return 0;
     int biome = world_biome_at_engine_slab(x, y);
-    if ((biome < 0) || (biome >= WgB_COUNT))
-        biome = 0;
+    if (biome == WgB_DeadMans) /* Dead Man's Land: nothing lives there (version 7) */
+        return 0;
+    biome = world_biome_parent(biome); /* the other provinces: their parent biome's packs */
     const struct WildSpawn *list = wild_biomes[biome].on[ground];
     int total = 0;
     for (int k = 0; k < WILD_KINDS; k++)
@@ -848,8 +849,9 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     if (ns < 3)
         return 0;
     int biome = world_biome_at_engine_slab(x, y);
-    if ((biome < 0) || (biome >= WgB_COUNT))
-        biome = 0;
+    if (biome == WgB_DeadMans) /* Dead Man's Land: no burrows either (version 7) */
+        return 0;
+    biome = world_biome_parent(biome);
     const struct WildSpawn *list = wild_biomes[biome].on[WiG_Path];
     int total = 0;
     for (int k = 0; k < WILD_KINDS; k++)

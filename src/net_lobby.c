@@ -39,6 +39,8 @@
 #include "net_state.h"
 #include "server_admin.h"
 #include "net_secure.h"
+#include "net_anticheat.h"
+#include "server_admin.h"
 #include "post_inc.h"
 /******************************************************************************/
 
@@ -292,7 +294,8 @@ TbError process_login_message(NetUserId source, char *read_pos, const char *end_
         return Lb_OK;
     }
     strcpy(user->name, name);
-    if (!isalnum(user->name[0])) {
+    anticheat_clean_name(user->name);
+    if (!isalnum((unsigned char)user->name[0])) {
         NETDBG(6, "Connected peer had bad name starting with %c", user->name[0]);
         netstate.sp->drop_user(source, NetJoin_Accepted);
         return Lb_OK;
@@ -329,6 +332,14 @@ TbError process_login_message(NetUserId source, char *read_pos, const char *end_
         if (sealed < 0) {
             NETMSG("Peer %d sent a sealed login this server can't open", (int)source);
             netstate.sp->drop_user(source, NetJoin_Accepted);
+            return Lb_OK;
+        }
+        if ((sealed == 0) && netsec_require_sealed()) {
+            /* an unsealed login gives the seat's secret away to anyone listening, and a name alone proves nothing:
+               every Endless Keeper release since 1.4.0-5.3 seals its login */
+            NETMSG("Peer %d (%s) sent an unsealed login: refused", (int)source, user->name);
+            server_admin_log("cheat", "%s: login refused: not sealed (an old or changed game)", user->name);
+            netstate.sp->drop_user(source, NetJoin_Version);
             return Lb_OK;
         }
         user->reconnect_token = (sealed > 0) ? sealed_token : netsec_world_token(user->reconnect_token);
@@ -478,12 +489,15 @@ uint64_t net_local_reconnect_token(void)
 static int fetch_server_key(void)
 {
     netsec_client_reset();
+    if (getenv("KFX_NET_TESTRAW") != NULL) {
+        return 0; /* test hook: this game logs in the old way, unsealed (a server refuses it since the anti-cheat) */
+    }
     char *wp = begin_net_message(NETMSG_KEYREQ);
     const uint32_t magic = NETSEC_MAGIC;
     memcpy(wp, &magic, 4);
     send_message_buffer(SERVER_ID, wp + 4);
     const TbClockMSec start = LbTimerClock();
-    while (!netsec_client_has_key() && (net_join_rejection == NetJoin_Accepted) && (LbTimerClock() - start < 1000)) {
+    while (!netsec_client_has_key() && (net_join_rejection == NetJoin_Accepted) && (LbTimerClock() - start < 2500)) {
         if (attempting_to_join_cancel_requested()) {
             return -1;
         }

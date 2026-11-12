@@ -23,7 +23,7 @@
 #include "bflib_basics.h"
 
 /** Max amount of creatures supported on any map. */
-#define CREATURES_COUNT       4096 /* creature controls (1024 before: endless worlds with many dungeons need more) */
+#define CREATURES_COUNT       8192 /* creature controls (1024 before, 4096 until 2026-11-12: 100 keepers of 50 creatures each, their imps, heroes and wild packs) */
 /** Creatures a wind shot remembers it has pushed (it was CREATURES_COUNT, 1024: kept, the same limit a shot). */
 #define WIND_AFFECTED_MAX     1024
 /** The wind shots' lists live in game.wind_nodes (2026-11-11), not in every thing: a thing was 2244 bytes, 2048 of

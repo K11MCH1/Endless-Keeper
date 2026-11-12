@@ -28,7 +28,7 @@ extern "C" {
 #endif
 
 /** Max amount of battles supported on any map. */
-#define BATTLES_COUNT          192
+#define BATTLES_COUNT          1024 /* 192 filled up with 100 busy dungeons (2026-11-12) */
 #define MESSAGE_BATTLERS_COUNT   8
 /******************************************************************************/
 #pragma pack(1)

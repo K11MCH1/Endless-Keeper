@@ -195,6 +195,8 @@ void event_initialise_all(void)
 
 TbBool event_move_user_towards_event(NetUserId user, EventIndex event_idx)
 {
+    if (event_idx >= EVENTS_COUNT)
+        return false;
     struct Event* event = &game.event[event_idx];
     struct UserState *ustate = get_user_state(user);
     ustate->zoom_to_pos_x = event->mappos_x;
@@ -281,6 +283,8 @@ void event_update_last_use(struct Event *event)
 
 void event_delete_event(long plyr_idx, EventIndex evidx)
 {
+    if (evidx >= EVENTS_COUNT)
+        return;
     struct Event* event = &game.event[evidx];
     event_update_last_use(event);
     struct Dungeon* dungeon = get_dungeon(plyr_idx);

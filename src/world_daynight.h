@@ -19,6 +19,14 @@ struct Thing;
 
 /** Day number (1 = the first day) and whether it is day now; both follow from the game turn. */
 long world_day_number(void);
+/** The days a keeper's dungeon has lived (1 = its first day): the world's clock, counted from the day it began. */
+long world_seat_day(PlayerNumber plyr_idx);
+/** A keeper's dungeon (re)starts: its days count from today. */
+void world_daynight_seat_started(PlayerNumber plyr_idx);
+void world_seatdays_reset(void);
+size_t world_seatdays_save_size(void);
+void world_seatdays_save(uint8_t *buf);
+TbBool world_seatdays_load(const uint8_t *buf, size_t len);
 TbBool world_is_day(void);
 /** A day and its night, in game turns. */
 long world_day_turns(void);

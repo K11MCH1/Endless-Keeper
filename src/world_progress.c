@@ -131,7 +131,8 @@ static const struct WprItem wpr_items[] = {
 static TbBool wpr_item_disabled(int i)
 {
     return (i == WPR_ARMAGEDDON) || ((i >= 0) && (i < WPR_ITEMS) && ((strcmp(wpr_items[i].name, "POWER_DESTROY_WALLS") == 0) ||
-        (strcmp(wpr_items[i].name, "POWER_DISEASE") == 0))); /* Disease: off since 2026-11-09 */
+        (strcmp(wpr_items[i].name, "POWER_DISEASE") == 0) || /* Disease: off since 2026-11-09 */
+        (strcmp(wpr_items[i].name, "SCAVENGER") == 0))); /* the Scavenger Room: off since 2026-11-12 */
 }
 
 /** A human keeper's progression. */
@@ -317,6 +318,7 @@ void world_progress_request(int mode)
     wpr_requested = mode;
 }
 
+static void hell_hound_entrance(void);
 void world_progress_level_start(void)
 {
     memset(game.world_room_level, 0, sizeof(game.world_room_level));
@@ -325,6 +327,8 @@ void world_progress_level_start(void)
     memset(wpr_players, 0, sizeof(wpr_players));
     world_amenity_reset();
     resolve_ids();
+    if (world_mode_active())
+        hell_hound_entrance(); /* before the kit locks the portals' biome creatures */
     wpr_mode = wpr_requested;
     wpr_requested = 0;
     wpr_kit_given = false;
@@ -358,7 +362,7 @@ ThingModel world_progress_book_model(void)
 uint8_t world_progress_book_kind(int grade, int biome)
 {
     grade = max(1, min(grade, 5));
-    biome = max(0, min(biome, 7)); /* 8 biomes per grade: later ones count as the eighth (audit 2026-11-09) */
+    biome = world_biome_parent(biome); /* 8 biomes per grade: version 7's provinces are their parent biome's books */
     return (uint8_t)(128 + 8 * grade + biome);
 }
 
@@ -427,7 +431,7 @@ static void set_tooltips(void)
 {
     for (int g = 1; g <= 5; g++)
     {
-        for (int b = 0; b < WgB_COUNT; b++)
+        for (int b = 0; b < WG_V6_BIOMES; b++) /* the kinds' own biomes (the provinces share their parents') */
         {
             snprintf(game.box_tooltip[world_progress_book_kind(g, b)], MESSAGE_TEXT_LEN,
                 "Research book (grade %d, %s): carry it onto your ground and click it to learn something new", g,
@@ -489,6 +493,7 @@ static const struct { const char *name; uint32_t biomes; } wpr_portal_creatures[
     {"SPIDER",     WPR_BIOME(WgB_Rocky) | WPR_BIOME(WgB_Frozen) | WPR_BIOME(WgB_Ruins)},
     {"BILE_DEMON", WPR_BIOME(WgB_Rocky) | WPR_BIOME(WgB_Volcanic) | WPR_BIOME(WgB_Ruins)},
     {"DRAGON",     WPR_BIOME(WgB_Volcanic) | WPR_BIOME(WgB_Crystal) | WPR_BIOME(WgB_Sandstone)},
+    {"HELL_HOUND", WPR_BIOME(WgB_Volcanic)}, /* 2026-11-12: with a Lair of 9, not a Scavenger Room */
 };
 #define WPR_PORTAL_CREATURES ((int)(sizeof(wpr_portal_creatures) / sizeof(wpr_portal_creatures[0])))
 
@@ -545,7 +550,7 @@ void world_progress_portal_owned(PlayerNumber plyr_idx, int biome)
         return;
     for (int k = 0; k < WPR_PORTAL_CREATURES; k++)
     {
-        if ((wpr_portal_creatures[k].biomes & WPR_BIOME(biome)) == 0)
+        if ((wpr_portal_creatures[k].biomes & WPR_BIOME(world_biome_parent(biome))) == 0) /* a province: its parent's */
             continue;
         const ThingModel model = portal_creature_model(k);
         if ((model > 0) && !dungeon->creature_allowed[model])
@@ -643,7 +648,7 @@ void world_progress_creature_died(struct Thing *creatng)
     if ((target < 0) || (target >= PLAYERS_COUNT) || (wpr_players[target].raid_pending == 0))
         return;
     wpr_players[target].raid_pending--;
-    const long day = world_day_number();
+    const long day = world_seat_day(target); /* the dungeon's own days (2026-11-12), not the world's */
     const int grade = min(4, 1 + (int)((max(day, 1L) - 1) / 6));
     world_progress_drop_books(creatng->mappos.x.stl.num, creatng->mappos.y.stl.num, grade,
         world_biome_at_subtile(creatng->mappos.x.stl.num, creatng->mappos.y.stl.num), 1);
@@ -1837,10 +1842,56 @@ static void test_room_levels(void)
     }
 }
 
+/** Hell Hounds were drawn only by a Scavenger Room, which is off in endless worlds (2026-11-12): they come to a Lair
+ *  of 9 slabs instead, once the keeper owns a portal in volcanic ground (they are one of the portals' biome
+ *  creatures). The level's config is this machine's, read again with each level: set on every machine. */
+static void hell_hound_entrance(void)
+{
+    /* and the world's creature cap (2026-11-12): MapCreatureLimit (1000) stopped portals, Create Imp, wild packs and
+       raids long before 100 keepers of 50 creatures; in endless worlds it is the engine's own table (8192), so 5,000
+       players' creatures leave room for imps, heroes and wild packs */
+    if (game.conf.rules[0].gameplay.creatures_count != CREATURES_COUNT - 2)
+    {
+        game.conf.rules[0].gameplay.creatures_count = CREATURES_COUNT - 2;
+        SYNCLOG("World progress: the world's creature cap is %d", CREATURES_COUNT - 2);
+    }
+    const long model = get_id(creature_desc, "HELL_HOUND");
+    const long lair = get_id(room_desc, "LAIR");
+    if ((model <= 0) || (lair <= 0) || (model >= game.conf.crtr_conf.model_count))
+        return;
+    struct CreatureModelConfig *crconf = creature_stats_get((ThingModel)model);
+    if ((crconf->entrance_rooms[0] == (RoomKind)lair) && (crconf->entrance_slabs_req[0] == 9))
+        return;
+    for (int k = 0; k < ENTRANCE_ROOMS_COUNT; k++)
+    {
+        crconf->entrance_rooms[k] = RoK_NONE;
+        crconf->entrance_slabs_req[k] = 0;
+    }
+    crconf->entrance_rooms[0] = (RoomKind)lair;
+    crconf->entrance_slabs_req[0] = 9;
+    SYNCLOG("World progress: Hell Hounds come to a Lair of 9 slabs (no Scavenger Room in endless worlds)");
+}
+
 /** Destroy Walls, Armageddon and Disease stay off in endless worlds for every keeper, AI ones too: neither
  *  researchable nor usable. */
+static void hell_hound_entrance(void);
 static void ban_powers(void)
 {
+    hell_hound_entrance();
+    for (int i = 0; i < WPR_ITEMS; i++)
+    {
+        if (!wpr_item_disabled(i) || !item_usable(i) || (wpr_items[i].kind != WprK_Room))
+            continue;
+        /* a room that stays off (the Scavenger Room): nobody can build it, a computer keeper neither */
+        for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+        {
+            struct Dungeon *dungeon = get_players_num_dungeon(p);
+            if (dungeon_invalid(dungeon) || !player_exists(get_player(p)))
+                continue;
+            if ((dungeon->room_buildable[wpr_ids[i]] != 0) || (dungeon->room_resrchable[wpr_ids[i]] != 0))
+                set_room_available(p, wpr_ids[i], 0, 0);
+        }
+    }
     for (int i = 0; i < WPR_ITEMS; i++)
     {
         if (!wpr_item_disabled(i) || !item_usable(i) || (wpr_items[i].kind != WprK_Power))

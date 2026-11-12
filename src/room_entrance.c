@@ -36,6 +36,7 @@
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
 #include "world_misdeeds.h"
+#include "world_pools.h"
 #include "post_inc.h"
 #include <stdint.h>
 
@@ -190,7 +191,7 @@ long count_player_available_creatures_of_model(PlayerNumber plyr_idx, ThingModel
 
         if (creature_will_generate_for_dungeon(dungeon, i))
         {
-            count+= game.pool.crtr_kind[i];
+            count+= creature_pool_count(dungeon->owner, i);
         }
     }
     return min(count, dungeon->max_creatures_attracted - (long)dungeon->num_active_creatrs);
@@ -200,7 +201,7 @@ TbBool creature_will_generate_for_dungeon(const struct Dungeon * dungeon, ThingM
 {
     SYNCDBG(11, "Starting for creature model %s", creature_code_name(crmodel));
 
-    if (game.pool.crtr_kind[crmodel] <= 0) {
+    if (creature_pool_count(dungeon->owner, crmodel) <= 0) {
         SYNCDBG(11, "The %s is not in pool", creature_code_name(crmodel));
         return false;
     }
@@ -238,11 +239,20 @@ TbBool creature_will_generate_for_dungeon(const struct Dungeon * dungeon, ThingM
     return true;
 }
 
-TbBool remove_creature_from_generate_pool(ThingModel crmodel)
+/** The creatures of a kind in the pool a keeper's portals draw from: its own in an endless world, else the world's. */
+int32_t creature_pool_count(PlayerNumber plyr_idx, ThingModel crmodel)
 {
-    if (game.pool.crtr_kind[crmodel] > INT32_MIN)
+    const int32_t *own = world_pool_for(plyr_idx);
+    return (own != NULL) ? own[crmodel] : game.pool.crtr_kind[crmodel];
+}
+
+TbBool remove_creature_from_generate_pool(ThingModel crmodel, PlayerNumber plyr_idx)
+{
+    int32_t *own = world_pool_for(plyr_idx);
+    int32_t *count = (own != NULL) ? &own[crmodel] : &game.pool.crtr_kind[crmodel];
+    if (*count > INT32_MIN)
     {
-        game.pool.crtr_kind[crmodel]--;
+        (*count)--;
         return true;
     }
     WARNLOG("Could not remove creature %s from the creature pool", creature_code_name(crmodel));
@@ -323,7 +333,7 @@ TbBool generate_creature_at_random_entrance(struct Dungeon * dungeon, ThingModel
     if (thing_is_invalid(creatng)) {
         return false;
     }
-    remove_creature_from_generate_pool(crmodel);
+    remove_creature_from_generate_pool(crmodel, dungeon->owner);
     return true;
 }
 
@@ -426,6 +436,19 @@ TbBool update_creature_pool_state(void)
         { game.pool.is_empty = false; break; }
     }
     return true;
+}
+
+void add_creature_to_pool_of(PlayerNumber plyr_idx, ThingModel kind, int32_t amount)
+{
+    int32_t *own = world_pool_for(plyr_idx);
+    if (own == NULL)
+    {
+        add_creature_to_pool(kind, amount);
+        return;
+    }
+    kind %= game.conf.crtr_conf.model_count;
+    const int64_t v = (int64_t)own[kind] + amount;
+    own[kind] = (int32_t)((v > INT32_MAX) ? INT32_MAX : ((v < INT32_MIN) ? INT32_MIN : v));
 }
 
 void add_creature_to_pool(ThingModel kind, int32_t amount)

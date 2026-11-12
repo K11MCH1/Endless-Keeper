@@ -240,7 +240,7 @@ struct Dungeon {
     uint32_t digger_stack_update_turn;
     uint32_t digger_stack_length;
     /** Array with battle indexes with the battles currently visible in fight event message */
-    unsigned char visible_battles[3];
+    BattleIndex visible_battles[3];
     short zoom_annoyed_creature_idx;
     int32_t total_experience_creatures_gained;
     int32_t total_research_points;

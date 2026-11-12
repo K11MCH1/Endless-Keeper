@@ -39,7 +39,9 @@ TbBool generation_due_for_dungeon(struct Dungeon * dungeon);
 void process_entrance_generation(void);
 struct Thing *create_creature_at_entrance(struct Room * room, ThingModel crtr_kind);
 
-TbBool remove_creature_from_generate_pool(ThingModel crtr_kind);
+TbBool remove_creature_from_generate_pool(ThingModel crtr_kind, PlayerNumber plyr_idx);
+/** The creatures of a kind in the pool a keeper's portals draw from (endless worlds: its own). */
+int32_t creature_pool_count(PlayerNumber plyr_idx, ThingModel crmodel);
 TbBool creature_will_generate_for_dungeon(const struct Dungeon * dungeon, ThingModel crtr_kind);
 long count_player_available_creatures_of_model(PlayerNumber plyr_idx, ThingModel crtr_kind);
 /******************************************************************************/

@@ -21,6 +21,17 @@
 #endif
 #include "post_inc.h"
 
+TbBool netsec_require_sealed(void)
+{
+    static int allow_raw = -1;
+    if (allow_raw < 0)
+    {
+        const char *v = getenv("KFX_NET_ALLOWRAW");
+        allow_raw = ((v != NULL) && (atoi(v) != 0)) ? 1 : 0;
+    }
+    return allow_raw == 0;
+}
+
 #ifdef _WIN32
 /* bcrypt.h's, declared here so this file needn't pull in windows.h (the game links bcrypt) */
 __declspec(dllimport) long __stdcall BCryptGenRandom(void *algorithm, unsigned char *buffer, unsigned long count,

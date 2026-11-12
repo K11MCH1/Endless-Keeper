@@ -1105,7 +1105,7 @@ TbBool process_user_global_packet_action(NetUserId user)
       dump_first_held_thing_on_map(plyr_idx, pckt->actn_par1, pckt->actn_par2, 1);
       return 0;
   case PckA_EventBoxTurnOff:
-      if (game.event[pckt->actn_par1].kind != EvKind_Objective) {
+      if ((pckt->actn_par1 >= 0) && (pckt->actn_par1 < EVENTS_COUNT) && (game.event[pckt->actn_par1].kind != EvKind_Objective)) {
           event_delete_event(plyr_idx, pckt->actn_par1);
       }
       return 0;

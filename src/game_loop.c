@@ -327,7 +327,9 @@ void process_dungeon_destroy(struct Thing* heartng)
             {
                 setup_all_player_creatures_and_diggers_leave_or_die(plyr_idx);
                 player->allied_players = pmask_of(player->id_number);
-                if (game.game_kind == GKind_MultiGame)
+                /* not in endless worlds (2026-11-12): revealing every loaded chunk took 160 ms on a busy server, and a
+                   fallen keeper starts again rather than watching; the fog of war stays the server's */
+                if ((game.game_kind == GKind_MultiGame) && !world_mode_active())
                     reveal_whole_map(player);
             }
         }

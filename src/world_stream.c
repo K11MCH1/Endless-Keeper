@@ -112,6 +112,9 @@
 #include "net_secure.h"
 #define XXH_INLINE_ALL
 #include "../deps/xxhash/xxhash.h"
+#include "world_pools.h"
+#include "room_entrance.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -158,11 +161,15 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_RAIDS 0x31584452u  /* "RDX1": the raids' owed first raid and fleeing clock */
 #define WORLD_EXTRA_AMENITY 0x31584D41u /* "AMX1": Amenity Mastery's bars */
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
+#define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
+#define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
-/* The player's creature limit (imps don't count, as in stock): this many, plus this many per owned portal. */
+/* The player's creature limit (imps don't count, as in stock): this many, plus this many per owned portal, at most
+   WORLD_MAX_CREATURES (2026-11-12: 100 keepers of 50 each fit the world's creature budget). */
 #define WORLD_BASE_CREATURES 10
+#define WORLD_MAX_CREATURES 50
 /* Chunked world: how far a keeper's threat radius (at most 56 slabs from its heart) reaches beyond its box (24) */
 #define WORLD_KEEPER_REACH 40
 #define WORLD_CREATURES_PER_PORTAL 5
@@ -246,6 +253,7 @@ struct WorldState {
     char seed_text[64];
     uint64_t seed;
     struct WgWorld *gen;
+    int gen_version;                   /* the generator version the world was made with (6 or 7; kept for good) */
     int32_t origin_cx, origin_cy;      /* world chunk at window chunk (0,0) */
     struct ChunkTable store;           /* frozen chunk records (zlib) */
     struct ChunkTable memory;          /* map memory: CHUNK_STL_CELLS u16 panel codes, raw */
@@ -739,6 +747,53 @@ static size_t keeper_slots_extended(TbBool network, const PlayerNumber **slots)
    no world keeper holds it. Player 8 is left to the world's keepers, so a keeper that wakes finds a colour. */
 static const PlayerNumber world_seats_9[] = {0, 1, 2, 3, 6, 7};
 static PlayerNumber world_seats_ext[PLAYERS_MAX];
+
+/** Endless worlds have no Reveal Map box (2026-11-12): one of the others takes its place, chosen by the place (the
+ *  generator's weights without it: Steal Hero 2, Multiply 1, Increase Level 3, Make Safe 1, Heal All 2). */
+ThingModel world_box_kind(ThingModel model, MapCoord x, MapCoord y)
+{
+    static long revmap = -2;
+    if (revmap == -2)
+        revmap = get_id(object_desc, "SPECBOX_REVMAP");
+    if ((revmap <= 0) || (model != (ThingModel)revmap) || !world_mode_active())
+        return model;
+    static const char *const names[9] = {"SPECBOX_STEALHR", "SPECBOX_STEALHR", "SPECBOX_MULTPLY", "SPECBOX_INCLEV",
+        "SPECBOX_INCLEV", "SPECBOX_INCLEV", "SPECBOX_MKSAFE", "SPECBOX_HEALALL", "SPECBOX_HEALALL"};
+    uint64_t h = (uint64_t)(uint32_t)x * 0x9E3779B97F4A7C15ULL ^ (uint64_t)(uint32_t)y * 0xC2B2AE3D27D4EB4FULL;
+    h ^= h >> 31;
+    const long other = get_id(object_desc, names[h % 9]);
+    return (other > 0) ? (ThingModel)other : model;
+}
+
+/** Reveal Map boxes already on the map (a world saved before 2026-11-12): each becomes another box. */
+static void swap_reveal_map_boxes(void)
+{
+    static long revmap = -2;
+    if (revmap == -2)
+        revmap = get_id(object_desc, "SPECBOX_REVMAP");
+    if (revmap <= 0)
+        return;
+    const struct StructureList *slist = get_list_for_thing_class(TCls_Object);
+    long guard = 0;
+    for (ThingIndex i = slist->index; (i > 0) && (guard++ <= (long)THINGS_COUNT);)
+    {
+        struct Thing *thing = thing_get(i);
+        if (thing_is_invalid(thing))
+            break;
+        i = thing->next_of_class;
+        if ((thing->model != (ThingModel)revmap) || thing_is_picked_up(thing))
+            continue;
+        struct Coord3d pos = thing->mappos;
+        const PlayerNumber owner = thing->owner;
+        const ThingModel other = world_box_kind(thing->model, pos.x.val, pos.y.val);
+        if (other == thing->model)
+            continue;
+        delete_thing_structure(thing, 0);
+        struct Thing *box = create_object(&pos, other, owner, -1);
+        SYNCLOG("World: a Reveal Map box at subtile (%d,%d) became %s", (int)pos.x.stl.num, (int)pos.y.stl.num,
+            thing_is_invalid(box) ? "nothing" : thing_model_name(box));
+    }
+}
 
 int world_seat_players(const PlayerNumber **seats)
 {
@@ -1385,7 +1440,9 @@ static void apply_stamps(int32_t cx, int32_t cy, struct WorldChunkData *cd)
                 }
             }
         }
-        /* the chunk's own things on the dungeon's slabs, or objects on cleared ground, go */
+        /* the chunk's own things on the dungeon's slabs, or on cleared ground, go: the clearing turns paths to earth, so a
+           creature of the chunk's own (a neutral one in a cave there) was left inside it and tried to get out every turn
+           (found 2026-11-12: a Beetle after Start again) */
         int kept = 0;
         for (int t = 0; t < cd->thing_count; t++)
         {
@@ -1397,7 +1454,7 @@ static void apply_stamps(int32_t cx, int32_t cy, struct WorldChunkData *cd)
             if (!copied && (tx >= ox1) && (tx <= ox2) && (ty >= oy1) && (ty <= oy2))
             {
                 const int i = (int)((ty - cy1) * WG_CHUNK + (tx - cx1));
-                if (structure[i] || ((cd->kind[i] == SlbT_EARTH) && (th->oclass == TCls_Object)))
+                if (structure[i] || ((cd->kind[i] == SlbT_EARTH) && ((th->oclass == TCls_Object) || (th->oclass == TCls_Creature))))
                     continue;
             }
             cd->things[kept++] = *th;
@@ -1692,6 +1749,33 @@ static void place_books(const struct WgChunk *ch, int32_t cx, int32_t cy, struct
                 (int)cx, (int)cy, (int)kind, (long)bx, (long)by, wg_struct_type_name(ref->id.type));
         }
     }
+}
+
+int world_biome_parent(int biome)
+{
+    switch (biome)
+    {
+    case WgB_LavaOcean: case WgB_LavaRivers: return WgB_Volcanic;
+    case WgB_FloodedOcean: case WgB_FloodedRivers: return WgB_Flooded;
+    case WgB_DeadMans: return WgB_Earthen;
+    default: return ((biome >= 0) && (biome < WG_V6_BIOMES)) ? biome : WgB_Earthen;
+    }
+}
+
+TbBool world_land_fits(int64_t x1, int64_t y1, int64_t x2, int64_t y2, TbBool no_provinces)
+{
+    if (!W.active || (W.gen == NULL) || (W.gen_version < 7))
+        return true; /* version 6 places as it always did */
+    /* biomes only: reading the ground itself generates its chunks, seconds for a start's choice (2026-11-12) */
+    for (int64_t y = y1; y <= y2 + 7; y += 8)
+        for (int64_t x = x1; x <= x2 + 7; x += 8)
+        {
+            const int b = wg_biome_at(W.gen, min(x, x2), min(y, y2));
+            if ((b == WgB_DeadMans) || (b == WgB_LavaOcean) || (b == WgB_FloodedOcean) ||
+                (no_provinces && (b >= WG_V6_BIOMES)))
+                return false;
+        }
+    return true;
 }
 
 int world_biome_at_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
@@ -2946,7 +3030,7 @@ static void place_world_thing(const struct WorldThing *th, const struct WorldCre
                 break;
             }
         }
-        thing = create_object(&pos, th->model, owner, -1);
+        thing = create_object(&pos, world_box_kind(th->model, pos.x.val, pos.y.val), owner, -1);
         if (thing_is_invalid(thing))
             return;
         if (object_is_hero_gate(thing))
@@ -3659,7 +3743,7 @@ static void update_creature_limit(void)
         for (int i = 0; i < W.portal_count; i++)
             if (W.portals[i].owner == p)
                 owned++;
-        int limit = WORLD_BASE_CREATURES + WORLD_CREATURES_PER_PORTAL * owned;
+        int limit = min(WORLD_BASE_CREATURES + WORLD_CREATURES_PER_PORTAL * owned, WORLD_MAX_CREATURES);
         if (dungeon->max_creatures_attracted != limit)
         {
             if (p == PLAYER0)
@@ -4844,10 +4928,37 @@ TbBool world_is_chunked(void)
 }
 
 static char world_next_seed[64];
+/* the generator version of the next new world: 0 is this build's (world_new_gen_version); a replay or a network
+   game's host says which (sync_initial_network_seed) */
+static int world_next_gen;
 
 void world_set_next_seed(const char *seed_text)
 {
     snprintf(world_next_seed, sizeof(world_next_seed), "%s", (seed_text != NULL) ? seed_text : "");
+}
+
+/** The generator version this build gives a new world. Test hook: KFX_WORLD_GENVERSION=6 or 7. */
+int world_new_gen_version(void)
+{
+    const char *v = getenv("KFX_WORLD_GENVERSION");
+    if ((v != NULL) && (atoi(v) >= WORLD_GEN_OLDEST) && (atoi(v) <= WG_GENERATOR_LATEST))
+        return atoi(v);
+    return WORLD_NEW_GEN_VERSION;
+}
+
+void world_set_next_gen_version(int version)
+{
+    world_next_gen = ((version >= WORLD_GEN_OLDEST) && (version <= WG_GENERATOR_LATEST)) ? version : 0;
+}
+
+int world_next_gen_version(void)
+{
+    return (world_next_gen != 0) ? world_next_gen : world_new_gen_version();
+}
+
+int world_gen_version(void)
+{
+    return W.active ? W.gen_version : 0;
 }
 
 const char *world_next_seed_text(void)
@@ -4885,6 +4996,9 @@ TbBool world_request(const char *seed_text)
     world_level_end();
     W.pending = true;
     W.seed = seed;
+    W.gen_version = world_next_gen_version();
+    world_next_gen = 0;
+    SYNCLOG("World: generator version %d", W.gen_version);
     snprintf(W.seed_text, sizeof(W.seed_text), "%s", seed_text);
     /* players 10 and up for keepers and seats: every slot (PLAYERS_MAX) in a new world; a replay keeps what it was
        made with (16 before more were possible, nine before that). Test hooks: KFX_WORLD_PLAYERS9=1 keeps nine,
@@ -4904,9 +5018,13 @@ TbBool world_request(const char *seed_text)
     return true;
 }
 
+static void world_start_test(void);
+
 static TbBool world_init_state(void)
 {
-    W.gen = wg_world_create(W.seed);
+    if ((W.gen_version < WORLD_GEN_OLDEST) || (W.gen_version > WG_GENERATOR_LATEST))
+        W.gen_version = WORLD_GEN_OLDEST;
+    W.gen = wg_world_create_version(W.seed, W.gen_version);
     if (W.gen == NULL)
         return false;
     W.active = true;
@@ -5011,6 +5129,29 @@ void world_level_start(void)
         get_player(p)->id_number = saved_ids[p];
     W.last_shift_turn = 0;
     SYNCLOG("World: seed %s, %d chunks generated around the start, %d keepers known", W.seed_text, count, W.keeper_count);
+    if (W.gen_version >= 7)
+    {
+        /* what the start stands in (version 7: an ocean's island, by a river, Dead Man's Land) */
+        int counts[WgB_COUNT] = {0};
+        long liquid = 0, samples = 0;
+        for (int64_t y = W.home_y - 48; y <= W.home_y + 48; y += 8)
+            for (int64_t x = W.home_x - 48; x <= W.home_x + 48; x += 8)
+            {
+                const int b = wg_biome_at(W.gen, x, y), t = wg_terrain_at(W.gen, x, y);
+                if ((b >= 0) && (b < WgB_COUNT))
+                    counts[b]++;
+                liquid += ((t == WgS_Lava) || (t == WgS_Water));
+                samples++;
+            }
+        char text[256] = "";
+        for (int b = 0; b < WgB_COUNT; b++)
+            if (counts[b] > 0)
+                snprintf(text + strlen(text), sizeof(text) - strlen(text), "%s%s %d", text[0] ? ", " : "", wg_biome_name(b),
+                    counts[b]);
+        SYNCLOG("World: generator version 7 start in %s; within 48 slabs: %s; %ld%% lava or water",
+            wg_biome_name(wg_biome_at(W.gen, W.home_x, W.home_y)), text, (samples > 0) ? liquid * 100 / samples : 0);
+    }
+    world_start_test();
     server_admin_log("world", "New world, seed %s: %d chunks generated around the start, %d keepers known", W.seed_text, count,
         W.keeper_count);
 }
@@ -5049,6 +5190,15 @@ static TbBool stamp_place_free(const struct WorldStamp *st)
                 (world_paged && (wp_page(engine_chunk_of(cx), engine_chunk_of(cy)) != NULL)))
                 return false;
     return true;
+}
+
+/** Version 7: a start's copy goes nowhere in or by an ocean, a river province or Dead Man's Land (a copy of the start
+ *  there would be a blob cut off by liquid, or bare earth). Asked after the cheaper checks: it reads biomes round it. */
+static TbBool stamp_land_fits(const struct WorldStamp *st)
+{
+    int64_t x1, y1, x2, y2;
+    stamp_rect(st, &x1, &y1, &x2, &y2);
+    return world_land_fits(x1 - 48, y1 - 48, x2 + place_ext_x + 48, y2 + place_ext_y + 48, true);
 }
 
 /** Where a pair's second start goes from the first: beside it, across the arm that leads to the portal. */
@@ -5092,7 +5242,7 @@ static TbBool choose_offset_near(PlayerNumber plyr, int64_t ndx, int64_t ndy, in
         {
             const long a = (k * (ANGLE_MASK + 1) / 16) & ANGLE_MASK;
             const struct WorldStamp st = {plyr, ndx + ((int64_t)LbSinL(a) * r) / 65536, ndy - ((int64_t)LbCosL(a) * r) / 65536};
-            if (!stamp_place_free(&st))
+            if (!stamp_place_free(&st) || !stamp_land_fits(&st))
                 continue;
             *dx = st.dx;
             *dy = st.dy;
@@ -5183,6 +5333,8 @@ static TbBool choose_seat_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
                     continue;
                 if (nearest_start2(plyr, st.dx, st.dy, true) < coop_gap * coop_gap)
                     continue;
+                if (!stamp_land_fits(&st))
+                    continue;
                 if (pass > 0)
                     SYNCLOG("World: player %d's start goes nearer the co-op starts than %d slabs (no room on the spiral)",
                         (int)plyr, (int)COOP_SPAWN_GAP);
@@ -5228,6 +5380,8 @@ static TbBool choose_coop_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
             if (nearest_start2(plyr, st.dx, st.dy, false) < (int64_t)COOP_SPAWN_GAP * COOP_SPAWN_GAP)
                 continue;
             if (nearest_start2(plyr, st.dx, st.dy, true) < (int64_t)SPAWN_SPACING * SPAWN_SPACING)
+                continue;
+            if (!stamp_land_fits(&st))
                 continue;
             *dx = st.dx;
             *dy = st.dy;
@@ -5328,6 +5482,67 @@ static void circles_welcome_mat(PlayerNumber p, int64_t sx, int64_t sy)
 
 /* the seat starting again right now (PLAYER_NONE: none): PLAYER0 then gets a start like the other seats */
 static PlayerNumber respawn_seat = PLAYER_NONE;
+
+/** Test hook KFX_WORLD_STARTTEST=n: where n joiners' starts would go (every third the first of a co-op pair, with room
+ *  for its partner), what land is round each and how long the choice took; nothing is kept. */
+static void world_start_test(void)
+{
+    if ((getenv("KFX_WORLD_OPSURVEY") != NULL) && (atoi(getenv("KFX_WORLD_OPSURVEY")) > 0))
+        world_outpost_survey(atoi(getenv("KFX_WORLD_OPSURVEY")));
+    const char *v = getenv("KFX_WORLD_STARTTEST");
+    if ((v == NULL) || (atoi(v) <= 0))
+        return;
+    const int saved = W.stamp_count;
+    int placed = 0, provinces = 0;
+    for (int i = 0; (i < atoi(v)) && (W.stamp_count < WORLD_MAX_STAMPS); i++)
+    {
+        const PlayerNumber p = (PlayerNumber)(1 + i % 8);
+        int64_t dx = 0, dy = 0;
+        const TbClockMSec t0 = LbTimerClock();
+        TbBool ok;
+        if (i % 3 == 2)
+        {
+            coop_side(&place_ext_x, &place_ext_y);
+            ok = choose_start_offset(p, &dx, &dy);
+            place_ext_x = 0;
+            place_ext_y = 0;
+        } else
+            ok = choose_start_offset(p, &dx, &dy);
+        const long ms = (long)(LbTimerClock() - t0);
+        if (!ok)
+        {
+            SYNCLOG("World starttest %d: no place (%ld ms)", i + 1, ms);
+            continue;
+        }
+        placed++;
+        int counts[WgB_COUNT] = {0};
+        long liquid = 0, samples = 0;
+        const int64_t hx = W.home_x + dx, hy = W.home_y + dy;
+        for (int64_t y = hy - 48; y <= hy + 48; y += 8)
+            for (int64_t x = hx - 48; x <= hx + 48; x += 8)
+            {
+                const int b = wg_biome_at(W.gen, x, y), t = wg_terrain_at(W.gen, x, y);
+                if ((b >= 0) && (b < WgB_COUNT))
+                    counts[b]++;
+                provinces += (b >= WG_V6_BIOMES);
+                liquid += ((t == WgS_Lava) || (t == WgS_Water));
+                samples++;
+            }
+        char text[256] = "";
+        for (int b = 0; b < WgB_COUNT; b++)
+            if (counts[b] > 0)
+                snprintf(text + strlen(text), sizeof(text) - strlen(text), "%s%s %d", text[0] ? ", " : "", wg_biome_name(b),
+                    counts[b]);
+        SYNCLOG("World starttest %d%s: offset (%lld,%lld), %ld ms; within 48 slabs: %s; %ld%% lava or water", i + 1,
+            (i % 3 == 2) ? " (co-op)" : "", (long long)dx, (long long)dy, ms, text, (samples > 0) ? liquid * 100 / samples : 0);
+        W.stamps[W.stamp_count].plyr = p;
+        W.stamps[W.stamp_count].dx = dx;
+        W.stamps[W.stamp_count].dy = dy;
+        W.stamp_count++;
+    }
+    W.stamp_count = saved;
+    SYNCLOG("World starttest: %d of %s placed, %d province samples near them", placed, v, provinces);
+}
 
 static PlayerBitFlags make_seat_starts(void)
 {
@@ -5505,8 +5720,17 @@ void world_imp_mined_gold(struct Thing *creatng)
 
 static void world_first_turn(void)
 {
+    world_pools_first_turn(); /* the script's pool, before any portal draws from it */
     const PlayerBitFlags new_seats = make_seat_starts();
     bind_hearts();
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        if ((p == PLAYER0) || pmask_has(new_seats, p))
+        {
+            world_pools_seat_started(p);
+            world_daynight_seat_started(p);
+        }
+    }
     world_progress_first_turn();
     /* a new seat starts with the gold the level gives PLAYER0 (the script's START_MONEY names PLAYER0 only) */
     const struct Dungeon *first = get_players_num_dungeon(PLAYER0);
@@ -5590,6 +5814,11 @@ static void seats_joined(PlayerNumber first, PlayerNumber second)
         }
         /* the keeper's start (exploration, cameras, allies) now that it has a heart */
         init_player(get_player(plyr_idx), 0);
+        if (pmask_has(made, plyr_idx))
+        {
+            world_pools_seat_started(plyr_idx);   /* a fresh pool of its own, */
+            world_daynight_seat_started(plyr_idx); /* and its days count from today */
+        }
         world_progress_new_player(plyr_idx);
         world_perks_seat_started(plyr_idx); /* what the player keeps from earlier starts (by player, not seat) */
         cameras_to_hearts(plyr_idx);
@@ -7001,6 +7230,306 @@ static void world_rng_trace(const uint32_t *seed, unsigned long range, const cha
         (seed == &game.ai_random_seed) ? "ai" : NULL;
     if (which != NULL)
         SYNCLOG("RNG %s %s:%lu range %lu seed %08x", which, func_name, place, range, (unsigned)*seed);
+}
+
+/** Test hook KFX_WORLD_PROFCREATURES=n (with KFX_WORLD_PROFKEEPERS): at turn 400 every keeper with a heart gets n more
+ *  creatures of eight kinds at its heart (the map's creature cap raised for it), to measure what thousands of
+ *  creatures cost. Logs how many came and the sizes of the tables. */
+/** Test hook KFX_WORLD_PROFFIGHT=n (with KFX_WORLD_PROFKEEPERS and PROFCREATURES): at turn 700 every keeper with a
+ *  heart gets n heroes of level 4 three slabs from it, so that fights break out everywhere at once. */
+static void world_proffight(void)
+{
+    static int want = -1;
+    if (want < 0)
+    {
+        const char *v = getenv("KFX_WORLD_PROFFIGHT");
+        want = (v != NULL) ? atoi(v) : 0;
+    }
+    if ((want <= 0) || (game.play_gameturn != 700))
+        return;
+    static const char *const kinds[4] = {"KNIGHT", "ARCHER", "WIZARD", "BARBARIAN"};
+    int keepers = 0, made = 0;
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        if ((p == PLAYER_GOOD) || (p == game.neutral_player_num))
+            continue;
+        const struct Thing *heart = find_players_dungeon_heart(p);
+        if (!thing_exists(heart))
+            continue;
+        keepers++;
+        for (int k = 0; k < want; k++)
+        {
+            struct Coord3d pos = heart->mappos;
+            pos.x.val += (MapCoord)(9 + (k % 3) - 1) * COORD_PER_STL;
+            pos.y.val += (MapCoord)((k / 3) % 3 - 1) * COORD_PER_STL;
+            pos.z.val = 0;
+            struct Thing *h = create_creature(&pos, (ThingModel)get_id(creature_desc, kinds[k % 4]), PLAYER_GOOD);
+            if (thing_exists(h))
+            {
+                move_thing_in_map(h, &pos);
+                set_creature_level(h, 3);
+                made++;
+            }
+        }
+    }
+    SYNCLOG("World proffight: %d heroes beside %d keepers' hearts; creatures now %ld", made, keepers,
+        (long)game.thing_lists[TngList_Creatures].count);
+}
+
+static void world_profcreatures(void)
+{
+    world_proffight();
+    static int want = -1;
+    if (want < 0)
+    {
+        const char *v = getenv("KFX_WORLD_PROFCREATURES");
+        want = (v != NULL) ? atoi(v) : 0;
+    }
+    if ((want <= 0) || (game.play_gameturn != 400))
+        return;
+    game.conf.rules[0].gameplay.creatures_count = CREATURES_COUNT - 2;
+    static const char *const kinds[8] = {"TROLL", "ORC", "DEMONSPAWN", "BILE_DEMON", "DARK_MISTRESS", "SORCEROR",
+        "SPIDER", "HELL_HOUND"};
+    int keepers = 0, made = 0, failed = 0;
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        if ((p == PLAYER_GOOD) || (p == game.neutral_player_num))
+            continue;
+        const struct Thing *heart = find_players_dungeon_heart(p);
+        if (!thing_exists(heart))
+            continue;
+        keepers++;
+        for (int k = 0; k < want; k++)
+        {
+            struct Coord3d pos = heart->mappos;
+            pos.x.val += (MapCoord)((k % 5) - 2) * COORD_PER_STL;
+            pos.y.val += (MapCoord)(((k / 5) % 5) - 2) * COORD_PER_STL;
+            pos.z.val = 0;
+            struct Thing *crtng = create_creature(&pos, (ThingModel)get_id(creature_desc, kinds[k % 8]), p);
+            if (thing_exists(crtng))
+            {
+                move_thing_in_map(crtng, &pos);
+                made++;
+            } else
+                failed++;
+        }
+    }
+    SYNCLOG("World profcreatures: %d keepers, %d creatures made, %d failed; creatures now %ld of %d; a creature control is %d "
+        "bytes, a thing %d, the game state %ld", keepers, made, failed, (long)game.thing_lists[TngList_Creatures].count,
+        CREATURES_COUNT, (int)sizeof(struct CreatureControl), (int)sizeof(struct Thing), (long)sizeof(struct Game));
+}
+
+/** Test hook KFX_WORLD_B3TEST="T" (single player, player 0; run fast-forwarded): batch 3 in play.
+ *  T: player 0 takes the nine nearest portals (creature limit 50), a Lair of 9 east of the heart and a Scavenger Room
+ *  west of it (a room an old save could hold) with a Troll on it, gold, a Reveal Map box beside the heart; Hell Hounds
+ *  unlocked as a volcanic portal does (forced when none of the nine is volcanic). Every 250 turns a status line.
+ *  T+600: a creature leaves as an angry one does (pool counts before and after). T+4000: the dungeon is filled to 48
+ *  creatures, and the status lines show whether the portals stop at the limit. */
+static void world_b3_status(const char *when)
+{
+    struct Dungeon *dungeon = get_players_num_dungeon(PLAYER0);
+    if (dungeon_invalid(dungeon))
+        return;
+    const ThingModel hound = (ThingModel)get_id(creature_desc, "HELL_HOUND");
+    const ThingModel revmap = (ThingModel)get_id(object_desc, "SPECBOX_REVMAP");
+    int all = 0, hounds = 0, imps = 0, scav = 0, revs = 0, boxes = 0;
+    const struct StructureList *clist = get_list_for_thing_class(TCls_Creature);
+    long guard = 0;
+    for (ThingIndex i = clist->index; (i > 0) && (guard++ <= (long)THINGS_COUNT);)
+    {
+        struct Thing *t = thing_get(i);
+        if (thing_is_invalid(t))
+            break;
+        i = t->next_of_class;
+        if (t->owner != PLAYER0)
+            continue;
+        all++;
+        if (t->model == hound)
+            hounds++;
+        if (creature_is_for_dungeon_diggers_list(t))
+            imps++;
+        const CrtrStateId st = get_creature_state_besides_interruptions(t);
+        if ((st == CrSt_Scavengering) || (st == CrSt_CreatureScavengedDisappear) || (st == CrSt_CreatureScavengedReappear))
+            scav++;
+    }
+    const struct StructureList *olist = get_list_for_thing_class(TCls_Object);
+    guard = 0;
+    for (ThingIndex i = olist->index; (i > 0) && (guard++ <= (long)THINGS_COUNT);)
+    {
+        struct Thing *t = thing_get(i);
+        if (thing_is_invalid(t))
+            break;
+        i = t->next_of_class;
+        if (t->model == revmap)
+            revs++;
+        else if (thing_is_special_box(t))
+            boxes++;
+    }
+    const long scavroom = get_id(room_desc, "SCAVENGER");
+    const long lairk = get_id(room_desc, "LAIR");
+    int lair_slabs = 0;
+    for (long ri = 1; ri < ROOMS_COUNT; ri++)
+    {
+        const struct Room *room = room_get(ri);
+        if (room_exists(room) && (room->owner == PLAYER0) && (room->kind == (RoomKind)lairk))
+            lair_slabs += room->slabs_count;
+    }
+    SYNCLOG("B3 test %s (turn %lu): Lair slabs %d, limit %d, active %d, creatures %d (imps %d), Hell Hounds %d (allowed %d, will come %d,"
+        " in pool %d), scavenging %d, Scavenger buildable %d researchable %d, Reveal Map boxes %d (other boxes %d),"
+        " dungeon day %ld", when, (unsigned long)game.play_gameturn, lair_slabs, (int)dungeon->max_creatures_attracted,
+        (int)dungeon->num_active_creatrs, all, imps, hounds, (hound > 0) ? (int)dungeon->creature_allowed[hound] : -1,
+        (hound > 0) ? (int)creature_will_generate_for_dungeon(dungeon, hound) : -1,
+        (hound > 0) ? (int)creature_pool_count(PLAYER0, hound) : -1, scav,
+        (scavroom > 0) ? (int)dungeon->room_buildable[scavroom] : -1, (scavroom > 0) ? (int)dungeon->room_resrchable[scavroom] : -1,
+        revs, boxes, world_seat_day(PLAYER0));
+}
+
+static void world_b3_test(void)
+{
+    static long base = -2;
+    if (base == -2)
+    {
+        const char *v = getenv("KFX_WORLD_B3TEST");
+        base = (v != NULL) ? atol(v) : -1;
+    }
+    if ((base < 0) || ((long)game.play_gameturn < base))
+        return;
+    const long t = (long)game.play_gameturn - base;
+    struct Thing *heart = get_player_soul_container(PLAYER0);
+    if (!thing_exists(heart))
+        return;
+    const MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
+    if (t == 0)
+    {
+        world_b3_status("before");
+        TbBool volcanic = false;
+        for (int n = 0; n < 9; n++)
+        {
+            struct Room *best = NULL;
+            long best_d = LONG_MAX;
+            for (long ri = 1; ri < ROOMS_COUNT; ri++)
+            {
+                struct Room *room = room_get(ri);
+                if (!room_exists(room) || !room_role_matches(room->kind, RoRoF_CrPoolSpawn) || (room->owner == PLAYER0))
+                    continue;
+                const long d = labs((long)room->central_stl_x - heart->mappos.x.stl.num) +
+                    labs((long)room->central_stl_y - heart->mappos.y.stl.num);
+                if (d < best_d)
+                {
+                    best_d = d;
+                    best = room;
+                }
+            }
+            if (best == NULL)
+            {
+                SYNCLOG("B3 test: only %d portals to take", n);
+                break;
+            }
+            const int biome = world_biome_at_subtile(best->central_stl_x, best->central_stl_y);
+            volcanic |= (world_biome_parent(biome) == WgB_Volcanic);
+            SYNCLOG("B3 test: takes the portal at subtile (%d,%d), %ld subtiles away, %s", (int)best->central_stl_x,
+                (int)best->central_stl_y, best_d, wg_biome_name(biome));
+            take_over_room(best, PLAYER0);
+        }
+        if (!volcanic)
+        {
+            SYNCLOG("B3 test: none of them is volcanic: Hell Hounds unlocked as a volcanic portal would (forced)");
+            world_progress_portal_owned(PLAYER0, WgB_Volcanic);
+        }
+        /* portals far away that never load (test only), so player 0 owns eight in all: 10 + 5 x 8 = 50 */
+        {
+            int owned = 0;
+            for (int i = 0; i < W.portal_count; i++)
+                if (W.portals[i].owner == PLAYER0)
+                    owned++;
+            const int64_t wx = world_slab_x_of(hx), wy = world_slab_y_of(hy);
+            int added = 0;
+            for (int n = 0; owned + added < 8; n++)
+            {
+                struct WorldPortal *p = portal_add(wx + 5000 + 40 * n, wy + 5000);
+                if (p == NULL)
+                    break;
+                p->owner = PLAYER0;
+                p->last_owner = PLAYER0;
+                added++;
+            }
+            SYNCLOG("B3 test: %d test-only portals far away, player 0 owns %d", added, owned + added);
+        }
+        const RoomKind lairk = (RoomKind)get_id(room_desc, "LAIR"), scavk = (RoomKind)get_id(room_desc, "SCAVENGER");
+        struct Room *rooms[2] = {NULL, NULL};
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = 4; dx <= 6; dx++)
+            {
+                for (int k = 0; k < 2; k++)
+                {
+                    const MapSubtlCoord sx = slab_subtile_center((k == 0) ? hx + dx : hx - dx), sy = slab_subtile_center(hy + dy);
+                    place_slab_type_on_map(SlbT_CLAIMED, sx, sy, PLAYER0, 0);
+                    struct Room *r = place_room(PLAYER0, (k == 0) ? lairk : scavk, sx, sy);
+                    if (!room_is_invalid(r))
+                        rooms[k] = r;
+                }
+            }
+        for (int k = 0; k < 2; k++)
+            SYNCLOG("B3 test: a %s of %d slabs", (k == 0) ? "Lair" : "Scavenger Room",
+                room_is_invalid(rooms[k]) ? 0 : (int)rooms[k]->slabs_count);
+        player_add_offmap_gold(PLAYER0, 200000);
+        struct Coord3d pos = heart->mappos;
+        pos.x.val -= 5 * COORD_PER_STL * 3;
+        pos.z.val = 0;
+        struct Thing *troll = create_creature(&pos, (ThingModel)get_id(creature_desc, "TROLL"), PLAYER0);
+        if (thing_exists(troll))
+            move_thing_in_map(troll, &pos);
+        pos = heart->mappos;
+        pos.y.val += 2 * COORD_PER_STL * 3;
+        pos.z.val = 0;
+        struct Thing *box = create_object(&pos, (ThingModel)get_id(object_desc, "SPECBOX_REVMAP"), game.neutral_player_num, -1);
+        SYNCLOG("B3 test: a Troll on the Scavenger Room (%s), a Reveal Map box placed by hand (%s)",
+            thing_exists(troll) ? "made" : "failed", thing_exists(box) ? "made" : "failed");
+        world_b3_status("after setup");
+        return;
+    }
+    if (t == 600)
+    {
+        const struct StructureList *clist = get_list_for_thing_class(TCls_Creature);
+        long guard = 0;
+        for (ThingIndex i = clist->index; (i > 0) && (guard++ <= (long)THINGS_COUNT);)
+        {
+            struct Thing *c = thing_get(i);
+            if (thing_is_invalid(c))
+                break;
+            i = c->next_of_class;
+            if ((c->owner != PLAYER0) || creature_is_for_dungeon_diggers_list(c))
+                continue;
+            const ThingModel m = c->model;
+            const int own_before = creature_pool_count(PLAYER0, m), world_before = game.pool.crtr_kind[m];
+            kill_creature(c, INVALID_THING, -1, CrDed_NoEffects | CrDed_NotReallyDying);
+            SYNCLOG("B3 test: a %s leaves the dungeon: player 0's pool %d -> %d, the world's %d -> %d", creature_code_name(m),
+                own_before, (int)creature_pool_count(PLAYER0, m), world_before, (int)game.pool.crtr_kind[m]);
+            break;
+        }
+    }
+    if (t == 4000)
+    {
+        struct Dungeon *dungeon = get_players_num_dungeon(PLAYER0);
+        static const char *const kinds[4] = {"ORC", "TROLL", "DEMONSPAWN", "BILE_DEMON"};
+        int made = 0;
+        for (int k = 0; (k < 80) && !dungeon_invalid(dungeon) && (dungeon->num_active_creatrs < 48); k++)
+        {
+            struct Coord3d pos = heart->mappos;
+            pos.x.val += (MapCoord)((k % 5) - 2) * COORD_PER_STL;
+            pos.y.val += (MapCoord)(((k / 5) % 5) - 2) * COORD_PER_STL;
+            pos.z.val = 0;
+            struct Thing *c = create_creature(&pos, (ThingModel)get_id(creature_desc, kinds[k % 4]), PLAYER0);
+            if (thing_exists(c))
+            {
+                move_thing_in_map(c, &pos);
+                made++;
+            }
+        }
+        SYNCLOG("B3 test: filled with %d creatures", made);
+    }
+    if ((t % 250) == 0)
+        world_b3_status("status");
 }
 
 static void world_profkeepers(void)
@@ -8724,6 +9253,8 @@ void world_process_turn(void)
     }
     if ((game.play_gameturn % 64) == 3)
         coop_keep();
+    if ((game.play_gameturn % 64) == 5)
+        swap_reveal_map_boxes();
     world_coop_refresh();
     world_colours_turn(); /* local presentation only */
     world_progress_present();
@@ -8757,6 +9288,26 @@ void world_process_turn(void)
     world_explore_hook();
     world_sendimp();
     world_profkeepers();
+    world_pools_test();
+    world_profcreatures();
+    world_b3_test();
+    {
+        /* test hook KFX_WORLD_RESTARTTEST="t1,t2,...": player 0 starts again (as Start again) at each of those turns */
+        static const char *rt = NULL;
+        static TbBool rt_read = false;
+        if (!rt_read)
+        {
+            rt_read = true;
+            rt = getenv("KFX_WORLD_RESTARTTEST");
+        }
+        for (const char *q = rt; (q != NULL) && (*q != 0); q = strchr(q, ',') ? strchr(q, ',') + 1 : NULL)
+            if ((GameTurn)atol(q) == game.play_gameturn)
+            {
+                char why[128] = "";
+                const TbBool ok = world_seat_reset(PLAYER0, why, sizeof(why));
+                SYNCLOG("World restarttest: player 0 starts again: %s %s", ok ? "ok" : "refused", why);
+            }
+    }
     world_statehash();
     world_assist_hook();
     {
@@ -9106,6 +9657,8 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_AMENITY, world_amenity_save_size, world_amenity_save, world_amenity_load, world_amenity_reset},
     {WORLD_EXTRA_CIRCLES, world_circles_save_size, world_circles_save, world_circles_load, world_circles_reset},
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
+    {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
+    {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 
@@ -9263,7 +9816,7 @@ TbBool world_save_blob(unsigned char **data, uint32_t *len)
     struct RecWriter w;
     memset(&w, 0, sizeof(w));
     rec_u32(&w, WORLD_BLOB_MAGIC);
-    rec_u32(&w, WG_GENERATOR_VERSION);
+    rec_u32(&w, (uint32_t)W.gen_version); /* the world's own; saves from before 2026-11-12 say 6 */
     rec_put(&w, W.seed_text, sizeof(W.seed_text));
     rec_put(&w, &W.seed, 8);
     rec_put(&w, &W.origin_cx, 4);
@@ -9574,7 +10127,13 @@ enum WorldBlobCheck world_blob_check(const unsigned char *data, uint32_t len, ch
     enum WorldBlobCheck res = WBC_Ok;
     if (rec_get_u32(&r) != WORLD_BLOB_MAGIC)
         res = wbc_fail(WBC_Damaged, why, why_len, "the world data is not a saved world");
-    rec_get_u32(&r); /* the generator version: an older one still loads */
+    {
+        const uint32_t ver = rec_get_u32(&r); /* the generator version: older ones load as version 6 */
+        if ((res == WBC_Ok) && (ver > WG_GENERATOR_LATEST))
+            res = wbc_fail(WBC_Incompatible, why, why_len, "the world was made with world generator version %lu, "
+                "and this build knows versions up to %d: it needs a newer Endless Keeper", (unsigned long)ver,
+                WG_GENERATOR_LATEST);
+    }
     rec_skip(&r, (uint32_t)(sizeof(W.seed_text) + 8 + 4 + 4));
     const uint32_t nk = rec_get_u32(&r);
     if ((res == WBC_Ok) && (nk > WORLD_MAX_KEEPERS))
@@ -9638,11 +10197,18 @@ TbBool world_load_blob(const unsigned char *data, uint32_t len)
     }
     struct RecReader r = {raw, raw_len, 0, false};
     TbBool ok = (rec_get_u32(&r) == WORLD_BLOB_MAGIC);
-    uint32_t ver = rec_get_u32(&r);
-    if (ver != WG_GENERATOR_VERSION)
+    const uint32_t ver = rec_get_u32(&r);
+    if (ver > WG_GENERATOR_LATEST)
     {
-        WARNLOG("World: saved with generator version %u, this game has %u", (unsigned)ver, (unsigned)WG_GENERATOR_VERSION);
+        ERRORLOG("World: made with generator version %u, this build knows versions up to %d", (unsigned)ver,
+            WG_GENERATOR_LATEST);
+        free(raw);
+        world_level_end();
+        return false;
     }
+    /* the version stays the world's: before version 6 a world was always loaded as version 6 */
+    W.gen_version = (ver < WORLD_GEN_OLDEST) ? WORLD_GEN_OLDEST : (int)ver;
+    SYNCLOG("World: generator version %d (saved as %u)", W.gen_version, (unsigned)ver);
     rec_get(&r, W.seed_text, sizeof(W.seed_text));
     W.seed_text[sizeof(W.seed_text) - 1] = 0;
     rec_get(&r, &W.seed, 8);

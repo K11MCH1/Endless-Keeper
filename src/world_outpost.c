@@ -1593,6 +1593,9 @@ static TbBool op_place_clear(int64_t x1, int64_t y1, int64_t x2, int64_t y2)
         return false;
     if (world_stamps_overlap(x1 - OP_MARGIN, y1 - OP_MARGIN, x2 + OP_MARGIN, y2 + OP_MARGIN))
         return false;
+    /* version 7 (as its generator places its own structures): never in Dead Man's Land or an ocean */
+    if (!world_land_fits(x1, y1, x2, y2, false))
+        return false;
     return true;
 }
 
@@ -2258,6 +2261,36 @@ TbBool world_outpost_in_box(int64_t x1, int64_t y1, int64_t x2, int64_t y2)
                 return true;
         }
     return false;
+}
+
+void world_outpost_survey(int64_t range)
+{
+    struct WgWorld *gen = world_generator();
+    if ((gen == NULL) || !op_on)
+        return;
+    int counts[WgB_COUNT] = {0};
+    int regions = 0, made = 0;
+    for (int64_t ry = op_floor_div(-range, OP_REGION); ry <= op_floor_div(range, OP_REGION); ry++)
+        for (int64_t rx = op_floor_div(-range, OP_REGION); rx <= op_floor_div(range, OP_REGION); rx++)
+        {
+            int64_t bx1, by1, bx2, by2;
+            if (!op_region_reach(rx, ry, &bx1, &by1, &bx2, &by2))
+                continue;
+            regions++;
+            const struct OpPlan *p = op_plan_of(op_decide_outpost(rx, ry, INT32_MIN, INT32_MIN));
+            if (p == NULL)
+                continue;
+            made++;
+            const int b = wg_biome_at(gen, p->x0 + p->n / 2, p->y0 + p->n / 2);
+            if ((b >= 0) && (b < WgB_COUNT))
+                counts[b]++;
+        }
+    char text[300] = "";
+    for (int b = 0; b < WgB_COUNT; b++)
+        if (counts[b] > 0)
+            snprintf(text + strlen(text), sizeof(text) - strlen(text), "%s%s %d", text[0] ? ", " : "", wg_biome_name(b), counts[b]);
+    SYNCLOG("World outpost survey: %d of %d regions within %lld slabs have an outpost; their biomes: %s", made, regions,
+        (long long)range, text);
 }
 
 TbBool world_outpost_nearest(int64_t wx, int64_t wy, int64_t *x0, int64_t *y0, int64_t *ex, int64_t *ey, int *odx,

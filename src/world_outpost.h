@@ -49,6 +49,9 @@ struct OutpostOverlay {
 int world_outpost_overlay(int32_t cx, int32_t cy, struct OutpostOverlay *ov);
 /** Is there an outpost (or its way in) in this box of world slabs? */
 TbBool world_outpost_in_box(int64_t x1, int64_t y1, int64_t x2, int64_t y2);
+/** Test hook (KFX_WORLD_OPSURVEY=range): decides every outpost region within range slabs of the start and logs how
+ *  many have one and the biomes they stand in. */
+void world_outpost_survey(int64_t range);
 /** Test hooks: the outpost nearest a world slab (within 3 regions): its box corner, entrance and outward step, heart
  *  centre and the heart's portal, in world slabs. */
 TbBool world_outpost_nearest(int64_t wx, int64_t wy, int64_t *x0, int64_t *y0, int64_t *ex, int64_t *ey, int *odx,
