@@ -1390,6 +1390,34 @@ TbBool send_tunneller_to_point_in_dungeon(struct Thing *creatng, PlayerNumber pl
     return true;
 }
 
+/**
+ * The place in a dungeon a tunneller is to dig to: one of the places that dungeon's creatures wander in, else its
+ * heart (or what stands in for a heart). False when the dungeon has none of these on the map. The place was used
+ * unset in that case before: the tunneller then dug towards whatever the memory held, which in an endless world is
+ * far off the loaded ground.
+ */
+static TbBool get_tunneller_place_in_dungeon(struct Thing *creatng, PlayerNumber plyr_idx, struct Coord3d *pos)
+{
+    if (get_random_position_in_dungeon_for_creature(plyr_idx, CrWaS_WithinDungeon, creatng, pos))
+        return true;
+    struct Thing* heartng = get_player_soul_container(plyr_idx);
+    if (thing_exists(heartng))
+    {
+        *pos = heartng->mappos;
+        return true;
+    }
+    if (get_heartless_home_pos(plyr_idx, pos))
+        return true;
+    static GameTurn said_turn = 0;
+    if ((get_gameturn() < said_turn) || (get_gameturn() >= said_turn + 2000))
+    {
+        said_turn = get_gameturn();
+        WARNLOG("The %s index %d finds no place to dig to in the dungeon of player %d: it waits", thing_model_name(creatng),
+            (int)creatng->index, (int)plyr_idx);
+    }
+    return false;
+}
+
 short tunneller_doing_nothing(struct Thing *creatng)
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
@@ -1435,21 +1463,23 @@ short tunneller_doing_nothing(struct Thing *creatng)
         struct Coord3d pos;
         if ((dungeon->num_active_creatrs > 0) || (dungeon->num_active_diggers > 0))
         {
-            get_random_position_in_dungeon_for_creature(plyr_idx, CrWaS_WithinDungeon, creatng, &pos);
-            send_tunneller_to_point_in_dungeon(creatng, plyr_idx, &pos);
+            if (get_tunneller_place_in_dungeon(creatng, plyr_idx, &pos))
+                send_tunneller_to_point_in_dungeon(creatng, plyr_idx, &pos);
         } else
         {
             struct Thing* heartng = get_player_soul_container(plyr_idx);
             struct Coord3d heartpos = heartng->mappos;
+            TbBool has_home = thing_exists(heartng);
             // A player who plays without a heart (HEARTREQUIRED off): its dungeon stands in for the heart
-            get_heartless_home_pos(plyr_idx, &heartpos);
-            if (creature_can_navigate_to_with_storage(creatng, &heartpos, NavRtF_Default))
+            if (get_heartless_home_pos(plyr_idx, &heartpos))
+                has_home = true;
+            // (with neither, the place is the null thing's: nowhere on the map)
+            if (has_home && creature_can_navigate_to_with_storage(creatng, &heartpos, NavRtF_Default))
             {
                 good_setup_wander_to_dungeon_heart(creatng, plyr_idx);
             }
-            else
+            else if (get_tunneller_place_in_dungeon(creatng, plyr_idx, &pos))
             {
-                get_random_position_in_dungeon_for_creature(plyr_idx, CrWaS_WithinDungeon, creatng, &pos);
                 send_tunneller_to_point_in_dungeon(creatng, plyr_idx, &pos);
             }
         }

@@ -479,6 +479,42 @@ bool module_name_of(const void * address, char * name, size_t name_size, uintptr
     return true;
 }
 
+#ifdef _WIN64
+// The call stack at a fault, as module+offset lines. The 64-bit game had no other trace: the C runtime turns a fault
+// into a signal ("Failure signal: Segmentation violation") before the unhandled-exception filter, which has the
+// symbol trace, can run, so a 64-bit server's log named the function that faulted and nothing above it (2026-11-14).
+// An offset is read with addr2line (-e keeperfx.exe, the image base plus the offset) or looked up in keeperfx.map.
+static void log_fault_stack(const CONTEXT *fault)
+{
+    CONTEXT ctx = *fault;
+    for (int depth = 0; (depth < 24) && (ctx.Rip != 0); depth++) {
+        char module[MAX_PATH];
+        uintptr_t offset = 0;
+        if (module_name_of((const void *)ctx.Rip, module, sizeof(module), &offset)) {
+            LbJustLog("  [#%-2d] %s+0x%lx\n", depth, module, (unsigned long)offset);
+        } else {
+            LbJustLog("  [#%-2d] %p\n", depth, (void *)ctx.Rip);
+        }
+        DWORD64 image_base = 0;
+        PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(ctx.Rip, &image_base, nullptr);
+        if (function == nullptr) {
+            // a leaf function (or a jump into nothing): the caller's address is on top of the stack
+            DWORD64 caller = 0;
+            SIZE_T got = 0;
+            if (!ReadProcessMemory(GetCurrentProcess(), (LPCVOID)ctx.Rsp, &caller, sizeof(caller), &got) || (got != sizeof(caller))) {
+                break;
+            }
+            ctx.Rip = caller;
+            ctx.Rsp += sizeof(caller);
+        } else {
+            void *handler_data = nullptr;
+            DWORD64 establisher_frame = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, ctx.Rip, function, &ctx, &handler_data, &establisher_frame, nullptr);
+        }
+    }
+}
+#endif
+
 LONG __stdcall Vex_handler(_EXCEPTION_POINTERS *ExceptionInfo)
 {
     const auto exception_code = ExceptionInfo->ExceptionRecord->ExceptionCode;
@@ -509,6 +545,17 @@ LONG __stdcall Vex_handler(_EXCEPTION_POINTERS *ExceptionInfo)
         LbJustLog("Exception 0x%08lx thrown: %s at %p\n", exception_code,
             exception_name(exception_code), record->ExceptionAddress);
     }
+#ifdef _WIN64
+    if ((exception_code == EXCEPTION_ACCESS_VIOLATION) || (exception_code == EXCEPTION_ILLEGAL_INSTRUCTION)
+     || (exception_code == EXCEPTION_INT_DIVIDE_BY_ZERO) || (exception_code == EXCEPTION_IN_PAGE_ERROR)
+     || (exception_code == EXCEPTION_PRIV_INSTRUCTION)) {
+        if ((exception_code == EXCEPTION_ACCESS_VIOLATION) && (record->NumberParameters >= 2)) {
+            LbJustLog("  %s address %p\n", (record->ExceptionInformation[0] == 1) ? "writing" :
+                (record->ExceptionInformation[0] == 8) ? "executing" : "reading", (void *)record->ExceptionInformation[1]);
+        }
+        log_fault_stack(ExceptionInfo->ContextRecord);
+    }
+#endif
     return EXCEPTION_CONTINUE_SEARCH;
 }
 

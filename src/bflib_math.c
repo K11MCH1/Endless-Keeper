@@ -597,6 +597,18 @@ long LbCosL(long x)
     return lbCosTable[(unsigned long)x & ANGLE_MASK];
 }
 
+/**
+ * Smaller side * 256 / greater side: the index into lbArcTanFactors (0..256), for sides that are not negative.
+ * A side of 2^23 or more (two places some 10,900 slabs apart, which only an endless world has) is worked out in
+ * 64 bits: its shift wrapped in 32, and the index then pointed far outside the table (a 64-bit game stopped there).
+ */
+static inline uint32_t arctan_factor_index(int32_t smaller, int32_t greater)
+{
+    if (greater < (1 << 23))
+        return ((uint32_t)smaller << 8) / (uint32_t)greater;
+    return (uint32_t)(((uint64_t)(uint32_t)smaller << 8) / (uint32_t)greater);
+}
+
 /** Computes angle between negative Y axis and the line that crosses (0,0) and given (x,y).
  *  Uses arctan(x/y) with proper shift to get the angle.
  *  Returning 0 means direction towards negative y; 512 is towards positive x;
@@ -624,10 +636,10 @@ int32_t LbArcTanAngle(int32_t x,int32_t y)
             // Make sure we'll have smaller value * 256 / greater value.
             // This way we won't exceed factors array bounds (which is 256 elements).
             if (ux < uy) {
-                index = (ux << 8)/uy;
+                index = arctan_factor_index(ux, uy);
                 return DEGREES_360   - (int32_t)lbArcTanFactors[index];
             } else {
-                index = (uy << 8)/ux;
+                index = arctan_factor_index(uy, ux);
                 return ANGLE_WEST + (int32_t)lbArcTanFactors[index];
             }
         } else
@@ -635,10 +647,10 @@ int32_t LbArcTanAngle(int32_t x,int32_t y)
             uy = y;
             // Make sure we'll have smaller value * 256 / greater value.
             if (ux < uy) {
-                index = (ux << 8)/uy;
+                index = arctan_factor_index(ux, uy);
                 return   DEGREES_180   + (int32_t)lbArcTanFactors[index];
             } else {
-                index = (uy << 8)/ux;
+                index = arctan_factor_index(uy, ux);
                 return ANGLE_WEST - (int32_t)lbArcTanFactors[index];
             }
         }
@@ -650,10 +662,10 @@ int32_t LbArcTanAngle(int32_t x,int32_t y)
             uy = -y;
             // Make sure we'll have smaller value * 256 / greater value.
             if (ux < uy) {
-                index = (ux << 8)/uy;
+                index = arctan_factor_index(ux, uy);
                 return                 (int32_t)lbArcTanFactors[index];
             } else {
-                index = (uy << 8)/ux;
+                index = arctan_factor_index(uy, ux);
                 return ANGLE_EAST - (int32_t)lbArcTanFactors[index];
             }
         } else
@@ -661,10 +673,10 @@ int32_t LbArcTanAngle(int32_t x,int32_t y)
             uy = y;
             // Make sure we'll have smaller value * 256 / greater value.
             if (ux < uy) {
-                index = (ux << 8)/uy;
+                index = arctan_factor_index(ux, uy);
                 return DEGREES_180   - (int32_t)lbArcTanFactors[index];
             } else {
-                index = (uy << 8)/ux;
+                index = arctan_factor_index(uy, ux);
                 return ANGLE_EAST + (int32_t)lbArcTanFactors[index];
             }
         }
@@ -845,6 +857,25 @@ char LbCompareMultiplications(long mul1a, long mul1b, long mul2a, long mul2b)
 }
 
 /**
+ * Shorter side * 256 / longer side: the index into proportions (-256..256).
+ * A side of 2^23 or more is worked out in 64 bits (see arctan_factor_index), and the result stays inside the table
+ * whatever the sides are.
+ */
+static inline int side_ratio_256(long shorter, long longer)
+{
+    long long ratio;
+    if ((shorter > -(1L << 23)) && (shorter < (1L << 23)))
+        ratio = (shorter * 256) / longer;
+    else
+        ratio = ((long long)shorter * 256) / longer;
+    if (ratio < -256)
+        return -256;
+    if (ratio > 256)
+        return 256;
+    return (int)ratio;
+}
+
+/**
  *  Optimized function for computing vector length.
  *  Returns diagonal of a rectangle with sides of given length.
  * @param a Length of one of the sides.
@@ -859,13 +890,13 @@ long LbDiagonalLength(long a, long b)
         if (a == 0) {
             return 0; // don't divide by zero
         }
-        propidx = (b << 8)/a;
+        propidx = side_ratio_256(b, a);
         tmpval = a;
     } else {
         if (b == 0) {
             return 0; // Just to avoid dividing by 0
         }
-        propidx = (a << 8)/b;
+        propidx = side_ratio_256(a, b);
         tmpval = b;
     }
     tmpval = tmpval * (long long)proportions[propidx + 256].distance_ratio;
