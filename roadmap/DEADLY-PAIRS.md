@@ -1,7 +1,8 @@
 # Deadly Pairs
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game.
 
 A creature with two [vices](MISDEEDS.md) can have them melted down into one sin: a new trait with its own name and
 its own effect.

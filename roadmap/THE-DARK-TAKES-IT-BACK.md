@@ -1,7 +1,8 @@
 # The Dark Takes It Back
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game.
 
 Claimed land needs an anchor: the Dungeon Heart, a portal you have claimed, a Treasury, a Guard Post or a lit
 [watchfire](WATCHFIRES.md). Each anchor holds the land within its reach. Floor that no anchor reaches is on its own:

@@ -1,7 +1,8 @@
 # Virtues
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game.
 
 The mirror of [vices](MISDEEDS.md), and in this game a virtue is a flaw. For example:
 

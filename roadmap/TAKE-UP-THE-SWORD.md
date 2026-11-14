@@ -1,7 +1,9 @@
 # Take Up the Sword
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game. For now it is run with chat commands on a dedicated server: `!sword` followed by the
+> other player's name invites them, and `!help` lists the rest.
 
 You can invite another player to lead a raid against your own dungeon. The guest takes over the raid's leader and
 plays him in first person. Which wall to break through, when to bring the rest of the party up, whether to make for

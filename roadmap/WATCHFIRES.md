@@ -1,7 +1,9 @@
 # Watchfires
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game. For now a watchfire is set down with the chat command `!watchfire`, with the cursor over
+> the ground it should stand on.
 
 A watchfire is a brazier that your Workshop builds and an imp carries out. It can be set down anywhere you have
 already seen, and it burns for one day, at the price of a little gold.

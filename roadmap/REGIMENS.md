@@ -1,7 +1,8 @@
 # Regimens
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game.
 
 You choose what a creature trains for. In the Training Room, a creature can be put on one of four regimens. Each
 level it earns there then brings a little more of what the regimen trains, and a little less of everything else:

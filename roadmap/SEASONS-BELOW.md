@@ -1,7 +1,8 @@
 # Seasons Below
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game.
 
 The underworld gets a year: twenty-eight days in four seasons of seven days each. It is the same year for the whole
 world, and it is shown as a ring around the sun and moon dial.

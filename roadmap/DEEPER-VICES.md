@@ -1,7 +1,8 @@
 # Deeper Vices
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game.
 
 A [vice](MISDEEDS.md) keeps growing after it is earned. The misdeed behind it goes on being counted, and as the
 count climbs the vice rises through ranks, five at most. Every rank strengthens the vice, and every rank needs twice

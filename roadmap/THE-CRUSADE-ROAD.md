@@ -1,7 +1,8 @@
 # The Crusade Road
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game.
 
 A hero fortress you have disturbed and left standing founds a new outpost one region nearer to you every few days,
 up to three. Outposts on the same road answer each other's alarms. Raze the fortress and its road dies with it.

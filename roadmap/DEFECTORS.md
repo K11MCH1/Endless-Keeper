@@ -1,7 +1,8 @@
 # Defectors
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game.
 
 When an angry creature walks out on you, it no longer just disappears. It leaves by your portal. If some other
 keeper on the same server can offer what you did not (the room it wanted, the wages it was owed or a lair of its

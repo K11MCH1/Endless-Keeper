@@ -1,7 +1,8 @@
 # Contracts
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game.
 
 Every ten levels a creature renegotiates its pay, and you choose how:
 

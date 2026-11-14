@@ -1,7 +1,8 @@
 # Alumni
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game.
 
 Every portal remembers the creatures it has brought you, and how far they have risen since. Each of them adds to the
 portal's renown when it reaches level 10, again at level 25 and again at level 50.

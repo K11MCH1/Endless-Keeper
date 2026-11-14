@@ -1,7 +1,8 @@
 # Past Lives
 
 > [!NOTE]
-> This is a planned feature. It is not in the game yet, and details may change before it arrives.
+> In the game since Endless Keeper 1.4.0-10 Alpha. This page is the design it was built from, and some details
+> differ in the game.
 
 An old veteran can start again as a new creature. Give a creature of level 30 or higher to the pool of the Temple,
 and its soul returns in the next creature your portals send, of whatever kind that happens to be. The new creature

@@ -150,16 +150,21 @@ every run is new, every tunnel can lead somewhere, and your dungeon keeps growin
 Arrived and still growing:
 
 - [Misdeeds](roadmap/MISDEEDS.md) · [Circles of Hell](roadmap/CIRCLES-OF-HELL.md) · [Amenity Mastery](roadmap/AMENITY-MASTERY.md) · [New Creatures](roadmap/NEW-CREATURES.md)
+- **Threats:** [Alarm Bells](roadmap/ALARM-BELLS.md) · [The Crusade Road](roadmap/THE-CRUSADE-ROAD.md)
+- **The keeper:** [The Hand Grows](roadmap/THE-HAND-GROWS.md)
+- **Creatures:** [Contracts](roadmap/CONTRACTS.md) · [Seeing Through Their Eyes](roadmap/SEEING-THROUGH-THEIR-EYES.md) · [Virtues](roadmap/VIRTUES.md) · [Strays](roadmap/STRAYS.md) · [Marching Order](roadmap/MARCHING-ORDER.md) · [Regimens](roadmap/REGIMENS.md) · [Lessons](roadmap/LESSONS.md) · [Deadly Pairs](roadmap/DEADLY-PAIRS.md) · [Deeper Vices](roadmap/DEEPER-VICES.md) · [Past Lives](roadmap/PAST-LIVES.md) · [Alumni](roadmap/ALUMNI.md) · [Breeds](roadmap/BREEDS.md)
+- **Survival:** [Seasons Below](roadmap/SEASONS-BELOW.md) · [Watchfires](roadmap/WATCHFIRES.md) · [The Dark Takes It Back](roadmap/THE-DARK-TAKES-IT-BACK.md)
+- **Playing together:** [World Bosses](roadmap/WORLD-BOSSES.md) · [Take Up the Sword](roadmap/TAKE-UP-THE-SWORD.md) · [Defectors](roadmap/DEFECTORS.md)
 
 Planned:
 
-- **Threats:** [Alarm Bells](roadmap/ALARM-BELLS.md) · [Circle Laws](roadmap/CIRCLE-LAWS.md) · [Consecrated Ground](roadmap/CONSECRATED-GROUND.md) · [The Crusade Road](roadmap/THE-CRUSADE-ROAD.md) · [Rivals with Ambitions](roadmap/RIVALS-WITH-AMBITIONS.md) · [Scars](roadmap/SCARS.md) · [The Ledger of Dread](roadmap/THE-LEDGER-OF-DREAD.md) · [The Hunt](roadmap/THE-HUNT.md)
-- **The keeper:** [The Keeper's Rap Sheet](roadmap/THE-KEEPERS-RAP-SHEET.md) · [The Hand Grows](roadmap/THE-HAND-GROWS.md) · [Anniversaries of the Heart](roadmap/ANNIVERSARIES-OF-THE-HEART.md) · [The Last Loyalist](roadmap/THE-LAST-LOYALIST.md) · [Attunement](roadmap/ATTUNEMENT.md) · [The Keeper's Champion](roadmap/THE-KEEPERS-CHAMPION.md) · [Dressing the Dungeon](roadmap/DRESSING-THE-DUNGEON.md)
+- **Threats:** [Circle Laws](roadmap/CIRCLE-LAWS.md) · [Consecrated Ground](roadmap/CONSECRATED-GROUND.md) · [Rivals with Ambitions](roadmap/RIVALS-WITH-AMBITIONS.md) · [Scars](roadmap/SCARS.md) · [The Ledger of Dread](roadmap/THE-LEDGER-OF-DREAD.md) · [The Hunt](roadmap/THE-HUNT.md)
+- **The keeper:** [The Keeper's Rap Sheet](roadmap/THE-KEEPERS-RAP-SHEET.md) · [Anniversaries of the Heart](roadmap/ANNIVERSARIES-OF-THE-HEART.md) · [The Last Loyalist](roadmap/THE-LAST-LOYALIST.md) · [Attunement](roadmap/ATTUNEMENT.md) · [The Keeper's Champion](roadmap/THE-KEEPERS-CHAMPION.md) · [Dressing the Dungeon](roadmap/DRESSING-THE-DUNGEON.md)
 - **The dungeon:** [Neighbours](roadmap/NEIGHBOURS.md) · [Unholy Unions](roadmap/UNHOLY-UNIONS.md) · [Heresies](roadmap/HERESIES.md) · [The Unholy Cookbook](roadmap/THE-UNHOLY-COOKBOOK.md) · [Rigging](roadmap/RIGGING.md) · [Backfill and Masonry](roadmap/BACKFILL-AND-MASONRY.md) · [The False Heart](roadmap/THE-FALSE-HEART.md) · [The Shape of a Room](roadmap/THE-SHAPE-OF-A-ROOM.md) · [Lie of the Land](roadmap/LIE-OF-THE-LAND.md) · [The Storage Room](roadmap/THE-STORAGE-ROOM.md)
-- **Creatures:** [A Prisoner's Fate](roadmap/A-PRISONERS-FATE.md) · [Contracts](roadmap/CONTRACTS.md) · [Seeing Through Their Eyes](roadmap/SEEING-THROUGH-THEIR-EYES.md) · [Virtues](roadmap/VIRTUES.md) · [Strays](roadmap/STRAYS.md) · [Chain Gangs](roadmap/CHAIN-GANGS.md) · [Marching Order](roadmap/MARCHING-ORDER.md) · [Foul Chemistry](roadmap/FOUL-CHEMISTRY.md) · [Regimens](roadmap/REGIMENS.md) · [Lessons](roadmap/LESSONS.md) · [Deadly Pairs](roadmap/DEADLY-PAIRS.md) · [Deeper Vices](roadmap/DEEPER-VICES.md) · [Keepsakes](roadmap/KEEPSAKES.md) · [Past Lives](roadmap/PAST-LIVES.md) · [Alumni](roadmap/ALUMNI.md) · [Breeds](roadmap/BREEDS.md)
-- **Survival:** [Seasons Below](roadmap/SEASONS-BELOW.md) · [Watchfires](roadmap/WATCHFIRES.md) · [The Dark Takes It Back](roadmap/THE-DARK-TAKES-IT-BACK.md) · [Move the Heart](roadmap/MOVE-THE-HEART.md)
+- **Creatures:** [A Prisoner's Fate](roadmap/A-PRISONERS-FATE.md) · [Chain Gangs](roadmap/CHAIN-GANGS.md) · [Foul Chemistry](roadmap/FOUL-CHEMISTRY.md) · [Keepsakes](roadmap/KEEPSAKES.md)
+- **Survival:** [Move the Heart](roadmap/MOVE-THE-HEART.md)
 - **The world:** [The Five Provinces](roadmap/THE-FIVE-PROVINCES.md) · [The Overgrowth](roadmap/THE-OVERGROWTH.md) · [Borderlands](roadmap/BORDERLANDS.md) · [Biome Keeps](roadmap/BIOME-KEEPS.md) · [Set Pieces](roadmap/SET-PIECES.md) · [Dead Dominions](roadmap/DEAD-DOMINIONS.md) · [Priced Prizes](roadmap/PRICED-PRIZES.md) · [Mother Lodes and Trails](roadmap/MOTHER-LODES-AND-TRAILS.md) · [Ground That Ages](roadmap/GROUND-THAT-AGES.md) · [World Temperaments](roadmap/WORLD-TEMPERAMENTS.md)
-- **Playing together:** [World Bosses](roadmap/WORLD-BOSSES.md) · [Take Up the Sword](roadmap/TAKE-UP-THE-SWORD.md) · [Hostage Pacts](roadmap/HOSTAGE-PACTS.md) · [Portal Wars](roadmap/PORTAL-WARS.md) · [The Auction House](roadmap/THE-AUCTION-HOUSE.md) · [Defectors](roadmap/DEFECTORS.md)
+- **Playing together:** [Hostage Pacts](roadmap/HOSTAGE-PACTS.md) · [Portal Wars](roadmap/PORTAL-WARS.md) · [The Auction House](roadmap/THE-AUCTION-HOUSE.md)
 
 ---
 
