@@ -1019,11 +1019,15 @@ static void wl_join_server(int i)
     wl_follow_key = 0;
     if (net_party_key != 0)
         SYNCLOG("World list: joining \"%s\" with the party", sv->title);
+    /* a world that is on this network too is joined here, not by its internet address */
+    const char *host = (sv->lan_host[0] != '\0') ? sv->lan_host : sv->host;
+    if (host != sv->host)
+        SYNCLOG("World list: \"%s\" is on this network: joining it there", sv->title);
     char addr[WNET_HOST_MAX + 16];
-    if (strchr(sv->host, ':') != NULL)
-        snprintf(addr, sizeof(addr), "[%s]:%d", sv->host, sv->port);
+    if (strchr(host, ':') != NULL)
+        snprintf(addr, sizeof(addr), "[%s]:%d", host, sv->port);
     else
-        snprintf(addr, sizeof(addr), "%s:%d", sv->host, sv->port);
+        snprintf(addr, sizeof(addr), "%s:%d", host, sv->port);
     wl_join_plain = false;
     wl_join(addr);
     wl_join_plain = true;

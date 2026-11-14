@@ -28,6 +28,10 @@ extern "C" {
 void port_forward_set_mapping(uint16_t port);
 /** The World List hub's TCP port (0: none), forwarded apart from the game's UDP port (2026-11-09). */
 void port_forward_set_tcp_mapping(uint16_t port);
+/** A host calls this every turn. About once a minute it looks whether the router still forwards the host's ports
+ *  to this computer, and asks again when it does not (a lease that ended, a restarted router, another program on
+ *  this computer that took the port away). */
+void port_forward_keepalive(void);
 /** Waits (5 s at most each) for the router requests under way: at the game's end, so the forwards are removed. */
 void port_forward_wait(void);
 /** What the last forwarding try gave, in words ("" before any); returns a number that changes with it. */

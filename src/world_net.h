@@ -37,6 +37,8 @@ struct WnetServer {
     char id[16];
     char title[WNET_TITLE_MAX];
     char host[WNET_HOST_MAX];  /* where to connect (the hub's host when the server is on the hub's machine) */
+    char lan_host[WNET_HOST_MAX]; /* "" or its address on this network (the hub's row of a world that is found here
+                                     too): the address to join from here */
     int port;
     int players;
     int max;

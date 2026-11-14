@@ -114,7 +114,7 @@ unsigned short twinkle_eff_elements[] = {TngEffElm_RedTwinkle,  TngEffElm_BlueTw
 unsigned short gold_hoard_objects[] = {ObjMdl_GoldHoard1, ObjMdl_GoldHoard2, ObjMdl_GoldHoard3, ObjMdl_GoldHoard4, ObjMdl_GoldHoard5};
 unsigned short food_grow_objects[] = {ObjMdl_ChickenStb, ObjMdl_ChickenWob, ObjMdl_ChickenCrk};
 
-struct CallToArmsGraphics call_to_arms_graphics[10];
+struct CallToArmsGraphics call_to_arms_graphics[CALL_TO_ARMS_GRAPHICS_COUNT];
 
 /******************************************************************************/
 /** Objects made since the start (a key of the cached list of hearts, thing_list.c). */

@@ -26,6 +26,7 @@
 #include "player_data.h"
 #include "net_diag.h"
 #include "server_admin.h"
+#include "net_state.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -456,6 +457,10 @@ namespace
      * @param options
      * @return Lb_FAIL or Lb_OK
      */
+    /* how many ports after the wanted one a game tries when that one is taken (the World List looks for worlds on
+       this network on the same few ports: world_net.c LAN_GAME_PORTS) */
+    #define HOST_PORT_TRIES 3
+
     TbError bf_enet_host(const char *session, void *)
     {
         if (!*session)
@@ -470,6 +475,25 @@ namespace
         enet_address_build_any(&address, ENET_ADDRESS_TYPE_IPV6);
         address.port = actual_port;
         host = enet_host_create(ENET_ADDRESS_TYPE_ANY, &address, MAX_NET_CONNECTIONS, NUM_CHANNELS, 0, 0);
+        if (!host && !netstate_dedicated()) {
+            /* The port is taken on this computer (a dedicated server here has it). A game then hosts on the next
+               free port instead of sharing that one: while the two shared it the players' packets went to the wrong
+               program, and when the game stopped hosting it told the router to drop the forward the server needs.
+               (A computer without IPv6 fails here on every port and falls through to the IPv4 host below.) */
+            for (int next = 1; (next <= HOST_PORT_TRIES) && !host; next++) {
+                enet_address_build_any(&address, ENET_ADDRESS_TYPE_IPV6);
+                address.port = (enet_uint16)(actual_port + next);
+                host = enet_host_create(ENET_ADDRESS_TYPE_ANY, &address, MAX_NET_CONNECTIONS, NUM_CHANNELS, 0, 0);
+                if (host) {
+                    LbNetLog("ENet: UDP port %d is in use on this computer (a server?): hosting on port %d instead\n",
+                        (int)actual_port, (int)(actual_port + next));
+                }
+            }
+            if (!host) {
+                enet_address_build_any(&address, ENET_ADDRESS_TYPE_IPV6);
+                address.port = actual_port;
+            }
+        }
         if (host) {
             host_is_dual_stack = 1;
             address = host->address;
@@ -1063,6 +1087,9 @@ namespace
     {
         if (!client_peer && netstate.phase == NetPhase_InGame && frontnet_service_selected(FrontendNetSvc_Online)) {
             enet_matchmaking_host_update();
+        }
+        if (host && !client_peer) {
+            port_forward_keepalive(); /* a host: the router keeps forwarding its ports */
         }
         int packets_read = 0;
         const int MAX_PACKETS_PER_UPDATE = 100;

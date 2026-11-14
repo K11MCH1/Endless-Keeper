@@ -27,6 +27,7 @@
 #include "gui_draw.h"
 #include "game_legacy.h"
 #include "player_instances.h"
+#include "thing_objects.h"
 #include "value_util.h"
 
 #include <toml.h>
@@ -53,6 +54,7 @@ static unsigned short pointer_sprites_eq[MAX_COLORED_SPRITES * PLAYER_COLORS_COU
 static unsigned short button_sprite_eq[MAX_COLORED_SPRITES * PLAYER_COLORS_COUNT];
 static unsigned short animationIds_eq[MAX_COLORED_SPRITES * PLAYER_COLORS_COUNT];
 static unsigned short objects_eq[MAX_COLORED_SPRITES * PLAYER_COLORS_COUNT];
+_Static_assert(CALL_TO_ARMS_GRAPHICS_COUNT >= PLAYER_COLORS_COUNT, "call_to_arms_graphics needs an entry for each player colour");
 /******************************************************************************/
 static unsigned short get_player_colored_idx(unsigned short base_icon_idx,unsigned char color_idx,unsigned short *arr);
 /******************************************************************************/
@@ -108,7 +110,6 @@ static TbBool load_spritecolors_config_file(const char *fname, unsigned short fl
     load_array(&file_root,"animationIds",animationIds_eq,flags,get_anim_id_);
     load_array(&file_root,"objects",objects_eq,flags,get_anim_id_);
 
-    extern struct CallToArmsGraphics call_to_arms_graphics[];
     for (size_t plr_idx = 0; plr_idx < PLAYER_COLORS_COUNT; plr_idx++)
     {
         call_to_arms_graphics[plr_idx].birth_anim_idx = get_player_colored_idx(867,plr_idx + 1,animationIds_eq);

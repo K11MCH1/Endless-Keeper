@@ -31,7 +31,11 @@ bool http_download(const std::string &url, const std::wstring &file, const std::
     const std::atomic<bool> &cancel, std::string &why);
 /** The published releases of the repository ("owner/name"), newest first. */
 bool fetch_releases(const std::string &repo, std::vector<Release> &out, std::string &why);
+/** The programs running out of the game folder besides this launcher (the game, a world Keeper Server runs, Keeper
+ *  Server itself, ...), a name for each: an update can't replace the files of a program that runs. */
+std::vector<std::string> programs_open_in(const std::wstring &game_dir);
 /** Downloads the release's patch, checks it, unpacks it over the game folder (settings and saves are kept) and leaves the
- *  running launcher renamed to <name>.old for the new one. stage: what it is doing. False with why. */
+ *  running launcher renamed to <name>.old for the new one. stage: what it is doing; while programs run out of the game
+ *  folder it is "Close:<name>|<name>..." and the update waits for them to be closed (or for cancel). False with why. */
 bool install_release(const Release &rel, const std::wstring &game_dir, const std::wstring &self_exe,
     const std::function<void(const char *stage, float fraction)> &progress, const std::atomic<bool> &cancel, std::string &why);

@@ -64,6 +64,8 @@ TbBool wnet_hub_off = false;
 #define FIND_MAGIC        "KFXWFIND"
 #define FOUND_MAGIC       "KFXWFOUN"
 #define LAN_GAME_PORT     5556
+#define LAN_GAME_PORTS    4    /* worlds are looked for on this port and the next ones (a game beside a server on
+                                  the same computer hosts on the next free port: bflib_enet.cpp HOST_PORT_TRIES) */
 #define LAN_FORGET_MS     7000
 #define LAN_MAX           16
 
@@ -396,13 +398,23 @@ static void menu_merge_lan(void)
         if (strcmp(WM.servers[s].id, "lan") != 0)
             WM.servers[n++] = WM.servers[s];
     WM.server_count = n;
+    for (int s = 0; s < WM.server_count; s++)
+        WM.servers[s].lan_host[0] = '\0';
     for (int k = 0; (k < WM.lan_count) && (WM.server_count < WNET_SERVERS_MAX); k++)
     {
         const struct WnetServer *l = &WM.lan[k].sv;
         TbBool listed = false;
         for (int s = 0; (s < WM.server_count) && !listed; s++)
+        {
             listed = (WM.servers[s].port == l->port) && ((strcmp(WM.servers[s].host, l->host) == 0) ||
                 (strcmp(WM.servers[s].title, l->title) == 0));
+            /* The hub's row stays (a party enters a world by the hub's name for it), but from here the world is
+               joined on this network: its internet address works only through the router's port forward, and from
+               inside the network not on every router (2026-11-14: a party could not enter the server in its own
+               house). */
+            if (listed && (strcmp(WM.servers[s].host, l->host) != 0))
+                snprintf(WM.servers[s].lan_host, sizeof(WM.servers[s].lan_host), "%s", l->host);
+        }
         if (!listed)
             WM.servers[WM.server_count++] = *l;
     }
@@ -682,10 +694,20 @@ static void menu_pings(void)
         ENetAddress all;
         if (enet_address_set_host_ip(&all, "255.255.255.255") == 0)
         {
-            all.port = LAN_GAME_PORT;
-            ENetBuffer b = {.data = req, .dataLength = sizeof(req)};
+            /* (test hook KFX_WORLD_LANPORT: the first port to ask, for test servers on other ports) */
+            static int first_port = 0;
+            if (first_port == 0)
+            {
+                const char *env = getenv("KFX_WORLD_LANPORT");
+                first_port = ((env != NULL) && (atoi(env) > 0) && (atoi(env) < 65536 - LAN_GAME_PORTS)) ? atoi(env) : LAN_GAME_PORT;
+            }
             WM.find_sent = now_ms();
-            enet_socket_send(WM.udp, &all, &b, 1);
+            for (int k = 0; k < LAN_GAME_PORTS; k++)
+            {
+                all.port = (enet_uint16)(first_port + k);
+                ENetBuffer b = {.data = req, .dataLength = sizeof(req)};
+                enet_socket_send(WM.udp, &all, &b, 1);
+            }
         }
     }
     for (int s = 0; s < WM.server_count; s++)

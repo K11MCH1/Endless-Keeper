@@ -10,7 +10,9 @@
  * - Every second, WILD_CHUNK_TRIES random loaded chunks (of the window, or of the chunked world) get one pack
  *   try. A pack starts on a random slab; its kind is picked by weight from the biome's list for that ground; each
  *   member gets up to 4 tries, each moved up to 5 slabs (triangular, as Minecraft) from the last.
- * - Not within WILD_MIN_DIST slabs of the player's view or heart, never on claimed ground.
+ * - Not within WILD_MIN_DIST slabs of a player's heart, never on claimed ground. (Until 2026-11-13 not within that
+ *   of a player's view either, as Minecraft keeps spawns away from the player: the player asked for the view to be
+ *   left out. A god's view is not a place: packs may appear on ground that is being looked at.)
  * - Caps: Minecraft's 70 monsters (and 20 water ambient) for 289 chunks, scaled to the loaded chunks (100 in the
  *   window).
  * - Despawn: when their chunk is frozen (they aren't frozen with it, like Minecraft's 128 blocks); and,
@@ -206,10 +208,11 @@ struct WildPlayer {
     int top_level[WILD_MAX_ANCHORS];      /* that keeper's strongest creature (1-based level) */
 };
 
-static TbBool wild_near_player(const struct WildPlayer *pl, MapSlabCoord x, MapSlabCoord y, long dist)
+/** Is a slab within dist of a player: of a human heart, and (unless hearts_only) of a human player's view? */
+static TbBool wild_near_player(const struct WildPlayer *pl, MapSlabCoord x, MapSlabCoord y, long dist, TbBool hearts_only)
 {
     for (int i = 0; i < pl->count; i++)
-        if (wild_dist2(x, y, pl->ax[i], pl->ay[i]) < dist * dist)
+        if ((!hearts_only || pl->heart[i]) && (wild_dist2(x, y, pl->ax[i], pl->ay[i]) < dist * dist))
             return true;
     return false;
 }
@@ -323,7 +326,7 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
         {
             x += wild_rand(rng, WILD_JITTER) - wild_rand(rng, WILD_JITTER);
             y += wild_rand(rng, WILD_JITTER) - wild_rand(rng, WILD_JITTER);
-            if ((wild_ground_at(x, y) != ground) || wild_near_player(pl, x, y, WILD_MIN_DIST))
+            if ((wild_ground_at(x, y) != ground) || wild_near_player(pl, x, y, WILD_MIN_DIST, true))
                 continue;
             if (!thing_is_invalid(wild_spawn(rng, (ThingModel)model, x, y, low + wild_rand(rng, top - low + 1))))
             {
@@ -1032,7 +1035,7 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
         dy = -dy;
     MapSlabCoord x = cx + dx, y = cy + dy;
     const TbBool fire_pushed = world_watchfire_push(&x, &y); /* a watchfire's light: the burrow opens at its edge, bigger */
-    if (!wild_earth_at(x, y) || wild_near_player(pl, x, y, WILD_MIN_DIST))
+    if (!wild_earth_at(x, y) || wild_near_player(pl, x, y, WILD_MIN_DIST, true))
         return 0;
     /* the burrow: this slab and the earth beside it, three to five slabs */
     static const int8_t ndx[4] = {1, -1, 0, 0}, ndy[4] = {0, 0, 1, -1};
@@ -1235,7 +1238,7 @@ void world_wild_turn(void)
             }
         }
         /* (a hunting pack doesn't fade by night: it is on its way) */
-        if (!fighting && !hunter && !wild_near_player(&pl, x, y, WILD_KEEP_DIST) &&
+        if (!fighting && !hunter && !wild_near_player(&pl, x, y, WILD_KEEP_DIST, false) && /* (not while it is looked at) */
             ((long)(game.play_gameturn - thing->creation_turn) > WILD_MIN_AGE) && (wild_rand(&rng, WILD_DESPAWN_ONE_IN) == 0))
         {
             world_remove_thing_quietly(thing);

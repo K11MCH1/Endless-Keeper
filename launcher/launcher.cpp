@@ -290,6 +290,7 @@ static HANDLE g_game_process = nullptr;
    long (then the launcher closes), with Settings open on that tab */
 static std::string t_shot, t_tab;
 static bool t_bare = false; /* "bare=1": the battle alone */
+static bool t_hidden = false; /* "hidden=1": the window is never shown (a test that only wants the picture) */
 static float t_play = 0;    /* "play=<seconds>": Play clicks itself then */
 static int t_burst = 0;     /* "burst=<n>": that many more screenshots, a quarter of a second apart (<file>_1.bmp ...) */
 static float t_after = 0;
@@ -1153,7 +1154,31 @@ static void message_boxes(float w, float h)
                 text.replace(at, 3, std::to_string((int)(fraction * 100.0f)) + "%");
             return text;
         };
-        if (up == UP_INSTALLING)
+        if ((up == UP_INSTALLING) && (stage.rfind("Close:", 0) == 0))
+        {
+            /* programs run out of the game folder: their files can't be replaced, so the update waits for them */
+            ImGui::PushStyleColor(ImGuiCol_Text, C_GOLD_HI);
+            ImGui::TextUnformatted(T("Close these to update:"));
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_Text, C_TEXT);
+            for (size_t at = 6; at < stage.size();)
+            {
+                const size_t end = std::min(stage.find('|', at), stage.size());
+                if (end > at)
+                {
+                    ImGui::Bullet();
+                    ImGui::SameLine();
+                    ImGui::TextWrapped("%s", T(stage.substr(at, end - at).c_str()));
+                }
+                at = end + 1;
+            }
+            ImGui::Dummy(ImVec2(0, 4 * S));
+            ImGui::TextWrapped("%s", T("The update goes on by itself as soon as they are closed."));
+            ImGui::PopStyleColor();
+            ImGui::Dummy(ImVec2(0, 4 * S));
+            if (ImGui::Button(titled("Cancel").c_str(), ImVec2(bw, 0)))
+                g_cancel = true;
+        } else if (up == UP_INSTALLING)
         {
             const std::string text = (stage == "Downloading") ? percent("Downloading: %p%") : (stage == "Unpacking") ? percent("Extracting: %p%")
                 : (stage == "Installing") ? percent("Copying: %p%") : std::string(T("Updating..."));
@@ -1487,6 +1512,7 @@ int main(int, char **)
                 else if (key == "after") t_after = (float)atof(val.c_str());
                 else if (key == "settings") t_tab = val;
                 else if (key == "bare") t_bare = true;
+                else if (key == "hidden") t_hidden = true;
                 else if (key == "play") t_play = (float)atof(val.c_str());
                 else if (key == "burst") t_burst = atoi(val.c_str());
                 else if (key == "version") t_version = val;
@@ -1531,8 +1557,11 @@ int main(int, char **)
                 engine_view_note("Play: the game has closed; the launcher is back");
                 g_cfg.load(g_cfg.path);
                 engine_view_resume();
-                SDL_ShowWindow(g_window);
-                SDL_RaiseWindow(g_window);
+                if (!t_hidden)
+                {
+                    SDL_ShowWindow(g_window);
+                    SDL_RaiseWindow(g_window);
+                }
                 last = SDL_GetPerformanceCounter();
             }
             continue;
@@ -1544,8 +1573,11 @@ int main(int, char **)
             if (!g_battle || engine_view_ready() || (SDL_GetTicks() - opened_at > 12000))
             {
                 window_shown = true;
-                SDL_ShowWindow(g_window);
-                SDL_RaiseWindow(g_window);
+                if (!t_hidden)
+                {
+                    SDL_ShowWindow(g_window);
+                    SDL_RaiseWindow(g_window);
+                }
                 last = SDL_GetPerformanceCounter();
             } else
             {

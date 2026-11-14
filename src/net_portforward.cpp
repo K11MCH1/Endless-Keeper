@@ -396,6 +396,7 @@ static uint16_t tcp_mapped_port = 0;
 static enum PortForwardMethod tcp_method = PORT_FORWARD_NONE;
 static struct UPNPUrls tcp_urls;
 static struct IGDdatas tcp_data;
+static char tcp_lanaddr[64];
 
 /** A NAT-PMP TCP mapping for port (lifetime 0 removes it); 1 if the router agreed. */
 static int tcp_natpmp(uint16_t port, uint32_t lifetime)
@@ -433,11 +434,12 @@ static int tcp_upnp_add(uint16_t port)
     if (!device_list) {
         return 0;
     }
-    char lanaddr[64] = "";
+    char *lanaddr = tcp_lanaddr; /* kept: the forward is looked up again later */
+    lanaddr[0] = '\0';
 #if (MINIUPNPC_API_VERSION >= 18)
-    int igd = UPNP_GetValidIGD(device_list, &tcp_urls, &tcp_data, lanaddr, sizeof(lanaddr), NULL, 0);
+    int igd = UPNP_GetValidIGD(device_list, &tcp_urls, &tcp_data, lanaddr, sizeof(tcp_lanaddr), NULL, 0);
 #else
-    int igd = UPNP_GetValidIGD(device_list, &tcp_urls, &tcp_data, lanaddr, sizeof(lanaddr));
+    int igd = UPNP_GetValidIGD(device_list, &tcp_urls, &tcp_data, lanaddr, sizeof(tcp_lanaddr));
 #endif
     freeUPNPDevlist(device_list);
     if (igd == 0) {
@@ -510,6 +512,179 @@ void port_forward_set_tcp_mapping(uint16_t port)
         WSACleanup();
 #endif
     });
+}
+
+/******************************************************************************/
+/* Keeping the forwards (2026-11-14). A router forgets a forward when its lease ends, when it restarts, and when
+   another program on this computer takes the port away: a game that hosted on a dedicated server's port for a few
+   seconds removed the server's forward as it left, and nobody could reach the server by its internet address after
+   that. So a host looks about once a minute whether the router still has its forwards, and asks again if not. */
+#define PORT_FORWARD_CHECK_MS 45000
+#define PORT_FORWARD_NATPMP_RENEW_MS (20 * 60 * 1000)
+#define PORT_FORWARD_LEASE_LOW 600 /* seconds left on a timed lease at which it is asked for again */
+
+/** Whether the router still forwards the port to this computer; lease: the seconds its lease has left (0: no end). */
+static bool upnp_has_mapping(const struct UPNPUrls *urls, const struct IGDdatas *data, const char *lanaddr, uint16_t port,
+    const char *proto, long *lease)
+{
+    char port_string[16];
+    char client[64] = "";
+    char internal[16] = "";
+    char description[96] = "";
+    char enabled[16] = "";
+    char duration[32] = "";
+    snprintf(port_string, sizeof(port_string), "%u", port);
+    const int result = UPNP_GetSpecificPortMappingEntry(urls->controlURL, data->first.servicetype, port_string, proto, NULL,
+        client, internal, description, enabled, duration);
+    *lease = atol(duration);
+    return (result == UPNPCOMMAND_SUCCESS) && (strcmp(client, lanaddr) == 0) && (atoi(internal) == (int)port);
+}
+
+/** Asks the router for the forward once more (the same request as the first time); 1 if it agreed. */
+static int upnp_ask_again(const struct UPNPUrls *urls, const struct IGDdatas *data, const char *lanaddr, uint16_t port,
+    const char *proto, const char *description)
+{
+    char port_string[16];
+    snprintf(port_string, sizeof(port_string), "%u", port);
+    int result = UPNP_AddPortMapping(urls->controlURL, data->first.servicetype, port_string, port_string, lanaddr, description, proto, "", "0");
+    if (result != UPNPCOMMAND_SUCCESS) {
+        result = UPNP_AddPortMapping(urls->controlURL, data->first.servicetype, port_string, port_string, lanaddr, description, proto, "", "3600");
+    }
+    if (result != UPNPCOMMAND_SUCCESS) {
+        LbNetLog("UPnP: the router refused %s port %u this time (error %d, %s)\n", proto, port, result, strupnperror(result));
+        return 0;
+    }
+    return 1;
+}
+
+static void keep_udp_forward(void)
+{
+    static unsigned long natpmp_renewed_ms = 0;
+    static unsigned int asked = 0;
+    if ((mapped_port == 0) || (active_method == PORT_FORWARD_NONE)) {
+        return;
+    }
+    const uint16_t port = mapped_port;
+    if (active_method == PORT_FORWARD_UPNP) {
+        long lease = 0;
+        if (upnp_has_mapping(&upnp_urls, &upnp_data, upnp_lanaddr, port, "UDP", &lease) && ((lease == 0) || (lease > PORT_FORWARD_LEASE_LOW))) {
+            asked = 0;
+            return;
+        }
+        /* (a router that can't be asked about a forward gets the request each time: said once, then now and then) */
+        const bool say = ((asked % 20) == 0);
+        asked++;
+        if (say) {
+            LbNetLog("UPnP: the router no longer forwards UDP port %u to this computer: asking for it again\n", port);
+        }
+        if (upnp_ask_again(&upnp_urls, &upnp_data, upnp_lanaddr, port, "UDP", "KeeperFX")) {
+            if (say) {
+                LbNetLog("UPnP: port forwarding active on port %u again\n", port);
+            }
+            set_status(1, "UDP port %u forwarded by the router (UPnP, to %s)", port, upnp_lanaddr);
+        } else {
+            set_status(0, "the router dropped the forward of UDP port %u and refused it again (forward it by hand)", port);
+        }
+    } else if (active_method == PORT_FORWARD_NATPMP) {
+        const unsigned long now = (unsigned long)LbTimerClock();
+        if (natpmp_renewed_ms == 0) {
+            natpmp_renewed_ms = now;
+        }
+        if ((now - natpmp_renewed_ms) >= PORT_FORWARD_NATPMP_RENEW_MS) {
+            natpmp_renewed_ms = now;
+            natpmp_add_port_mapping(port); /* the same request renews it */
+        }
+    }
+}
+
+static void keep_tcp_forward(void)
+{
+    static unsigned long natpmp_renewed_ms = 0;
+    static unsigned int asked = 0;
+    if ((tcp_mapped_port == 0) || (tcp_method == PORT_FORWARD_NONE)) {
+        return;
+    }
+    const uint16_t port = tcp_mapped_port;
+    if (tcp_method == PORT_FORWARD_UPNP) {
+        long lease = 0;
+        if (upnp_has_mapping(&tcp_urls, &tcp_data, tcp_lanaddr, port, "TCP", &lease) && ((lease == 0) || (lease > PORT_FORWARD_LEASE_LOW))) {
+            asked = 0;
+            return;
+        }
+        const bool say = ((asked % 20) == 0);
+        asked++;
+        if (say) {
+            LbNetLog("UPnP: the router no longer forwards TCP port %u (World List hub) to this computer: asking for it again\n", port);
+        }
+        if (upnp_ask_again(&tcp_urls, &tcp_data, tcp_lanaddr, port, "TCP", "KeeperFX World List") && say) {
+            LbNetLog("UPnP: TCP port %u (World List hub) forwarded to %s again\n", port, tcp_lanaddr);
+        }
+    } else if (tcp_method == PORT_FORWARD_NATPMP) {
+        const unsigned long now = (unsigned long)LbTimerClock();
+        if (natpmp_renewed_ms == 0) {
+            natpmp_renewed_ms = now;
+        }
+        if ((now - natpmp_renewed_ms) >= PORT_FORWARD_NATPMP_RENEW_MS) {
+            natpmp_renewed_ms = now;
+            tcp_natpmp(port, 0x7FFFFFFF);
+        }
+    }
+}
+
+void port_forward_keepalive(void)
+{
+    static unsigned long checked_ms = 0;
+    const unsigned long now = (unsigned long)LbTimerClock();
+    if ((checked_ms != 0) && ((now - checked_ms) < PORT_FORWARD_CHECK_MS)) {
+        return;
+    }
+    checked_ms = now;
+    /* each look goes after whatever its port's task is doing (the same chain as setting and removing a forward),
+       and is dropped when the port has been set anew meanwhile */
+    {
+        const uint32_t generation = mapping_generation;
+        mapping_task = std::async(std::launch::async, [previous = std::move(mapping_task), generation]() mutable {
+            if (previous.valid()) {
+                previous.wait();
+                previous = {};
+            }
+            if (generation != mapping_generation) {
+                return;
+            }
+#ifdef _WIN32
+            WSADATA data;
+            if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+                return;
+            }
+#endif
+            keep_udp_forward();
+#ifdef _WIN32
+            WSACleanup();
+#endif
+        });
+    }
+    {
+        const uint32_t generation = tcp_generation;
+        tcp_task = std::async(std::launch::async, [previous = std::move(tcp_task), generation]() mutable {
+            if (previous.valid()) {
+                previous.wait();
+                previous = {};
+            }
+            if (generation != tcp_generation) {
+                return;
+            }
+#ifdef _WIN32
+            WSADATA data;
+            if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+                return;
+            }
+#endif
+            keep_tcp_forward();
+#ifdef _WIN32
+            WSACleanup();
+#endif
+        });
+    }
 }
 
 void port_forward_wait(void)

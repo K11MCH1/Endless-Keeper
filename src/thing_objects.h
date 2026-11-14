@@ -152,6 +152,11 @@ struct CallToArmsGraphics {
     int alive_anim_idx;
     int leave_anim_idx;
 };
+/** One entry for each player colour the sprite colours config counts (config_spritecolors.c: the colours and two
+ *  more). The table had ten while the config filled eleven: the eleventh went over whatever the program kept next to
+ *  the table (in Endless Keeper 1.4.0-10: the numbers of the dig, sell and large-room sounds). */
+#define CALL_TO_ARMS_GRAPHICS_COUNT 11
+extern struct CallToArmsGraphics call_to_arms_graphics[CALL_TO_ARMS_GRAPHICS_COUNT];
 
 /******************************************************************************/
 extern const struct NamedCommand object_update_functions_desc[];

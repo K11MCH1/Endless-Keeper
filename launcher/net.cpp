@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <bcrypt.h>
+#include <tlhelp32.h>
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -324,30 +325,124 @@ bool fetch_releases(const std::string &repo, std::vector<Release> &out, std::str
     return true;
 }
 
+/** What the player calls a program of the game folder (its path under the folder, in small letters). */
+static std::string program_name(const std::wstring &rel_path)
+{
+    const size_t slash = rel_path.find_last_of(L"\\/");
+    const std::wstring file = (slash == std::wstring::npos) ? rel_path : rel_path.substr(slash + 1);
+    if (file == L"keeperserver.exe")
+        return "Keeper Server";
+    if (file == L"keeperfx.exe")
+        return "Endless Keeper (the game, or a world that Keeper Server runs)";
+    if (file == L"endlessviewer.exe")
+        return "Endless World Viewer";
+    if (file == L"endlesskeeper.exe")
+        return "Endless Keeper's launcher (another window of it)";
+    return narrow(rel_path);
+}
+
+std::vector<std::string> programs_open_in(const std::wstring &game_dir)
+{
+    std::vector<std::string> names;
+    std::wstring dir = game_dir;
+    for (wchar_t &c : dir)
+        c = (c == L'/') ? L'\\' : (wchar_t)towlower(c);
+    while (!dir.empty() && (dir.back() == L'\\'))
+        dir.pop_back();
+    dir += L'\\';
+    const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return names;
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    for (BOOL more = Process32FirstW(snap, &pe); more; more = Process32NextW(snap, &pe))
+    {
+        if (pe.th32ProcessID == GetCurrentProcessId())
+            continue;
+        const HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+        if (h == nullptr)
+            continue;
+        wchar_t path[1024];
+        DWORD len = 1024;
+        if (QueryFullProcessImageNameW(h, 0, path, &len))
+        {
+            std::wstring image(path, len);
+            for (wchar_t &c : image)
+                c = (wchar_t)towlower(c);
+            if (image.compare(0, dir.size(), dir) == 0)
+            {
+                const std::string name = program_name(image.substr(dir.size()));
+                if (std::find(names.begin(), names.end(), name) == names.end())
+                    names.push_back(name);
+            }
+        }
+        CloseHandle(h);
+    }
+    CloseHandle(snap);
+    return names;
+}
+
+/** Waits until nothing runs out of the game folder any more, telling the player what to close. False: cancelled. */
+static bool wait_until_closed(const std::wstring &game_dir, const std::function<void(const char *, float)> &progress,
+    const std::atomic<bool> &cancel, std::string &why)
+{
+    for (int round = 0;; round++)
+    {
+        const std::vector<std::string> open = programs_open_in(game_dir);
+        if (open.empty())
+            return true;
+        if (cancel.load())
+        {
+            why = "the update was cancelled; nothing was changed";
+            return false;
+        }
+        if (round >= 2) /* (a program that is just closing gets a moment) */
+        {
+            std::string stage = "Close:";
+            for (size_t i = 0; i < open.size(); i++)
+                stage += ((i > 0) ? "|" : "") + open[i];
+            progress(stage.c_str(), 0.0f);
+        }
+        Sleep(300);
+    }
+}
+
 bool install_release(const Release &rel, const std::wstring &game_dir, const std::wstring &self_exe,
     const std::function<void(const char *, float)> &progress, const std::atomic<bool> &cancel, std::string &why)
 {
-    const ReleaseAsset *asset = patch_asset(rel);
-    if (asset == nullptr)
+    /* test hook EKL_TEST_PACKAGE=<file>: that patch instead of the release's download */
+    const wchar_t *local_package = _wgetenv(L"EKL_TEST_PACKAGE");
+    const ReleaseAsset *asset = (local_package != nullptr) ? nullptr : patch_asset(rel);
+    if ((asset == nullptr) && (local_package == nullptr))
     {
         why = "this release has no patch to download";
         return false;
     }
+    /* before anything is fetched: programs running out of the game folder must be closed */
+    if (!wait_until_closed(game_dir, progress, cancel, why))
+        return false;
     std::error_code ec;
     wchar_t tmp[MAX_PATH];
     GetTempPathW(MAX_PATH, tmp);
     const fs::path work = fs::path(tmp) / L"EndlessKeeperUpdate";
     fs::remove_all(work, ec);
     fs::create_directories(work / L"files", ec);
-    const fs::path archive = work / widen(asset->name);
+    const fs::path archive = work / ((asset != nullptr) ? widen(asset->name) : fs::path(local_package).filename().wstring());
     progress("Downloading", 0.0f);
-    if (!http_download(asset->url, archive.wstring(), [&](long long done, long long total) {
+    if (asset == nullptr)
+    {
+        if (!CopyFileW(local_package, archive.c_str(), FALSE))
+        {
+            why = "the test package could not be read";
+            return false;
+        }
+    } else if (!http_download(asset->url, archive.wstring(), [&](long long done, long long total) {
             const long long all = (total > 0) ? total : asset->size;
             progress("Downloading", (all > 0) ? (float)((double)done / (double)all) : 0.0f);
         }, cancel, why))
         return false;
     progress("Checking", 1.0f);
-    if (asset->digest.rfind("sha256:", 0) == 0)
+    if ((asset != nullptr) && (asset->digest.rfind("sha256:", 0) == 0))
     {
         std::string hex;
         if (!sha256_file(archive.wstring(), hex) || (_stricmp(hex.c_str(), asset->digest.c_str() + 7) != 0))
@@ -356,7 +451,10 @@ bool install_release(const Release &rel, const std::wstring &game_dir, const std
             return false;
         }
     }
-    /* the game must not be running: its program can't be replaced then */
+    /* nothing may run out of the game folder now (something may have been started during the download) */
+    if (!wait_until_closed(game_dir, progress, cancel, why))
+        return false;
+    /* and the game's programs must be free to write (a program started from elsewhere that holds them) */
     for (const wchar_t *exe : {L"keeperfx.exe", L"x64\\keeperfx.exe"})
     {
         const fs::path p = fs::path(game_dir) / exe;

@@ -324,6 +324,7 @@ void world_progress_request(int mode)
 }
 
 static void hell_hound_entrance(void);
+static TbBool wpr_hound_check; /* (defined with relock_hell_hounds) */
 void world_progress_level_start(void)
 {
     world_hand_reset(); /* nobody is hurried in a new level */
@@ -339,6 +340,7 @@ void world_progress_level_start(void)
     wpr_requested = 0;
     wpr_kit_given = false;
     wpr_kit_players = pmask_none();
+    wpr_hound_check = true;
     if ((wpr_mode > 0) && (book_model <= 0))
     {
         WARNLOG("World progress: no RESEARCH_BOOK object in this map pack; progression off");
@@ -395,12 +397,17 @@ static TbBool kit_power(const char *name)
 }
 
 static void lock_portal_creatures(PlayerNumber plyr_idx);
+static void hell_hound_entrance(void);
 
 static void apply_kit(PlayerNumber plyr_idx)
 {
     struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
     if (dungeon_invalid(dungeon))
         return;
+    /* The Hell Hound's entrance first. The portal creatures are locked only when no room holds them back, and the
+       Hell Hound still asked for a Scavenger Room when the kit was given (its Lair rule came two turns later, with
+       ban_powers): it was left out of the lock, and then came from any portal to a Lair of 9 (2026-11-12 to 11-14). */
+    hell_hound_entrance();
     lock_portal_creatures(plyr_idx);
     int rooms = 0, powers = 0;
     for (int i = 0; room_desc[i].name != NULL; i++)
@@ -2193,10 +2200,43 @@ static void test_traps(void)
     }
 }
 
+/** Worlds begun before the fix above have Hell Hounds allowed for keepers who own no portal in volcanic ground: they
+ *  are locked again (the Hell Hounds a keeper has stay). Looked at once after each start or load of a world, when the
+ *  world's portals are known. A keeper who once owned such a portal and lost it to another keeper is locked too:
+ *  the save doesn't say who owned what before. */
+static TbBool wpr_hound_check = true;
+static void relock_hell_hounds(void)
+{
+    const long model = get_id(creature_desc, "HELL_HOUND");
+    if ((model <= 0) || (model >= game.conf.crtr_conf.model_count) || creature_room_locked((ThingModel)model))
+        return;
+    uint32_t biomes = 0;
+    for (int k = 0; k < WPR_PORTAL_CREATURES; k++)
+        if (strcmp(wpr_portal_creatures[k].name, "HELL_HOUND") == 0)
+            biomes = wpr_portal_creatures[k].biomes;
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        if (!pmask_has(wpr_kit_players, p) || !world_player_is_human(p) || !player_exists(get_player(p)))
+            continue;
+        struct Dungeon *dungeon = get_players_num_dungeon(p);
+        if (dungeon_invalid(dungeon) || !dungeon->creature_allowed[model] || world_player_owns_portal_in(p, biomes))
+            continue;
+        dungeon->creature_allowed[model] = 0;
+        SYNCLOG("World progress: player %d's Hell Hounds wait for a portal in volcanic ground again (they had been left out of the lock)", (int)p);
+    }
+}
+
 void world_progress_turn(void)
 {
     if (world_mode_active() && ((game.play_gameturn % 64) == 2))
+    {
         ban_powers();
+        if (wpr_hound_check && world_progress_active())
+        {
+            wpr_hound_check = false;
+            relock_hell_hounds();
+        }
+    }
     wp_poison_turn();
     test_traps();
     world_storage_turn();
@@ -2298,6 +2338,7 @@ TbBool world_progress_load(const uint8_t *buf, size_t len)
         return false;
     const int mode = buf[8], count = buf[9];
     wpr_kit_given = true; /* a loaded run had its kit long ago */
+    wpr_hound_check = true; /* (see relock_hell_hounds) */
     wpr_kit_players = pmask_none();
     if (len < 10 + (size_t)count * sizeof(struct WprSaved))
         return false;

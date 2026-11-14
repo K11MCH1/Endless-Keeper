@@ -142,6 +142,9 @@ int world_biome_at_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
  *  versions 2-6: lava ocean and lava rivers are Volcanic, flooded ocean and flooded rivers Flooded, Dead Man's Land
  *  Earthen. The eight are themselves. */
 int world_biome_parent(int biome);
+/** Does the player own a portal that stands in one of these biomes (a mask of 1 << biome; a province counts as its
+ *  parent)? From the world's portal list, so portals on ground that isn't loaded count too. */
+TbBool world_player_owns_portal_in(PlayerNumber plyr_idx, uint32_t biome_mask);
 /** Version 7 worlds: is the land in this box of world slabs fit to build on: no Dead Man's Land and no ocean (nor,
  *  with no_provinces, the river provinces either), its biomes sampled every 8 slabs? Always true in a version 6
  *  world. */

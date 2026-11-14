@@ -8,8 +8,8 @@
  * starting at sunrise. Nothing needs saving: the day number, the time of day and the day's raid times all come
  * from game.play_gameturn and the world seed.
  *
- * By day, heroes break in through the ceiling (the FALL spawn of scripts) at open spots about 100 slabs from the
- * player's heart: parties of a Tunneller that digs its way to the heart and its followers (2-6 in all). The first
+ * By day, heroes break in through the ceiling (the FALL spawn of scripts) at open spots about 60 slabs from the
+ * player's heart (2026-11-14, the player: it was 100; never nearer than 40): parties of a Tunneller that digs its way to the heart and its followers (2-6 in all). The first
  * raid of a day always comes, the day's others one time in two (2026-11-11), at least four minutes apart. The player's best creature sets their levels, how many parties land at once and who
  * follows (2026-11-08: 1 party up to level 3, 1-2 to level 5, 1-3 to level 8, 2-4 to level 12, then 3-5; Thieves
  * and Tunnellers, then Dwarves, Archers, Barbarians, Monks, and from level 9 the heroes of the landing's biome).
@@ -361,9 +361,12 @@ static const char *const dn_biome_heroes[WgB_COUNT][2] = {
     [WgB_DeadMans] = {"KNIGHT", "GIANT"},
 };
 
-#define DN_SPAWN_DIST 100
+#define DN_SPAWN_DIST 60             /* slabs from the heart a raid lands at, about (2026-11-14, the player: "about 60
+                                        slabs from the dungeon heart (still never nearer than 40)"; it was 100) */
 #define DN_SPAWN_SLACK 5
 #define DN_SPAWN_MIN_DIST 40
+#define DN_SPAWN_REACH 105           /* the ground looked at for a landing, round the heart: as far as it always was, so
+                                        a dungeon with no open ground near still gets its raid from further out */
 #define DN_PARTY_GAP 8               /* slabs at least between two parties' landings */
 #define DN_MAX_PARTIES 5
 #define DN_RETREAT_NIGHTS 1          /* raiders go home at the next dawn (2026-11-11; it was after their third night) */
@@ -397,15 +400,15 @@ static uint32_t dn_rand(struct DnRng *r, uint32_t n)
     return (n > 0) ? (uint32_t)(r->s % n) : 0;
 }
 
-/** Possible tunnel-ins on a day (2026-11-11): 1 on day 1, 2 to day 4, 3 to day 8, then 4. The first always comes,
- *  the others one time in two. */
+/** Possible tunnel-ins on a day: 2 to day 4, 3 to day 8, then 4. The first always comes, the others one time in
+ *  two. (2026-11-11: 1 on day 1; 2026-11-14, the player: "1 extra possible raid for the 1st day".) */
 static int dn_raids_on_day(long day)
 {
-    return (day <= 1) ? 1 : (day < 5) ? 2 : (day < 9) ? 3 : 4;
+    return (day < 5) ? 2 : (day < 9) ? 3 : 4;
 }
 
-/** Time of day of raid i of n: one in each part of the day, at a time fixed by the seed. The first day's raid
- *  waits for its second half; no raid starts in the first or last twentieth of a day. */
+/** Time of day of raid i of n: one in each part of the day, at a time fixed by the seed. The first day's raids
+ *  wait for its second half; no raid starts in the first or last twentieth of a day. */
 static uint64_t dn_player_salt(PlayerNumber plyr_idx);
 
 /** Time of raid i for a player: each player's at its own time in the slot (all of them landed in one turn, each
@@ -873,7 +876,7 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
     MapSlabCoord bx1 = 1, by1 = 1, bx2 = game.map_tiles_x - 2, by2 = game.map_tiles_y - 2;
     if (world_is_chunked())
     {
-        const MapSlabCoord reach = DN_SPAWN_DIST + DN_SPAWN_SLACK;
+        const MapSlabCoord reach = DN_SPAWN_REACH;
         bx1 = hx - reach;
         by1 = hy - reach;
         bx2 = hx + reach;
@@ -1432,7 +1435,7 @@ void world_daynight_turn(void)
             if (!thing_exists(heartng))
                 continue;
             const MapSlabCoord hx = subtile_slab(heartng->mappos.x.stl.num), hy = subtile_slab(heartng->mappos.y.stl.num);
-            const MapSlabCoord reach = DN_SPAWN_DIST + DN_SPAWN_SLACK;
+            const MapSlabCoord reach = DN_SPAWN_REACH;
             world_peek_warm(hx - reach, hy - reach, hx + reach, hy + reach, 2);
         }
     }

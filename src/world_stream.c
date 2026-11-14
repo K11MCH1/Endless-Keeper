@@ -4000,6 +4000,22 @@ static void update_portals(void)
 }
 
 /** Window chunks that must stay loaded: the boxes of awake keepers. */
+TbBool world_player_owns_portal_in(PlayerNumber plyr_idx, uint32_t biome_mask)
+{
+    if (!W.active)
+        return false;
+    for (int i = 0; i < W.portal_count; i++)
+    {
+        const struct WorldPortal *p = &W.portals[i];
+        if (p->owner != plyr_idx)
+            continue;
+        const int biome = world_biome_parent(world_biome_at_engine_slab((MapSlabCoord)engine_slab_x(p->x), (MapSlabCoord)engine_slab_y(p->y)));
+        if ((biome >= 0) && (biome < 32) && ((biome_mask & (1u << biome)) != 0))
+            return true;
+    }
+    return false;
+}
+
 static TbBool window_chunk_pinned(int lcx, int lcy)
 {
     int64_t cx = W.origin_cx + lcx, cy = W.origin_cy + lcy;

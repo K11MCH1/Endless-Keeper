@@ -80,6 +80,10 @@ void WindowSystemSDL::SetCursorGrab(bool grab)
 {
     if (!m_window)
         return;
+    // The launcher's background is a game without a window to see: it never takes hold of the player's mouse
+    // or moves it (it did, each time it set its screen up: the pointer jumped while the launcher opened).
+    if (world_attract_active())
+        return;
     if (m_useRelativeMouse) {
         // deltas straight from the OS.
         SDL_SetWindowRelativeMouseMode(m_window, grab);
@@ -120,6 +124,8 @@ void WindowSystemSDL::WarpCursor(int x, int y)
 {
     if (!m_window)
         return;
+    if (world_attract_active())
+        return; // (see SetCursorGrab)
     int px = 0, py = 0, pw = 0, ph = 0;
     GetPresentRect(&px, &py, &pw, &ph);
     float ux = 1.0f, uy = 1.0f;
@@ -139,6 +145,8 @@ void WindowSystemSDL::RecenterCursor()
 {
     if (!m_window)
         return;
+    if (world_attract_active())
+        return; // (see SetCursorGrab)
     int w = 0, h = 0;
     SDL_GetWindowSize(m_window, &w, &h);
     SDL_WarpMouseInWindow(m_window, w / 2.0f, h / 2.0f);
