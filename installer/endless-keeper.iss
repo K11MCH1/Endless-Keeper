@@ -52,6 +52,8 @@ AppPublisherURL=https://github.com/K11MCH1/Endless-Keeper
 AppSupportURL=https://github.com/K11MCH1/Endless-Keeper/issues
 AppUpdatesURL=https://github.com/K11MCH1/Endless-Keeper/releases
 DefaultDirName={sd}\Games\EndlessKeeper
+; the folder page is always shown: the player sees where Endless Keeper goes
+DisableDirPage=no
 DefaultGroupName=Endless Keeper
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
@@ -87,27 +89,27 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#PackageDir}\*"; Excludes: "\keeperfx.cfg"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#PackageDir}\keeperfx.cfg"; DestDir: "{app}"; Flags: ignoreversion; Check: IsNewInstall
 ; 3. the original Dungeon Keeper files, from the player's own copy
-Source: "{code:DkFile|data\bluepal.dat}";   DestDir: "{app}\data"; DestName: "bluepal.dat";   Flags: external ignoreversion
-Source: "{code:DkFile|data\bluepall.dat}";  DestDir: "{app}\data"; DestName: "bluepall.dat";  Flags: external ignoreversion
-Source: "{code:DkFile|data\dogpal.pal}";    DestDir: "{app}\data"; DestName: "dogpal.pal";    Flags: external ignoreversion
-Source: "{code:DkFile|data\hitpall.dat}";   DestDir: "{app}\data"; DestName: "hitpall.dat";   Flags: external ignoreversion
-Source: "{code:DkFile|data\lightng.pal}";   DestDir: "{app}\data"; DestName: "lightng.pal";   Flags: external ignoreversion
-Source: "{code:DkFile|data\redpal.col}";    DestDir: "{app}\data"; DestName: "redpal.col";    Flags: external ignoreversion
-Source: "{code:DkFile|data\redpall.dat}";   DestDir: "{app}\data"; DestName: "redpall.dat";   Flags: external ignoreversion
-Source: "{code:DkFile|data\slab0-0.dat}";   DestDir: "{app}\data"; DestName: "slab0-0.dat";   Flags: external ignoreversion
-Source: "{code:DkFile|data\slab0-1.dat}";   DestDir: "{app}\data"; DestName: "slab0-1.dat";   Flags: external ignoreversion
-Source: "{code:DkFile|data\vampal.pal}";    DestDir: "{app}\data"; DestName: "vampal.pal";    Flags: external ignoreversion
-Source: "{code:DkFile|data\whitepal.col}";  DestDir: "{app}\data"; DestName: "whitepal.col";  Flags: external ignoreversion
-Source: "{code:DkFile|sound\atmos1.sbk}";   DestDir: "{app}\sound"; DestName: "atmos1.sbk";   Flags: external ignoreversion
-Source: "{code:DkFile|sound\atmos2.sbk}";   DestDir: "{app}\sound"; DestName: "atmos2.sbk";   Flags: external ignoreversion
-Source: "{code:DkFile|sound\bullfrog.sbk}"; DestDir: "{app}\sound"; DestName: "bullfrog.sbk"; Flags: external ignoreversion
+Source: "{code:DkFile|data\bluepal.dat}";   DestDir: "{app}\data"; DestName: "bluepal.dat";   Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|data\bluepall.dat}";  DestDir: "{app}\data"; DestName: "bluepall.dat";  Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|data\dogpal.pal}";    DestDir: "{app}\data"; DestName: "dogpal.pal";    Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|data\hitpall.dat}";   DestDir: "{app}\data"; DestName: "hitpall.dat";   Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|data\lightng.pal}";   DestDir: "{app}\data"; DestName: "lightng.pal";   Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|data\redpal.col}";    DestDir: "{app}\data"; DestName: "redpal.col";    Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|data\redpall.dat}";   DestDir: "{app}\data"; DestName: "redpall.dat";   Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|data\slab0-0.dat}";   DestDir: "{app}\data"; DestName: "slab0-0.dat";   Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|data\slab0-1.dat}";   DestDir: "{app}\data"; DestName: "slab0-1.dat";   Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|data\vampal.pal}";    DestDir: "{app}\data"; DestName: "vampal.pal";    Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|data\whitepal.col}";  DestDir: "{app}\data"; DestName: "whitepal.col";  Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|sound\atmos1.sbk}";   DestDir: "{app}\sound"; DestName: "atmos1.sbk";   Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|sound\atmos2.sbk}";   DestDir: "{app}\sound"; DestName: "atmos2.sbk";   Flags: external ignoreversion; Check: DkElsewhere
+Source: "{code:DkFile|sound\bullfrog.sbk}"; DestDir: "{app}\sound"; DestName: "bullfrog.sbk"; Flags: external ignoreversion; Check: DkElsewhere
 ; the music of digital copies (GOG, Steam), when there is any
-Source: "{code:DkMusic|keeper02.ogg}"; DestDir: "{app}\music"; DestName: "keeper02.ogg"; Flags: external ignoreversion skipifsourcedoesntexist
-Source: "{code:DkMusic|keeper03.ogg}"; DestDir: "{app}\music"; DestName: "keeper03.ogg"; Flags: external ignoreversion skipifsourcedoesntexist
-Source: "{code:DkMusic|keeper04.ogg}"; DestDir: "{app}\music"; DestName: "keeper04.ogg"; Flags: external ignoreversion skipifsourcedoesntexist
-Source: "{code:DkMusic|keeper05.ogg}"; DestDir: "{app}\music"; DestName: "keeper05.ogg"; Flags: external ignoreversion skipifsourcedoesntexist
-Source: "{code:DkMusic|keeper06.ogg}"; DestDir: "{app}\music"; DestName: "keeper06.ogg"; Flags: external ignoreversion skipifsourcedoesntexist
-Source: "{code:DkMusic|keeper07.ogg}"; DestDir: "{app}\music"; DestName: "keeper07.ogg"; Flags: external ignoreversion skipifsourcedoesntexist
+Source: "{code:DkMusic|keeper02.ogg}"; DestDir: "{app}\music"; DestName: "keeper02.ogg"; Flags: external ignoreversion skipifsourcedoesntexist; Check: DkElsewhere
+Source: "{code:DkMusic|keeper03.ogg}"; DestDir: "{app}\music"; DestName: "keeper03.ogg"; Flags: external ignoreversion skipifsourcedoesntexist; Check: DkElsewhere
+Source: "{code:DkMusic|keeper04.ogg}"; DestDir: "{app}\music"; DestName: "keeper04.ogg"; Flags: external ignoreversion skipifsourcedoesntexist; Check: DkElsewhere
+Source: "{code:DkMusic|keeper05.ogg}"; DestDir: "{app}\music"; DestName: "keeper05.ogg"; Flags: external ignoreversion skipifsourcedoesntexist; Check: DkElsewhere
+Source: "{code:DkMusic|keeper06.ogg}"; DestDir: "{app}\music"; DestName: "keeper06.ogg"; Flags: external ignoreversion skipifsourcedoesntexist; Check: DkElsewhere
+Source: "{code:DkMusic|keeper07.ogg}"; DestDir: "{app}\music"; DestName: "keeper07.ogg"; Flags: external ignoreversion skipifsourcedoesntexist; Check: DkElsewhere
 
 [INI]
 Filename: "{app}\endless-keeper.ini"; Section: "install"; Key: "version"; String: "{#AppVersion}"
@@ -129,6 +131,7 @@ const
 
 var
   DkPage: TInputDirWizardPage;
+  DestNote: TNewStaticText;
   DownloadPage: TDownloadWizardPage;
   ExtractionPage: TExtractionWizardPage;
   NewInstall, BaseDone: Boolean;
@@ -211,6 +214,12 @@ begin
   Result := RemoveBackslashUnlessRoot(DkPage.Values[0]);
 end;
 
+{ The original files are copied unless they are in the install folder already (an update). }
+function DkElsewhere(): Boolean;
+begin
+  Result := CompareText(RemoveBackslashUnlessRoot(DkDir()), RemoveBackslashUnlessRoot(WizardDirValue())) <> 0;
+end;
+
 function DkFile(Param: String): String;
 begin
   Result := AddBackslash(DkDir()) + Param;
@@ -243,14 +252,26 @@ procedure InitializeWizard();
 var
   Given: String;
 begin
+  { the folder offered: where Endless Keeper is now, unless that folder no longer holds it (a plain KeeperFX is
+    there now, or nothing) }
+  if (WizardForm.PrevAppDir <> '') and not FileExists(AddBackslash(WizardForm.PrevAppDir) + 'endless-keeper.ini') then
+    WizardForm.DirEdit.Text := ExpandConstant('{sd}\Games\EndlessKeeper');
   DkPage := CreateInputDirPage(wpSelectDir, 'Original game files',
-    'Where is your copy of Dungeon Keeper?',
-    'Endless Keeper needs a few files from your own copy of Dungeon Keeper (the game''s palettes, two texture ' +
-    'files and three sound banks). Choose the folder of your Dungeon Keeper (GOG, Steam, EA/Origin or the ' +
-    'contents of the CD), or of an existing KeeperFX installation, which has them too.' + #13#10#13#10 +
-    'The folder must have the data and sound folders of the game.',
+    'Where can the setup copy Dungeon Keeper''s files from?',
+    'Endless Keeper is NOT installed in this folder. The setup only copies a few files from it (the game''s ' +
+    'palettes, two texture files and three sound banks) and changes nothing there.' + #13#10#13#10 +
+    'Choose the folder of your Dungeon Keeper (GOG, Steam, EA/Origin or the contents of the CD), or of a ' +
+    'KeeperFX installation, which has these files too. It must have the data and sound folders of the game.',
     False, '');
-  DkPage.Add('');
+  DkPage.Add('Copy the original files from:');
+  DestNote := TNewStaticText.Create(DkPage);
+  DestNote.Parent := DkPage.Surface;
+  DestNote.AutoSize := False;
+  DestNote.WordWrap := True;
+  DestNote.Left := 0;
+  DestNote.Top := DkPage.Edits[0].Top + DkPage.Edits[0].Height + ScaleY(18);
+  DestNote.Width := DkPage.SurfaceWidth;
+  DestNote.Height := ScaleY(44);
   Given := ExpandConstant('{param:DKDIR|}');
   if Given <> '' then
     DkPage.Values[0] := Given
@@ -311,6 +332,34 @@ begin
   end;
 end;
 
+{ The page of the original files says where Endless Keeper itself goes. }
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = DkPage.ID then
+    DestNote.Caption := 'Endless Keeper itself will be installed in:' + #13#10 + WizardDirValue();
+end;
+
+{ An update: the folder Endless Keeper is in has the original files already, so the setup doesn't ask for them. }
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  if (PageID = DkPage.ID) and FileExists(AddBackslash(WizardDirValue()) + 'endless-keeper.ini') and IsDkDir(WizardDirValue()) then
+  begin
+    DkPage.Values[0] := WizardDirValue();
+    Result := True;
+  end;
+end;
+
+{ The last page before the install names both folders. }
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+begin
+  Result := MemoDirInfo;
+  if DkElsewhere() then
+    Result := Result + NewLine + NewLine + 'Original game files copied from (nothing is changed there):' + NewLine + Space + DkDir();
+  if MemoTasksInfo <> '' then
+    Result := Result + NewLine + NewLine + MemoTasksInfo;
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   Dir, Missing: String;
@@ -368,6 +417,9 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   NewInstall := not FileExists(ExpandConstant('{app}\endless-keeper.ini'));
+  { an update whose folder has the original files takes them from there (a silent update finds no other copy) }
+  if not IsDkDir(DkDir()) and IsDkDir(ExpandConstant('{app}')) then
+    DkPage.Values[0] := ExpandConstant('{app}');
   { silent installs come straight here: check the original files and the folder too }
   if not IsDkDir(DkDir()) then
     Result := 'The original Dungeon Keeper files were not found in "' + DkDir() + '". ' +
