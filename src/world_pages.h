@@ -131,6 +131,21 @@ struct WpSlabIter { int g, e, k, y, x; };
 void wp_slab_iter_init(struct WpSlabIter *it);
 TbBool wp_slab_iter_next(struct WpSlabIter *it, MapSlabCoord *slb_x, MapSlabCoord *slb_y, struct SlabMap **slb);
 
+/** The loaded subtiles in row-major order, the same way (a loop over the bounding box's subtile rows that skips
+ *  unloaded ground, without walking the box). */
+struct WpStlIter { int g, e, k, y, x; };
+void wp_stl_iter_init(struct WpStlIter *it);
+TbBool wp_stl_iter_next(struct WpStlIter *it, MapSubtlCoord *stl_x, MapSubtlCoord *stl_y, struct Map **mapblk);
+
+/** The loaded ground as boxes (engine slabs, inclusive): one for each island of loaded chunks, boxes that overlap
+ *  joined into one, so every loaded slab is in exactly one box. For work that needs rectangles (navigation, static
+ *  light) and must not walk the one box round everything: two dungeons a thousand slabs apart, or a World Boss
+ *  arena in its own far corner, make that box mostly (or nearly all) empty. Returns how many boxes (at most max;
+ *  with more islands than that the last box grows to hold the rest: bigger, still right). */
+struct WpBox { MapSlabCoord x1, y1, x2, y2; };
+#define WP_ISLAND_BOXES_MAX 256
+int wp_island_boxes(struct WpBox *boxes, int max);
+
 #ifdef __cplusplus
 }
 #endif

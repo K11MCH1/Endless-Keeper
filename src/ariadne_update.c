@@ -1799,10 +1799,14 @@ void rebuild_navigation(void)
         /* a margin of 2^20 subtiles: the mesh stays below 2^23 subtiles across (map units fit 32 bits) */
         triangulation_initxy(-(1L << 20), -(1L << 20), size_x + (1L << 20), size_y + (1L << 20));
         tri_set_rectangle(0, 0, size_x, size_y, NAV_COL_BLOCKED);
-        MapSubtlCoord x1, y1, x2, y2;
-        map_loop_subtile_bounds(&x1, &y1, &x2, &y2);
-        if (x1 <= x2)
-            nav_triangulate_paged(x1, y1, x2 + 1, y2 + 1);
+        /* island by island: the one box round every loaded chunk was triangulated tile by tile, loaded or not, and
+           with two dungeons far apart (or a World Boss arena in its own corner of the world) nearly all of those
+           tiles were ground that isn't loaded */
+        static struct WpBox boxes[WP_ISLAND_BOXES_MAX];
+        const int n = wp_island_boxes(boxes, WP_ISLAND_BOXES_MAX);
+        for (int i = 0; i < n; i++)
+            nav_triangulate_paged((long)boxes[i].x1 * STL_PER_SLB, (long)boxes[i].y1 * STL_PER_SLB,
+                (long)boxes[i].x2 * STL_PER_SLB + STL_PER_SLB, (long)boxes[i].y2 * STL_PER_SLB + STL_PER_SLB);
         nav_map_initialised = 1;
         set_nav_rule_default();
         game.map_changed_for_navigation = 1;

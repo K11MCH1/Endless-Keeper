@@ -58,8 +58,14 @@
 #include "world_menu.h"
 #include "world_pages.h"
 #include "net_game.h"
+#include "world_boss.h"
+#include "world_truce.h"
+#include "world_defectors.h"
+#include "world_crusade.h"
+#include "world_alarm.h"
 #include "world_progress.h"
 #include "server_admin.h"
+#include "world_seasons.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -121,13 +127,19 @@ long world_day_turns(void)
     return (long)(dn_day_turns + dn_night_turns);
 }
 
+/** Seasons Below: a day's daylight (the Long Night swaps the lengths of day and night). */
+static GameTurnDelta dn_light(long day)
+{
+    return world_season_long_night(day) ? dn_night_turns : dn_day_turns;
+}
+
 TbBool world_is_day(void)
 {
     long day;
     GameTurnDelta t;
     dn_read_lengths();
     dn_time(game.play_gameturn, &day, &t);
-    return t < dn_day_turns;
+    return t < dn_light(day);
 }
 
 /** The disc's turn, clockwise in radians: -pi/2 at sunrise (sun on the left), 0 at noon (sun on top),
@@ -137,9 +149,10 @@ static double dn_disc_angle(void)
     long day;
     GameTurnDelta t;
     dn_time(game.play_gameturn, &day, &t);
-    if (t < dn_day_turns)
-        return M_PI * (-0.5 + (double)t / (double)dn_day_turns);
-    return M_PI * (0.5 + (double)(t - dn_day_turns) / (double)dn_night_turns);
+    const GameTurnDelta light = dn_light(day), dark = dn_day_turns + dn_night_turns - light;
+    if (t < light)
+        return M_PI * (-0.5 + (double)t / (double)light);
+    return M_PI * (0.5 + (double)(t - light) / (double)dark);
 }
 
 /******************************************************************************/
@@ -296,6 +309,8 @@ void world_daynight_draw(void)
     const int off = ((DAYNIGHT_RIM - DAYNIGHT_DISC) / 2) * upp / 16;
     UIRenderer_SubmitPanelSpriteRaw(x + off, y + off, upp, &dn_frame_spr[k], 0);
     UIRenderer_SubmitPanelSpriteRaw(x, y, upp, &dn_rim_spr, 0);
+    world_seasons_draw_ring(x, y, size); /* the year round the dial */
+    world_boss_draw(x, y + size + 2 * upp / 16, size); /* the World Boss timer, under the dial */
 }
 
 /******************************************************************************/
@@ -399,9 +414,9 @@ static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_
 
 static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_idx)
 {
-    const GameTurnDelta edge = dn_day_turns / 20;
-    const GameTurnDelta start = (day == 1) ? dn_day_turns / 2 : edge;
-    const GameTurnDelta span = dn_day_turns - edge - start;
+    const GameTurnDelta edge = dn_light(day) / 20;
+    const GameTurnDelta start = (day == 1) ? dn_light(day) / 2 : edge;
+    const GameTurnDelta span = dn_light(day) - edge - start;
     /* breathing room (2026-11-11): DN_RAID_GAP between two raids, or as much as the day has room for (four raids
        don't fit four minutes apart in a 12-minute day); what is left over is shared out as each raid's leeway */
     GameTurnDelta gap = 0;
@@ -604,6 +619,11 @@ static int32_t dn_owed_day[PLAYERS_MAX];
 
 TbBool world_raid_hero(const struct Thing *thing);
 
+TbBool world_raid_on(PlayerNumber plyr_idx)
+{
+    return (plyr_idx >= 0) && (plyr_idx < PLAYERS_MAX) && dn_inv[plyr_idx].active && !dn_inv[plyr_idx].retreating;
+}
+
 /** The invasion a raider belongs to: its target's, else the one whose landing is nearest; -1 none. */
 static int dn_raider_invasion(const struct Thing *thing)
 {
@@ -764,7 +784,7 @@ static void dn_invasions_turn(long day, GameTurnDelta t)
     for (int p = 0; p < PLAYERS_COUNT; p++)
     {
         struct DnInvasion *inv = &dn_inv[p];
-        if (inv->active && !inv->retreating && (day >= inv->day + DN_RETREAT_NIGHTS) && (t < dn_day_turns))
+        if (inv->active && !inv->retreating && (day >= inv->day + DN_RETREAT_NIGHTS) && (t < dn_light(day)))
         {
             inv->retreating = 1;
             inv->retreat_turn = game.play_gameturn;
@@ -1301,6 +1321,7 @@ void world_daynight_seat_started(PlayerNumber plyr_idx)
     if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
         return;
     dn_seat_first_day[plyr_idx] = (int32_t)world_day_number();
+    world_alarm_seat_started(plyr_idx);
     SYNCLOG("World: player %d's dungeon counts its days from the world's day %d", (int)plyr_idx, (int)dn_seat_first_day[plyr_idx]);
 }
 
@@ -1369,14 +1390,19 @@ void world_daynight_turn(void)
         if (day > 1)
             dn_dawn_save = true;
     }
-    else if (t == dn_day_turns)
+    else if (t == dn_light(day))
     {
         SYNCLOG("World: night %ld begins", day);
         server_admin_log("world", "Night %ld begins", day);
     }
     dn_invasions_turn(day, t);
     dn_killleader_hook();
-    if (t >= dn_day_turns)
+    world_boss_turn();
+    world_truce_turn();
+    world_defectors_turn();
+    world_crusade_turn();
+    world_alarm_turn();
+    if (t >= dn_light(day))
         return;
     /* a first raid that waited for the last raid's heroes to go: it comes now, if its time has passed */
     if ((game.play_gameturn % 16) == 13)
@@ -1414,9 +1440,10 @@ void world_daynight_turn(void)
        raid's part of the day, rolled on its own */
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
-        if (!world_player_is_human(p) || world_coop_seat_away(p))
-            continue; /* (a co-op dungeon whose player is away is frozen: no raid comes for it) */
-        const int n = dn_raids_on_day(world_seat_day(p));
+        if (!world_player_is_human(p) || world_coop_seat_away(p) || world_boss_player_away(p))
+            continue; /* (a co-op dungeon whose player is away is frozen: no raid comes for it; nor for a keeper at a
+                         World Boss fight) */
+        const int n = dn_raids_on_day(world_seat_day(p)) + world_season_extra_raids(p); /* the Swelter: one more */
         for (int i = 0; i < n; i++)
         {
             if (dn_raid_time_for(day, i, n, p) != t)
@@ -1437,6 +1464,7 @@ void world_daynight_want_chunks(void (*want)(int64_t wx, int64_t wy, int r))
 {
     if (!world_mode_active())
         return;
+    world_boss_want_chunks(want); /* a World Boss's arena while a fight is on */
     for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
     {
         const struct DnInvasion *inv = &dn_inv[p];

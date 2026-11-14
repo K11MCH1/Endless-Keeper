@@ -112,9 +112,20 @@
 #include "net_secure.h"
 #define XXH_INLINE_ALL
 #include "../deps/xxhash/xxhash.h"
+#include "world_boss.h"
+#include "world_truce.h"
+#include "world_defectors.h"
+#include "world_crusade.h"
+#include "world_alarm.h"
 #include "world_pools.h"
 #include "room_entrance.h"
 #include "world_progress.h"
+#include "world_creature_window.h"
+#include "world_storage.h"
+#include "world_sword.h"
+#include "world_hand.h"
+#include "world_watchfire.h"
+#include "world_dark.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -160,9 +171,19 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_WILD 0x31544257u   /* "WBT1": the wild packs' burrows and tunnels */
 #define WORLD_EXTRA_RAIDS 0x31584452u  /* "RDX1": the raids' owed first raid and fleeing clock */
 #define WORLD_EXTRA_AMENITY 0x31584D41u /* "AMX1": Amenity Mastery's bars */
+#define WORLD_EXTRA_GROWTH 0x31474C53u  /* "SLG1": since when each computer keeper is left alone (slow growth) */
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
+#define WORLD_EXTRA_SWORD 0x31445753u   /* "SWD1": guests invited to lead raids, their tallies (world_sword.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_BOSS 0x31534F42u     /* "BOS1": World Bosses: the schedule, who joined, the boss, the arena */
+#define WORLD_EXTRA_STORAGE 0x31525453u  /* "STR1": the loot registry (world_storage.c) */
+#define WORLD_EXTRA_TRUCE 0x31435254u    /* "TRC1": friendly fire between keepers who are allied or truced (world_truce.c) */
+#define WORLD_EXTRA_DEFECTORS 0x31464544u /* "DEF1": each defector's line: the keeper it left, why, the day */
+#define WORLD_EXTRA_CRUSADE 0x31535243u  /* "CRS1": the Crusade roads */
+#define WORLD_EXTRA_ALARM 0x314D4C41u    /* "ALM1": Alarm Bells: each keeper's alarms, the razed fortresses */
+#define WORLD_EXTRA_FIRES 0x31524657u    /* "WFR1": the watchfires (world_watchfire.c) */
+#define WORLD_EXTRA_DARK 0x314B5244u     /* "DRK1": untended floor's neglect (world_dark.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -677,6 +698,30 @@ static int64_t engine_slab_x(int64_t wx) { return world_paged ? wx + WP_ORIGIN_S
 static int64_t world_slab_x_of(int64_t ex) { return world_paged ? ex - WP_ORIGIN_SLB : (int64_t)W.origin_cx * WORLD_CHUNK_SLABS + ex - 1; }
 static int64_t world_slab_y_of(int64_t ey) { return world_paged ? ey - WP_ORIGIN_SLB : (int64_t)W.origin_cy * WORLD_CHUNK_SLABS + ey - 1; }
 static int64_t engine_slab_y(int64_t wy) { return world_paged ? wy + WP_ORIGIN_SLB : wy - (int64_t)W.origin_cy * WORLD_CHUNK_SLABS + 1; }
+
+/******************************************************************************/
+/* The world apart (see world_stream.h) */
+
+TbBool world_apart_slab(int64_t wx, int64_t wy)
+{
+    return (wx >= WORLD_APART_MIN) && (wy >= WORLD_APART_MIN);
+}
+
+/** Is a world chunk in the world apart? (WORLD_APART_MIN is a whole number of chunks.) */
+static TbBool chunk_apart(int64_t cx, int64_t cy)
+{
+    return world_paged && world_apart_slab(cx * WORLD_CHUNK_SLABS, cy * WORLD_CHUNK_SLABS);
+}
+
+TbBool world_apart_engine_slab(MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    return W.active && world_paged && world_apart_slab(world_slab_x_of(slb_x), world_slab_y_of(slb_y));
+}
+
+TbBool world_apart_thing(const struct Thing *thing)
+{
+    return (thing != NULL) && world_apart_engine_slab(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num));
+}
 
 /** New runs play the chunked world. A replay plays the world it was
  *  recorded on (replays from before have no flag: the sliding window). Test hook: KFX_WORLD_PAGED=0 starts new
@@ -1574,11 +1619,93 @@ PlayerNumber world_nearest_start_player(int64_t wx, int64_t wy)
     return nearest;
 }
 
+/* Circles of Hell, slow growth (2026-11-13): an enemy keeper grows slowly while left alone. The world day since
+   which each keeper on record has been left alone (0: not known yet); every two days alone its creatures stand a
+   level higher than their circle says, ten levels at most, given when its ground comes into play again (a chunk
+   record is graded as it thaws). Being near it (its AI awake) starts the count again. Not farmable: the level is
+   the circle's plus the days, never added up thaw after thaw. */
+#define SLG_DAYS 2
+#define SLG_CAP 10
+static int32_t keeper_alone_since[WORLD_MAX_KEEPERS];
+
+static int keeper_growth(int k)
+{
+    if ((k < 0) || (k >= WORLD_MAX_KEEPERS) || (k >= W.keeper_count))
+        return 0;
+    static int forced = -2;
+    if (forced == -2)
+    {
+        const char *v = getenv("KFX_WORLD_GROWTEST");
+        forced = (v != NULL) ? atoi(v) : -1;
+    }
+    if (forced >= 0)
+        return min(forced, SLG_CAP);
+    if (keeper_alone_since[k] <= 0)
+        return 0;
+    const long days = world_day_number() - keeper_alone_since[k];
+    return (int)max(0L, min((long)SLG_CAP, days / SLG_DAYS));
+}
+
+static void keepers_alone_turn(void)
+{
+    if (!W.active || ((game.play_gameturn % 600) != 450))
+        return;
+    const int32_t today = (int32_t)world_day_number();
+    for (int i = 0; (i < W.keeper_count) && (i < WORLD_MAX_KEEPERS); i++)
+    {
+        const struct WorldKeeper *wk = &W.keepers[i];
+        if (wk->state == WKSt_Destroyed)
+            continue;
+        if ((keeper_alone_since[i] <= 0) || (wk->state == WKSt_Active))
+            keeper_alone_since[i] = today;
+    }
+}
+
+static void world_growth_reset(void)
+{
+    memset(keeper_alone_since, 0, sizeof(keeper_alone_since));
+}
+
+static size_t world_growth_save_size(void)
+{
+    return 4 + sizeof(keeper_alone_since);
+}
+
+static void world_growth_save(uint8_t *buf)
+{
+    {
+        int known = 0;
+        for (int i = 0; i < WORLD_MAX_KEEPERS; i++)
+            known += (keeper_alone_since[i] > 0) ? 1 : 0;
+        SYNCLOG("World: slow growth: saved, %d keepers with a day they were last near", known);
+    }
+    const uint32_t n = WORLD_MAX_KEEPERS;
+    memcpy(buf, &n, 4);
+    memcpy(buf + 4, keeper_alone_since, sizeof(keeper_alone_since));
+}
+
+static TbBool world_growth_load(const uint8_t *buf, size_t len)
+{
+    world_growth_reset();
+    uint32_t n = 0;
+    if (len < 4)
+        return false;
+    memcpy(&n, buf, 4);
+    if ((n != WORLD_MAX_KEEPERS) || (len < 4 + sizeof(keeper_alone_since)))
+        return false;
+    memcpy(keeper_alone_since, buf + 4, sizeof(keeper_alone_since));
+    int known = 0;
+    for (int i = 0; i < WORLD_MAX_KEEPERS; i++)
+        known += (keeper_alone_since[i] > 0) ? 1 : 0;
+    SYNCLOG("World: slow growth: loaded, %d keepers with a day they were last near", known);
+    return true;
+}
+
 /** Circles (world_circles.c): the heroes and computer keepers' creatures in a chunk's record get the level of the
  *  circle they stand in (never below the level they have; imps stay as they are). Returns how many changed. */
 static int circles_grade_chunk(struct WorldChunkData *cd)
 {
-    int changed = 0, seen = 0, lo = 255, hi = 0, cmin = WC_CIRCLES, cmax = 1;
+    int changed = 0, seen = 0, lo = 255, hi = 0, cmin = WC_CIRCLES, cmax = 1, grown = 0;
     for (int t = 0; t < cd->thing_count; t++)
     {
         struct WorldThing *th = &cd->things[t];
@@ -1592,7 +1719,15 @@ static int circles_grade_chunk(struct WorldChunkData *cd)
         const int64_t wx = (int64_t)cd->cx * WG_CHUNK + floor_div(th->x / COORD_PER_STL, STL_PER_SLB);
         const int64_t wy = (int64_t)cd->cy * WG_CHUNK + floor_div(th->y / COORD_PER_STL, STL_PER_SLB);
         int circle = 1;
-        const int level = world_circles_level_at_world(wx, wy, (int)th->level, &circle);
+        int level = world_circles_level_at_world(wx, wy, (int)th->level, &circle);
+        if (keeper)
+        {
+            /* slow growth: a keeper left alone stands higher than its circle says */
+            const int grow = keeper_growth((int)th->owner - WOwn_Keeper0);
+            if (grow > 0)
+                level = max((int)th->level, min(level + grow, 100));
+            grown += (grow > 0) ? 1 : 0;
+        }
         seen++;
         changed += (level != (int)th->level) ? 1 : 0;
         th->level = (uint8_t)level;
@@ -1602,8 +1737,8 @@ static int circles_grade_chunk(struct WorldChunkData *cd)
         cmax = max(cmax, circle);
     }
     if (seen > 0)
-        SYNCLOG("World circles: chunk (%d,%d), circle %d-%d: %d heroes and keepers' creatures at levels %d-%d (%d changed; "
-            "nearest keeper %d)", (int)cd->cx, (int)cd->cy, cmin, cmax, seen, lo, hi, changed,
+        SYNCLOG("World circles: chunk (%d,%d), circle %d-%d: %d heroes and keepers' creatures at levels %d-%d (%d changed, %d "
+            "grown while left alone; nearest keeper %d)", (int)cd->cx, (int)cd->cy, cmin, cmax, seen, lo, hi, changed, grown,
             (int)world_nearest_start_player((int64_t)cd->cx * WG_CHUNK + WG_CHUNK / 2, (int64_t)cd->cy * WG_CHUNK + WG_CHUNK / 2));
     return changed;
 }
@@ -2316,7 +2451,9 @@ static TbBool thing_is_frozen_kind(const struct Thing *thing)
     switch (thing->class_id)
     {
     case TCls_Creature:
-        return !world_wild_creature(thing); /* wild creatures despawn when their chunk leaves the window */
+        /* wild creatures despawn when their chunk leaves the window; one a keeper fed tonight is kept (Strays: it is
+           wild until dawn, and the dawn it is next seen at makes it a stray) */
+        return !world_wild_creature(thing) || world_misdeeds_stray_fed(thing);
     case TCls_Trap:
     case TCls_Door:
     case TCls_DeadCreature:
@@ -2697,9 +2834,10 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
             }
         }
     }
+    const TbBool apart = chunk_apart(cd->cx, cd->cy); /* the world apart: not remembered on the map, not stored */
     if (codes != NULL)
     {
-        if (any_revealed)
+        if (any_revealed && !apart)
         {
             struct ChunkSlot *s = table_insert(&W.memory, cd->cx, cd->cy);
             world_memory_gen++;
@@ -2812,7 +2950,7 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
     }
     KFX_C_ZONE_END(z_frz_remove);
     KFX_C_ZONE_BEGIN(z_frz_store, "Freeze: store the record");
-    const TbBool record_stored = store_chunk_record(cd);
+    const TbBool record_stored = apart ? true : store_chunk_record(cd);
     KFX_C_ZONE_END(z_frz_store);
     if (!record_stored)
     {
@@ -3312,12 +3450,28 @@ static void place_frame(void)
     }
 }
 
+/** A chunk of the world apart: rock, nobody's, nothing in it. Not "fresh": nothing of a new chunk's set-up (the
+ *  level-start look round, outposts, a copy of the start) is for it. */
+static void apart_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData *cd)
+{
+    memset(cd, 0, sizeof(*cd));
+    cd->cx = cx;
+    cd->cy = cy;
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+    {
+        cd->kind[i] = SlbT_ROCK;
+        cd->owner[i] = WOwn_Neutral;
+    }
+}
+
 static struct WorldChunkData *chunk_data_for(int32_t cx, int32_t cy)
 {
     struct WorldChunkData *cd = (struct WorldChunkData *)malloc(sizeof(struct WorldChunkData));
     if (cd == NULL)
         return NULL;
-    if (!load_chunk_record(cx, cy, cd))
+    if (chunk_apart(cx, cy))
+        apart_chunk_data(cx, cy, cd); /* the world apart: never from the store, never from the generator */
+    else if (!load_chunk_record(cx, cy, cd))
         generate_chunk_data(cx, cy, cd);
     return cd;
 }
@@ -3646,6 +3800,31 @@ static void update_keepers(void)
     }
 }
 
+/** A dungeon's "essential position" is where the game puts down a thing a Hand holds when it cannot be dropped where
+ *  it was meant to go: a computer keeper's failed drop (player_comptask.c), the creatures a defeated keeper still held
+ *  (power_hand.c). The game sets it at a level's start from the dungeon's rooms. An endless world's dungeons have no
+ *  rooms then (theirs come with their chunks), so each got the middle of the map, and the world's origin moved that to
+ *  the map's far corner: ground that is never loaded. A computer keeper that could not drop a creature where it wanted
+ *  left it there, off the map for good (found 2026-11-14: keepers whose creatures fought in a World Boss's arena
+ *  carried more creatures to that fight, could not put them down on ground that is not theirs, and lost them; two
+ *  keepers' creatures then fought each other in that corner). Every dungeon with a Dungeon Heart keeps its Heart's
+ *  place instead, as a level's dungeon does. */
+static void keep_essential_positions(void)
+{
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        if ((p == PLAYER_GOOD) || (p == game.neutral_player_num))
+            continue;
+        struct Dungeon *dungeon = get_players_num_dungeon(p);
+        const struct Thing *heartng = find_players_dungeon_heart(p);
+        if (dungeon_invalid(dungeon) || !thing_exists(heartng))
+            continue;
+        dungeon->essential_pos.x.val = heartng->mappos.x.val;
+        dungeon->essential_pos.y.val = heartng->mappos.y.val;
+        dungeon->essential_pos.z.val = subtile_coord(0, 1);
+    }
+}
+
 TbBool world_keeper_is_passive(PlayerNumber plyr_idx)
 {
     if (!W.active)
@@ -3672,6 +3851,28 @@ void world_slab_to_world(MapSlabCoord slb_x, MapSlabCoord slb_y, int64_t *wx, in
 {
     *wx = world_slab_x_of(slb_x);
     *wy = world_slab_y_of(slb_y);
+}
+
+/** Test hooks (Strays): the engine slab 6 chunks east of the start, with its chunks loaded. */
+TbBool world_test_stray_spot(MapSlabCoord *sx, MapSlabCoord *sy)
+{
+    if (W.gen == NULL)
+        return false;
+    struct WgStructRef start;
+    wg_start_ref(W.gen, &start);
+    *sx = (MapSlabCoord)engine_slab_x(start.heart_x + 6 * WG_CHUNK);
+    *sy = (MapSlabCoord)engine_slab_y(start.heart_y);
+    world_load_chunks_round(*sx, *sy, 0);
+    return true;
+}
+
+static void cm_unload_chunk(int64_t cx, int64_t cy);
+static void cm_after_changes(void);
+/** Test hooks (Strays): the chunk holding an engine slab freezes at once (as the chunk manager freezes one). */
+void world_test_stray_freeze(MapSlabCoord sx, MapSlabCoord sy)
+{
+    cm_unload_chunk(floor_div(world_slab_x_of(sx), WORLD_CHUNK_SLABS), floor_div(world_slab_y_of(sy), WORLD_CHUNK_SLABS));
+    cm_after_changes();
 }
 
 TbBool world_player_heart_loaded(void)
@@ -4093,7 +4294,7 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
         ci = thing->next_of_class;
         if (!thing_exists(thing) || (thing->class_id != TCls_Creature) || thing_is_picked_up(thing))
             continue;
-        if (owner_in_mask(thing->owner, humans) || world_raid_hero(thing))
+        if (owner_in_mask(thing->owner, humans) || world_raid_hero(thing) || world_alarm_hero(thing))
             cm_want_subtile(thing->mappos.x.stl.num, thing->mappos.y.stl.num, CM_CREATURE_RADIUS);
     }
     /* awake keepers keep their whole box; one of the player's creatures within a keeper's threat radius loads its
@@ -4685,6 +4886,17 @@ static struct PeekEntry *peek_get(int64_t wcx, int64_t wcy, struct WorldChunkDat
     pe->valid = 0;
     pe->cx = (int32_t)wcx;
     pe->cy = (int32_t)wcy;
+    if (chunk_apart(wcx, wcy))
+    {
+        /* the world apart: rock */
+        for (int k = 0; k < WG_CHUNK_CELLS; k++)
+        {
+            pe->kind[k] = SlbT_ROCK;
+            pe->owner[k] = WOwn_Neutral;
+        }
+        pe->valid = 1;
+        return pe;
+    }
     if (*cd == NULL)
         *cd = (struct WorldChunkData *)malloc(sizeof(struct WorldChunkData));
     if ((*cd != NULL) && load_chunk_record((int32_t)wcx, (int32_t)wcy, *cd))
@@ -5610,6 +5822,7 @@ static PlayerBitFlags make_seat_starts(void)
         st->dy = dy;
         pmask_add(&made, p);
         world_circles_player_reset(p); /* a new dungeon: only the first circle is breached */
+        world_sword_player_reset(p); /* and a guest's invitations and drive end */
     }
     /* their ground comes once every new start has its place (a pair's two are in the same chunks) */
     for (int n = 0; n < W.stamp_count; n++)
@@ -5707,6 +5920,8 @@ void world_imp_mined_gold(struct Thing *creatng)
     struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
     if (creature_control_invalid(cctrl) || cctrl->exp_level_up)
         return; /* a level-up is pending: it comes first */
+    if (world_creature_growth_frozen(creatng))
+        return; /* the caretaker keeps the dungeon: no experience (2026-11-13) */
     long gain = compute_creature_work_value_for_room_role(creatng, RoRoF_CrTrainExp, ROOM_EFFICIENCY_MAX);
     if (gain < 1)
         gain = 1;
@@ -6131,6 +6346,21 @@ static void seat_dungeon_reset(PlayerNumber p, TbBool keep_records)
     dungeon->modifier.training_cost = 100;
     dungeon->modifier.scavenging_cost = 100;
     dungeon->modifier.loyalty = 100;
+}
+
+TbBool world_local_camera_to(MapCoord x, MapCoord y)
+{
+    const NetUserId user = get_my_user();
+    struct UserState *ustate = get_user_state(user);
+    if (!W.active || (ustate == NULL))
+        return false;
+    struct DungeonCamera pose = ustate->dungeon_camera;
+    pose.x = x;
+    pose.y = y;
+    ustate->dungeon_camera = pose;
+    sync_local_camera_pose(user, &pose);
+    SYNCLOG("World: this machine's camera goes to subtile (%d,%d)", (int)coord_subtile(x), (int)coord_subtile(y));
+    return true;
 }
 
 TbBool world_local_camera_to_heart(void)
@@ -6959,7 +7189,9 @@ static void world_log_dig_tasks(const char *when)
 static void world_testgold(void)
 {
     const char *env = getenv("KFX_WORLD_TESTGOLD");
-    if ((env == NULL) || (game.play_gameturn != 25))
+    /* "...@T": at turn T instead (a joined player arrives later than turn 25) */
+    const char *at25 = (env != NULL) ? strchr(env, '@') : NULL;
+    if ((env == NULL) || (game.play_gameturn != (GameTurn)((at25 != NULL) ? atol(at25 + 1) : 25)))
         return;
     int dx = 0, dy = 0, w = 0, h = 0;
     if (sscanf(env, "%d,%d,%d,%d", &dx, &dy, &w, &h) < 4)
@@ -7113,7 +7345,9 @@ static void world_explore_hook(void)
 static void world_tagdig(void)
 {
     const char *env = world_tagdig_env();
-    if ((env == NULL) || (game.play_gameturn != 30))
+    /* "...@T": at turn T instead (a joined player arrives later than turn 30) */
+    const char *at30 = (env != NULL) ? strchr(env, '@') : NULL;
+    if ((env == NULL) || (game.play_gameturn != (GameTurn)((at30 != NULL) ? atol(at30 + 1) : 30)))
         return;
     int dx = 0, dy = 0, w = 0, h = 0, reveal = 0;
     if (sscanf(env, "%d,%d,%d,%d,%d", &dx, &dy, &w, &h, &reveal) < 4)
@@ -7317,6 +7551,94 @@ static void world_profcreatures(void)
     SYNCLOG("World profcreatures: %d keepers, %d creatures made, %d failed; creatures now %ld of %d; a creature control is %d "
         "bytes, a thing %d, the game state %ld", keepers, made, failed, (long)game.thing_lists[TngList_Creatures].count,
         CREATURES_COUNT, (int)sizeof(struct CreatureControl), (int)sizeof(struct Thing), (long)sizeof(struct Game));
+}
+
+/** Test hook KFX_WORLD_TRAINTEST="T" (single player, player 0): at turn T a 3x3 Training Room east of the heart,
+ *  200,000 gold and four level 1 creatures (Troll, Orc, Demon Spawn, Dark Mistress) sent to train; every 250 turns, and
+ *  on the first turn after a load, each of player 0's creatures' level and experience points. */
+static int world_train_test_at = -1;
+static TbBool world_train_test_loaded = false;
+
+static void world_train_test_after_load(void)
+{
+    world_train_test_loaded = true;
+}
+
+static void world_train_test_log(const char *when)
+{
+    struct Dungeon *dungeon = get_players_num_dungeon(PLAYER0);
+    if (dungeon_invalid(dungeon))
+        return;
+    char line[600];
+    int n = 0;
+    line[0] = 0;
+    long guard = 0;
+    for (ThingIndex i = dungeon->creatr_list_start; (i > 0) && (guard++ < CREATURES_COUNT);)
+    {
+        struct Thing *t = thing_get(i);
+        struct CreatureControl *c = creature_control_get_from_thing(t);
+        if (thing_is_invalid(t) || creature_control_invalid(c))
+            break;
+        i = c->players_next_creature_idx;
+        if (n < (int)sizeof(line) - 60)
+            n += snprintf(line + n, sizeof(line) - n, "%s%s#%d L%d xp%ld st%d", (n > 0) ? ", " : "", thing_model_name(t),
+                (int)t->index, (int)c->exp_level + 1, (long)c->exp_points, (int)get_creature_state_besides_interruptions(t));
+    }
+    SYNCLOG("Train test (%s): %s", when, line);
+}
+
+static void world_train_test(void)
+{
+    if (world_train_test_at < 0)
+    {
+        const char *v = getenv("KFX_WORLD_TRAINTEST");
+        world_train_test_at = (v != NULL) ? max(1, atoi(v)) : 0;
+    }
+    if (world_train_test_at <= 0)
+        return;
+    if (world_train_test_loaded)
+    {
+        world_train_test_loaded = false;
+        world_train_test_log("after a load");
+    }
+    const GameTurn t = game.play_gameturn;
+    if ((t > (GameTurn)world_train_test_at) && ((t % 250) == 0))
+        world_train_test_log("now");
+    if (t != (GameTurn)world_train_test_at)
+        return;
+    struct Thing *heart = find_players_dungeon_heart(PLAYER0);
+    if (!thing_exists(heart))
+        return;
+    const MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
+    const RoomKind traink = (RoomKind)get_id(room_desc, "TRAINING");
+    struct Room *room = NULL;
+    for (int dy = -1; dy <= 1; dy++)
+        for (int dx = 4; dx <= 6; dx++)
+        {
+            const MapSubtlCoord sx = slab_subtile_center(hx + dx), sy = slab_subtile_center(hy + dy);
+            place_slab_type_on_map(SlbT_CLAIMED, sx, sy, PLAYER0, 0);
+            struct Room *r = place_room(PLAYER0, traink, sx, sy);
+            if (!room_is_invalid(r))
+                room = r;
+        }
+    player_add_offmap_gold(PLAYER0, 200000);
+    static const char *const kinds[4] = {"TROLL", "ORC", "DEMONSPAWN", "DARK_MISTRESS"};
+    int sent = 0;
+    for (int k = 0; k < 4; k++)
+    {
+        struct Coord3d pos;
+        pos.x.val = subtile_coord_center(slab_subtile_center(hx + 5));
+        pos.y.val = subtile_coord_center(slab_subtile_center(hy));
+        pos.z.val = 0;
+        struct Thing *c = create_creature(&pos, (ThingModel)get_id(creature_desc, kinds[k]), PLAYER0);
+        if (!thing_exists(c))
+            continue;
+        move_thing_in_map(c, &pos);
+        if (send_creature_to_job_for_player(c, PLAYER0, Job_TRAIN))
+            sent++;
+    }
+    SYNCLOG("Train test: a Training Room of %d slabs, %d of 4 creatures sent to train", room_is_invalid(room) ? 0 :
+        (int)room->slabs_count, sent);
 }
 
 /** Test hook KFX_WORLD_B3TEST="T" (single player, player 0; run fast-forwarded): batch 3 in play.
@@ -9199,11 +9521,15 @@ void world_client_turn(void)
     client_follow_new_heart();
     world_colours_turn();
     world_progress_present();
+    world_creature_window_turn();
     world_respawn_prompt_turn();
+    world_boss_local_turn();
+    world_sword_local_turn();
     chat_box_turn();
     world_shots_hook();
     world_assist_hook();
     world_progress_client_turn();
+    world_misdeeds_client_turn(); /* test hook */
     /* test hook KFX_WORLD_AUTOPAN: the packets take the moved view to the server (from turn 100, when the first
        keyframe has put this machine's camera where the server has the player) */
     if (game.play_gameturn >= 100)
@@ -9250,6 +9576,7 @@ void world_process_turn(void)
     {
         update_keepers();
         update_portals();
+        keep_essential_positions();
     }
     if ((game.play_gameturn % 64) == 3)
         coop_keep();
@@ -9258,7 +9585,10 @@ void world_process_turn(void)
     world_coop_refresh();
     world_colours_turn(); /* local presentation only */
     world_progress_present();
+    world_creature_window_turn();
     world_respawn_prompt_turn();
+    world_boss_local_turn();
+    world_sword_local_turn();
     chat_box_turn();
     world_shots_hook();
     world_mapdrag_hook();
@@ -9281,6 +9611,8 @@ void world_process_turn(void)
     world_daynight_turn();
     world_wild_turn();
     world_circles_turn();
+    keepers_alone_turn();
+    world_sword_turn();
     world_misdeeds_turn();
     world_outposts_turn();
     world_testgold();
@@ -9291,6 +9623,7 @@ void world_process_turn(void)
     world_pools_test();
     world_profcreatures();
     world_b3_test();
+    world_train_test();
     {
         /* test hook KFX_WORLD_RESTARTTEST="t1,t2,...": player 0 starts again (as Start again) at each of those turns */
         static const char *rt = NULL;
@@ -9365,6 +9698,7 @@ void world_level_end(void)
     coop_seats_clear();
     netstate_level_end();
     world_progress_level_end();
+    world_hand_reset(); /* the slaps' hurries were this world's */
     world_extras_reset();
     world_levels_reset();
     world_perks_reset();
@@ -9516,6 +9850,11 @@ static void local_home_slab(int64_t *wx, int64_t *wy)
     *wy = world_slab_y_of(coord_slab(heartng->mappos.y.val));
 }
 
+void world_parchment_centre_on(int64_t wx, int64_t wy)
+{
+    world_parchment_look_at(wx, wy);
+}
+
 void world_parchment_scroll_fine(int64_t dx, int64_t dy)
 {
     pview_check();
@@ -9656,9 +9995,19 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_RAIDS, world_raids_extra_save_size, world_raids_extra_save, world_raids_extra_load, world_raids_extra_reset},
     {WORLD_EXTRA_AMENITY, world_amenity_save_size, world_amenity_save, world_amenity_load, world_amenity_reset},
     {WORLD_EXTRA_CIRCLES, world_circles_save_size, world_circles_save, world_circles_load, world_circles_reset},
+    {WORLD_EXTRA_GROWTH, world_growth_save_size, world_growth_save, world_growth_load, world_growth_reset},
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
+    {WORLD_EXTRA_SWORD, world_sword_save_size, world_sword_save, world_sword_load, world_sword_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_BOSS, world_boss_save_size, world_boss_save, world_boss_load, world_boss_reset},
+    {WORLD_EXTRA_STORAGE, world_storage_save_size, world_storage_save, world_storage_load, world_storage_reset},
+    {WORLD_EXTRA_TRUCE, world_truce_save_size, world_truce_save, world_truce_load, world_truce_reset},
+    {WORLD_EXTRA_DEFECTORS, world_defectors_save_size, world_defectors_save, world_defectors_load, world_defectors_reset},
+    {WORLD_EXTRA_CRUSADE, world_crusade_save_size, world_crusade_save, world_crusade_load, world_crusade_reset},
+    {WORLD_EXTRA_ALARM, world_alarm_save_size, world_alarm_save, world_alarm_load, world_alarm_reset},
+    {WORLD_EXTRA_FIRES, world_watchfire_save_size, world_watchfire_save, world_watchfire_load, world_watchfire_reset},
+    {WORLD_EXTRA_DARK, world_dark_save_size, world_dark_save, world_dark_load, world_dark_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 
@@ -10572,6 +10921,7 @@ TbBool world_load_blob(const unsigned char *data, uint32_t len)
     }
     if (ok)
         ok = world_extras_read(&r);
+    world_train_test_after_load(); /* (test hook KFX_WORLD_TRAINTEST) */
     free(raw);
     if (!ok || !world_init_state())
     {
@@ -10664,6 +11014,15 @@ TbBool world_stamps_overlap(int64_t x1, int64_t y1, int64_t x2, int64_t y2)
             return true;
     }
     return false;
+}
+
+TbBool world_engine_slab_unloaded(int64_t wx, int64_t wy, MapSlabCoord *ex, MapSlabCoord *ey)
+{
+    if (!W.active || !world_paged)
+        return false;
+    *ex = (MapSlabCoord)engine_slab_x(wx);
+    *ey = (MapSlabCoord)engine_slab_y(wy);
+    return true;
 }
 
 TbBool world_engine_slab(int64_t wx, int64_t wy, MapSlabCoord *ex, MapSlabCoord *ey)

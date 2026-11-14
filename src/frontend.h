@@ -30,9 +30,9 @@ extern "C" {
 
 /******************************************************************************/
 // Limits for GUI arrays
-#define ACTIVE_BUTTONS_COUNT        100
+#define ACTIVE_BUTTONS_COUNT        160
 #define DOUBLE_CLICK_MS 250
-#define MENU_LIST_ITEMS_COUNT       58
+#define MENU_LIST_ITEMS_COUNT       64
 #define FRONTEND_BUTTON_INFO_COUNT 118
 #define NET_MESSAGES_COUNT           8
 #define NET_MESSAGE_LEN             192

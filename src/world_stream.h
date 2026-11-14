@@ -167,6 +167,9 @@ TbBool world_view_slab(MapSlabCoord *slb_x, MapSlabCoord *slb_y);
 /** Where a user is looking (possessed creature or dungeon camera): game state, the same on every machine. */
 TbBool world_user_view_slab(int user, MapSlabCoord *slb_x, MapSlabCoord *slb_y);
 void world_slab_to_world(MapSlabCoord slb_x, MapSlabCoord slb_y, int64_t *wx, int64_t *wy);
+/** This machine's camera goes to a map position (the camera is local: nothing is loaded for it). */
+TbBool world_local_camera_to(MapCoord x, MapCoord y);
+TbBool world_local_camera_to_heart(void);
 void world_remove_thing_quietly(struct Thing *thing);
 /** Is a world chunk made already (stored, or on the map)? */
 TbBool world_chunk_made(int32_t cx, int32_t cy);
@@ -181,6 +184,20 @@ int world_stamp_count(void);
 TbBool world_stamps_overlap(int64_t x1, int64_t y1, int64_t x2, int64_t y2);
 /** The engine slab of a world slab, when it is on the map now (a loaded page, or inside the window). */
 TbBool world_engine_slab(int64_t wx, int64_t wy, MapSlabCoord *ex, MapSlabCoord *ey);
+/** The world apart (2026-11-14, chunked worlds): the far corner of the world plane, from world slab WORLD_APART_MIN
+ *  on in both x and y, is nobody's ground. The generator is never asked for its chunks: they load as plain rock with
+ *  nothing in them. They are never stored and never remembered on the map when they freeze, so the next time they
+ *  load they are rock again. None of the world's systems (wild packs, raids, outposts, circles, the dark, the
+ *  Misdeeds' counters) acts there: it is a second, empty world on the same map, where a World Boss arena is cut for
+ *  each fight (world_boss.c) and nothing else can ever be in the way. It is 400,000 slabs from the world's start: a
+ *  creature would walk for days to get near it, and the generator's ground simply ends there. */
+#define WORLD_APART_MIN 400000
+TbBool world_apart_slab(int64_t wx, int64_t wy);                        /* world slabs */
+TbBool world_apart_engine_slab(MapSlabCoord slb_x, MapSlabCoord slb_y); /* engine slabs (false outside a chunked world) */
+TbBool world_apart_thing(const struct Thing *thing);                    /* where a thing stands */
+/** Chunked world: the engine slab of a world slab, loaded or not (a joined player's camera can go to ground the
+ *  server will stream once the camera is there). */
+TbBool world_engine_slab_unloaded(int64_t wx, int64_t wy, MapSlabCoord *ex, MapSlabCoord *ey);
 /** The world chunks on the map now; returns how many (at most max). */
 int world_loaded_chunks(int32_t *wcx, int32_t *wcy, int max);
 /** How many chunks are loaded now; how many the world keeps (explored). */
@@ -216,6 +233,9 @@ TbBool world_read_slab_box(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, Ma
 /** Chunked world: loads the chunks within r of the chunk holding an engine slab now (a raid's landing spot).
  *  Returns how many were loaded. */
 int world_load_chunks_round(MapSlabCoord slb_x, MapSlabCoord slb_y, int r);
+/** Test hooks (Strays): the engine slab 6 chunks east of the start, its chunks loaded; and a chunk frozen at once. */
+TbBool world_test_stray_spot(MapSlabCoord *sx, MapSlabCoord *sy);
+void world_test_stray_freeze(MapSlabCoord sx, MapSlabCoord sy);
 /** The same round a world slab (loaded or not). */
 int world_load_chunks_round_world(int64_t wx, int64_t wy, int r);
 /** Chunked world: reads up to `budget` chunks of a box of engine slabs that aren't loaded into world_read_slab_box's
@@ -240,6 +260,8 @@ void world_parchment_scroll(int dx_slabs, int dy_slabs);
 void world_parchment_scroll_fine(int64_t dx, int64_t dy);
 /** Glides the view to the player's Dungeon Heart. */
 void world_parchment_home(void);
+/** The full-screen map's middle goes to this world slab at once (a World Boss fight keeps it on the arena). */
+void world_parchment_centre_on(int64_t wx, int64_t wy);
 /** Glides the view to an engine subtile (a battle). */
 void world_parchment_glide_to_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 /** Moves a glide on by this much real time (each frame). */

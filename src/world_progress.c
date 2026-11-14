@@ -47,9 +47,14 @@
 #include "magic_powers.h"
 #include "thing_stats.h"
 #include "gui_frontmenu.h"
+#include "world_hand.h"
 #include "room_workshop.h"
 #include "world_circles.h"
 #include "creature_senses.h"
+#include "world_storage.h"
+#include "world_seasons.h"
+#include "world_watchfire.h"
+#include "world_dark.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -321,6 +326,7 @@ void world_progress_request(int mode)
 static void hell_hound_entrance(void);
 void world_progress_level_start(void)
 {
+    world_hand_reset(); /* nobody is hurried in a new level */
     memset(game.world_room_level, 0, sizeof(game.world_room_level));
     memset(game.world_room_allowed, 0, sizeof(game.world_room_allowed));
     memset(game.world_room_researching, 0, sizeof(game.world_room_researching));
@@ -907,7 +913,7 @@ int world_trap_bonus(PlayerNumber plyr_idx, int trap_kind, enum WorldTrapBonus w
     return wrl_numbers()->trap[t][what][min(level, WRL_MAX)];
 }
 
-/** The keeper's bar for a room (for the panel): false when the room has no levels or is at its top. */
+/** The keeper's bar for a room, spell or trap (for the panel): false when it has no levels or is at its top. */
 TbBool world_amenity_bar(PlayerNumber plyr_idx, int kind_class, int kind, int *xp, int *need)
 {
     if (!world_mode_active() || (plyr_idx < 0) || (plyr_idx >= PLAYERS_COUNT) || (plyr_idx >= PLAYERS_MAX))
@@ -1055,6 +1061,11 @@ TbBool world_room_level_badge(PlayerNumber plyr_idx, int rkind, int *number, TbB
 TbBool world_power_level_badge(PlayerNumber plyr_idx, int pwkind, int *number, TbBool *reached)
 {
     return level_badge(plyr_idx, wrl_of_power(pwkind), number, reached);
+}
+
+TbBool world_trap_level_badge(PlayerNumber plyr_idx, int trkind, int *number, TbBool *reached)
+{
+    return level_badge(plyr_idx, wrl_of_trap(trkind), number, reached);
 }
 
 int world_power_bonus(PlayerNumber plyr_idx, enum WorldPowerBonus what)
@@ -1748,7 +1759,7 @@ static void test_spell_effects(PlayerNumber p, const char *when)
 static void test_room_levels(void)
 {
     static int delay = -2;
-    static TbBool spells = false, spells_measured = false;
+    static TbBool spells = false, spells_measured = false, traps = false;
     static int fast = 0;
     static GameTurn first = 0;
     if (delay == -2)
@@ -1759,6 +1770,9 @@ static void test_room_levels(void)
         const char *f = (v != NULL) ? strstr(v, "fast") : NULL;
         fast = (f == NULL) ? 0 : ((f[4] == '=') ? atoi(f + 5) : 40);
         spells = (v != NULL) && (strstr(v, "spells") != NULL);
+        /* ",traps": the four traps with levels are given; the Lightning Trap's bar is left part full, the trap
+           tab is opened for the screenshots */
+        traps = (v != NULL) && (strstr(v, "traps") != NULL);
     }
     if (delay < 0)
         return;
@@ -1781,6 +1795,10 @@ static void test_room_levels(void)
                     add_power_to_player(wrl_ids[r], p);
             test_spell_effects(p, "level 1");
         }
+        if (traps)
+            for (int r = WRL_FIRST_TRAP; r < WRL_ROOMS; r++)
+                if (wrl_ids[r] > 0)
+                    set_trap_buildable_and_add_to_amount(p, wrl_ids[r], 1, 1);
         for (int r = 0; r < WRL_ROOMS; r++)
         {
             if (!wrl_owned(p, r))
@@ -1788,8 +1806,11 @@ static void test_room_levels(void)
                 SYNCLOG("Room levels test: player %d has no %s", (int)p, wrl_labels[r]);
                 continue;
             }
-            room_level_xp(p, r, 30000, &pos); /* every bar full, to the top */
+            /* every bar full, to the top (with ",traps", the Lightning Trap's only a little) */
+            room_level_xp(p, r, (traps && (r == WRL_FIRST_TRAP + 1)) ? 10 : 30000, &pos);
         }
+        if (traps)
+            set_menu_mode(GMnu_TRAP);
     }
     if (fast && (game.play_gameturn > first + (GameTurn)delay) && (game.world_room_researching[p] != 0))
     {
@@ -2178,6 +2199,10 @@ void world_progress_turn(void)
         ban_powers();
     wp_poison_turn();
     test_traps();
+    world_storage_turn();
+    world_hand_test_turn();
+    world_watchfire_turn();
+    world_dark_turn();
     if (!world_progress_active())
         return;
     test_books();
@@ -2467,6 +2492,8 @@ void world_progress_seat_reset(PlayerNumber plyr_idx)
     memset(game.world_room_xp[plyr_idx], 0, sizeof(game.world_room_xp[plyr_idx]));
     wpr_offer_circle[plyr_idx] = 0;
     pmask_del(&wpr_kit_players, plyr_idx); /* the kit is given again when it starts */
+    world_misdeeds_strays_seat_reset(plyr_idx); /* Strays: the old keeper's strays go wild again */
+    world_watchfire_seat_reset(plyr_idx); /* and the watchfires */
     SYNCLOG("World: player %d's level, XP, records and research progress start again from zero", (int)plyr_idx);
 }
 
@@ -2697,7 +2724,10 @@ void world_progress_present(void)
         if (news && (wpl_seen[p] != 0) && (level > wpl_seen[p]))
         {
             if (p == my_player_number)
+            {
                 message_add_fmt(MsgType_Player, p, "Player level %d!", level);
+                world_hand_level_news(wpl_seen[p], level);
+            }
             else
             {
                 char name[32];
@@ -2706,6 +2736,7 @@ void world_progress_present(void)
         }
         wpl_seen[p] = (uint8_t)level;
     }
+    world_seasons_turn(); /* every machine: the season's change, told to its keeper */
 }
 
 #ifdef __cplusplus

@@ -110,6 +110,7 @@ long compute_controlled_speed_increase(long prev_speed, long speed_limit);
 long compute_controlled_speed_decrease(long prev_speed, long speed_limit);
 long compute_value_percentage(long base_val, short npercent);
 GoldAmount calculate_correct_creature_pay(const struct Thing *thing);
+GoldAmount calculate_correct_creature_pay_base(const struct Thing *thing); /* endless: the wage before Contracts */
 GoldAmount calculate_correct_creature_training_cost(const struct Thing *thing);
 GoldAmount calculate_correct_creature_scavenging_cost(const struct Thing *thing);
 HitPoints calculate_correct_creature_max_health(const struct Thing *thing);

@@ -19,6 +19,7 @@
 #include "pre_inc.h"
 #include "room_data.h"
 #include "globals.h"
+#include "world_misdeeds.h"
 
 #include "bflib_basics.h"
 #include "bflib_math.h"
@@ -1527,6 +1528,8 @@ TbBool room_has_enough_free_capacity_for_creature_job(const struct Room *room, c
         return false;
     }
     int required_cap = get_required_room_capacity_for_job(jobpref, creatng->model);
+    if (jobpref == Job_TAKE_SLEEP)
+        required_cap = world_misdeeds_lair_places(creatng, required_cap); /* endless: Contracts */
     if (room->used_capacity + required_cap <= room->total_capacity)
         return true;
     return false;

@@ -23,6 +23,8 @@
 #include "world_daynight.h"
 #include "world_circles.h"
 #include "chat_box.h"
+#include "world_creature_window.h"
+#include "gui_frontmenu.h"         /* menu_is_active */
 
 #include "post_inc.h"
 
@@ -55,13 +57,25 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
         draw_whole_status_panel();
     }
     chat_box_turn(); /* an endless server's chat box opens, closes and moves with the message dialogs */
+    /* endless: the creature window and the World Boss window are windows over the view - what the view draws over
+       itself (the day's dial, the World Boss strip and bar, the messages) goes under them, not across their titles
+       and their top rows */
+    const bool window_on_top = world_creature_window_open() || menu_is_active(GMnu_WORLD_BOSS_PICK);
+    if (window_on_top) {
+        world_daynight_draw();
+        message_draw();
+    }
     draw_gui();
-    world_daynight_draw();
+    if (!window_on_top) {
+        world_daynight_draw();
+    }
     if (show_sidebar) {
         draw_overlay_compass(local_state.minimap_pos_x, local_state.minimap_pos_y);
     }
-    
-    message_draw();
+
+    if (!window_on_top) {
+        message_draw();
+    }
     world_circles_draw(); /* endless worlds: a breached circle's name */
     chat_box_draw_faded();
     draw_power_hand();

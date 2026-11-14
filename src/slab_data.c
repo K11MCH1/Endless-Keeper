@@ -993,13 +993,22 @@ void set_player_texture(PlayerNumber plyr_idx, long texture_id)
     else
         dungeon->texture_pack = texture_id;
 
-    // Paged mode: only the loaded chunks' bounding box
-    MapSlabCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_tiles_x - 1, loop_y2 = game.map_tiles_y - 1;
     if (world_paged)
-        map_loop_slab_bounds(&loop_x1, &loop_y1, &loop_x2, &loop_y2);
-    for (MapSlabCoord slb_y=loop_y1; slb_y <= loop_y2; slb_y++)
     {
-        for (MapSlabCoord slb_x=loop_x1; slb_x <= loop_x2; slb_x++)
+        // Paged mode: the loaded chunks' pages (not the box round all of them, which is mostly unloaded ground)
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+        {
+            for (int i = 0; i < WP_CHUNK_SLAB_CELLS; i++)
+            {
+                if (slabmap_owner(&pg->slab[i]) == plyr_idx)
+                    pg->ext[i] = reset ? pg->ext_initial[i] : (unsigned char)texture_id;
+            }
+        }
+        return;
+    }
+    for (MapSlabCoord slb_y=0; slb_y <= game.map_tiles_y - 1; slb_y++)
+    {
+        for (MapSlabCoord slb_x=0; slb_x <= game.map_tiles_x - 1; slb_x++)
         {
             struct SlabMap* slb = get_slabmap_block(slb_x,slb_y);
             if (slabmap_owner(slb) == plyr_idx)

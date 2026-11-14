@@ -397,6 +397,27 @@ struct Game {
        (0: none), copied here by the server so that a thin client's Rap Sheet has it. */
     uint16_t world_misdeed_view_thing[PLAYERS_MAX];
     uint8_t world_misdeed_view[PLAYERS_MAX][128];
+    /** World Bosses (world_boss.c): the phase (WorldBossPhase), the turn it ends (0: not scheduled yet), which fight,
+     *  the boss's kind and health in percent, and who joined: every machine's timer and window read them. */
+    uint8_t world_boss_phase;
+    uint8_t world_boss_kind;
+    uint8_t world_boss_health;
+    uint32_t world_boss_until;
+    uint32_t world_boss_number;
+    uint8_t world_boss_joined[PLAYERS_MAX];
+    int32_t world_boss_arena_x, world_boss_arena_y; /* the arena's middle, world slabs (0,0: none yet) */
+    uint16_t world_boss_loot[PLAYERS_MAX][4]; /* each player's loot lying in the arena (things; 0: none) */
+    /** The boss while its fight is on (its thing; 0: none), its health and its full health: every machine draws the
+     *  health bar at the top of the screen from them and leaves the boss's health flower off. */
+    uint16_t world_boss_thing;
+    int32_t world_boss_hp, world_boss_hp_max;
+    /** While an event is ready: how many keepers it counts on, those who are ready and those who could still be (the
+     *  window's "Players ready: 2 of 4"; the last of them to click Ready starts the fight). */
+    uint8_t world_boss_wanted;
+    /** Defectors (world_defectors.c): the line on the Rap Sheet of the creature each player looks at, if it came
+     *  over from another keeper, and that creature (written by the server: a joined player's sheet shows it too). */
+    char world_defector_line[PLAYERS_MAX][48];
+    uint16_t world_defector_line_thing[PLAYERS_MAX];
     /** The wind shots' lists of the creatures they pushed (thing_data.h; they were in every thing). wind_nodes_used:
      *  the highest node ever handed out; wind_free_head: the chain of nodes given back (0: none). All zero is empty. */
     struct WindNode wind_nodes[WIND_NODES_COUNT];

@@ -45,6 +45,7 @@
 
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_truce.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -731,7 +732,7 @@ HitPoints calculate_correct_creature_max_health(const struct Thing *thing)
         }
         max_health = compute_max_health;
     }
-    return max_health;
+    return world_misdeeds_regimen_stat(thing, 4, max_health); /* endless: Regimens */
 }
 
 long calculate_correct_creature_strength(const struct Thing *thing)
@@ -747,7 +748,7 @@ long calculate_correct_creature_strength(const struct Thing *thing)
         unsigned short modifier = dungeon->modifier.strength;
         max_param = (max_param * modifier) / 100;
     }
-    return max_param;
+    return world_misdeeds_regimen_stat(thing, 1, max_param); /* endless: Regimens */
 }
 
 long calculate_correct_creature_armour(const struct Thing *thing)
@@ -788,7 +789,7 @@ long calculate_correct_creature_defense(const struct Thing *thing)
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
     long max_param = compute_creature_max_defense(crconf->defense, cctrl->exp_level);
     // TODO: Add a dungeon modifier.
-    return max_param;
+    return world_misdeeds_regimen_stat(thing, 2, max_param); /* endless: Regimens */
 }
 
 long calculate_correct_creature_dexterity(const struct Thing *thing)
@@ -797,7 +798,7 @@ long calculate_correct_creature_dexterity(const struct Thing *thing)
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
     long max_param = compute_creature_max_dexterity(crconf->dexterity, cctrl->exp_level);
     // TODO: Add a dungeon modifier.
-    return max_param;
+    return world_misdeeds_regimen_stat(thing, 3, max_param); /* endless: Regimens */
 }
 
 long calculate_correct_creature_maxspeed(const struct Thing *thing)
@@ -844,7 +845,7 @@ long calculate_correct_creature_loyalty(const struct Thing *thing)
     return max_param;
 }
 
-GoldAmount calculate_correct_creature_pay(const struct Thing *thing)
+GoldAmount calculate_correct_creature_pay_base(const struct Thing *thing)
 {
     struct Dungeon* dungeon;
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
@@ -862,6 +863,11 @@ GoldAmount calculate_correct_creature_pay(const struct Thing *thing)
         pay = pay * (100 - world_room_bonus(thing->owner, WRB_TreasuryPay)) / 100; /* endless: the Treasury's level */
     }
     return pay;
+}
+
+GoldAmount calculate_correct_creature_pay(const struct Thing *thing)
+{
+    return world_misdeeds_pay(thing, calculate_correct_creature_pay_base(thing)); /* endless: Contracts */
 }
 
 GoldAmount calculate_correct_creature_training_cost(const struct Thing *thing)
@@ -1194,6 +1200,8 @@ HitPoints apply_damage_to_thing(struct Thing *thing, HitPoints dmg, PlayerNumber
     // If it's already dead, then don't interfere.
     if (thing->health < 0)
         return 0;
+    if (world_truce_no_harm(thing, dmg, dealing_plyr_idx))
+        return 0; /* endless: keepers who are allied or truced cannot hurt each other's creatures (friendly fire off) */
     lua_on_apply_damage_to_thing(thing, dmg, dealing_plyr_idx);
 
     HitPoints cdamage;
@@ -1201,7 +1209,7 @@ HitPoints apply_damage_to_thing(struct Thing *thing, HitPoints dmg, PlayerNumber
     {
     case TCls_Creature:
         cdamage = apply_damage_to_creature(thing, dmg);
-        world_misdeeds_on_damage(thing, cdamage); /* endless: Misdeeds */
+        world_misdeeds_on_damage(thing, cdamage, dealing_plyr_idx); /* endless: Misdeeds */
         if (thing->health < 0)
         {
             struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
@@ -1232,7 +1240,7 @@ long calculate_damage_did_to_slab_with_single_hit(const struct Thing *diggertng,
         dig_damage = game.conf.rules[diggertng->owner].workers.default_imp_dig_own_damage;
     else
         dig_damage = game.conf.rules[diggertng->owner].workers.default_imp_dig_damage;
-    return dig_damage;
+    return world_misdeeds_dig_damage(diggertng, dig_damage); /* endless: a possessed Imp */
 }
 
 GoldAmount calculate_gold_digged_out_of_slab_with_single_hit(long damage_did_to_slab, const struct SlabMap *slb)

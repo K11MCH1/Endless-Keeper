@@ -114,6 +114,8 @@
 #include "world_misdeeds.h"
 #include "world_pages.h"
 #include "net_state.h"
+#include "world_boss.h"
+#include "world_watchfire.h"
 #include "post_inc.h"
 
 /* the double-click arrays (frontend.h) are indexed by user: one for every packet */
@@ -880,9 +882,17 @@ TbBool process_user_global_packet_action(NetUserId user)
       if (!netstate_thin_mode() || network_is_host())
           world_misdeeds_packet_rename(plyr_idx, (uint32_t)pckt->actn_par1, (uint32_t)pckt->actn_par2);
       return 1;
+  case PckA_WorldWatchfire:
+      if (!netstate_thin_mode() || network_is_host())
+          world_watchfire_place(plyr_idx, (MapSubtlCoord)pckt->actn_par1, (MapSubtlCoord)pckt->actn_par2);
+      return 1;
   case PckA_WorldMisdeedPick:
       if (!netstate_thin_mode() || network_is_host())
           world_misdeeds_packet_pick(plyr_idx, (ThingIndex)pckt->actn_par1, (int)pckt->actn_par2);
+      return 1;
+  case PckA_WorldBossJoin:
+      if (!netstate_thin_mode() || network_is_host())
+          world_boss_packet_join(plyr_idx, (uint32_t)pckt->actn_par1, (uint32_t)pckt->actn_par2);
       return 1;
   case PckA_QuitToMainMenu:
       if ((user == get_local_user()) && !replay.load_enable)

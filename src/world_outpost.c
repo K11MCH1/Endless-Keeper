@@ -62,6 +62,7 @@
 #include "thing_list.h"
 #include "thing_navigate.h"
 #include "thing_stats.h"
+#include "world_crusade.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -135,6 +136,7 @@ enum OpFlags {
     OPF_HeartWoken = 0x02,             /* the heart's portal woke */
     OPF_Looted = 0x04,                 /* the heart fell and dropped its books */
     OPF_DoorSeen = 0x08,               /* its iron door stood: it was really built (a door missing counts after this) */
+    OPF_Answer = 0x10,                 /* a Crusade road's alarm: its portals send their heroes unbroken (world_crusade.c) */
 };
 
 struct OpState {
@@ -1537,7 +1539,8 @@ static TbBool op_region_rng(int64_t rx, int64_t ry, struct OpRng *rng)
     if (gen == NULL)
         return false;
     rng->s = wg_world_seed(gen) ^ op_mix((uint64_t)rx * 0x51ED27F1ULL) ^ op_mix((uint64_t)ry * 0x2545F491ULL + 0x4F555450ULL);
-    return op_rand(rng, 100) < OP_CHANCE;
+    const TbBool chance = (op_rand(rng, 100) < OP_CHANCE);
+    return chance || world_crusade_forced(rx, ry); /* a Crusade road founds one here (same stream, same site) */
 }
 
 /** The box an outpost takes with its way in (world slabs). */
@@ -1958,6 +1961,49 @@ static TbBool op_region_reach(int64_t rx, int64_t ry, int64_t *x1, int64_t *y1, 
     *x2 = mx0 + SH_N_MAX - 1 + OP_PATH;
     *y2 = my0 + SH_N_MAX - 1 + OP_PATH;
     return true;
+}
+
+/** Crusade roads (world_crusade.c): -1 the region isn't decided yet, 0 it has no outpost, 1 it has one. */
+int world_outpost_region_state(int64_t rx, int64_t ry)
+{
+    const struct OpState *st = op_state(ShF_Outpost, rx, ry, false);
+    if (st == NULL)
+        return -1;
+    return ((st->tier < ShT_COUNT) || (st->tier == ShT_Legacy)) ? 1 : 0;
+}
+
+/** Crusade roads: an outpost on a road answers another's alarm: its portals send their heroes. */
+void world_outpost_answer(int64_t rx, int64_t ry, int level)
+{
+    struct OpState *st = op_state(ShF_Outpost, rx, ry, false);
+    if ((st == NULL) || (st->flags & OPF_Opened))
+        return;
+    st->flags |= OPF_Opened | OPF_Answer;
+    st->level = (uint8_t)max(1, min(level, 255));
+    SYNCLOG("World: the heroes outpost of region (%lld,%lld) answers its road's alarm (heroes level %d)", (long long)rx,
+        (long long)ry, level);
+}
+
+/** Crusade roads: the hero fortresses decided so far: n-th one's generator start chunk, middle and whether a keeper has
+ *  disturbed it (a gate of it sent heroes). False past the last. */
+TbBool world_outpost_fortress_get(int n, int32_t *id_cx, int32_t *id_cy, int64_t *cx, int64_t *cy, TbBool *disturbed)
+{
+    int k = 0;
+    for (int i = 0; i < op_state_count; i++)
+    {
+        const struct OpState *st = &op_states[i];
+        if (st->family != ShF_Fortress)
+            continue;
+        if (k++ != n)
+            continue;
+        *id_cx = (int32_t)st->rx;
+        *id_cy = (int32_t)st->ry;
+        *cx = st->cx;
+        *cy = st->cy;
+        *disturbed = (st->gates_done != 0) || ((st->flags & OPF_Opened) != 0);
+        return true;
+    }
+    return false;
 }
 
 /** Decides an outpost region the first time a chunk it may cover is generated. */
@@ -2536,8 +2582,15 @@ static void op_runtime_entrance(const struct OpPlan *p, struct OpState *st, stru
             {
                 st->flags |= OPF_Opened;
                 st->level = (uint8_t)max(1, min(op_breaker_level(sx, sy), 255));
+                if (p->family == ShF_Fortress)
+                {
+                    const struct Thing *breaker = op_keeper_creature_near(sx, sy, OP_SEEK_DIST);
+                    if (breaker != NULL)
+                        world_crusade_fortress_disturbed((int32_t)st->rx, (int32_t)st->ry, breaker->owner);
+                }
                 SYNCLOG("World: the heroes outpost at slab (%lld,%lld) is broken into; its portals wake (heroes level %d)",
                     (long long)p->x0, (long long)p->y0, (int)st->level);
+                world_crusade_outpost_alarm(st->rx, st->ry, st->level); /* the road answers */
             }
             flags = st->flags;
         }
@@ -2569,6 +2622,8 @@ static void op_runtime_entrance(const struct OpPlan *p, struct OpState *st, stru
             {
                 st->flags |= OPF_HeartWoken;
                 st->gates_done |= 1u;
+                if (p->family == ShF_Fortress)
+                    world_crusade_fortress_disturbed((int32_t)st->rx, (int32_t)st->ry, near->owner);
                 const int level = world_keeper_top_level(near->owner);
                 const int n = (p->tier == ShT_Small) ? 4 + op_rand(rng, 2) : ((p->tier == ShT_Moderate) ? 6 + op_rand(rng, 3) :
                     7 + op_rand(rng, 3));
@@ -2592,17 +2647,27 @@ static void sh_runtime_rooms(const struct OpPlan *p, struct OpState *st, struct 
             !world_engine_slab(p->x0 + p->grx2[g], p->y0 + p->gry2[g], &sx2, &sy2))
             continue;
         const struct Thing *in = op_keeper_creature_in(min(sx1, sx2), min(sy1, sy2), max(sx1, sx2), max(sy1, sy2));
-        if (in == NULL)
+        const TbBool answer = ((st->flags & OPF_Answer) != 0) && (p->family == ShF_Outpost); /* a Crusade road's call */
+        if ((in == NULL) && !answer)
             continue;
-        const int level = world_keeper_top_level(in->owner);
+        const int level = (in != NULL) ? world_keeper_top_level(in->owner) : max(1, (int)st->level);
+        const TbBool first = ((st->flags & OPF_Opened) == 0);
         const int n = max(3, min(2 + level / 3, 10)) + op_rand(rng, 2) + (p->tier - ShT_Medium);
         const int made = op_gate_spawn(p, g, n, true, level, true, 1, rng);
         if (made < 0)
             continue;
         st->gates_done |= (uint16_t)(1u << g);
         st->flags |= OPF_DoorSeen | OPF_Opened;
-        SYNCLOG("World: player %d breaks into a %s %s's portal room %d: %d heroes and a Knight (level %d)", (int)in->owner,
-            sh_tier_names[p->tier], (p->family == ShF_Fortress) ? "fortress" : "outpost", g, max(made - 1, 0), level);
+        if ((in != NULL) && (p->family == ShF_Fortress))
+            world_crusade_fortress_disturbed((int32_t)st->rx, (int32_t)st->ry, in->owner); /* its road grows towards them */
+        SYNCLOG("World: %s a %s %s's portal room %d: %d heroes and a Knight (level %d)", (in != NULL) ?
+            "a keeper breaks into" : "a Crusade road's call wakes", sh_tier_names[p->tier],
+            (p->family == ShF_Fortress) ? "fortress" : "outpost", g, max(made - 1, 0), level);
+        if (first && (in != NULL) && (p->family == ShF_Outpost))
+        {
+            st->level = (uint8_t)max(1, min(level, 255));
+            world_crusade_outpost_alarm(st->rx, st->ry, st->level); /* the road answers */
+        }
     }
 }
 
@@ -2651,6 +2716,8 @@ void world_outposts_turn(void)
     for (int c = 0; c < n; c++)
     {
         const int64_t wx1 = (int64_t)ccx[c] * WG_CHUNK, wy1 = (int64_t)ccy[c] * WG_CHUNK;
+        if (world_apart_slab(wx1, wy1))
+            continue; /* the world apart (a World Boss's arena): the heroes have no outposts there */
         for (int64_t ry = op_floor_div(wy1, OP_REGION); ry <= op_floor_div(wy1 + WG_CHUNK - 1, OP_REGION); ry++)
             for (int64_t rx = op_floor_div(wx1, OP_REGION); rx <= op_floor_div(wx1 + WG_CHUNK - 1, OP_REGION); rx++)
             {

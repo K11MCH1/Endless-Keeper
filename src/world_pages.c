@@ -259,38 +259,46 @@ int wp_cells_begin(void)
     return n;
 }
 
-TbBool wp_island_bounds(MapSlabCoord slb_x, MapSlabCoord slb_y, MapSlabCoord *x1, MapSlabCoord *y1, MapSlabCoord *x2,
-    MapSlabCoord *y2)
+/* Island floods: a mark for each flood, and the queue of pages it walks */
+static uint32_t wp_mark = 0;
+static struct WorldPage **wp_queue = NULL;
+static int wp_queue_cap = 0;
+
+static TbBool wp_queue_room(void)
 {
-    static uint32_t mark = 0;
-    static struct WorldPage **queue = NULL;
-    static int queue_cap = 0;
-    if ((slb_x < 0) || (slb_y < 0))
+    if (wp_loaded <= wp_queue_cap)
+        return true;
+    struct WorldPage **q = (struct WorldPage **)realloc(wp_queue, sizeof(struct WorldPage *) * (wp_loaded + 64));
+    if (q == NULL)
         return false;
-    struct WorldPage *start = wp_page(slb_x / WP_CHUNK_SLABS, slb_y / WP_CHUNK_SLABS);
-    if (start == NULL)
-        return false;
-    if (wp_loaded > queue_cap)
-    {
-        struct WorldPage **q = (struct WorldPage **)realloc(queue, sizeof(struct WorldPage *) * (wp_loaded + 64));
-        if (q == NULL)
-            return wp_bounds(x1, y1, x2, y2); /* the whole box: bigger, still right */
-        queue = q;
-        queue_cap = wp_loaded + 64;
-    }
-    if (++mark == 0)
+    wp_queue = q;
+    wp_queue_cap = wp_loaded + 64;
+    return true;
+}
+
+/** A mark no page carries yet. */
+static uint32_t wp_new_mark(void)
+{
+    if (++wp_mark == 0)
     {
         for (struct WorldPage *pg = wp_list; pg != NULL; pg = pg->next)
             pg->island_mark = 0;
-        mark = 1;
+        wp_mark = 1;
     }
+    return wp_mark;
+}
+
+/** Marks the island of loaded chunks that holds a page (the chunks reachable from it through loaded chunks, diagonals
+ *  included) and gives its box in engine chunks. wp_queue_room() must have said yes. */
+static void wp_island_flood(struct WorldPage *start, uint32_t mark, int32_t *bx1, int32_t *by1, int32_t *bx2, int32_t *by2)
+{
     int head = 0, tail = 0;
     start->island_mark = mark;
-    queue[tail++] = start;
+    wp_queue[tail++] = start;
     int32_t cx1 = start->cx, cy1 = start->cy, cx2 = start->cx, cy2 = start->cy;
     while (head < tail)
     {
-        const struct WorldPage *pg = queue[head++];
+        const struct WorldPage *pg = wp_queue[head++];
         cx1 = min(cx1, pg->cx); cy1 = min(cy1, pg->cy);
         cx2 = max(cx2, pg->cx); cy2 = max(cy2, pg->cy);
         for (int dy = -1; dy <= 1; dy++)
@@ -299,18 +307,101 @@ TbBool wp_island_bounds(MapSlabCoord slb_x, MapSlabCoord slb_y, MapSlabCoord *x1
             {
                 struct WorldPage **slot = wp_slot(pg->cx + dx, pg->cy + dy, false);
                 struct WorldPage *nb = (slot != NULL) ? *slot : NULL;
-                if ((nb == NULL) || (nb->island_mark == mark) || (tail >= queue_cap))
+                if ((nb == NULL) || (nb->island_mark == mark) || (tail >= wp_queue_cap))
                     continue;
                 nb->island_mark = mark;
-                queue[tail++] = nb;
+                wp_queue[tail++] = nb;
             }
         }
     }
+    *bx1 = cx1; *by1 = cy1; *bx2 = cx2; *by2 = cy2;
+}
+
+TbBool wp_island_bounds(MapSlabCoord slb_x, MapSlabCoord slb_y, MapSlabCoord *x1, MapSlabCoord *y1, MapSlabCoord *x2,
+    MapSlabCoord *y2)
+{
+    if ((slb_x < 0) || (slb_y < 0))
+        return false;
+    struct WorldPage *start = wp_page(slb_x / WP_CHUNK_SLABS, slb_y / WP_CHUNK_SLABS);
+    if (start == NULL)
+        return false;
+    if (!wp_queue_room())
+        return wp_bounds(x1, y1, x2, y2); /* the whole box: bigger, still right */
+    int32_t cx1, cy1, cx2, cy2;
+    wp_island_flood(start, wp_new_mark(), &cx1, &cy1, &cx2, &cy2);
     *x1 = (MapSlabCoord)(cx1 * WP_CHUNK_SLABS);
     *y1 = (MapSlabCoord)(cy1 * WP_CHUNK_SLABS);
     *x2 = (MapSlabCoord)(cx2 * WP_CHUNK_SLABS + WP_CHUNK_SLABS - 1);
     *y2 = (MapSlabCoord)(cy2 * WP_CHUNK_SLABS + WP_CHUNK_SLABS - 1);
     return true;
+}
+
+static int wp_box_cmp(const void *a, const void *b)
+{
+    const struct WpBox *ba = (const struct WpBox *)a, *bb = (const struct WpBox *)b;
+    if (ba->y1 != bb->y1)
+        return (ba->y1 < bb->y1) ? -1 : 1;
+    if (ba->x1 != bb->x1)
+        return (ba->x1 < bb->x1) ? -1 : 1;
+    return 0;
+}
+
+int wp_island_boxes(struct WpBox *boxes, int max)
+{
+    if ((wp_list == NULL) || (max <= 0))
+        return 0;
+    if (!wp_queue_room())
+    {
+        /* no memory for the flood: the one box round everything (bigger, still right) */
+        wp_bounds(&boxes[0].x1, &boxes[0].y1, &boxes[0].x2, &boxes[0].y2);
+        return 1;
+    }
+    const uint32_t mark = wp_new_mark();
+    int n = 0;
+    for (struct WorldPage *pg = wp_list; pg != NULL; pg = pg->next)
+    {
+        if (pg->island_mark == mark)
+            continue;
+        int32_t cx1, cy1, cx2, cy2;
+        wp_island_flood(pg, mark, &cx1, &cy1, &cx2, &cy2);
+        struct WpBox box;
+        box.x1 = (MapSlabCoord)(cx1 * WP_CHUNK_SLABS);
+        box.y1 = (MapSlabCoord)(cy1 * WP_CHUNK_SLABS);
+        box.x2 = (MapSlabCoord)(cx2 * WP_CHUNK_SLABS + WP_CHUNK_SLABS - 1);
+        box.y2 = (MapSlabCoord)(cy2 * WP_CHUNK_SLABS + WP_CHUNK_SLABS - 1);
+        if (n < max)
+        {
+            boxes[n++] = box;
+            continue;
+        }
+        /* more islands than boxes: the last box takes this one in */
+        struct WpBox *last = &boxes[max - 1];
+        last->x1 = min(last->x1, box.x1); last->y1 = min(last->y1, box.y1);
+        last->x2 = max(last->x2, box.x2); last->y2 = max(last->y2, box.y2);
+    }
+    /* boxes that overlap become one, until none do: no slab is walked twice */
+    for (TbBool joined = true; joined;)
+    {
+        joined = false;
+        for (int a = 0; a < n; a++)
+        {
+            for (int b = a + 1; b < n; b++)
+            {
+                if ((boxes[a].x1 > boxes[b].x2) || (boxes[b].x1 > boxes[a].x2) || (boxes[a].y1 > boxes[b].y2) ||
+                    (boxes[b].y1 > boxes[a].y2))
+                    continue;
+                boxes[a].x1 = min(boxes[a].x1, boxes[b].x1); boxes[a].y1 = min(boxes[a].y1, boxes[b].y1);
+                boxes[a].x2 = max(boxes[a].x2, boxes[b].x2); boxes[a].y2 = max(boxes[a].y2, boxes[b].y2);
+                boxes[b] = boxes[n - 1];
+                n--;
+                b--;
+                joined = true;
+            }
+        }
+    }
+    /* (the pages' list is in the order they were made: the boxes come out top to bottom, whatever that was) */
+    qsort(boxes, (size_t)n, sizeof(struct WpBox), wp_box_cmp);
+    return n;
 }
 
 int64_t wp_rowmajor_ordinal(MapSlabCoord slb_x, MapSlabCoord slb_y)
@@ -378,6 +469,47 @@ TbBool wp_slab_iter_next(struct WpSlabIter *it, MapSlabCoord *slb_x, MapSlabCoor
             {
                 it->g = it->e;
                 wp_slab_iter_row(it);
+            }
+        }
+    }
+    return true;
+}
+
+void wp_stl_iter_init(struct WpStlIter *it)
+{
+    struct WpSlabIter rows;
+    wp_slab_iter_init(&rows);
+    it->g = rows.g;
+    it->e = rows.e;
+    it->k = rows.k;
+    it->y = 0;
+    it->x = 0;
+}
+
+TbBool wp_stl_iter_next(struct WpStlIter *it, MapSubtlCoord *stl_x, MapSubtlCoord *stl_y, struct Map **mapblk)
+{
+    if (it->g >= wp_cells_count)
+        return false;
+    struct WorldPage *pg = wp_cells[it->k];
+    *stl_x = pg->cx * WP_CHUNK_STL + it->x;
+    *stl_y = pg->cy * WP_CHUNK_STL + it->y;
+    *mapblk = &pg->map[it->y * WP_CHUNK_STL + it->x];
+    if (++it->x == WP_CHUNK_STL)
+    {
+        it->x = 0;
+        if (++it->k == it->e)
+        {
+            it->k = it->g;
+            if (++it->y == WP_CHUNK_STL)
+            {
+                /* the next row of chunks: the pages that share the next cy */
+                struct WpSlabIter rows;
+                rows.g = it->e;
+                wp_slab_iter_row(&rows);
+                it->g = rows.g;
+                it->e = rows.e;
+                it->k = rows.k;
+                it->y = 0;
             }
         }
     }

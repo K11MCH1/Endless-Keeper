@@ -48,6 +48,7 @@
 #include "keeperfx.hpp"
 #include "world_pages.h"
 #include "world_progress.h"
+#include "world_boss.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -380,9 +381,16 @@ void make_safe(struct PlayerInfo *player)
     SlabCodedCoords* slblist;
     if (world_paged)
     {
-        // Paged mode: the area map covers the loaded chunks' bounding box, plus the outside cell
+        // Paged mode: the area map covers the box of the island of loaded chunks the dungeon is in, plus the outside
+        // cell. The fill starts at the dungeon's essential position and never crosses unloaded ground, so it can't
+        // leave that island; the box round every loaded chunk would hold other dungeons far away as well (and be
+        // too big for the map).
         MapSlabCoord bx1, by1, bx2, by2;
-        map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
+        {
+            const struct Coord3d* island_pos = dungeon_get_essential_pos(player->id_number);
+            if (!wp_island_bounds(subtile_slab(island_pos->x.stl.num), subtile_slab(island_pos->y.stl.num), &bx1, &by1, &bx2, &by2))
+                return;
+        }
         if ((bx1 > bx2) || (by1 > by2))
             return;
         safe_box_x1 = bx1;
@@ -550,46 +558,51 @@ void make_safe(struct PlayerInfo *player)
     panel_map_update(0, 0, game.map_subtiles_x+1, game.map_subtiles_y+1);
 }
 
+/** One slab of make_unsafe: a player's fortified wall falls to rock. */
+static void make_unsafe_slab(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y, struct SlabMap *slb,
+    struct Room **room_list, int room_list_len)
+{
+    if (slabmap_owner(slb) != plyr_idx)
+        return;
+    const struct SlabConfigStats* slabst = get_slab_stats(slb);
+    if (slabst->category != SlbAtCtg_FortifiedWall)
+        return;
+    SlabKind newslab = choose_rock_type(plyr_idx, slb_x, slb_y);
+    struct Dungeon* dungeon = get_dungeon(plyr_idx);
+    dungeon->camera_deviate_jump = dungeon->camera_deviate_jump + 3; //Bigger jump on more slabs changed
+    dungeon->camera_deviate_quake = 30; //30 frames of camera shaking
+
+    struct Coord3d pos;
+    set_coords_to_slab_center(&pos, slb_x, slb_y);
+    const struct PowerConfigStats* powerst = get_power_model_stats(PwrK_DESTRWALLS);
+    play_sound_if_close_to_receiver(&pos, powerst->select_sound_idx);
+    place_slab_type_on_map(newslab, slab_subtile_center(slb_x), slab_subtile_center(slb_y), game.neutral_player_num, 0);
+    collect_rooms_around_slab(slb_x, slb_y, room_list, room_list_len);
+}
+
 void make_unsafe(PlayerNumber plyr_idx)
 {
     MapSlabCoord slb_x;
     MapSlabCoord slb_y;
-    SlabCodedCoords slb_num;
     struct SlabMap* slb;
-    struct SlabConfigStats* slabst;
-    struct PowerConfigStats* powerst;
-    struct Dungeon* dungeon;
-    struct Coord3d pos;
     struct Room* room_list[ROOMS_COUNT + 1];
     memset(room_list, 0, sizeof(room_list));
 
-    // Paged mode: only the loaded chunks' bounding box
-    MapSlabCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_tiles_x - 1, loop_y2 = game.map_tiles_y - 1;
     if (world_paged)
-        map_loop_slab_bounds(&loop_x1, &loop_y1, &loop_x2, &loop_y2);
-    for (slb_y = loop_y1; slb_y <= loop_y2; slb_y++)
     {
-        for (slb_x = loop_x1; slb_x <= loop_x2; slb_x++)
+        // Paged mode: the loaded slabs, in the order a walk of their bounding box had them (the box is not walked: it
+        // is mostly unloaded ground once two dungeons are far apart)
+        struct WpSlabIter it;
+        wp_slab_iter_init(&it);
+        while (wp_slab_iter_next(&it, &slb_x, &slb_y, &slb))
+            make_unsafe_slab(plyr_idx, slb_x, slb_y, slb, room_list, sizeof(room_list)/sizeof(room_list[0]));
+    } else
+    for (slb_y = 0; slb_y <= game.map_tiles_y - 1; slb_y++)
+    {
+        for (slb_x = 0; slb_x <= game.map_tiles_x - 1; slb_x++)
         {
-            slb_num = get_slab_number(slb_x, slb_y);
-            slb = get_slabmap_direct(slb_num);
-            if (slabmap_owner(slb) == plyr_idx)
-            {
-                slabst = get_slab_stats(slb);
-                if (slabst->category == SlbAtCtg_FortifiedWall)
-                {
-                    SlabKind newslab = choose_rock_type(plyr_idx, slb_x, slb_y);
-                    dungeon = get_dungeon(plyr_idx);
-                    dungeon->camera_deviate_jump = dungeon->camera_deviate_jump + 3; //Bigger jump on more slabs changed
-                    dungeon->camera_deviate_quake = 30; //30 frames of camera shaking
-
-                    set_coords_to_slab_center(&pos, slb_x, slb_y);
-                    powerst = get_power_model_stats(PwrK_DESTRWALLS);
-                    play_sound_if_close_to_receiver(&pos, powerst->select_sound_idx);
-                    place_slab_type_on_map(newslab, slab_subtile_center(slb_x), slab_subtile_center(slb_y), game.neutral_player_num, 0);
-                    collect_rooms_around_slab(slb_x, slb_y, room_list, sizeof(room_list)/sizeof(room_list[0]));
-                }
-            }
+            slb = get_slabmap_direct(get_slab_number(slb_x, slb_y));
+            make_unsafe_slab(plyr_idx, slb_x, slb_y, slb, room_list, sizeof(room_list)/sizeof(room_list[0]));
         }
     }
     recalculate_rooms_in_list(room_list, sizeof(room_list)/sizeof(room_list[0]));
@@ -599,6 +612,8 @@ void make_unsafe(PlayerNumber plyr_idx)
 void activate_dungeon_special(struct Thing *cratetng, struct PlayerInfo *player)
 {
     SYNCDBG(6,"Starting");
+    if (world_boss_collect(cratetng, player->id_number))
+        return; /* endless worlds: a World Boss's loot, collected for the storage at home */
     if (world_progress_activate(cratetng, player))
         return; /* endless worlds: a research or lore book */
     struct Coord3d pos;

@@ -390,6 +390,21 @@ TbBool display_loading_screen(void)
     return done;
 }
 
+TbBool load_loading_picture(unsigned char **raw, unsigned char **pal, int *width, int *height)
+{
+    struct ActiveBitmap bmp = {0};
+    if (!init_bitmap_screen(&bmp, RBmp_WaitLoading) || (bmp.raw_data == NULL) || (bmp.pal_data == NULL) || (bmp.bpp != 8))
+    {
+        free_bitmap_screen(&bmp);
+        return false;
+    }
+    *raw = (unsigned char *)bmp.raw_data;
+    *pal = bmp.pal_data;
+    *width = bmp.width;
+    *height = bmp.height;
+    return true;
+}
+
 TbBool wait_for_installation_files(void)
 {
   char ffullpath[2048];

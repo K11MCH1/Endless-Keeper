@@ -19,6 +19,7 @@
 #include "pre_inc.h"
 #include "creature_states.h"
 #include "globals.h"
+#include "world_boss.h"
 
 #include "bflib_math.h"
 #include "bflib_planar.h"
@@ -88,6 +89,9 @@
 #include "world_stream.h"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_misdeeds.h"
+#include "world_caretaker.h"
+#include "world_defectors.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1897,7 +1901,7 @@ short creature_doing_nothing(struct Thing *creatng)
     {
         if ((get_gameturn() - cctrl->tasks_check_turn > 128))
         {
-            int required_cap = get_required_room_capacity_for_object(RoRoF_LairStorage, 0, creatng->model);
+            int required_cap = world_misdeeds_lair_places(creatng, get_required_room_capacity_for_object(RoRoF_LairStorage, 0, creatng->model)); /* endless: Contracts */
             cctrl->tasks_check_turn = get_gameturn();
             struct Room* room = find_nearest_room_of_role_for_thing_with_spare_capacity(creatng, creatng->owner, get_room_role_for_job(Job_TAKE_SLEEP), NavRtF_Default, required_cap);
             if (!room_is_invalid(room))
@@ -2482,6 +2486,16 @@ short creature_leaves(struct Thing *creatng)
         dungeon->total_creatures_left++;
         struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
         apply_anger_to_all_players_creatures_excluding(creatng->owner, crconf->annoy_others_leaving, AngR_Other, creatng);
+        if (world_defectors_leaving(creatng)) /* endless worlds: another keeper may take it in (Defectors) */
+        {
+            /* the creature lives on with its new keeper: it must not also go back to the old keeper's pool */
+            const TbBool back_to_pool = flag_is_set(game.mode_flags, MFlg_DeadBackToPool);
+            clear_flag(game.mode_flags, MFlg_DeadBackToPool);
+            kill_creature(creatng, INVALID_THING, -1, CrDed_NoEffects | CrDed_NotReallyDying);
+            if (back_to_pool)
+                set_flag(game.mode_flags, MFlg_DeadBackToPool);
+            return CrStRet_Deleted;
+        }
     }
     kill_creature(creatng, INVALID_THING, -1, CrDed_NoEffects | CrDed_NotReallyDying);
     return CrStRet_Deleted;
@@ -3171,6 +3185,12 @@ short creature_take_salary(struct Thing *creatng)
 {
     TRACE_THING(creatng);
     SYNCDBG(18,"Starting");
+    if (world_misdeeds_no_wage(creatng)) /* endless: Contracts (it signed for no wage on its way here) */
+    {
+        creature_control_get_from_thing(creatng)->paydays_owed = 0;
+        set_start_state(creatng);
+        return 1;
+    }
     if (!thing_is_on_own_room_tile(creatng))
     {
         internal_set_thing_state(creatng, CrSt_CreatureWantsSalary);
@@ -3519,6 +3539,12 @@ short creature_wants_salary(struct Thing *creatng)
     unsigned char navtype;
     struct Room* room = get_room_for_thing_salary(creatng,&navtype);
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
+    if (world_misdeeds_no_wage(creatng)) /* endless: Contracts (it signed for no wage on its way to the Treasury) */
+    {
+        cctrl->paydays_owed = 0;
+        set_start_state(creatng);
+        return 1;
+    }
     if (room_is_invalid(room))
     {
         if (cctrl->paydays_owed > 0)
@@ -4526,6 +4552,11 @@ TbBool creature_will_attack_creature(const struct Thing *fightng, const struct T
         TSP_INC(TSP_Rej_WillAttack_Self);
         return false;
     }
+    // Endless: the keepers at a World Boss fight are at peace with each other in its arena.
+    if (world_boss_truce(fightng, enmtng))
+    {
+        return false;
+    }
     // No fight when creature in custody.
     TSP_ZONE_BEGIN(z_custody, "TS/WillAttack: Custody");
     TbBool in_custody = creature_is_kept_in_custody_by_player(fightng, enmtng->owner)
@@ -4592,6 +4623,11 @@ TbBool creature_will_attack_creature_incl_til_death(const struct Thing *fightng,
     }
     // No self fight.
     if (enmtng->index == fightng->index)
+    {
+        return false;
+    }
+    // Endless: the keepers at a World Boss fight are at peace with each other in its arena.
+    if (world_boss_truce(fightng, enmtng))
     {
         return false;
     }
@@ -4949,6 +4985,8 @@ long process_work_speed_on_work_value(const struct Thing *thing, long base_val)
 
 TbBool check_experience_upgrade(struct Thing *thing)
 {
+    if (world_creature_growth_frozen(thing))
+        return false; /* endless: no level while the caretaker keeps the dungeon (the points wait) */
     struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig *crconf = creature_stats_get_from_thing(thing);
     long i = creature_exp_to_next_level(crconf, cctrl->exp_level) << 8;
@@ -5258,6 +5296,10 @@ long process_creature_needs_a_wage(struct Thing *creatng, const struct CreatureM
     if ((crconf->pay == 0) || (cctrl->paydays_owed == 0)) {
         return 0;
     }
+    if (world_misdeeds_no_wage(creatng)) { /* endless: Contracts (a payday owed from before it signed is forgiven) */
+        cctrl->paydays_owed = 0;
+        return 0;
+    }
     if (creature_is_taking_salary_activity(creatng)) {
         return 1;
     }
@@ -5411,6 +5453,7 @@ long process_creature_needs_to_eat(struct Thing *creatng, const struct CreatureM
     {
         cctrl->hunger_amount = hunger_fill;
     }
+    cctrl->hunger_amount = world_misdeeds_hunger(creatng, cctrl->hunger_amount); /* endless: Contracts */
     return 1;
 }
 

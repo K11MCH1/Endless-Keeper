@@ -96,11 +96,13 @@
 #include "moonphase.h"
 #include "config_keeperfx.h"
 #include "world_menu.h"
+#include "world_creature_window.h"
 #include "chat_box.h"
 #include "net_state.h"
 #include "server_admin.h"
 #include "world_stream.h"
 #include "world_caretaker.h"
+#include "world_boss.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -225,6 +227,12 @@ struct GuiMenu *menu_list[] = {
     &world_party_menu,
     &chat_box_menu, //55
     &world_delete_menu, //56
+    NULL, //57 (the Keeper's Rap Sheet on roadmap/keeper-tools-panel)
+    NULL, //58 (Attunement, there)
+    NULL, //59 (the Tools panel, there)
+    &world_boss_bar_menu, //60
+    &world_boss_pick_menu, //61
+    &world_creature_window_menu, //62
     NULL,
 };
 
@@ -4002,12 +4010,15 @@ FrontendMenuState get_startup_menu_state(void)
   }
   else if ((game.mode_flags & MFlg_DemoMode) != 0)
   { // If starting up the game after intro
-    if (is_full_moon)
+    /* (a menu test, KFX_WORLD_MENU, goes straight to the main menu: the full-moon and birthday screens wait for a
+       click that an unattended test never gives) */
+    const TbBool menu_test = (getenv("KFX_WORLD_MENU") != NULL);
+    if (is_full_moon && !menu_test)
     {
         SYNCLOG("Full moon state selected");
         return FeSt_STORY_POEM;
     } else
-    if (get_team_birthday() != NULL)
+    if ((get_team_birthday() != NULL) && !menu_test)
     {
         SYNCLOG("Birthday state selected");
         return FeSt_STORY_BIRTHDAY;

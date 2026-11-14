@@ -32,6 +32,7 @@
 #include "game_legacy.h"
 
 #include "keeperfx.hpp"
+#include "world_seasons.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -60,7 +61,7 @@ TbBool add_body_to_graveyard(struct Thing *deadtng, struct Room *room)
     }
     room->used_capacity++;
     deadtng->corpse.laid_to_rest = 1;
-    deadtng->health = game.conf.rules[room->owner].rooms.graveyard_convert_time;
+    deadtng->health = game.conf.rules[room->owner].rooms.graveyard_convert_time * world_season_grave_pct(room->owner) / 100; /* endless: the Rot */
     return true;
 }
 
@@ -118,7 +119,7 @@ TbBool recreate_repositioned_body_in_room_on_subtile(struct Room *room, MapSubtl
             if (!thing_is_invalid(bodytng))
             {
                 bodytng->corpse.laid_to_rest = 1;
-                bodytng->health = game.conf.rules[room->owner].rooms.graveyard_convert_time;
+                bodytng->health = game.conf.rules[room->owner].rooms.graveyard_convert_time * world_season_grave_pct(room->owner) / 100; /* endless: the Rot */
                 rrepos->used--;
                 rrepos->models[ri] = 0;
                 rrepos->exp_level[ri] = 0;

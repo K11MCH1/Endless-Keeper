@@ -92,6 +92,8 @@
 #include "net_state.h"
 #include "chat_box.h"
 #include "world_menu.h"
+#include "world_watchfire.h"
+#include "world_curtain.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -455,7 +457,9 @@ static short get_players_message_inputs(void)
         if (text[0] != '\0') {
             memcpy(local_state.mp_message_text_last, text, PLAYER_MP_MESSAGE_LEN);
         }
-        if (!replay.load_enable && world_delete_command(text)) {
+        if (!replay.load_enable && world_watchfire_command(text, cursor_x, cursor_y)) {
+            /* endless worlds: "!watchfire" sets a watchfire down at the cursor; the line isn't sent */
+        } else if (!replay.load_enable && world_delete_command(text)) {
             /* party dungeons: "!delete dungeon" asks first, in a box here; the line isn't sent */
         } else if (observer_is_active() && text[0] == cmd_char) {
             cmd_exec(PLAYER_NEUTRAL, text + 1, cursor_x, cursor_y, true);
@@ -3275,6 +3279,17 @@ void input(void)
     else
         pckt->additional_packet_values &= ~PCAdV_RotatePressed;
 
+    if (world_curtain_up())
+    {
+        /* endless: the loading screen is up (this keeper is on its way to a World Boss's arena, or home): the screen
+           a click or a key would act on isn't shown */
+        left_button_clicked = 0;
+        left_button_released = 0;
+        right_button_clicked = 0;
+        right_button_released = 0;
+        memset(lbKeyPressed, 0, sizeof(lbKeyPressed));
+        return;
+    }
     get_inputs();
     if ((game.mode_flags & MFlg_IsDemoMode) == 0 && !replay.load_enable) {
         update_local_view_prediction(pckt);

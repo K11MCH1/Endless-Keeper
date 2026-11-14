@@ -42,6 +42,7 @@
 #include "power_hand.h"
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -729,6 +730,7 @@ short creature_being_sacrificed(struct Thing *thing)
     struct SlabMap* slb = get_slabmap_for_subtile(thing->mappos.x.stl.num, thing->mappos.y.stl.num);
     long owner = slabmap_owner(slb);
     add_creature_to_sacrifice_list(owner, thing->model, cctrl->exp_level);
+    world_misdeeds_sacrificed(thing, (PlayerNumber)owner); /* endless: Past Lives */
     struct Coord3d pos;
     pos.x.val = thing->mappos.x.val;
     pos.y.val = thing->mappos.y.val;

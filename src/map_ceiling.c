@@ -341,19 +341,9 @@ static int get_ceiling_or_floor_filled_subtiles(SubtlCodedCoords stl_num)
     }
 }
 
-void ceiling_init()
+/** One subtile of ceiling_init. */
+static void ceiling_init_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
-    /* normal levels: [0, map_subtiles); paged mode: the loaded chunks */
-    MapSubtlCoord bx1 = 0, by1 = 0, bx2 = game.map_subtiles_x, by2 = game.map_subtiles_y;
-    if (world_paged)
-    {
-        map_loop_subtile_bounds(&bx1, &by1, &bx2, &by2);
-        bx2++;
-        by2++;
-    }
-    for (MapSubtlCoord stl_y=by1; stl_y < by2; stl_y++)
-    {
-        for (MapSubtlCoord stl_x=bx1; stl_x < bx2; stl_x++)
         {
             int filled_h;
             if (map_pos_solid_at_ceiling(stl_x, stl_y))
@@ -425,6 +415,30 @@ void ceiling_init()
             }
             struct Map *mapblk = get_map_block_at(stl_x,stl_y);
             set_mapblk_filled_subtiles(mapblk, filled_h);
+        }
+}
+
+void ceiling_init()
+{
+    if (world_paged)
+    {
+        /* paged mode: the loaded subtiles, in the order a walk of their bounding box had them (a subtile reads what
+           the ones left of it and above it were given). The box itself is not walked: with two dungeons far apart,
+           or a World Boss arena in its own corner of the world, nearly all of it is ground that isn't loaded, and
+           each of those subtiles cost a search of the whole ceiling distance. */
+        struct WpStlIter it;
+        MapSubtlCoord stl_x, stl_y;
+        struct Map *mapblk;
+        wp_stl_iter_init(&it);
+        while (wp_stl_iter_next(&it, &stl_x, &stl_y, &mapblk))
+            ceiling_init_subtile(stl_x, stl_y);
+        return;
+    }
+    for (MapSubtlCoord stl_y=0; stl_y < game.map_subtiles_y; stl_y++)
+    {
+        for (MapSubtlCoord stl_x=0; stl_x < game.map_subtiles_x; stl_x++)
+        {
+            ceiling_init_subtile(stl_x, stl_y);
         }
     }
 }

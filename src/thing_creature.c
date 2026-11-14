@@ -112,6 +112,11 @@
 #include "world_daynight.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
+#include "world_creature_window.h"
+#include "world_boss.h"
+#include "world_caretaker.h"
+#include "world_sword.h"
+#include "world_hand.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -261,7 +266,8 @@ TbBool control_creature_as_controller(NetUserId user, struct Thing *thing)
     struct UserState* ustate = get_user_state(user);
     struct CreatureModelConfig *crconf;
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
-    if (((thing->owner != player->id_number) && (ustate->work_state != PSt_FreeCtrlDirect))
+    if (((thing->owner != player->id_number) && (ustate->work_state != PSt_FreeCtrlDirect) &&
+        !world_sword_may_drive(user, thing)) /* endless worlds: a guest leading a raid (Take Up the Sword) */
       || !thing_can_be_controlled_as_controller(thing))
     {
       if (!control_creature_as_passenger(user, thing))
@@ -3628,6 +3634,7 @@ struct Thing *kill_creature(struct Thing *creatng, struct Thing *killertng, Play
     {
         return cause_creature_death(creatng, flags);
     }
+    world_misdeeds_knocked_out(creatng, killertng); /* endless: the virtue Mercy */
     make_creature_unconscious(creatng);
     creatng->health = 1;
     return INVALID_THING;
@@ -3700,6 +3707,7 @@ long calculate_melee_damage(struct Thing *creatng, short damage_percent)
     {
         damage = (damage * damage_percent) / 100;
     }
+    damage = damage * world_boss_melee_percent(creatng) / 100; /* endless: a World Boss's blows by hand */
     return damage;
 }
 
@@ -3726,7 +3734,8 @@ long calculate_shot_damage(struct Thing *creatng, ThingModel shot_model)
     const struct ShotConfigStats* shotst = get_shot_model_stats(shot_model);
     const struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     const struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
-    return compute_creature_attack_spell_damage(shotst->damage, crconf->luck, cctrl->exp_level, creatng->owner);
+    return compute_creature_attack_spell_damage(shotst->damage, crconf->luck, cctrl->exp_level, creatng->owner) *
+        world_boss_damage_percent(creatng) / 100; /* endless: a World Boss's terrible blows */
 }
 
 static void shot_init_lizard(const struct Thing *target, short angle_xy, unsigned char dexterity, struct Thing *shotng)
@@ -4063,7 +4072,7 @@ long get_creature_speed(const struct Thing *thing)
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     if (creature_control_invalid(cctrl))
         return 0;
-    long speed = cctrl->max_speed;
+    long speed = world_hand_speed(thing, cctrl->max_speed); /* endless: hurried by a slap beside it */
     if (speed < 0)
         speed = 0;
     if (speed > MAX_VELOCITY)
@@ -4253,9 +4262,11 @@ TbBool creature_instance_has_reset_at(const struct Thing *thing, const struct Cr
     if ((thing->alloc_flags & TAlF_IsControlled) != 0) {
         ritime = inst_inf->fp_reset_time;
     }
+    world_misdeeds_reset_time(thing, inst_idx, &ritime); /* endless: Lessons */
     if (flag_is_set(inst_inf->instance_property_flags, InstPF_ReadyFromStart) && (cctrl->instance_use_turn[inst_idx] == 0))
         return true; // never used: no waiting from the start of the game (for abilities with a long reset time)
     ritime += cctrl->inst_total_turns - cctrl->inst_action_turns;
+    ritime = world_boss_reset_turns(thing, inst_idx, ritime); /* endless: a World Boss's abilities take longer to come back */
     return (GameTurnDelta)(turn - cctrl->instance_use_turn[inst_idx]) >= ritime;
 }
 
@@ -5146,6 +5157,8 @@ TbBool creature_change_multiple_levels(struct Thing *thing, int count)
         ERRORLOG("Invalid creature control; no action");
         return false;
     }
+    if ((count > 0) && world_creature_growth_frozen(thing))
+        return false; /* endless: no levels while the caretaker keeps the dungeon */
     struct Dungeon* dungeon = get_dungeon(thing->owner);
     int k = 0;
     if (count > 0)
@@ -6548,6 +6561,8 @@ long update_creature_levels(struct Thing *thing)
     {
         return 0;
     }
+    if (world_creature_growth_frozen(thing))
+        return 0; /* endless: the level waits until the keeper is back */
     cctrl->exp_level_up = false;
     lua_on_level_up(thing);
 
@@ -6876,7 +6891,7 @@ int claim_neutral_creatures_in_sight(struct Thing *creatng, int can_see_slabs)
         int dy = abs(slb_y - subtile_slab(thing->mappos.y.stl.num));
         if ((dx <= can_see_slabs) && (dy <= can_see_slabs))
         {
-            if (is_neutral_thing(thing) && creature_can_see_thing(thing,creatng))
+            if (is_neutral_thing(thing) && !world_misdeeds_stray_kept(thing) && creature_can_see_thing(thing,creatng)) /* endless: Strays */
             {
                 if (creature_is_leaving_and_cannot_be_stopped(thing) || creature_is_leaving_and_cannot_be_stopped(creatng))
                     return false;
@@ -6908,6 +6923,8 @@ int claim_neutral_creatures_in_sight(struct Thing *creatng, int can_see_slabs)
 
 TbBool change_creature_owner_if_near_dungeon_heart(struct Thing *creatng)
 {
+    if (world_misdeeds_stray_kept(creatng)) /* endless: Strays (it waits for its keeper's chicken) */
+        return false;
     for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_COUNT; plyr_idx++)
     {
         if (player_is_neutral(plyr_idx))
@@ -7833,6 +7850,7 @@ void query_creature(NetUserId user, ThingIndex index, TbBool reset, TbBool zoom)
                 menu = GMnu_CREATURE_QUERY1;
             }
         }
+        menu = world_creature_window_panel_menu(menu); /* endless: the creature window has what the pages had */
         turn_off_all_panel_menus();
         initialise_tab_tags_and_menu(menu);
         turn_on_menu(menu);

@@ -61,6 +61,10 @@ static const char *const kept_events[] = {
 };
 
 static PlayerBitFlags caretaker_on;
+/* World Bosses (2026-11-13): a dungeon held as an away player's is while its keeper fights a World Boss: everything
+   that asks world_caretaker_active stops (training, research, experience, alarms, dread), but no computer takes the
+   seat (a computer-controlled player's input is ignored, and the keeper casts spells in the arena) */
+static PlayerBitFlags caretaker_hold;
 static GoldAmount caretaker_gold[PLAYERS_MAX];
 
 static TbBool name_in(const char *name, const char *const *list, int count)
@@ -111,7 +115,14 @@ static long caretaker_model(void)
 
 TbBool world_caretaker_active(PlayerNumber plyr_idx)
 {
-    return (plyr_idx >= 0) && (plyr_idx < PLAYERS_MAX) && pmask_has(caretaker_on, plyr_idx);
+    return (plyr_idx >= 0) && (plyr_idx < PLAYERS_MAX) && (pmask_has(caretaker_on, plyr_idx) || pmask_has(caretaker_hold, plyr_idx));
+}
+
+TbBool world_creature_growth_frozen(const struct Thing *thing)
+{
+    if (!world_mode_active() || !thing_exists(thing))
+        return false;
+    return world_caretaker_active(thing->owner);
 }
 
 TbBool world_caretaker_start(PlayerNumber plyr_idx)
@@ -166,9 +177,24 @@ TbBool world_caretaker_start(PlayerNumber plyr_idx)
     return true;
 }
 
+void world_caretaker_hold(PlayerNumber plyr_idx, TbBool on)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
+        return;
+    if (on && !pmask_has(caretaker_hold, plyr_idx))
+    {
+        pmask_add(&caretaker_hold, plyr_idx);
+        SYNCLOG("World: player %d's dungeon is held as an away player's (its keeper is at a World Boss fight)", (int)plyr_idx);
+    } else if (!on && pmask_has(caretaker_hold, plyr_idx))
+    {
+        pmask_del(&caretaker_hold, plyr_idx);
+        SYNCLOG("World: player %d's dungeon is the keeper's own again", (int)plyr_idx);
+    }
+}
+
 void world_caretaker_end(PlayerNumber plyr_idx)
 {
-    if (!world_caretaker_active(plyr_idx))
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX) || !pmask_has(caretaker_on, plyr_idx))
         return;
     pmask_del(&caretaker_on, plyr_idx);
     SYNCLOG("World: player %d is back: the caretaker goes", (int)plyr_idx);
@@ -343,6 +369,7 @@ void world_caretaker_turn(void)
 void world_caretaker_reset(void)
 {
     caretaker_on = pmask_none();
+    caretaker_hold = pmask_none();
     memset(caretaker_gold, 0, sizeof(caretaker_gold));
 }
 /******************************************************************************/

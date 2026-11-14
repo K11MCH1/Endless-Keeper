@@ -40,6 +40,8 @@ void world_daynight_level_end(void);
 
 /** Is this one of the heroes of a day raid? (They show on the maps like tunnelling hero parties.) */
 TbBool world_raid_hero(const struct Thing *thing);
+/** Heroes are raiding this keeper now. */
+TbBool world_raid_on(PlayerNumber plyr_idx);
 /** A raid hero whose raid is over (after its third night) walks back to its landing and leaves; true when this one
  *  was seen to (the hero AI then leaves it alone). */
 TbBool world_raid_hero_goes_home(struct Thing *thing);

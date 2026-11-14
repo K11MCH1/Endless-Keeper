@@ -35,6 +35,7 @@
 #include "bflib_sound.h"
 #include "game_legacy.h"
 #include "world_misdeeds.h"
+#include "world_caretaker.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -341,6 +342,10 @@ void play_creature_sound_and_create_sound_thing(struct Thing *thing, long snd_id
 
 TbBool creature_can_gain_experience(const struct Thing *thing)
 {
+    /* endless worlds: while the caretaker keeps a dungeon (its player is away), its creatures gain no experience of
+       any kind (the user, 2026-11-13) */
+    if (world_creature_growth_frozen(thing))
+        return false;
     struct Dungeon* dungeon = get_dungeon(thing->owner);
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     // Creatures which reached players max level can't be trained

@@ -45,6 +45,8 @@
 #include "gui_msgs.h"
 #include "server_roles.h"
 #include "net_anticheat.h"
+#include "world_misdeeds.h"
+#include "world_sword.h"
 #include "post_inc.h"
 /******************************************************************************/
 
@@ -197,6 +199,10 @@ static TbError handle_chat_message(NetUserId source, char *read_pos, size_t mess
             server_farewell_set(message);
         } else if (world_circles_net_notice(message)) {
             /* endless worlds: this player breached a circle (world_circles.c); not chat */
+        } else if (world_misdeeds_net_notice(message)) {
+            /* endless worlds: one of this player's creatures melted its vices into a sin (world_misdeeds.c) */
+        } else if (world_sword_net_notice(message)) {
+            /* endless worlds: the server puts this player into a raid's hero (world_sword.c); not chat */
         } else if (chat_box_active()) {
             chat_box_add(-1, message); /* the chat box (chat_box.c) */
         } else {

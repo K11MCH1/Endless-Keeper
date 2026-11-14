@@ -60,6 +60,7 @@
 #include "world_stream.h"
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_caretaker.h"
 #include "post_inc.h"
 #include "creature_states_lair.h"
 
@@ -1985,7 +1986,7 @@ short creature_drops_crate_in_workshop(struct Thing *thing)
     }
     // The action of moving object is now finished
     set_start_state(thing);
-    if (game.conf.rules[thing->owner].workers.digger_work_experience != 0)
+    if ((game.conf.rules[thing->owner].workers.digger_work_experience != 0) && !world_creature_growth_frozen(thing))
     {
         cctrl->exp_points += game.conf.rules[thing->owner].workers.digger_work_experience;
         check_experience_upgrade(thing);

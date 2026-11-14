@@ -69,7 +69,10 @@
 #include "observer.h"
 #include "world_colours.h"
 #include "world_stream.h"
+#include "world_misdeeds.h"
 #include "world_attract.h"
+#include "world_boss.h"
+#include "world_hand.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -251,6 +254,8 @@ long can_thing_be_picked_up_by_player(const struct Thing *thing, PlayerNumber pl
         /* endless worlds (2026-11-10): a spellbook or a special box is picked up, or used, only where it lies on the
            player's own ground (claimed floor or a room). The hand's power would take the player's own ones wherever
            the player sees them: an ally's dungeon too, now that a party's allies see what each other sees. */
+        if (world_mode_active() && (world_boss_loot_owner(thing) != PLAYER_NONE))
+            return (world_boss_loot_owner(thing) == plyr_idx); /* a World Boss's loot: its own player's only */
         if (world_mode_active() && (thing_is_spellbook(thing) || thing_is_special_box(thing)))
             return false;
     }
@@ -385,11 +390,24 @@ TbBool power_hand_is_hovering(NetUserId user)
     return get_user_thing_under_hand(user) > 0;
 }
 
+/** How many things the keeper's Hand can hold now (endless worlds: it grows with the player level). */
+static int hand_capacity(PlayerNumber plyr_idx)
+{
+    return world_hand_capacity(plyr_idx, game.conf.rules[plyr_idx].gameplay.max_things_in_hand);
+}
+
+/** How far the hand list is walked when taking things out of it: in endless worlds the whole list, so things held
+ *  while the Hand was bigger (before a "Start again") are never lost track of. */
+static int hand_list_limit(PlayerNumber plyr_idx)
+{
+    return world_mode_active() ? MAX_THINGS_IN_HAND : hand_capacity(plyr_idx);
+}
+
 TbBool power_hand_is_full(const struct PlayerInfo *player)
 {
     const struct Dungeon *dungeon;
   dungeon = get_dungeon(player->id_number);
-  return (dungeon->num_things_in_hand >= game.conf.rules[player->id_number].gameplay.max_things_in_hand);
+  return (dungeon->num_things_in_hand >= hand_capacity(player->id_number));
 }
 
 struct Thing *get_first_thing_in_power_hand(const struct PlayerInfo *player)
@@ -412,8 +430,8 @@ TbBool remove_first_thing_from_power_hand_list(PlayerNumber plyr_idx)
   long num_in_hand;
   dungeon = get_dungeon(plyr_idx);
   num_in_hand = dungeon->num_things_in_hand;
-  if (num_in_hand > game.conf.rules[plyr_idx].gameplay.max_things_in_hand)
-      num_in_hand = game.conf.rules[plyr_idx].gameplay.max_things_in_hand;
+  if (num_in_hand > hand_list_limit(plyr_idx))
+      num_in_hand = hand_list_limit(plyr_idx);
   if (num_in_hand > 0)
   {
       for (i = 0; i < num_in_hand-1; i++)
@@ -441,8 +459,8 @@ TbBool remove_thing_from_power_hand_list(struct Thing *thing, PlayerNumber plyr_
     long num_in_hand;
     dungeon = get_dungeon(plyr_idx);
     num_in_hand = dungeon->num_things_in_hand;
-    if (num_in_hand > game.conf.rules[plyr_idx].gameplay.max_things_in_hand)
-        num_in_hand = game.conf.rules[plyr_idx].gameplay.max_things_in_hand;
+    if (num_in_hand > hand_list_limit(plyr_idx))
+        num_in_hand = hand_list_limit(plyr_idx);
     for (i = 0; i < num_in_hand; i++)
     {
         if (dungeon->things_in_hand[i] == thing->index)
@@ -472,10 +490,10 @@ TbBool insert_thing_into_power_hand_list(struct Thing *thing, PlayerNumber plyr_
     long i;
     struct PowerConfigStats *powerst;
     dungeon = get_dungeon(plyr_idx);
-    if (dungeon->num_things_in_hand >= game.conf.rules[plyr_idx].gameplay.max_things_in_hand)
+    if (dungeon->num_things_in_hand >= hand_capacity(plyr_idx))
       return false;
     // Move all things in list up, to free position 0
-    for (i = game.conf.rules[plyr_idx].gameplay.max_things_in_hand-1; i > 0; i--)
+    for (i = hand_capacity(plyr_idx)-1; i > 0; i--)
     {
       dungeon->things_in_hand[i] = dungeon->things_in_hand[i-1];
     }
@@ -919,6 +937,12 @@ long gold_being_dropped_on_creature(long plyr_idx, struct Thing *goldtng, struct
     }
     GoldAmount salary;
     salary = calculate_correct_creature_pay(creatng);
+    if (salary < 1)
+    {
+        /* endless: Contracts (a creature without a wage measures a tribute against the wage it gave up; measured
+           against 1, a single coin calmed the fury of a day without a kill) */
+        salary = calculate_correct_creature_pay_base(creatng);
+    }
     if (salary < 1) // we devide by this number later on
     {
         salary = 1;
@@ -1034,6 +1058,22 @@ short dump_first_held_thing_on_map(PlayerNumber plyr_idx, MapSubtlCoord stl_x, M
     }
     // Check if drop position is allowed
     struct Thing *droptng = thing_get(dungeon->things_in_hand[0]);
+    /* endless: Strays (a chicken for a wild creature or a stray, where a keeper may not drop otherwise) */
+    const int stray_fed = world_misdeeds_stray_feed(plyr_idx, droptng, thing_get(ustate->thing_under_hand));
+    if (stray_fed < 0)
+    {
+        /* the stray refused it: the chicken stays in the hand, as any refused drop */
+        play_player_sample(plyr_idx, snd_refusal);
+        return 0;
+    }
+    if (stray_fed > 0)
+    {
+        if (dungeon->num_things_in_hand == 1) {
+            set_user_instance(get_player_primary_user(player), PI_Drop, 0);
+        }
+        remove_first_thing_from_power_hand_list(plyr_idx);
+        return 1;
+    }
     if (!can_drop_thing_here(stl_x, stl_y, plyr_idx, is_creature_droppable_on_path(droptng))) {
         // Make a rejection sound
         play_player_sample(plyr_idx, snd_refusal);
@@ -1123,7 +1163,7 @@ void clear_things_in_hand(struct PlayerInfo *player)
   struct Dungeon *dungeon;
   long i;
   dungeon = get_dungeon(player->id_number);
-  for (i=0; i < game.conf.rules[player->id_number].gameplay.max_things_in_hand; i++)
+  for (i=0; i < hand_list_limit(player->id_number); i++)
     dungeon->things_in_hand[i] = 0;
 }
 
@@ -1211,8 +1251,8 @@ void draw_mini_things_in_hand(long x, long y)
     expshift_x = scale_ui_value(abs(i)) / 2;
     for (i = dungeon->num_things_in_hand-1; i >= 0; i--)
     {
-        unsigned char ratio = (game.conf.rules[my_player_number].gameplay.max_things_in_hand / 2);
-        if (game.conf.rules[my_player_number].gameplay.max_things_in_hand % 2)
+        unsigned char ratio = (hand_capacity(my_player_number) / 2);
+        if (hand_capacity(my_player_number) % 2)
         {
             ratio ++;
         }
@@ -1395,7 +1435,7 @@ long prepare_thing_for_power_hand(unsigned short tng_idx, PlayerNumber plyr_idx)
     if (!user_state_invalid(ustate) && (ustate->hand_thing_idx == 0)) {
         create_power_hand(user);
     }
-    if (dungeon->num_things_in_hand >= game.conf.rules[plyr_idx].gameplay.max_things_in_hand) {
+    if (dungeon->num_things_in_hand >= hand_capacity(plyr_idx)) {
       return 0;
     }
     struct Thing *thing;

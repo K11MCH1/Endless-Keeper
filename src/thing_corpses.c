@@ -41,6 +41,7 @@
 #include "keeperfx.hpp"
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_boss.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -514,6 +515,7 @@ struct Thing *destroy_creature_and_create_corpse(struct Thing *thing, long crpsc
     CrtrExpLevel exp_level = cctrl->exp_level;
     remove_creature_score_from_owner(thing);
     const uint16_t misdeed_body = world_misdeeds_corpse_begin(thing); /* endless: Unfinished Business */
+    const long boss_size = world_boss_corpse_size(thing); /* endless: a World Boss falls as big as it stood */
     delete_thing_structure(thing, 0);
     struct Thing* deadtng = create_dead_creature(&pos, crmodel, crpscondition, owner, exp_level);
     world_misdeeds_corpse_made(deadtng, misdeed_body);
@@ -522,6 +524,8 @@ struct Thing *destroy_creature_and_create_corpse(struct Thing *thing, long crpsc
         ERRORLOG("Could not create dead thing while killing %s index %d owned by player %d.",creature_code_name(crmodel),(int)prev_idx,(int)owner);
         return INVALID_THING;
     }
+    if (boss_size > 0)
+        deadtng->sprite_size = (unsigned short)boss_size;
     deadtng->move_angle_xy = angle;
     set_flag_value(deadtng->alloc_flags, TAlF_IsControlled, memf1);
     if (owner != game.neutral_player_num)

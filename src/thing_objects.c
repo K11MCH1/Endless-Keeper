@@ -61,6 +61,7 @@
 #include "net_game.h"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -606,7 +607,7 @@ TbBool creature_remove_lair_totem_from_room(struct Thing *creatng, struct Room *
         return false;
     }
     TbBool result = true;
-    int required_cap = get_required_room_capacity_for_object(RoRoF_LairStorage, 0, creatng->model);
+    int required_cap = world_misdeeds_lair_places(creatng, get_required_room_capacity_for_object(RoRoF_LairStorage, 0, creatng->model)); /* endless: Contracts */
     // Remove lair from room capacity
     if (room->content_per_model[creatng->model] <= 0)
     {
@@ -1509,6 +1510,7 @@ static TngUpdateRet object_update_object_scale(struct Thing *objtng)
     unsigned char start_frame = objtng->current_frame;
     if (objtng->lair.belongs_to) {
         spr_size = game.conf.crtr_conf.sprite_size + (game.conf.crtr_conf.sprite_size * cctrl->exp_level * game.conf.crtr_conf.exp.size_increase_on_exp) / 100;
+        spr_size = world_misdeeds_lair_size(creatng, spr_size); /* endless: Contracts (Bed and Board) */
     } else {
         spr_size = objst->sprite_size_max;
     }

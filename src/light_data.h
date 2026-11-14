@@ -111,6 +111,9 @@ typedef struct VALUE VALUE;
 /******************************************************************************/
 void clear_stat_light_map(void);
 void update_light_render_area(void);
+/** Static and dynamic light worked out over an area now (a dedicated server, which has no view of its own: ground
+ *  made far from every camera, as an endless world's boss arena, otherwise goes out to its players unlit). */
+void light_render_area_now(MapSubtlCoord startx, MapSubtlCoord starty, MapSubtlCoord endx, MapSubtlCoord endy);
 void light_delete_light(long idx);
 void light_initialise(void);
 void light_turn_light_off(long num);

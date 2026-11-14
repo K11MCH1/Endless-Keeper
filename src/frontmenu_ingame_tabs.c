@@ -22,6 +22,7 @@
 #include "frontmenu_ingame_tabs.h"
 #include "chat_box.h"
 #include "globals.h"
+#include "world_misdeeds.h"
 #include "bflib_basics.h"
 
 #include "bflib_keybrd.h"
@@ -777,7 +778,7 @@ static void draw_level_badge(struct GuiButton *gbtn, int number, TbBool reached)
     LbTextDrawResized(0, gbtn->height / 16, tx_units_per_px, level_text);
 }
 
-/** Endless worlds, Amenity Mastery: the bar of a room (class 0) or spell (1) along the foot of its icon: how far its
+/** Endless worlds, Amenity Mastery: the bar of a room (class 0), spell (1) or trap (2) along the foot of its icon: how far its
  *  next level is. Nothing while the bar is empty or the amenity is at its top. */
 static void draw_mastery_bar(struct GuiButton *gbtn, int kind_class, int kind)
 {
@@ -1159,6 +1160,15 @@ void gui_area_trap_button(struct GuiButton *gbtn)
     } else
     {
         draw_gui_panel_sprite_left(gbtn->scr_pos_x, gbtn->scr_pos_y, ps_units_per_px, i);
+    }
+    if (manufctr->tngclass == TCls_Trap)
+    {
+        /* endless worlds, Amenity Mastery: the trap's level and bar, as on the room and spell icons */
+        int level_number = 0;
+        TbBool level_reached = false;
+        if (world_trap_level_badge(my_player_number, manufctr->tngmodel, &level_number, &level_reached))
+            draw_level_badge(gbtn, level_number, level_reached);
+        draw_mastery_bar(gbtn, 2, manufctr->tngmodel);
     }
     RendererSetDrawFlags(flg_mem);
 }
@@ -1561,6 +1571,12 @@ void draw_name_box(long x, long y, int width, struct Thing *thing)
         }
         // Draw creature name
         const char* text = creature_own_name(thing);
+        if (world_mode_active())
+        {
+            /* endless worlds: the name its keeper gave it, else its kind's (the names the game makes up are not shown) */
+            const char *given = world_misdeeds_shown_name(thing);
+            text = (given != NULL) ? given : get_string(creature_stats_get_from_thing(thing)->namestr_idx);
+        }
         draw_centred_string64k(text, x + 63*width/140, y + 2*width/140, 120, 120*width/140);
     }
 }

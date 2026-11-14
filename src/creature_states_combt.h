@@ -106,6 +106,10 @@ void creature_frenzy_start_effects(struct Thing *creatng, GameTurnDelta duration
 TbBool frenzy_spark_has_expired(const struct Thing *objtng);
 long get_combat_distance(const struct Thing *thing, const struct Thing *enemy);
 TbBool set_creature_in_combat_to_the_death(struct Thing *fighter, struct Thing *enemy, CrAttackType attack_type);
+TbBool change_current_combat(struct Thing *fighter, struct Thing *enemy, CrAttackType attack_type);
+TbBool remove_melee_attacker(struct Thing *fightng, struct Thing *enmtng);
+TbBool remove_ranged_attacker(struct Thing *fightng, struct Thing *enmtng);
+CrInstance get_best_melee_offensive_weapon(const struct Thing *thing, long dist);
 CrAttackType find_fellow_creature_to_fight_in_room(struct Thing *fighter, struct Room *room,short crmodel[], struct Thing **enemytng);
 long remove_all_traces_of_combat(struct Thing *thing);
 long get_combat_score(const struct Thing *thing, const struct Thing *enmtng, CrAttackType attack_type, long distance);

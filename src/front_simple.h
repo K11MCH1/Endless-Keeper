@@ -76,6 +76,9 @@ TbBool show_actv_bitmap_screen(TbClockMSec tmdelay);
 /******************************************************************************/
 
 TbBool display_loading_screen(void);
+/** The loading screen's picture and its palette (768 bytes), for the size of screen in use: two buffers the caller
+ *  frees. (Endless worlds draw it over a running game: world_curtain.c.) */
+TbBool load_loading_picture(unsigned char **raw, unsigned char **pal, int *width, int *height);
 TbBool wait_for_installation_files(void);
 /******************************************************************************/
 #ifdef __cplusplus

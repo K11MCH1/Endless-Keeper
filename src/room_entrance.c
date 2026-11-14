@@ -37,6 +37,7 @@
 #include "game_legacy.h"
 #include "world_misdeeds.h"
 #include "world_pools.h"
+#include "world_seasons.h"
 #include "post_inc.h"
 #include <stdint.h>
 
@@ -103,7 +104,9 @@ TbBool generation_due_for_dungeon(struct Dungeon * dungeon)
     if ( (game.armageddon_cast_turn == 0) || (game.conf.rules[game.armageddon_caster_idx].magic.armageddon_count_down + game.armageddon_cast_turn > get_gameturn()) )
     {
         if ( (dungeon->turns_between_entrance_generation != -1) &&
-             (get_gameturn() - dungeon->last_entrance_generation_gameturn >= dungeon->turns_between_entrance_generation) ) {
+             (get_gameturn() - dungeon->last_entrance_generation_gameturn >=
+              world_misdeeds_entrance_wait(dungeon->owner, dungeon->turns_between_entrance_generation
+                * (100 + world_season_portal_pct(dungeon->owner)) / 100)) ) { /* endless: the Long Night, then Alumni */
             SYNCDBG(9,"Due confirmed");
             return true;
         }

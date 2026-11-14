@@ -141,6 +141,8 @@ long world_heal_amount(PlayerNumber plyr_idx, long configured, const int32_t *st
 TbBool world_room_level_sacrifice(PlayerNumber plyr_idx);
 /** The number on a spell's panel icon (as world_room_level_badge). */
 TbBool world_power_level_badge(PlayerNumber plyr_idx, int pwkind, int *number, TbBool *reached);
+/** The number on a trap's panel icon (as world_room_level_badge; grey: the Workshop builds it next). */
+TbBool world_trap_level_badge(PlayerNumber plyr_idx, int trkind, int *number, TbBool *reached);
 /** The number on a room's panel icon: the next level, grey (allowed, not researched yet), or the level reached, white
  *  (the last one allowed). False: no number. */
 TbBool world_room_level_badge(PlayerNumber plyr_idx, int rkind, int *number, TbBool *reached);

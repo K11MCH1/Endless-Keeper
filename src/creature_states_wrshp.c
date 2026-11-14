@@ -43,6 +43,7 @@
 #include "game_legacy.h"
 #include "keeperfx.hpp"
 #include "world_progress.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -411,6 +412,7 @@ short manufacturing(struct Thing *creatng)
     {
         long work_value = compute_creature_work_value_for_room_role(creatng, RoRoF_CratesManufctr, room->efficiency);
         work_value = work_value * (100 + world_room_bonus(room->owner, WRB_WorkshopSpeed)) / 100; /* endless: its level */
+        work_value = work_value * world_misdeeds_work_percent(creatng) / 100; /* endless: resting after a correction */
         SYNCDBG(9,"The %s index %d owner %d produced %d manufacture points",thing_model_name(creatng),(int)creatng->index,(int)creatng->owner,(int)work_value);
         dungeon->manufacture_progress += work_value;
         dungeon->total_manufacture_points += work_value;

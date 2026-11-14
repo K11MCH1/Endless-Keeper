@@ -1518,10 +1518,14 @@ static void light_stat_light_map_clear_area(MapSubtlCoord start_stl_x, MapSubtlC
 void light_stat_refresh() {
     if (world_paged)
     {
-        MapSubtlCoord x1, y1, x2, y2;
-        map_loop_subtile_bounds(&x1, &y1, &x2, &y2);
-        if (x1 <= x2)
+        /* the loaded ground, island by island (not the one box round all of it: that box is mostly ground that
+           isn't loaded once two dungeons are far apart) */
+        static struct WpBox boxes[WP_ISLAND_BOXES_MAX];
+        const int n = wp_island_boxes(boxes, WP_ISLAND_BOXES_MAX);
+        for (int i = 0; i < n; i++)
         {
+            const MapSubtlCoord x1 = boxes[i].x1 * STL_PER_SLB, y1 = boxes[i].y1 * STL_PER_SLB;
+            const MapSubtlCoord x2 = boxes[i].x2 * STL_PER_SLB + STL_PER_SLB - 1, y2 = boxes[i].y2 * STL_PER_SLB + STL_PER_SLB - 1;
             light_stat_light_map_clear_area(x1, y1, x2, y2);
             light_signal_stat_light_update_in_area(x1, y1, x2, y2);
         }
@@ -2368,6 +2372,12 @@ static void light_render_area(MapSubtlCoord startx, MapSubtlCoord starty, MapSub
       }
     }
   }
+}
+
+void light_render_area_now(MapSubtlCoord startx, MapSubtlCoord starty, MapSubtlCoord endx, MapSubtlCoord endy)
+{
+    light_render_area(max(startx, 0), max(starty, 0), min(endx, (MapSubtlCoord)game.map_subtiles_x),
+        min(endy, (MapSubtlCoord)game.map_subtiles_y));
 }
 
 void update_light_render_area(void)

@@ -20,6 +20,7 @@
 #include "pre_inc.h"
 #include "observer.h"
 #include "local_camera.h"
+#include "world_boss.h"
 #include "engine_camera.h"
 #include "engine_render.h"
 #include "engine_redraw.h"
@@ -566,6 +567,35 @@ void update_local_cameras(void)
         }
         if (move_camera) {
             view_process_camera_velocity(cam);
+        }
+    }
+    {
+        /* endless: a keeper at a World Boss fight sees the arena only: its dungeon cameras stay inside it */
+        MapCoord box_x1, box_y1, box_x2, box_y2;
+        if (world_boss_view_box(&box_x1, &box_y1, &box_x2, &box_y2))
+        {
+            static const int dungeon_cams[2] = {CamIV_Isometric, CamIV_FrontView};
+            for (int i = 0; i < 2; i++)
+            {
+                struct Camera *bcam = &local_state.camera.destination[dungeon_cams[i]];
+                const MapCoord to_x = max(box_x1, min((MapCoord)bcam->mappos.x.val, box_x2));
+                const MapCoord to_y = max(box_y1, min((MapCoord)bcam->mappos.y.val, box_y2));
+                if (to_x != (MapCoord)bcam->mappos.x.val) {
+                    bcam->mappos.x.val = to_x;
+                    bcam->velocity_x = 0;
+                }
+                if (to_y != (MapCoord)bcam->mappos.y.val) {
+                    bcam->mappos.y.val = to_y;
+                    bcam->velocity_y = 0;
+                }
+            }
+            /* a glide to somewhere outside it (the Heart key, a message's place) would never arrive, and holds the
+               camera's keys meanwhile: it ends here */
+            if ((local_state.camera.move_cam != NULL) &&
+                ((local_state.camera.move_target[0] < box_x1) || (local_state.camera.move_target[0] > box_x2) ||
+                 (local_state.camera.move_target[1] < box_y1) || (local_state.camera.move_target[1] > box_y2))) {
+                local_state.camera.move_cam = NULL;
+            }
         }
     }
     if (active_cam_idx == CamIV_Isometric) {

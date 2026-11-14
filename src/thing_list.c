@@ -58,6 +58,7 @@
 #include "kfx/ai/TargetSearchProbe.h"
 #include "world_pages.h"
 #include "world_stream.h"
+#include "world_truce.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -3934,6 +3935,8 @@ TbBool thing_is_shootable(const struct Thing *thing, PlayerNumber shot_owner, Hi
         // spectators are not shootable
         if ((get_creature_model_flags(thing) & CMF_IsSpectator) != 0)
             return false;
+        if (world_truce_no_touch(thing, shot_owner))
+            return false; /* endless: a truce between keepers who are not allied (friendly fire off) */
         // Armour spell may prevent from hitting
         if ((hit_targets & HitTF_ArmourAffctdCreatrs) == 0) {
             if (creature_under_spell_effect(thing, CSAfF_Armour))

@@ -1006,11 +1006,13 @@ TbBool cmd_conceal(PlayerNumber plyr_idx, char * args)
         conceal_map_area(plyr_idx, stl_x - radius_offset, stl_x + r - radius_offset, stl_y - radius_offset, stl_y + r - radius_offset, false);
     } else
     if (world_paged) {
-        // Paged mode: the whole map is the loaded chunks
-        MapSubtlCoord sx1, sy1, sx2, sy2;
-        map_loop_subtile_bounds(&sx1, &sy1, &sx2, &sy2);
-        if ((sx1 <= sx2) && (sy1 <= sy2))
-            conceal_map_area(plyr_idx, sx1, sx2, sy1, sy2, false);
+        // Paged mode: the whole map is the loaded chunks, page by page (not the box round all of them, which is
+        // mostly unloaded ground once two dungeons are far apart)
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+        {
+            const MapSubtlCoord sx1 = pg->cx * WP_CHUNK_STL, sy1 = pg->cy * WP_CHUNK_STL;
+            conceal_map_area(plyr_idx, sx1, sx1 + WP_CHUNK_STL - 1, sy1, sy1 + WP_CHUNK_STL - 1, false);
+        }
     } else {
         conceal_map_area(plyr_idx, 0, game.map_subtiles_x - 1, 0, game.map_subtiles_y - 1, false);
     }

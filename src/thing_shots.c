@@ -21,6 +21,7 @@
 #include "thing_shots.h"
 
 #include "globals.h"
+#include "world_boss.h"
 #include "bflib_basics.h"
 #include "bflib_math.h"
 #include "bflib_planar.h"
@@ -61,6 +62,7 @@
 #include "world_progress.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
+#include "world_sword.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -778,7 +780,10 @@ TbBool apply_shot_experience_from_hitting_creature(struct Thing *shooter, struct
 {
     struct CreatureControl* tgcctrl = creature_control_get_from_thing(target);
     struct CreatureModelConfig* tgcrconf = creature_stats_get_from_thing(target);
-    return apply_shot_experience(shooter, tgcrconf->exp_for_hitting, tgcctrl->exp_level, shot_model);
+    long exp_factor = tgcrconf->exp_for_hitting;
+    if (world_sword_driven(target) && (shooter->owner == tgcctrl->party.target_plyr_idx))
+        exp_factor *= 2; /* endless worlds: the hero a guest drives is worth twice (Take Up the Sword) */
+    return apply_shot_experience(shooter, exp_factor, tgcctrl->exp_level, shot_model);
 }
 
 long shot_kill_object(struct Thing *shotng, struct Thing *target)
@@ -983,7 +988,8 @@ long get_damage_of_melee_shot(struct Thing *shotng, const struct Thing *target, 
     {
         hitchance = 96;
     }
-    if (THING_RANDOM(shotng, 256) < (128 + hitchance))
+    // Endless: a World Boss's blows land less often (the same chance for any other creature's)
+    if (THING_RANDOM(shotng, 256) < (128 + hitchance) * world_boss_hit_percent(shotng) / 100)
     {
         return shotng->shot.damage;
     }
@@ -1115,8 +1121,10 @@ long melee_shot_hit_creature_at(struct Thing *shotng, struct Thing *trgtng, stru
         return 0;
     struct Thing* shooter = get_parent_thing(shotng);
     struct CreatureControl* tgcctrl = creature_control_get_from_thing(trgtng);
+    world_boss_cleave(shooter, shotng, trgtng); /* endless: the Avatar's Cleave */
     long damage = get_damage_of_melee_shot(shotng, trgtng, flag_is_set(shotst->model_flags, ShMF_NeverBlock));
     damage = world_misdeeds_adjust_damage(trgtng, shooter, damage); /* endless: the vices */
+    damage = world_misdeeds_shot_damage(shotng, shooter, trgtng, damage); /* endless: Lessons, Breeds */
     if (flag_is_set(shotst->model_flags, ShMF_Fire))
         damage = creature_fire_adjust_damage(trgtng, damage);
     if (damage > 0)
@@ -1313,6 +1321,7 @@ long shot_hit_creature_at(struct Thing *shotng, struct Thing *trgtng, struct Coo
     {
         HitPoints damage_done;
         HitPoints vice_damage = world_misdeeds_adjust_damage(trgtng, shooter, shotng->shot.damage); /* endless: the vices */
+        vice_damage = world_misdeeds_shot_damage(shotng, shooter, trgtng, vice_damage); /* endless: Lessons, Breeds */
         if (flag_is_set(shotst->model_flags, ShMF_Fire))
             vice_damage = creature_fire_adjust_damage(trgtng, vice_damage);
         if (thing_exists(shooter)) {

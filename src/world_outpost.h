@@ -65,6 +65,11 @@ TbBool world_stronghold_test_target(int family, int64_t wx, int64_t wy, int64_t 
     int64_t *gy, int64_t *ex, int64_t *ey, int *tier);
 /** The hero AI with nothing to do: an outpost's or fortress's hero walks off somewhere (true when it set off). */
 TbBool world_stronghold_hero_wanders(struct Thing *creatng);
+/** Crusade roads (world_crusade.c): a region's outpost state (-1 undecided, 0 none, 1 one), an outpost answering a
+ *  road's alarm, the hero fortresses decided so far (n from 0; false past the last). */
+int world_outpost_region_state(int64_t rx, int64_t ry);
+void world_outpost_answer(int64_t rx, int64_t ry, int level);
+TbBool world_outpost_fortress_get(int n, int32_t *id_cx, int32_t *id_cy, int64_t *cx, int64_t *cy, TbBool *disturbed);
 /** A heroes heart is gone: an outpost's drops its spellbook. */
 void world_outpost_heart_destroyed(const struct Thing *heartng);
 /** A new world, a load, the end: outposts on (a world made before them turns them off while it loads). */

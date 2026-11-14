@@ -50,6 +50,7 @@
 #include "config_settings.h"
 #include "keeperfx.hpp"
 #include "world_pages.h"
+#include "world_creature_window.h"
 #include "post_inc.h"
 
 extern TbBool process_dungeon_control_packet_spell_overcharge(NetUserId user);
@@ -402,7 +403,7 @@ TbBool process_dungeon_control_packet_dungeon_control(NetUserId user)
                         if (is_local_user(user))
                         {
                             turn_off_all_panel_menus();
-                            turn_on_menu(GMnu_CREATURE_QUERY1);
+                            turn_on_menu(world_creature_window_panel_menu(GMnu_CREATURE_QUERY1)); /* endless: the creature window */
                         }
                         ustate->influenced_thing_idx = ustate->thing_under_hand;
                         ustate->influenced_thing_creation = thing->creation_turn;

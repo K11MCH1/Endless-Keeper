@@ -66,6 +66,7 @@
 #include "kfx/profiling/KfxProfiling.h"
 #include "world_stream.h"
 #include "world_pages.h"
+#include "world_misdeeds.h"
 #include "net_state.h"
 #include "roomspace_input.h"
 #include "net_spectator.h"
@@ -163,11 +164,14 @@ static void process_dungeon_devastation_effects(void)
             continue;
         if (world_paged)
         {
-            // Paged mode: the ring stops once it's past every side of the loaded chunks' bounding box
+            // Paged mode: the ring stops once it's past every side of the island of loaded chunks its middle is in
+            // (the box round every loaded chunk reaches to other dungeons far away: the ring would go on for as many
+            // turns as there are slabs between them, blasting ground that isn't loaded)
             MapSlabCoord bx1, by1, bx2, by2;
-            map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
             const MapSlabCoord cslb_x = subtile_slab(dungeon->devastation_centr_x);
             const MapSlabCoord cslb_y = subtile_slab(dungeon->devastation_centr_y);
+            if (!wp_island_bounds(cslb_x, cslb_y, &bx1, &by1, &bx2, &by2))
+                continue;
             const MapSlabCoord reach = max(max(cslb_x - bx1, bx2 - cslb_x), max(cslb_y - by1, by2 - cslb_y));
             if ((bx1 > bx2) || (by1 > by2) || (reach < 0) || (dungeon->devastation_turn > (GameTurn)reach))
                 continue;
@@ -220,7 +224,7 @@ static int set_players_creatures_to_get_paid(PlayerNumber plyr_idx)
         {
             struct CreatureModelConfig *crconf;
             crconf = creature_stats_get_from_thing(thing);
-            if (crconf->pay != 0)
+            if ((crconf->pay != 0) && !world_misdeeds_no_wage(thing)) /* endless: Contracts (no wage, no payday) */
             {
                 struct CreatureControl *cctrl;
                 cctrl = creature_control_get_from_thing(thing);

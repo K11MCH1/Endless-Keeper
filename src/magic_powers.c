@@ -64,6 +64,9 @@
 #include "lua_triggers.h"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_misdeeds.h"
+#include "world_boss.h"
+#include "world_truce.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -235,6 +238,9 @@ TbBool can_cast_power_on_thing(PlayerNumber plyr_idx, const struct Thing *thing,
     // Picked up things are immune to spells
     if (thing_is_picked_up(thing)) {
         return false;
+    }
+    if (world_truce_no_touch(thing, plyr_idx)) {
+        return false; /* endless: a truce between keepers who are not allied (friendly fire off) */
     }
     struct PowerConfigStats *powerst;
     powerst = get_power_model_stats(pwkind);
@@ -444,6 +450,10 @@ TbBool can_cast_power_on_thing(PlayerNumber plyr_idx, const struct Thing *thing,
         }
         if ((powerst->can_cast_flags & PwCast_BoundCrtrs) == 0)
         {
+            if ((pwkind == PwrK_HAND) && world_boss_blocks_pickup(thing, plyr_idx)) {
+                SYNCDBG(8,"Player %d cannot pick up %s index %d in a World Boss's arena",(int)plyr_idx,thing_model_name(thing),(int)thing->index);
+                return false;
+            }
             if (armageddon_blocks_creature_pickup(thing, plyr_idx)) {
                 SYNCDBG(8,"Player %d cannot cast %s while armageddon blocks %s index %d",(int)plyr_idx,power_code_name(pwkind),thing_model_name(thing),(int)thing->index);
                 return false;
@@ -1203,6 +1213,8 @@ static TbResult magic_use_power_hold_audience(PowerKind power_kind, PlayerNumber
 
 static TbResult magic_use_power_hand(PowerKind power_kind, PlayerNumber plyr_idx, struct Thing *thing, MapSubtlCoord stl_x, MapSubtlCoord stl_y, KeepPwrLevel power_level, unsigned long mod_flags)
 {
+    if (world_boss_take_gold(thing, plyr_idx))
+        return Lb_SUCCESS; // endless: a World Boss's gold goes straight to the keeper's gold, not into the Hand
     if (power_hand_is_full(get_player(plyr_idx)))
         return Lb_FAIL;
     else if (place_thing_in_power_hand(thing, plyr_idx))
@@ -2153,6 +2165,7 @@ TbResult magic_use_power_on_thing(PlayerNumber plyr_idx, PowerKind pwkind,
     if (ret == Lb_SUCCESS)
     {
         get_player(plyr_idx)->power_of_cooldown_turn = get_gameturn() + powerst->cast_cooldown;
+        world_misdeeds_power_on(plyr_idx, pwkind, thing); /* endless: a virtue corrected on the rack */
     }
     return ret;
 }

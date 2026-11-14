@@ -84,6 +84,10 @@ enum GUI_Menus {
   GMnu_FEPARTY_INVITE     = 54, /* World List: "Join <name> to party?" */
   GMnu_CHAT_BOX           = 55, /* a network endless game's chat box (chat_box.c) */
   GMnu_WORLD_DELETE       = 56, /* endless world: !delete dungeon's "Are you sure?" Yes/No */
+  /* 57-59: the Keeper's Rap Sheet, Attunement and Tools panel (roadmap/keeper-tools-panel) */
+  GMnu_WORLD_BOSS_BAR     = 60, /* endless world: "Join the World Boss" (world_boss.c) */
+  GMnu_WORLD_BOSS_PICK    = 61, /* endless world: the creatures to send to a World Boss */
+  GMnu_CREATURE_WINDOW    = 62, /* endless world: the creature the Information tool shows, in a window (world_creature_window.c) */
 };
 
 #define MENU_INVALID_ID -1

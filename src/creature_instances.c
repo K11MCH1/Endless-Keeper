@@ -57,6 +57,8 @@
 #include "world_colours.h"
 #include "world_progress.h"
 #include "world_circles.h"
+#include "world_misdeeds.h"
+#include "world_alarm.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -231,10 +233,11 @@ TbBool creature_increase_available_instances(struct Thing *thing)
         int k = crconf->learned_instance_id[i];
         if (k > 0)
         {
-            if (crconf->learned_instance_level[i] <= cctrl->exp_level+1) {
+            const int learn_level = world_misdeeds_learn_level(thing, i, crconf->learned_instance_level[i]); /* endless: Lessons */
+            if (learn_level <= cctrl->exp_level+1) {
                 cctrl->instance_available[k] = true;
             }
-            else if ( (crconf->learned_instance_level[i] > cctrl->exp_level+1) && !(game.conf.rules[thing->owner].gameplay.classic_bugs_flags & ClscBug_RebirthKeepsSpells) )
+            else if ( (learn_level > cctrl->exp_level+1) && !(game.conf.rules[thing->owner].gameplay.classic_bugs_flags & ClscBug_RebirthKeepsSpells) )
             {
                 cctrl->instance_available[k] = false;
             }
@@ -679,6 +682,7 @@ long instf_dig(struct Thing *creatng, int32_t *param)
             gold = calculate_gold_digged_out_of_slab_with_single_hit(dig_damage, slb);
             creatng->creature.gold_carried += gold;
             dungeon->lvstats.gold_mined += gold;
+            world_alarm_gold_mined(creatng, stl_x, stl_y, gold); /* endless worlds: a fortress's bell hears it */
         }
         return 0;
     }
@@ -691,6 +695,7 @@ long instf_dig(struct Thing *creatng, int32_t *param)
         gold = calculate_gold_digged_out_of_slab_with_single_hit(dig_damage, slb);
         creatng->creature.gold_carried += gold;
         dungeon->lvstats.gold_mined += gold;
+        world_alarm_gold_mined(creatng, stl_x, stl_y, gold); /* endless worlds: a fortress's bell hears it */
         mine_out_block(stl_x, stl_y, creatng->owner);
         world_circles_dug(creatng->owner, stl_x, stl_y); /* endless worlds: digging through a circle's line */
         if (dig_has_revealed_area(stl_x, stl_y, creatng->owner))
@@ -1735,7 +1740,7 @@ TbBool search_target_generic
             // @todo Consider checking thing_in_field_of_view() in the future, now it is buggy.
             // We assume that the source must see the target before it can cast the spell.
             int range = get_combat_distance(source, candidate);
-            if (range < inst_inf->range_min || range > inst_inf->range_max ||
+            if (range < inst_inf->range_min || range > world_misdeeds_range(source, inst_inf->range_max) || /* endless: the Rear */
                 !creature_can_see_combat_path(source, candidate, range))
             {
                 continue;

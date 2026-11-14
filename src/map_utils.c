@@ -197,9 +197,11 @@ void slabs_fill_iterate_from_slab(MapSlabCoord src_slab_x, MapSlabCoord src_slab
 {
     if (world_paged)
     {
-        // Paged mode: the fill stays inside the loaded chunks' bounding box; the visited map uses local coordinates
+        // Paged mode: the fill stays inside the box of the island of loaded chunks it starts in (the box round every
+        // loaded chunk would hold other dungeons far away as well); the visited map uses local coordinates
         MapSlabCoord bx1, by1, bx2, by2;
-        map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
+        if (!wp_island_bounds(src_slab_x, src_slab_y, &bx1, &by1, &bx2, &by2))
+            return;
         if ((src_slab_x < bx1) || (src_slab_x > bx2) || (src_slab_y < by1) || (src_slab_y > by2))
             return;
         const long box_w = bx2 - bx1 + 1;

@@ -44,6 +44,7 @@
 #include "player_instances.h"
 #include "player_utils.h"
 #include "slab_data.h"
+#include "config_terrain.h"
 #include "thing_creature.h"
 #include "thing_data.h"
 #include "thing_factory.h"
@@ -51,6 +52,7 @@
 #include "world_pages.h"
 #include "world_daynight.h"
 #include "world_circles.h"
+#include "world_misdeeds.h"
 #include "net_game.h"
 #include "creature_states.h"
 #include "creature_groups.h"
@@ -59,6 +61,8 @@
 #include "slab_data.h"
 #include "thing_stats.h"
 #include <limits.h>
+#include "world_seasons.h"
+#include "world_watchfire.h"
 #include "post_inc.h"
 
 #define WILD_CYCLE_TURNS 20     /* one spawn cycle a second */
@@ -277,6 +281,9 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
         x = 1 + lcx * WORLD_CHUNK_SLABS + wild_rand(rng, WORLD_CHUNK_SLABS);
         y = 1 + lcy * WORLD_CHUNK_SLABS + wild_rand(rng, WORLD_CHUNK_SLABS);
     }
+    if (world_apart_engine_slab(x, y))
+        return 0; /* the world apart (a World Boss's arena): nothing of the wild is there */
+    const TbBool fire_pushed = world_watchfire_push(&x, &y); /* a watchfire's light: the pack comes at its edge, bigger */
     const int ground = wild_ground_at(x, y);
     if ((ground < 0) || (counts[ground] >= wild_caps[ground]))
         return 0;
@@ -298,10 +305,13 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
     }
     if (list[k].name == NULL)
         return 0;
-    const long model = get_id(creature_desc, list[k].name);
+    TbBool season_flies = false;
+    const int season_extra = world_season_pack_extra(ground == WiG_Water, &season_flies); /* the seasons */
+    const long model = season_flies ? get_id(creature_desc, "FLY") : get_id(creature_desc, list[k].name);
     if (model <= 0)
         return 0;
-    const int group = list[k].min_group + wild_rand(rng, list[k].max_group - list[k].min_group + 1);
+    const int group = list[k].min_group + wild_rand(rng, list[k].max_group - list[k].min_group + 1) + season_extra +
+        (fire_pushed ? 1 : 0);
     const MapSlabCoord px = x, py = y;
     /* circles (world_circles.c): a pack is as strong as the circle it appears in */
     const int top = world_circles_level_at_slab(x, y, 1, "a wild pack");
@@ -345,6 +355,8 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
 #define WILD_DIG_TURNS 60            /* a Beetle digs a slab of earth in 3 seconds */
 #define WILD_WALK_TURNS 30
 #define WILD_HUNT_REACH 90           /* slabs: how far a Beetle looks for its keeper's imps and creatures */
+#define WILD_SITE_MIN 48             /* slabs from the heart: imps digging or mining further out are a work site, and
+                                        burrows open round them (2026-11-13) */
 #define WILD_MAX_TUNNEL 4096
 #define WILD_MAX_DIGGERS 48
 #define WILD_DIG_PHASES 5            /* a digger gets its turn every fifth pass (a pass every fourth turn: once a second) */
@@ -371,6 +383,9 @@ struct WildDigger {
     int64_t head_x, head_y;          /* the tunnel's head, world slabs: it digs on from there, wherever it wandered */
     int64_t trail_x[8], trail_y[8];  /* the head's last places: not stepped on again (no going round in circles) */
     int8_t last_dx, last_dy;
+    int32_t target_x, target_y;      /* the engine slab it went for last (a new target starts the stall count again) */
+    uint8_t arrived;                 /* it reached its target (logged once) */
+    uint8_t site;                    /* its burrow opened by imps at work far from home (for the log) */
 };
 static struct WildDigger wild_digger[WILD_MAX_DIGGERS];
 static uint32_t wild_pack_serial = 0;
@@ -540,8 +555,8 @@ static TbBool wild_hunt_target(PlayerNumber plyr_idx, MapSlabCoord bx, MapSlabCo
     struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
     if (dungeon_invalid(dungeon))
         return false;
-    long best_dig = LONG_MAX, best_out = LONG_MAX;
-    MapSlabCoord dig_x = 0, dig_y = 0, out_x = 0, out_y = 0;
+    long best_dig = LONG_MAX, best_imp = LONG_MAX, best_out = LONG_MAX;
+    MapSlabCoord dig_x = 0, dig_y = 0, imp_x = 0, imp_y = 0, out_x = 0, out_y = 0;
     const ThingIndex lists[2] = {dungeon->digger_list_start, dungeon->creatr_list_start};
     for (int l = 0; l < 2; l++)
     {
@@ -571,8 +586,16 @@ static TbBool wild_hunt_target(PlayerNumber plyr_idx, MapSlabCoord bx, MapSlabCo
                 }
                 continue;
             }
-            const struct SlabMap *slb = get_slabmap_block(x, y);
-            if (!slabmap_block_invalid(slb) && (slabmap_owner(slb) != plyr_idx) && (d < best_out))
+            if ((l == 0) && (d < best_imp))
+            {
+                /* an imp walking its tunnel to or from the face: a target too (2026-11-13: before, only an imp caught
+                   digging was, so the target jumped between the face and the heart) */
+                best_imp = d;
+                imp_x = x;
+                imp_y = y;
+                continue;
+            }
+            if (d < best_out)
             {
                 best_out = d;
                 out_x = x;
@@ -584,6 +607,12 @@ static TbBool wild_hunt_target(PlayerNumber plyr_idx, MapSlabCoord bx, MapSlabCo
     {
         *tx = dig_x;
         *ty = dig_y;
+        return true;
+    }
+    if (best_imp != LONG_MAX)
+    {
+        *tx = imp_x;
+        *ty = imp_y;
         return true;
     }
     if (best_out != LONG_MAX)
@@ -625,6 +654,152 @@ static void wild_send(struct Thing *thing, MapSlabCoord x, MapSlabCoord y)
     cleanup_current_thing_state(thing);
     if (setup_person_move_to_coord(thing, &pos, NavRtF_Default))
         thing->continue_state = CrSt_GoodDoingNothing;
+}
+
+/** Floor any creature can walk: a path or claimed floor or a room of anyone (the keeper's own tunnel too: the way in
+ *  to the imps is its open end at the face), not a door, not water or lava. */
+static TbBool wild_floor_at(MapSlabCoord x, MapSlabCoord y)
+{
+    const struct SlabMap *slb = get_slabmap_block(x, y);
+    if (slabmap_block_invalid(slb))
+        return false;
+    return is_slab_type_walkable(slb->kind) && !slab_kind_is_door(slb->kind) && !slab_kind_is_liquid(slb->kind);
+}
+
+/* The Beetle's way: Dijkstra over a box round it and its target, open ground costing 1 and diggable earth 3; the
+ * target's own slab may be anything (an imp on claimed ground). A target further than WILD_PLAN_REACH is aimed at
+ * through a point that far along the line. When there is no way, the step goes towards the reached slab nearest the
+ * target. */
+#define WILD_PLAN_REACH 70
+#define WILD_PLAN_MARGIN 14
+#define WILD_PLAN_MAX (2 * (WILD_PLAN_REACH + WILD_PLAN_MARGIN) + 1)
+static TbBool wild_plan_step(MapSlabCoord bx, MapSlabCoord by, MapSlabCoord tx, MapSlabCoord ty, MapSlabCoord *nx,
+    MapSlabCoord *ny, long *togo)
+{
+    static uint16_t cost[WILD_PLAN_MAX * WILD_PLAN_MAX];
+    static uint8_t from[WILD_PLAN_MAX * WILD_PLAN_MAX];  /* 1 + the direction it was entered by; 0 unreached */
+    static int32_t bucket_next[WILD_PLAN_MAX * WILD_PLAN_MAX];
+    int32_t bucket_head[4];
+    const long ddx0 = (long)tx - bx, ddy0 = (long)ty - by;
+    const long far = max(labs(ddx0), labs(ddy0));
+    if (far > WILD_PLAN_REACH)
+    {
+        tx = bx + (MapSlabCoord)(ddx0 * WILD_PLAN_REACH / far);
+        ty = by + (MapSlabCoord)(ddy0 * WILD_PLAN_REACH / far);
+    }
+    const MapSlabCoord x0 = min(bx, tx) - WILD_PLAN_MARGIN, y0 = min(by, ty) - WILD_PLAN_MARGIN;
+    const int w = abs(tx - bx) + 2 * WILD_PLAN_MARGIN + 1, h = abs(ty - by) + 2 * WILD_PLAN_MARGIN + 1;
+    if ((w > WILD_PLAN_MAX) || (h > WILD_PLAN_MAX))
+        return false;
+    memset(cost, 0xFF, sizeof(uint16_t) * (size_t)w * h);
+    memset(from, 0, (size_t)w * h);
+    for (int b = 0; b < 4; b++)
+        bucket_head[b] = -1;
+    static const int8_t ddx[4] = {1, -1, 0, 0}, ddy[4] = {0, 0, 1, -1};
+    const int start = (by - y0) * w + (bx - x0), goal = (ty - y0) * w + (tx - x0);
+    cost[start] = 0;
+    from[start] = 5;
+    bucket_next[start] = -1;
+    bucket_head[0] = start;
+    int best = start;
+    long best_d = wild_dist2(bx, by, tx, ty);
+    int pending = 1;
+    for (unsigned c = 0; pending > 0; c++)
+    {
+        const int b = (int)(c % 4);
+        while (bucket_head[b] >= 0)
+        {
+            const int cell = bucket_head[b];
+            bucket_head[b] = bucket_next[cell];
+            pending--;
+            if (cost[cell] != c)
+                continue; /* a stale entry: reached cheaper since */
+            if (cell == goal)
+            {
+                pending = 0;
+                best = goal;
+                break;
+            }
+            const MapSlabCoord cx = x0 + cell % w, cy = y0 + cell / w;
+            const long d = wild_dist2(cx, cy, tx, ty);
+            if (d < best_d)
+            {
+                best_d = d;
+                best = cell;
+            }
+            for (int k = 0; k < 4; k++)
+            {
+                const MapSlabCoord ex = cx + ddx[k], ey = cy + ddy[k];
+                if ((ex < x0) || (ey < y0) || (ex >= x0 + w) || (ey >= y0 + h))
+                    continue;
+                const int e = (ey - y0) * w + (ex - x0);
+                int step;
+                if (e == goal)
+                    step = 1;
+                else if (wild_floor_at(ex, ey))
+                    step = 1;
+                else if (wild_earth_at(ex, ey))
+                    step = 3;
+                else
+                    continue;
+                const unsigned nc = c + (unsigned)step;
+                if ((nc >= 0xFFFF) || (nc >= cost[e]))
+                    continue;
+                cost[e] = (uint16_t)nc;
+                from[e] = (uint8_t)(k + 1);
+                const int nb = (int)(nc % 4);
+                bucket_next[e] = bucket_head[nb];
+                bucket_head[nb] = e;
+                pending++;
+            }
+        }
+    }
+    if (best == start)
+        return false;
+    /* back from the best cell to the first step */
+    int cell = best, guard = 0;
+    *togo = (long)cost[best];
+    while (guard++ < WILD_PLAN_MAX * WILD_PLAN_MAX)
+    {
+        const int k = from[cell] - 1;
+        const MapSlabCoord cx = x0 + cell % w, cy = y0 + cell / w;
+        const int prev = (cy - ddy[k] - y0) * w + (cx - ddx[k] - x0);
+        if (prev == start)
+        {
+            if (cell == goal)
+                return false; /* it stands next to its target already */
+            *nx = cx;
+            *ny = cy;
+            return true;
+        }
+        cell = prev;
+    }
+    return false;
+}
+
+/** A hunting pack that can get no further gives up the hunt: it becomes an ordinary wild pack where it stands (it
+ *  still fights what comes near and fades at dawn), so it no longer counts against its keeper's WILD_HUNT_MAX and the
+ *  next burrow can open by the imps (2026-11-13: packs stuck at walls filled the eight places for the whole night). */
+static void wild_pack_gives_up(struct Thing *beetle)
+{
+    long guard = 0;
+    struct Thing *leader = creature_is_group_member(beetle) ? get_group_leader(beetle) : beetle;
+    struct Thing *memb = thing_exists(leader) ? leader : beetle;
+    while (thing_exists(memb) && (guard++ < 32))
+    {
+        struct CreatureControl *mctrl = creature_control_get_from_thing(memb);
+        if (creature_control_invalid(mctrl))
+            break;
+        if (world_wild_creature(memb) && (mctrl->party.original_objective == WILD_HUNTER_MARK))
+        {
+            mctrl->party.original_objective = CHeroTsk_DefendSpawn;
+            mctrl->party.objective = CHeroTsk_DefendSpawn;
+            mctrl->party.target_plyr_idx = -1;
+        }
+        if (memb == beetle && !creature_is_group_member(beetle))
+            break;
+        memb = (mctrl->next_in_group > 0) ? thing_get(mctrl->next_in_group) : INVALID_THING;
+    }
 }
 
 /** Once a second: each pack's first living Beetle takes a step of its tunnel. */
@@ -701,7 +876,26 @@ static void wild_diggers_turn(int phase)
             dg->next = game.play_gameturn + 100; /* nobody to dig towards: the pack prowls, and looks again */
             continue;
         }
+        if ((dg->target_x != tx) || (dg->target_y != ty))
+        {
+            if (max(labs((long)dg->target_x - tx), labs((long)dg->target_y - ty)) > 6)
+            {
+                dg->best = 0; /* another target: how near it gets is counted afresh */
+                dg->stall = 0;
+            }
+            dg->target_x = tx;
+            dg->target_y = ty;
+        }
         const long adx = labs((long)tx - bx), ady = labs((long)ty - by);
+        if ((adx <= 2) && (ady <= 2) && !dg->arrived)
+        {
+            struct Thing *heart = find_players_dungeon_heart(dg->plyr);
+            const long from_heart = thing_exists(heart) ? (long)floor(sqrt((double)wild_dist2(tx, ty,
+                subtile_slab(heart->mappos.x.stl.num), subtile_slab(heart->mappos.y.stl.num)))) : -1;
+            SYNCLOG("World: a wild pack hunting player %d (out of a burrow by its %s) arrives at its target, %ld slabs from"
+                " the keeper's heart", (int)dg->plyr, dg->site ? "imps at work" : "heart", from_heart);
+            dg->arrived = 1;
+        }
         if ((adx <= 1) && (ady <= 1))
         {
             dg->next = game.play_gameturn + WILD_WALK_TURNS;
@@ -715,104 +909,113 @@ static void wild_diggers_turn(int phase)
         {
             /* a way there already: no digging; it walks, the pack with it */
             if (!dg->walking)
-                SYNCLOG("World: a wild Beetle at engine slab (%d,%d) has a way to (%d,%d): its pack walks in on player %d",
-                    (int)bx, (int)by, (int)tx, (int)ty, (int)dg->plyr);
+            {
+                struct Thing *heart = find_players_dungeon_heart(dg->plyr);
+                const long from_heart = thing_exists(heart) ? (long)floor(sqrt((double)wild_dist2(tx, ty,
+                    subtile_slab(heart->mappos.x.stl.num), subtile_slab(heart->mappos.y.stl.num)))) : -1;
+                SYNCLOG("World: a wild Beetle at engine slab (%d,%d) has a way to (%d,%d): its pack walks in on player %d,"
+                    " %ld slabs from the keeper's heart (a burrow by its %s)", (int)bx, (int)by, (int)tx, (int)ty, (int)dg->plyr,
+                    from_heart, dg->site ? "imps at work" : "heart");
+            }
             dg->walking = 1;
             if (get_creature_state_besides_interruptions(thing) != CrSt_MoveToPosition)
                 wild_send(thing, tx, ty);
             dg->next = game.play_gameturn + 100;
             continue;
         }
-        /* the four steps, nearest to the target first; never straight back */
-        static const int8_t ddx[4] = {1, -1, 0, 0}, ddy[4] = {0, 0, 1, -1};
-        int order[4] = {0, 1, 2, 3};
-        long dist[4];
-        for (int d = 0; d < 4; d++)
-            dist[d] = wild_dist2(bx + ddx[d], by + ddy[d], tx, ty);
-        for (int a = 0; a < 3; a++)
-            for (int b = a + 1; b < 4; b++)
-                if (dist[order[b]] < dist[order[a]])
-                {
-                    const int t = order[a];
-                    order[a] = order[b];
-                    order[b] = t;
-                }
-        TbBool stepped = false;
-        for (int o = 0; (o < 4) && !stepped; o++)
+        /* the next step of the cheapest way there through open ground (1) and earth it can dig (3): it goes round rock,
+           gold and walls instead of stopping at the first one (2026-11-13: greedy steps gave up 14 to 23 slabs out) */
+        MapSlabCoord nx, ny;
+        long togo_after = 0;
+        if (!wild_plan_step(bx, by, tx, ty, &nx, &ny, &togo_after))
         {
-            const int d = order[o];
-            if ((ddx[d] == -dg->last_dx) && (ddy[d] == -dg->last_dy) && ((dg->last_dx != 0) || (dg->last_dy != 0)))
-                continue;
-            const MapSlabCoord nx = bx + ddx[d], ny = by + ddy[d];
-            int64_t nwx, nwy;
-            world_slab_to_world(nx, ny, &nwx, &nwy);
-            TbBool been = false;
-            for (int t = 0; t < 8; t++)
-                if ((dg->trail_x[t] == nwx) && (dg->trail_y[t] == nwy))
-                    been = true;
-            if (been)
-                continue;
-            if (wild_earth_at(nx, ny))
-            {
-                if ((dg->last_dx == 0) && (dg->last_dy == 0) && (dg->blocked == 0))
-                    SYNCLOG("World: a wild Beetle at engine slab (%d,%d) digs towards (%d,%d), hunting player %d", (int)bx,
-                        (int)by, (int)tx, (int)ty, (int)dg->plyr);
-                wild_open_slab(nx, ny);
-                dg->next = game.play_gameturn + WILD_DIG_TURNS;
-            } else if (wild_open_at(nx, ny))
-                dg->next = game.play_gameturn + WILD_WALK_TURNS;
-            else
-                continue;
-            wild_send(thing, nx, ny);
-            dg->steps++;
-            dg->head_x = nwx;
-            dg->head_y = nwy;
-            {
-                /* walls it can't dig turn it aside: when it has gone round them for a while without getting nearer,
-                   it stops, and its pack prowls there */
-                const long togo = max(labs((long)tx - nx), labs((long)ty - ny));
-                if ((dg->best == 0) || (togo < dg->best))
-                {
-                    dg->best = (int32_t)togo;
-                    dg->stall = 0;
-                } else if (++dg->stall > 12)
-                {
-                    SYNCLOG("World: a wild Beetle hunting player %d gets no nearer than %d slabs (walls or rock): its pack"
-                        " prowls there", (int)dg->plyr, (int)dg->best);
-                    dg->idx = 0;
-                }
-            }
-            dg->trail_x[dg->steps % 8] = nwx;
-            dg->trail_y[dg->steps % 8] = nwy;
-            if (((dg->steps % 10) == 0) && (getenv("KFX_WORLD_BURROWS") != NULL))
-                SYNCLOG("World test: a wild Beetle hunting player %d: %d steps, at (%d,%d), %ld slabs to go, state %d",
-                    (int)dg->plyr, (int)dg->steps, (int)nx, (int)ny, max(adx, ady), (int)get_creature_state_besides_interruptions(thing));
-            dg->last_dx = ddx[d];
-            dg->last_dy = ddy[d];
-            dg->blocked = 0;
-            stepped = true;
-        }
-        if (!stepped)
-        {
-            dg->last_dx = dg->last_dy = 0;
-            for (int t = 0; t < 8; t++)
-            {
-                dg->trail_x[t] = dg->head_x; /* a dead end: it may go back the way it came */
-                dg->trail_y[t] = dg->head_y;
-            }
             dg->next = game.play_gameturn + WILD_DIG_TURNS;
             if (++dg->blocked > 6)
             {
-                SYNCLOG("World: a wild Beetle hunting player %d can dig no further (rock, walls or claimed ground): its pack"
-                    " prowls", (int)dg->plyr);
+                SYNCLOG("World: a wild Beetle hunting player %d finds no way to dig (rock, walls or claimed ground all"
+                    " round): its pack prowls", (int)dg->plyr);
+                wild_pack_gives_up(thing);
+                dg->idx = 0;
+            }
+            continue;
+        }
+        int64_t nwx, nwy;
+        world_slab_to_world(nx, ny, &nwx, &nwy);
+        if (wild_earth_at(nx, ny))
+        {
+            if (dg->steps == 0)
+                SYNCLOG("World: a wild Beetle at engine slab (%d,%d) digs towards (%d,%d), hunting player %d", (int)bx,
+                    (int)by, (int)tx, (int)ty, (int)dg->plyr);
+            wild_open_slab(nx, ny);
+            dg->next = game.play_gameturn + WILD_DIG_TURNS;
+        } else
+            dg->next = game.play_gameturn + WILD_WALK_TURNS;
+        wild_send(thing, nx, ny);
+        dg->steps++;
+        dg->head_x = nwx;
+        dg->head_y = nwy;
+        dg->blocked = 0;
+        {
+            /* when it goes on for a long while without getting nearer (the way round is very long, or the target moves
+               away as fast as it digs), it stops, and its pack prowls there */
+            const long togo = max(labs((long)tx - nx), labs((long)ty - ny));
+            if ((dg->best == 0) || (togo < dg->best))
+            {
+                dg->best = (int32_t)togo;
+                dg->stall = 0;
+            } else if (++dg->stall > 40)
+            {
+                SYNCLOG("World: a wild Beetle hunting player %d gets no nearer than %d slabs: its pack prowls there",
+                    (int)dg->plyr, (int)dg->best);
+                wild_pack_gives_up(thing);
                 dg->idx = 0;
             }
         }
+        if (((dg->steps % 10) == 0) && (getenv("KFX_WORLD_BURROWS") != NULL))
+            SYNCLOG("World test: a wild Beetle hunting player %d: %d steps, at (%d,%d), %ld slabs to go (%ld by its way),"
+                " state %d", (int)dg->plyr, (int)dg->steps, (int)nx, (int)ny, max(adx, ady), togo_after,
+                (int)get_creature_state_besides_interruptions(thing));
     }
 }
 
-/** A burrow try for one keeper: a pack breaks out of the earth WILD_BURROW_MIN..MAX slabs from the heart. */
-static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, int *counts, const int *wild_caps, int reach)
+/** Where a keeper's imps are at work far from home: one of its imps that digs or mines WILD_SITE_MIN slabs or more
+ *  from the heart (hx, hy), each such imp as likely as the next. False when all of them work near home. */
+static TbBool wild_work_site(struct WildRng *rng, PlayerNumber plyr_idx, MapSlabCoord hx, MapSlabCoord hy,
+    MapSlabCoord *sx, MapSlabCoord *sy)
+{
+    struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
+    if (dungeon_invalid(dungeon))
+        return false;
+    int found = 0;
+    long guard = 0;
+    for (ThingIndex i = dungeon->digger_list_start; (i > 0) && (guard++ < CREATURES_COUNT);)
+    {
+        struct Thing *thing = thing_get(i);
+        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        if (thing_is_invalid(thing) || creature_control_invalid(cctrl))
+            break;
+        i = cctrl->players_next_creature_idx;
+        if (thing_is_picked_up(thing) || creature_is_dying(thing) || creature_is_kept_in_custody(thing))
+            continue;
+        /* (any imp out there: one far out spends most of its time walking to and from the face, not in a digging
+           state; an imp that has nothing to do walks home) */
+        const MapSlabCoord x = subtile_slab(thing->mappos.x.stl.num), y = subtile_slab(thing->mappos.y.stl.num);
+        if (wild_dist2(x, y, hx, hy) < (long)WILD_SITE_MIN * WILD_SITE_MIN)
+            continue;
+        found++;
+        if (wild_rand(rng, found) == 0)
+        {
+            *sx = x;
+            *sy = y;
+        }
+    }
+    return (found > 0);
+}
+
+/** A burrow try for one keeper: a pack breaks out of the earth WILD_BURROW_MIN..reach slabs from (cx, cy): the
+ *  keeper's heart, or (site) one of its imps at work far from home. */
+static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, MapSlabCoord cx, MapSlabCoord cy,
+    TbBool site, int *counts, const int *wild_caps, int reach)
 {
     const long night = world_day_number();
     if ((night <= 1) && (getenv("KFX_WORLD_BURROWS") == NULL))
@@ -827,7 +1030,8 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     int dy = (int)floor(sqrt((double)(r * r - dx * dx)) + 0.5);
     if (wild_rand(rng, 2) == 0)
         dy = -dy;
-    const MapSlabCoord x = pl->ax[a] + dx, y = pl->ay[a] + dy;
+    MapSlabCoord x = cx + dx, y = cy + dy;
+    const TbBool fire_pushed = world_watchfire_push(&x, &y); /* a watchfire's light: the burrow opens at its edge, bigger */
     if (!wild_earth_at(x, y) || wild_near_player(pl, x, y, WILD_MIN_DIST))
         return 0;
     /* the burrow: this slab and the earth beside it, three to five slabs */
@@ -877,7 +1081,7 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     const uint32_t pack = ++wild_pack_serial;
     struct Thing *leader = INVALID_THING;
     int made = 0;
-    for (int m = 0; m < size; m++)
+    for (int m = 0; m < size + (fire_pushed ? 1 : 0); m++)
     {
         struct Thing *thing = wild_spawn(rng, (ThingModel)((m < beetles) ? beetle : model), sx[m % ns], sy[m % ns],
             low + wild_rand(rng, top - low + 1));
@@ -903,6 +1107,7 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
                 wild_digger[j].plyr = pl->plyr[a];
                 wild_digger[j].pack = pack;
                 wild_digger[j].next = game.play_gameturn + WILD_DIG_TURNS;
+                wild_digger[j].site = site ? 1 : 0;
                 break;
             }
         }
@@ -911,8 +1116,8 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     }
     if (made > 0)
         SYNCLOG("World: a pack of %d (%d Beetles, %s; levels %d-%d) breaks out of the earth at engine slab (%d,%d), %d slabs"
-            " from player %d's heart, %s (night %ld, a burrow of %d slabs)", made, min(beetles, made), list[k].name, low, top,
-            (int)x, (int)y, r, (int)pl->plyr[a], wg_biome_name(biome), night, ns);
+            " from player %d's %s, %s (night %ld, a burrow of %d slabs)", made, min(beetles, made), list[k].name, low, top,
+            (int)x, (int)y, r, (int)pl->plyr[a], site ? "imps at work" : "heart", wg_biome_name(biome), night, ns);
     return made;
 }
 
@@ -983,6 +1188,24 @@ void world_wild_turn(void)
         struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
         const MapSlabCoord x = subtile_slab(thing->mappos.x.stl.num), y = subtile_slab(thing->mappos.y.stl.num);
         const TbBool fighting = (cctrl->combat_flags != 0);
+        /* Strays: a wild creature that ate a keeper's chicken tonight is as wild as before until dawn; then it stays
+           where it is, as a neutral creature. It does not fade meanwhile (it would not be there at dawn). */
+        if (!fighting && world_misdeeds_stray_fed(thing))
+        {
+            if (day)
+            {
+                world_misdeeds_stray_dawn(thing);
+                continue;
+            }
+            if (cctrl->party.original_objective != WILD_HUNTER_MARK)
+            {
+                /* (an ordinary wild creature by night: what the rest of this loop does for one that does not fade) */
+                if (cctrl->party.objective != CHeroTsk_DefendSpawn)
+                    cctrl->party.objective = CHeroTsk_DefendSpawn;
+                counts[wild_ground_of(thing)]++;
+                continue;
+            }
+        }
         if (day && !fighting && (wild_rand(&rng, WILD_DAWN_ONE_IN) == 0))
         {
             /* the night is over: they fade out (the ones in a fight stay until it's done) */
@@ -1061,8 +1284,43 @@ void world_wild_turn(void)
             int hearts = 0;
             for (int a = 0; a < pl.count; a++)
                 hearts += pl.heart[a];
-            SYNCLOG("World test: burrows: %d anchors, %d hearts, hunting player 0: %d, night %ld, one in %d", pl.count, hearts,
-                (int)hunting[0], night, one_in);
+            struct WildRng trng = rng; /* (a copy: the test line must not move the real draws) */
+            MapSlabCoord wx = 0, wy = 0;
+            long work = -1;
+            for (int a = 0; (a < pl.count) && (work < 0); a++)
+                if (pl.heart[a] && wild_work_site(&trng, pl.plyr[a], pl.ax[a], pl.ay[a], &wx, &wy))
+                    work = (long)sqrt((double)wild_dist2(wx, wy, pl.ax[a], pl.ay[a]));
+            /* and where the first keeper's imps are, and what they do */
+            int imps = 0, digging = 0;
+            long farthest = 0;
+            for (int a = 0; a < pl.count; a++)
+            {
+                struct Dungeon *dungeon = pl.heart[a] ? get_players_num_dungeon(pl.plyr[a]) : INVALID_DUNGEON;
+                if (dungeon_invalid(dungeon))
+                    continue;
+                long guard2 = 0;
+                for (ThingIndex di = dungeon->digger_list_start; (di > 0) && (guard2++ < CREATURES_COUNT);)
+                {
+                    struct Thing *imp = thing_get(di);
+                    struct CreatureControl *ictrl = creature_control_get_from_thing(imp);
+                    if (thing_is_invalid(imp) || creature_control_invalid(ictrl))
+                        break;
+                    di = ictrl->players_next_creature_idx;
+                    const CrtrStateId st = get_creature_state_besides_interruptions(imp);
+                    imps++;
+                    if ((st == CrSt_ImpDigsDirt) || (st == CrSt_ImpMinesGold) || (st == CrSt_ImpArrivesAtDigDirt) ||
+                        (st == CrSt_ImpArrivesAtMineGold))
+                        digging++;
+                    const long d = (long)sqrt((double)wild_dist2(subtile_slab(imp->mappos.x.stl.num),
+                        subtile_slab(imp->mappos.y.stl.num), pl.ax[a], pl.ay[a]));
+                    if (d > farthest)
+                        farthest = d;
+                }
+                break;
+            }
+            SYNCLOG("World test: burrows: %d anchors, %d hearts, hunting player 0: %d, night %ld, one in %d, imps at work far"
+                " from home: %ld slabs out (-1: none); %d imps, %d digging or mining, the farthest %ld slabs from the heart",
+                pl.count, hearts, (int)hunting[0], night, one_in, work, imps, digging, farthest);
         }
         for (int a = 0; a < pl.count; a++)
         {
@@ -1071,10 +1329,25 @@ void world_wild_turn(void)
             /* a few tries for a spot of earth in the band: anywhere in it first, then nearer in, since the far part
                of the band is often ground that isn't loaded (round a small dungeon, or just after a load), where no
                burrow can open (seen 2026-11-11: whole nights without a pack) */
+            /* where: round the keeper's imps where they dig or mine far from home, else round the heart. The threat is
+               meant to land on work sites; a burrow by a walled dungeon only leaves its pack prowling at the walls.
+               One time in four the heart still gets it, so a dungeon left open is found as well. (Seen 2026-11-13: with
+               imps digging a tunnel 250 slabs out, every pack of five nights broke out by the heart, dug to its walls
+               and stood there: thirteen packs, none reached anything.) */
+            MapSlabCoord cx = pl.ax[a], cy = pl.ay[a];
+            TbBool site = wild_work_site(&rng, pl.plyr[a], pl.ax[a], pl.ay[a], &cx, &cy);
+            if (site && (wild_rand(&rng, 4) == 0))
+            {
+                cx = pl.ax[a];
+                cy = pl.ay[a];
+                site = false;
+            }
             for (int t = 0; t < 12; t++)
             {
-                const int reach = (t < 4) ? WILD_BURROW_MAX : (t < 8) ? (WILD_BURROW_MIN + WILD_BURROW_MAX) / 2 : WILD_BURROW_MIN + 8;
-                const int made = wild_burrow(&rng, &pl, a, counts, wild_caps, reach);
+                /* (round a work site only the ground near the imps is loaded, so those tries stay nearer in) */
+                const int reach = site ? ((t < 6) ? WILD_BURROW_MIN + 16 : WILD_BURROW_MIN + 8) :
+                    (t < 4) ? WILD_BURROW_MAX : (t < 8) ? (WILD_BURROW_MIN + WILD_BURROW_MAX) / 2 : WILD_BURROW_MIN + 8;
+                const int made = wild_burrow(&rng, &pl, a, cx, cy, site, counts, wild_caps, reach);
                 if (made > 0)
                 {
                     hunting[pl.plyr[a]] = (uint8_t)min(255, hunting[pl.plyr[a]] + made);

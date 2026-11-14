@@ -20,6 +20,7 @@
 #include "room_util.h"
 
 #include "globals.h"
+#include "world_misdeeds.h"
 #include "bflib_basics.h"
 #include "ariadne_update.h"
 #include "room_data.h"
@@ -529,7 +530,7 @@ EventIndex update_cannot_find_room_of_role_wth_spare_capacity_event(PlayerNumber
             // Find room with lair capacity
             {
                 struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
-                room = find_room_of_role_with_spare_capacity(plyr_idx, rrole, crconf->lair_size);
+                room = find_room_of_role_with_spare_capacity(plyr_idx, rrole, world_misdeeds_lair_places(creatng, crconf->lair_size)); /* endless: Contracts */
                 break;
             }
         // For Treasure rooms, the item capacity is the amount of gold, not the number of gold hoardes.

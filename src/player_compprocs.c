@@ -1116,12 +1116,15 @@ long computer_process_sight_of_evil(struct Computer2 *comp, struct ComputerProce
 #define GRID COMPUTER_SOE_GRID_SIZE
         MapSlabCoord slb_x = game.map_tiles_x / 2;
         MapSlabCoord slb_y = game.map_tiles_y / 2;
-        // The grid of targets spans the map; in paged mode the loaded chunks' bounding box
+        // The grid of targets spans the map; in paged mode the island of loaded chunks this keeper's dungeon is in
+        // (the box round every loaded chunk holds other dungeons far away, and its grid fell on unloaded ground)
         MapSlabCoord area_x1 = 0, area_y1 = 0, area_w = game.map_tiles_x, area_h = game.map_tiles_y;
         if (world_paged)
         {
             MapSlabCoord bx1, by1, bx2, by2;
-            map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
+            const struct Coord3d* island_pos = dungeon_get_essential_pos(dungeon->owner);
+            if (!wp_island_bounds(subtile_slab(island_pos->x.stl.num), subtile_slab(island_pos->y.stl.num), &bx1, &by1, &bx2, &by2))
+                map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
             if ((bx1 > bx2) || (by1 > by2)) {
                 set_flag(cproc->flags, ComProc_Unkn0004);
                 return CProcRet_Unk3;

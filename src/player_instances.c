@@ -68,6 +68,8 @@
 #include "net_game.h"
 
 #include "keeperfx.hpp"
+#include "world_sword.h"
+#include "world_hand.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -306,6 +308,7 @@ TbBool slap_thing(struct PlayerInfo *player, NetUserId user, struct Thing *thing
       } else
       {
           slap_creature(player, thing);
+          world_hand_slapped(player, thing);
           pos.x.val = thing->mappos.x.val;
           pos.y.val = thing->mappos.y.val;
           pos.z.val = thing->mappos.z.val + (thing->clipbox_size_z >> 1);
@@ -898,7 +901,8 @@ void leave_creature_as_controller(NetUserId user, struct Thing *thing)
     struct PlayerInfo *player = get_user_player(user);
     struct UserState* ustate = get_user_state(user);
     SYNCDBG(7,"Starting for player %d within %s index %d",(int)player->id_number,thing_model_name(thing),(int)thing->index);
-    if (((thing->owner != player->id_number) && (ustate->work_state != PSt_FreeCtrlDirect))
+    if (((thing->owner != player->id_number) && (ustate->work_state != PSt_FreeCtrlDirect) &&
+        !world_sword_may_drive(user, thing)) /* endless worlds: a guest leading a raid */
       || (thing->index != ustate->controlled_thing_idx))
     {
         set_user_instance(user, PI_Unset, false);

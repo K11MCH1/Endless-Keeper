@@ -1711,13 +1711,23 @@ void set_player_colour(PlayerNumber plyr_idx, unsigned char colour_idx)
         {
             dungeon->color_idx = colour_idx;
             update_panel_color_player_color(plyr_idx,colour_idx);
-            // Paged mode: only the loaded chunks' bounding box
-            MapSlabCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_tiles_x - 1, loop_y2 = game.map_tiles_y - 1;
             if (world_paged)
-                map_loop_slab_bounds(&loop_x1, &loop_y1, &loop_x2, &loop_y2);
-            for (MapSlabCoord slb_y=loop_y1; slb_y <= loop_y2; slb_y++)
             {
-                for (MapSlabCoord slb_x=loop_x1; slb_x <= loop_x2; slb_x++)
+                // Paged mode: the loaded slabs, in the order a walk of their bounding box had them (the box is not
+                // walked: it is mostly unloaded ground once two dungeons are far apart)
+                struct WpSlabIter it;
+                MapSlabCoord slb_x, slb_y;
+                struct SlabMap *slb;
+                wp_slab_iter_init(&it);
+                while (wp_slab_iter_next(&it, &slb_x, &slb_y, &slb))
+                {
+                    if (slabmap_owner(slb) == plyr_idx)
+                        redraw_slab_map_elements(slb_x, slb_y);
+                }
+            } else
+            for (MapSlabCoord slb_y=0; slb_y <= game.map_tiles_y - 1; slb_y++)
+            {
+                for (MapSlabCoord slb_x=0; slb_x <= game.map_tiles_x - 1; slb_x++)
                 {
                     struct SlabMap* slb = get_slabmap_block(slb_x,slb_y);
                     if (slabmap_owner(slb) == plyr_idx)

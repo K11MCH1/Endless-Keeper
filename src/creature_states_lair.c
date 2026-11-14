@@ -21,6 +21,7 @@
 #include "engine_render.h"
 #include "creature_graphics.h"
 #include "globals.h"
+#include "world_misdeeds.h"
 
 #include "bflib_math.h"
 #include "thing_physics.h"
@@ -255,7 +256,7 @@ TbBool creature_place_lair_totem(struct Thing *creatng, struct Room *room, const
         return false;
     }
     room->content_per_model[creatng->model]++;
-    room->used_capacity += get_required_room_capacity_for_object(RoRoF_LairStorage, 0, creatng->model);
+    room->used_capacity += world_misdeeds_lair_places(creatng, get_required_room_capacity_for_object(RoRoF_LairStorage, 0, creatng->model)); /* endless: Contracts */
     if ((cctrl->lair_room_id > 0) && (cctrl->lairtng_idx > 0))
     {
         struct Room *origroom = room_get(cctrl->lair_room_id);

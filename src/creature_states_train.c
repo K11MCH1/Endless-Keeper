@@ -65,6 +65,8 @@ TbBool creature_can_be_trained(const struct Thing *thing)
        (process_training_need asks the same) */
     if (world_caretaker_active(thing->owner))
         return false;
+    if (world_misdeeds_resting(thing)) /* endless: Virtues (resting after a cure: it would pay and gain nothing) */
+        return false;
     if ((cctrl->exp_level >= game.conf.rules[thing->owner].rooms.training_room_max_level-1) &! (game.conf.rules[thing->owner].rooms.training_room_max_level == 0))
         return false;
     // If its model can train, check if this one can gain more experience
@@ -474,7 +476,8 @@ void process_creature_in_training_room(struct Thing *thing, struct Room *room)
                 {
                     cctrl->training.train_timeout = 1;
                 }
-                cctrl->exp_points += (room->efficiency * crconf->training_value) * (100 + world_room_bonus(room->owner, WRB_TrainingXp)) / 100;
+                if (!world_creature_growth_frozen(thing))
+                    cctrl->exp_points += (room->efficiency * crconf->training_value) * (100 + world_room_bonus(room->owner, WRB_TrainingXp)) / 100;
               }
             }
         } else
@@ -595,6 +598,8 @@ CrStateRet training(struct Thing *thing)
         work_value = work_value * (100 + world_room_bonus(room->owner, WRB_TrainingXp)) / 100; /* endless: its level */
         work_value = work_value * (100 + world_misdeeds_train_bonus(thing)) / 100; /* endless: Bad Influence */
         SYNCDBG(19,"The %s index %d produced %d training points",thing_model_name(thing),(int)thing->index,(int)work_value);
+        if (world_creature_growth_frozen(thing))
+            work_value = 0; /* endless: the caretaker keeps the dungeon */
         cctrl->exp_points += work_value;
         dungeon->total_experience_creatures_gained += work_value;
         process_creature_in_training_room(thing, room);

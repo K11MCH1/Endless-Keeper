@@ -730,18 +730,24 @@ void reinit_tagged_blocks_for_player(PlayerNumber plyr_idx)
     // Clear tagged blocks
     MapSubtlCoord stl_x;
     MapSubtlCoord stl_y;
-    // Paged mode: only the loaded chunks' bounding box
-    MapSubtlCoord loop_x1 = 0, loop_y1 = 0, loop_x2 = game.map_subtiles_x - 1, loop_y2 = game.map_subtiles_y - 1;
     if (world_paged)
-        map_loop_subtile_bounds(&loop_x1, &loop_y1, &loop_x2, &loop_y2);
-    for (stl_y=loop_y1; stl_y <= loop_y2; stl_y++)
     {
-        for (stl_x=loop_x1; stl_x <= loop_x2; stl_x++)
+        // Paged mode: the loaded chunks' pages (not the box round all of them, which is mostly unloaded ground)
+        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+        {
+            for (int i = 0; i < WP_CHUNK_STL_CELLS; i++)
+            {
+                pg->map[i].flags &= ~SlbAtFlg_Unexplored;
+                pg->map[i].flags &= ~SlbAtFlg_TaggedValuable;
+            }
+        }
+    } else
+    for (stl_y=0; stl_y <= game.map_subtiles_y - 1; stl_y++)
+    {
+        for (stl_x=0; stl_x <= game.map_subtiles_x - 1; stl_x++)
         {
             struct Map *mapblk;
             mapblk = get_map_block_at(stl_x, stl_y);
-            if (world_paged && map_block_invalid(mapblk))
-                continue; // a chunk that isn't loaded
             mapblk->flags &= ~SlbAtFlg_Unexplored;
             mapblk->flags &= ~SlbAtFlg_TaggedValuable;
         }

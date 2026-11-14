@@ -72,6 +72,7 @@
 #include "custom_sprites.h"
 #include "keeperfx.hpp"
 #include "world_misdeeds.h"
+#include "world_curtain.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1057,7 +1058,10 @@ TbBool keeper_screen_redraw(void)
         setup_engine_window(local_state.engine_window_x, local_state.engine_window_y,
             local_state.engine_window_width, local_state.engine_window_height);
         local_observer_rendering = get_my_player() == &local_observer_player;
-        redraw_display();
+        if (world_curtain_up())
+            world_curtain_draw(); /* endless: the loading screen covers this frame (a journey to a World Boss) */
+        else
+            redraw_display();
         local_observer_rendering = false;
         RendererEndFrame();
         return true;

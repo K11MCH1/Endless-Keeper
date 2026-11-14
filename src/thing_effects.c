@@ -55,6 +55,7 @@
 #include "world_colours.h"
 #include "net_state.h"
 #include "world_progress.h"
+#include "world_boss.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -733,6 +734,7 @@ void effect_generate_effect_elements(const struct Thing *thing)
             long k = abs(effcst->accel_xy_max - effcst->accel_xy_min);
             if (k <= 1) k = 1;
             long mag = effcst->accel_xy_min + UNSYNC_RANDOM(k);
+            mag = mag * world_boss_effect_spread_percent(thing) / 100; /* endless: a World Boss's Word of Power */
             elemtng->veloc_push_add.x.val += distance_with_angle_to_coord_x(mag,arg);
             elemtng->veloc_push_add.y.val += distance_with_angle_to_coord_y(mag,arg);
             // Setting Z acceleration
@@ -1273,6 +1275,7 @@ void word_of_power_affecting_area(struct Thing *efftng, struct Thing *tngsrc, st
     }
     SYNCDBG(8,"Starting for %s index %d owner %d",thing_model_name(efftng),(int)efftng->index,(int)efftng->owner);
     MapCoordDelta max_dist = shotst->area_range * COORD_PER_STL;
+    max_dist += world_boss_wop_reach(tngsrc); /* endless: a World Boss's Word of Power reaches further */
     {
         // Make sure the subtile is rounded up, unless the range is really close to lower value
         long stl_range = coord_subtile(max_dist + COORD_PER_STL * 9 / 10);
@@ -1314,6 +1317,7 @@ void word_of_power_affecting_area(struct Thing *efftng, struct Thing *tngsrc, st
             explosion_effect_affecting_map_block(efftng, tngsrc, mapblk, max_dist, shotst->area_damage, shotst->area_blow, shotst);
         }
     }
+    world_boss_wop_cast(tngsrc, pos, max_dist); /* endless: ... and throws creatures further back */
 }
 
 /**

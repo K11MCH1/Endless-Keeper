@@ -19,6 +19,7 @@
 #include "pre_inc.h"
 #include "creature_battle.h"
 #include "globals.h"
+#include "world_boss.h"
 
 #include "bflib_math.h"
 #include "creature_states.h"
@@ -99,7 +100,8 @@ TbBool has_melee_combat_attackers(struct Thing *victim)
 TbBool can_add_melee_combat_attacker(struct Thing *victim)
 {
     struct CreatureControl* vicctrl = creature_control_get_from_thing(victim);
-    return (vicctrl->opponents_melee_count < COMBAT_MELEE_OPPONENTS_LIMIT);
+    // Endless: a World Boss takes every attacker (the first four have a place, the others fight without one)
+    return (vicctrl->opponents_melee_count < COMBAT_MELEE_OPPONENTS_LIMIT) || world_boss_takes_all(victim);
 }
 
 TbBool has_ranged_combat_attackers(const struct Thing *victim)
@@ -139,7 +141,8 @@ BattleIndex find_last_battle_of_mine(PlayerNumber plyr_idx)
 TbBool can_add_ranged_combat_attacker(const struct Thing *victim)
 {
     struct CreatureControl* vicctrl = creature_control_get_from_thing(victim);
-    return (vicctrl->opponents_ranged_count < COMBAT_RANGED_OPPONENTS_LIMIT);
+    // Endless: a World Boss takes every attacker (the first four have a place, the others fight without one)
+    return (vicctrl->opponents_ranged_count < COMBAT_RANGED_OPPONENTS_LIMIT) || world_boss_takes_all(victim);
 }
 
 /**

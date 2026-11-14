@@ -75,6 +75,7 @@
 
 #include "world_colours.h"
 #include "world_misdeeds.h"
+#include "world_boss.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -5295,6 +5296,8 @@ void draw_status_sprites(long scrpos_x, long scrpos_y, struct Thing *thing)
     {
         return;
     }
+    if (world_boss_no_flower(thing))
+        return; /* endless: a World Boss's health is the bar at the top of the screen */
 
     float scale_by_zoom;
     int base_size = creature_status_size * 256;
@@ -9021,7 +9024,7 @@ static void do_map_who(short tnglist_idx)
         }
         i = thing->next_on_mapblk;
         // Per thing code start
-        if ((thing->rendering_flags & TRF_Invisible) == 0)
+        if (((thing->rendering_flags & TRF_Invisible) == 0) && !world_boss_loot_hidden(thing)) /* endless: World Boss loot */
         {
             do_map_who_for_thing(thing);
         }
@@ -9045,7 +9048,7 @@ static void draw_frontview_thing_on_element(struct Thing *thing, struct Map *map
     int32_t cx;
     int32_t cy;
     int32_t cz;
-    if ((thing->rendering_flags & TRF_Invisible) != 0)
+    if (((thing->rendering_flags & TRF_Invisible) != 0) || world_boss_loot_hidden(thing))
         return;
     switch (thing->draw_class)
     {

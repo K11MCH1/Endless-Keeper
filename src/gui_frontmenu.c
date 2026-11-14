@@ -161,6 +161,7 @@ void turn_off_query_menus(void)
     turn_off_menu(GMnu_CREATURE_QUERY3);
     turn_off_menu(GMnu_CREATURE_QUERY4);
     turn_off_menu(GMnu_CREATURE_QUERY5);
+    turn_off_menu(GMnu_CREATURE_WINDOW); /* endless: the creature window */
 }
 
 void turn_off_all_panel_menus(void)

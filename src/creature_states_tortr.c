@@ -389,9 +389,12 @@ long reveal_players_map_to_player(struct Thing *thing, PlayerNumber benefit_plyr
     struct IPOINT_2D* revealed_pts;
     if (world_paged)
     {
-        // Paged mode: the ownership map covers the loaded chunks' bounding box, plus the outside cell
+        // Paged mode: the ownership map covers the box of the island of loaded chunks the reveal starts in, plus the
+        // outside cell. The reveal spreads from slab to slab and never crosses unloaded ground, so it can't leave
+        // that island; the box round every loaded chunk would hold other dungeons far away as well.
         MapSlabCoord bx1, by1, bx2, by2;
-        map_loop_slab_bounds(&bx1, &by1, &bx2, &by2);
+        if (!wp_island_bounds(subtile_slab(revealstl_x), subtile_slab(revealstl_y), &bx1, &by1, &bx2, &by2))
+            return 1;
         if ((bx1 > bx2) || (by1 > by2))
             return 1;
         torture_box_x1 = bx1;

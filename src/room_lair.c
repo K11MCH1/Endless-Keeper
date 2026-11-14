@@ -20,6 +20,7 @@
 #include "room_lair.h"
 
 #include "globals.h"
+#include "world_misdeeds.h"
 #include "bflib_basics.h"
 #include "bflib_planar.h"
 #include "room_data.h"
@@ -101,7 +102,7 @@ long calculate_free_lair_space(struct Dungeon * dungeon)
         if (cctrl->lair_room_id == 0)
         {
             struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-            cap_required += crconf->lair_size;
+            cap_required += world_misdeeds_lair_places(thing, crconf->lair_size); /* endless: Contracts */
         }
         // Thing list loop body ends
         k++;
@@ -286,7 +287,7 @@ void count_lair_occupants_on_slab(struct Room *room,MapSlabCoord slb_x, MapSlabC
         if (!thing_is_invalid(lairtng))
         {
             struct Thing* creatng = thing_get(lairtng->lair.belongs_to);
-            int required_cap = get_required_room_capacity_for_object(RoRoF_LairStorage, 0, creatng->model);
+            int required_cap = world_misdeeds_lair_places(creatng, get_required_room_capacity_for_object(RoRoF_LairStorage, 0, creatng->model)); /* endless: Contracts */
             if (room->used_capacity + required_cap > room->total_capacity)
             {
                 create_effect(&lairtng->mappos, imp_spangle_effects[world_display_colour(lairtng->owner)], lairtng->owner);

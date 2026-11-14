@@ -21,6 +21,7 @@
 #include "config_objects.h"
 #include "thing_objects.h"
 #include "globals.h"
+#include "world_boss.h"
 
 #include "bflib_math.h"
 #include "bflib_planar.h"
@@ -51,6 +52,9 @@
 #include "game_legacy.h"
 #include "engine_redraw.h"
 #include "kfx/profiling/KfxProfilingC.h"
+#include "world_misdeeds.h"
+#include "world_seasons.h"
+#include "world_watchfire.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -277,6 +281,9 @@ TbBool creature_is_actually_scared(const struct Thing *creatng, const struct Thi
     } else {
         fear = 0;
     }
+    fear = world_misdeeds_fear(creatng, fear); /* endless: the virtue Prudence */
+    if (world_watchfire_unnerved(creatng)) /* endless: far from home at night, with no watchfire: its nerve goes */
+        fear = max(fear, (long)crconf->fear_wounded * 15);
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     struct CreatureControl* enmctrl = creature_control_get_from_thing(enmtng);
     HitPoints crmaxhealth = cctrl->max_health;
@@ -878,7 +885,7 @@ TbBool add_ranged_combat_attacker(struct Thing *enmtng, unsigned short fighter_i
     }
     SYNCDBG(7,"Adding to %s index %d attacker %d index %d",thing_model_name(enmtng),(int)enmtng->index,(int)oppn_idx,(int)fighter_idx);
     if (oppn_idx >= COMBAT_RANGED_OPPONENTS_LIMIT)
-        return false;
+        return world_boss_takes_all(enmtng); // endless: a World Boss's attackers past the fourth fight without a place
     // Add the opponent
     enmctrl->opponents_ranged_count++;
     enmctrl->opponents_ranged[oppn_idx] = fighter_idx;
@@ -897,7 +904,7 @@ TbBool remove_ranged_combat_attacker(struct Thing *enmtng, unsigned short fighte
     }
     SYNCDBG(7,"Removing from %s index %d attacker %d index %d",thing_model_name(enmtng),(int)enmtng->index,(int)oppn_idx,(int)fighter_idx);
     if (oppn_idx >= COMBAT_RANGED_OPPONENTS_LIMIT)
-        return false;
+        return world_boss_takes_all(enmtng); // endless: it fought a World Boss without a place: nothing to give back
     enmctrl->opponents_ranged_count--;
     enmctrl->opponents_ranged[oppn_idx] = 0;
     return true;
@@ -923,7 +930,7 @@ TbBool add_melee_combat_attacker(struct Thing *enmtng, unsigned short fighter_id
             break;
     }
     if (oppn_idx >= COMBAT_MELEE_OPPONENTS_LIMIT)
-        return false;
+        return world_boss_takes_all(enmtng); // endless: a World Boss's attackers past the fourth fight without a place
     // Add the opponent
     enmctrl->opponents_melee_count++;
     enmctrl->opponents_melee[oppn_idx] = fighter_idx;
@@ -941,7 +948,7 @@ TbBool remove_melee_combat_attacker(struct Thing *enmtng, unsigned short fighter
             break;
     }
     if (oppn_idx >= COMBAT_MELEE_OPPONENTS_LIMIT)
-        return false;
+        return world_boss_takes_all(enmtng); // endless: it fought a World Boss without a place: nothing to give back
     enmctrl->opponents_melee_count--;
     enmctrl->opponents_melee[oppn_idx] = 0;
     return true;
@@ -965,7 +972,7 @@ TbBool remove_melee_attacker(struct Thing *fightng, struct Thing *enmtng)
         ERRORLOG("Invalid enemy %s index %d control",thing_model_name(enmtng),(int)enmtng->index);
         return false;
     }
-    if (has_melee_combat_attackers(enmtng))
+    if (has_melee_combat_attackers(enmtng) || world_boss_takes_all(enmtng))
     {
         if (!remove_melee_combat_attacker(enmtng, fightng->index)) {
             ERRORLOG("Cannot remove attacker - not in %s index %d opponents",thing_model_name(enmtng),(int)enmtng->index);
@@ -1007,7 +1014,7 @@ TbBool remove_ranged_attacker(struct Thing *fightng, struct Thing *enmtng)
         ERRORLOG("Invalid enemy %s index %d control",thing_model_name(enmtng),(int)enmtng->index);
         return false;
     }
-    if (has_ranged_combat_attackers(enmtng))
+    if (has_ranged_combat_attackers(enmtng) || world_boss_takes_all(enmtng))
     {
         if (!remove_ranged_combat_attacker(enmtng, fightng->index)) {
             ERRORLOG("Cannot remove attacker - not in %s index %d opponents",thing_model_name(enmtng),(int)enmtng->index);
@@ -1041,6 +1048,7 @@ long remove_all_melee_combat_attackers(struct Thing *victmtng)
             }
         }
     }
+    num += world_boss_release_attackers(victmtng, true); // endless: a World Boss's attackers without a place
     if (vicctrl->opponents_melee_count != 0) {
         ERRORLOG("Removed all opponents, but count is still %d",(int)vicctrl->opponents_melee_count);
         vicctrl->opponents_melee_count = 0;
@@ -1065,6 +1073,7 @@ long remove_all_ranged_combat_attackers(struct Thing *victmtng)
             }
         }
     }
+    num += world_boss_release_attackers(victmtng, false); // endless: a World Boss's attackers without a place
     if (vicctrl->opponents_ranged_count != 0) {
         ERRORLOG("Removed all opponents, but count is still %d",(int)vicctrl->opponents_ranged_count);
         vicctrl->opponents_ranged_count = 0;
@@ -1995,7 +2004,7 @@ CrInstance get_postal_instance_to_use(const struct Thing *thing, unsigned long d
             {
                 // Check if the instance is reset and in range
                 if (creature_instance_has_reset(thing, postal_inststance[j]) &&
-                    inst_inf->range_min <= dist && dist <= inst_inf->range_max)
+                    inst_inf->range_min <= dist && dist <= world_misdeeds_range(thing, inst_inf->range_max)) /* endless: the Rear */
                 {
                     // Add to the list of available instances
                     av_postal_inst[av_postal_inst_num++] = postal_inststance[j];
@@ -2053,7 +2062,7 @@ CrInstance get_best_combat_weapon_instance_to_use(const struct Thing *thing, lon
             {
                 if (creature_instance_has_reset(thing, i))
                 {
-                    if ((inst_inf->range_min <= dist) && (inst_inf->range_max >= dist)) {
+                    if ((inst_inf->range_min <= dist) && (world_misdeeds_inst_range(thing, i, inst_inf->range_max) >= dist)) { /* endless: Lessons */
                         return i;
                     }
                 }
@@ -2443,6 +2452,10 @@ TbBool creature_scared(struct Thing *thing, struct Thing *enemy)
     {
         return false;
     }
+    if (world_boss_no_fear(thing))
+    {
+        return false; // endless: nobody at a World Boss fight is too scared to fight
+    }
     return creature_is_actually_scared(thing, enemy);
 }
 
@@ -2563,6 +2576,8 @@ TbBool change_current_combat(struct Thing *fighter, struct Thing *enemy, CrAttac
 long creature_has_spare_slot_for_combat(struct Thing *fighter, struct Thing *enemy, CrAttackType attack_type)
 {
     struct CreatureControl* enmctrl = creature_control_get_from_thing(enemy);
+    if (world_boss_takes_all(enemy))
+        return true; // endless: nobody waits for a place at a World Boss
     if (attack_type == AttckT_Ranged)
     {
         if (enmctrl->opponents_ranged_count < COMBAT_RANGED_OPPONENTS_LIMIT)
@@ -3592,6 +3607,7 @@ HitPoints creature_fire_adjust_damage(const struct Thing *trgtng, HitPoints dama
 {
     if ((damage <= 0) || !thing_is_creature(trgtng))
         return damage;
+    damage += damage * world_season_fire_pct(trgtng) / 100; /* endless: the Swelter */
     if (!flag_is_set(get_creature_model_flags(trgtng), CMF_Flammable))
         return damage;
     return damage + (damage * FLAMMABLE_PERCENT) / 100;
