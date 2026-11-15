@@ -117,6 +117,8 @@ void world_amenity_save(uint8_t *buf);
 TbBool world_amenity_load(const uint8_t *buf, size_t len);
 /** The percent a keeper's room level adds (0 outside endless worlds). */
 int world_room_bonus(PlayerNumber plyr_idx, enum WorldRoomBonus what);
+/** Is this amenity (Amenity Mastery's entry name, e.g. "LAIR") at its top mastery for the keeper? */
+TbBool world_amenity_mastered(PlayerNumber plyr_idx, const char *entry);
 /** Spell levels, from duplicate books like the rooms'. Disease is off in endless worlds. */
 enum WorldPowerBonus {
     WPB_ImpLevels = 0,  /* levels the new imp gets on top */

@@ -50,6 +50,7 @@
 #include "room_workshop.h"
 #include "world_circles.h"
 #include "creature_senses.h"
+#include "world_unions.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -747,6 +748,16 @@ static int wrl_level(PlayerNumber p, int r)
 {
     const int v = game.world_room_level[p][r];
     return (v < 1) ? 1 : v;
+}
+
+TbBool world_amenity_mastered(PlayerNumber plyr_idx, const char *entry)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX) || (entry == NULL))
+        return false;
+    for (int r = 0; r < WRL_ROOMS; r++)
+        if (strcmp(wrl_names[r], entry) == 0)
+            return (wrl_level(plyr_idx, r) >= wrl_top[r]);
+    return false;
 }
 
 static int wrl_allowed(PlayerNumber p, int r)
@@ -2178,6 +2189,7 @@ void world_progress_turn(void)
         ban_powers();
     wp_poison_turn();
     test_traps();
+    world_unions_turn();
     if (!world_progress_active())
         return;
     test_books();
@@ -2467,6 +2479,7 @@ void world_progress_seat_reset(PlayerNumber plyr_idx)
     memset(game.world_room_xp[plyr_idx], 0, sizeof(game.world_room_xp[plyr_idx]));
     wpr_offer_circle[plyr_idx] = 0;
     pmask_del(&wpr_kit_players, plyr_idx); /* the kit is given again when it starts */
+    world_unions_seat_reset(plyr_idx); /* and the unions */
     SYNCLOG("World: player %d's level, XP, records and research progress start again from zero", (int)plyr_idx);
 }
 
