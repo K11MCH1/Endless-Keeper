@@ -397,6 +397,13 @@ struct Game {
        (0: none), copied here by the server so that a thin client's Rap Sheet has it. */
     uint16_t world_misdeed_view_thing[PLAYERS_MAX];
     uint8_t world_misdeed_view[PLAYERS_MAX][128];
+    /* The Unholy Cookbook (world_cookbook.c): the recipes each keeper has made (bit per recipe) */
+    uint16_t world_cookbook_known[PLAYERS_MAX];
+    /* ... and, for each keeper, only the ingredients it knows (made, or read on a lore page; 0xFF unknown), put here by
+       the server: a joined client has no world seed, and must not get the recipes it has not found (audit 2026-11-13) */
+    uint8_t world_cookbook_view[PLAYERS_MAX][12][3];
+    /* ... and the ingredients each keeper has read on lore pages (bit 3 * recipe + slot) */
+    uint64_t world_cookbook_lore[PLAYERS_MAX];
     /** The wind shots' lists of the creatures they pushed (thing_data.h; they were in every thing). wind_nodes_used:
      *  the highest node ever handed out; wind_free_head: the chain of nodes given back (0: none). All zero is empty. */
     struct WindNode wind_nodes[WIND_NODES_COUNT];

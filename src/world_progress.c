@@ -50,6 +50,7 @@
 #include "room_workshop.h"
 #include "world_circles.h"
 #include "creature_senses.h"
+#include "world_cookbook.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2178,6 +2179,7 @@ void world_progress_turn(void)
         ban_powers();
     wp_poison_turn();
     test_traps();
+    world_cookbook_turn();
     if (!world_progress_active())
         return;
     test_books();
@@ -2467,6 +2469,7 @@ void world_progress_seat_reset(PlayerNumber plyr_idx)
     memset(game.world_room_xp[plyr_idx], 0, sizeof(game.world_room_xp[plyr_idx]));
     wpr_offer_circle[plyr_idx] = 0;
     pmask_del(&wpr_kit_players, plyr_idx); /* the kit is given again when it starts */
+    world_cookbook_seat_reset(plyr_idx); /* and the cookbook */
     SYNCLOG("World: player %d's level, XP, records and research progress start again from zero", (int)plyr_idx);
 }
 
@@ -2610,6 +2613,7 @@ void world_heart_destroyed(const struct Thing *heartng)
     if (victim == PLAYER_GOOD)
     {
         wps[by].outposts++;
+        world_cookbook_stronghold_destroyed(by, &heartng->mappos); /* in the ruins: a lore page */
         server_admin_player_event(by, "%s defeated a heroes outpost", server_admin_player_name(by));
     } else
     {

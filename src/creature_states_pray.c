@@ -42,6 +42,7 @@
 #include "power_hand.h"
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
+#include "world_cookbook.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -739,6 +740,7 @@ short creature_being_sacrificed(struct Thing *thing)
 
     kill_creature(thing, INVALID_THING, -1, CrDed_NoEffects|CrDed_NotReallyDying);
     process_sacrifice_creature(&pos, model, owner, true);
+    world_cookbook_sacrificed(owner, model, &pos); /* endless: the Unholy Cookbook */
     return -1;
 }
 

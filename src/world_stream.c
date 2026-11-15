@@ -115,6 +115,7 @@
 #include "world_pools.h"
 #include "room_entrance.h"
 #include "world_progress.h"
+#include "world_cookbook.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -163,6 +164,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_COOKBOOK 0x31424B43u  /* "CKB1": the recipes each keeper knows (world_cookbook.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -3654,6 +3656,33 @@ TbBool world_keeper_is_passive(PlayerNumber plyr_idx)
         if ((W.keepers[k].slot == plyr_idx) && (W.keepers[k].state == WKSt_Passive))
             return true;
     return false;
+}
+
+TbBool world_nearest_free_portal(PlayerNumber plyr_idx, int64_t *wx, int64_t *wy)
+{
+    const struct Thing *heart = get_player_soul_container(plyr_idx);
+    if (!thing_exists(heart))
+        return false;
+    int64_t hx, hy;
+    world_slab_to_world(subtile_slab(heart->mappos.x.stl.num), subtile_slab(heart->mappos.y.stl.num), &hx, &hy);
+    int best = -1;
+    int64_t best_d = 0;
+    for (int i = 0; i < W.portal_count; i++)
+    {
+        if (W.portals[i].owner >= 0)
+            continue;
+        const int64_t d = (W.portals[i].x - hx) * (W.portals[i].x - hx) + (W.portals[i].y - hy) * (W.portals[i].y - hy);
+        if ((best < 0) || (d < best_d))
+        {
+            best = i;
+            best_d = d;
+        }
+    }
+    if (best < 0)
+        return false;
+    *wx = W.portals[best].x;
+    *wy = W.portals[best].y;
+    return true;
 }
 
 uint64_t world_seed(void)
@@ -9659,6 +9688,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_COOKBOOK, world_cookbook_save_size, world_cookbook_save, world_cookbook_load, world_cookbook_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 

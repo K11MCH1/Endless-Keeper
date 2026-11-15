@@ -136,6 +136,8 @@ void world_level_end(void);
 TbBool world_keeper_is_passive(PlayerNumber plyr_idx);
 TbBool world_pays_at_nearest_treasury(PlayerNumber plyr_idx);
 uint64_t world_seed(void);
+/** The known portal nobody holds nearest to a keeper's Heart (world slab): false when none is known. */
+TbBool world_nearest_free_portal(PlayerNumber plyr_idx, int64_t *wx, int64_t *wy);
 /** The biome at an engine subtile (world levels). */
 int world_biome_at_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 /** Generator version 7's five provinces count as their parent biome wherever a table has the eight biomes of
