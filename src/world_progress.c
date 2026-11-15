@@ -50,6 +50,7 @@
 #include "room_workshop.h"
 #include "world_circles.h"
 #include "creature_senses.h"
+#include "world_masonry.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2178,6 +2179,7 @@ void world_progress_turn(void)
         ban_powers();
     wp_poison_turn();
     test_traps();
+    world_masonry_turn();
     if (!world_progress_active())
         return;
     test_books();

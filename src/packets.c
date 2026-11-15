@@ -114,6 +114,7 @@
 #include "world_misdeeds.h"
 #include "world_pages.h"
 #include "net_state.h"
+#include "world_masonry.h"
 #include "post_inc.h"
 
 /* the double-click arrays (frontend.h) are indexed by user: one for every packet */
@@ -879,6 +880,11 @@ TbBool process_user_global_packet_action(NetUserId user)
       /* game state: the thin-client server (or every machine of a lockstep game) does it */
       if (!netstate_thin_mode() || network_is_host())
           world_misdeeds_packet_rename(plyr_idx, (uint32_t)pckt->actn_par1, (uint32_t)pckt->actn_par2);
+      return 1;
+  case PckA_WorldMasonry:
+      if (!netstate_thin_mode() || network_is_host())
+          world_masonry_order(plyr_idx, (MapSubtlCoord)((uint32_t)pckt->actn_par1 & 0x0FFFFFFFu), (MapSubtlCoord)pckt->actn_par2,
+              (int)((uint32_t)pckt->actn_par1 >> 28));
       return 1;
   case PckA_WorldMisdeedPick:
       if (!netstate_thin_mode() || network_is_host())
