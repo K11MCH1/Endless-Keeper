@@ -13,6 +13,8 @@
 [![License: GPL v2](https://img.shields.io/badge/license-GPL--2.0-blue)](LICENSE)
 [![Discord: Keeper Klan](https://img.shields.io/badge/Discord-Keeper%20Klan-5865F2?logo=discord&logoColor=white)](https://discord.com/invite/hE4p7vy2Hb)
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/V7V5FV1VE)
+
 </div>
 
 ---
