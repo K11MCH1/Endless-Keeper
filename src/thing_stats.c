@@ -45,6 +45,7 @@
 
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_keepsakes.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -731,6 +732,7 @@ HitPoints calculate_correct_creature_max_health(const struct Thing *thing)
         }
         max_health = compute_max_health;
     }
+    max_health = world_keepsakes_max_health(thing, max_health); /* endless: a keepsake */
     return max_health;
 }
 
@@ -825,7 +827,7 @@ long calculate_correct_creature_maxspeed(const struct Thing *thing)
         if (player_uses_power_obey(thing->owner))
             speed = 5 * speed / 4;
     }
-    return world_misdeeds_speed(thing, speed); /* endless: the vices */
+    return world_keepsakes_speed(thing, world_misdeeds_speed(thing, speed)); /* endless: the vices, a keepsake */
 }
 
 long calculate_correct_creature_loyalty(const struct Thing *thing)

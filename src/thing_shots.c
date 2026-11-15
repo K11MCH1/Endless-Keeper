@@ -61,6 +61,7 @@
 #include "world_progress.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
+#include "world_keepsakes.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1116,7 +1117,7 @@ long melee_shot_hit_creature_at(struct Thing *shotng, struct Thing *trgtng, stru
     struct Thing* shooter = get_parent_thing(shotng);
     struct CreatureControl* tgcctrl = creature_control_get_from_thing(trgtng);
     long damage = get_damage_of_melee_shot(shotng, trgtng, flag_is_set(shotst->model_flags, ShMF_NeverBlock));
-    damage = world_misdeeds_adjust_damage(trgtng, shooter, damage); /* endless: the vices */
+    damage = world_keepsakes_adjust_damage(trgtng, shooter, world_misdeeds_adjust_damage(trgtng, shooter, damage)); /* endless: the vices, keepsakes */
     if (flag_is_set(shotst->model_flags, ShMF_Fire))
         damage = creature_fire_adjust_damage(trgtng, damage);
     if (damage > 0)
@@ -1312,7 +1313,7 @@ long shot_hit_creature_at(struct Thing *shotng, struct Thing *trgtng, struct Coo
     if (shotng->shot.damage != 0)
     {
         HitPoints damage_done;
-        HitPoints vice_damage = world_misdeeds_adjust_damage(trgtng, shooter, shotng->shot.damage); /* endless: the vices */
+        HitPoints vice_damage = world_keepsakes_adjust_damage(trgtng, shooter, world_misdeeds_adjust_damage(trgtng, shooter, shotng->shot.damage)); /* endless: the vices, keepsakes */
         if (flag_is_set(shotst->model_flags, ShMF_Fire))
             vice_damage = creature_fire_adjust_damage(trgtng, vice_damage);
         if (thing_exists(shooter)) {

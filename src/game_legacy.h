@@ -397,6 +397,10 @@ struct Game {
        (0: none), copied here by the server so that a thin client's Rap Sheet has it. */
     uint16_t world_misdeed_view_thing[PLAYERS_MAX];
     uint8_t world_misdeed_view[PLAYERS_MAX][128];
+    /* Keepsakes (world_keepsakes.c): what each creature carries, by control slot ((stat + 1) << 8 | percent; 0: nothing)
+       and that creature's creation turn, copied here by the server so that a thin client has it */
+    uint16_t world_keepsake_view[CREATURES_COUNT];
+    int32_t world_keepsake_born[CREATURES_COUNT];
     /** The wind shots' lists of the creatures they pushed (thing_data.h; they were in every thing). wind_nodes_used:
      *  the highest node ever handed out; wind_free_head: the chain of nodes given back (0: none). All zero is empty. */
     struct WindNode wind_nodes[WIND_NODES_COUNT];

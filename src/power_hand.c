@@ -70,6 +70,7 @@
 #include "world_colours.h"
 #include "world_stream.h"
 #include "world_attract.h"
+#include "world_keepsakes.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -164,7 +165,7 @@ TbBool object_is_pickable_by_hand_for_use(const struct Thing *thing, long plyr_i
 TbBool object_is_pickable_by_hand_to_hold(const struct Thing* thing)
 {
     struct ObjectConfigStats* objst = get_object_model_stats(thing->model);
-    return flag_is_set(objst->model_flags, OMF_HoldInHand);
+    return flag_is_set(objst->model_flags, OMF_HoldInHand) || world_keepsake_is_object(thing); /* endless: keepsakes */
 }
 
 /**
@@ -989,6 +990,12 @@ void drop_held_thing_on_ground(struct Dungeon *dungeon, struct Thing *droptng, c
         droptng->mappos.z.val = max_height;
     }
     remove_thing_from_limbo(droptng);
+    if (droptng->class_id == TCls_Object)
+    {
+        world_keepsakes_hand_dropped(dungeon, droptng); /* endless: a keepsake dropped on a named creature is given */
+        if (!thing_exists(droptng))
+            return;
+    }
     if (thing_is_creature(droptng))
     {
         if (game.conf.rules[droptng->owner].creature.instance_delay_on_drop > 0) {

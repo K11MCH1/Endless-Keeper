@@ -60,6 +60,7 @@
 #include "net_game.h"
 #include "world_progress.h"
 #include "server_admin.h"
+#include "world_keepsakes.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -740,6 +741,7 @@ void world_raid_creature_died(struct Thing *thing)
     dn_inv[p].flee_turn = game.play_gameturn; /* (the chunk manager wants their landings from now on) */
     SYNCLOG("World: the leader (%s) of a party raiding player %d died: its %d heroes go home", thing_model_name(thing), p,
         fled);
+    world_keepsakes_drop(&thing->mappos, 50, thing->index, -1); /* a raid leader drops a keepsake one time in two */
 }
 
 TbBool world_raid_hero_goes_home(struct Thing *thing)

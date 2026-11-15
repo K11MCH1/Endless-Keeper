@@ -50,6 +50,8 @@
 #include "room_workshop.h"
 #include "world_circles.h"
 #include "creature_senses.h"
+#include "world_storage.h"
+#include "world_keepsakes.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2178,6 +2180,8 @@ void world_progress_turn(void)
         ban_powers();
     wp_poison_turn();
     test_traps();
+    world_storage_turn();
+    world_keepsakes_turn();
     if (!world_progress_active())
         return;
     test_books();
@@ -2610,6 +2614,7 @@ void world_heart_destroyed(const struct Thing *heartng)
     if (victim == PLAYER_GOOD)
     {
         wps[by].outposts++;
+        world_keepsakes_drop(&heartng->mappos, 100, heartng->index, -1); /* the stronghold's captain's keepsake */
         server_admin_player_event(by, "%s defeated a heroes outpost", server_admin_player_name(by));
     } else
     {

@@ -62,6 +62,7 @@
 #include "net_game.h"
 #include "thing_corpses.h"
 #include "map_blocks.h"
+#include "world_keepsakes.h"
 #include "post_inc.h"
 
 #define MD_SAMPLE 32            /* a creature is sampled one turn in this many */
@@ -1194,7 +1195,7 @@ void world_misdeeds_packet_pick(PlayerNumber plyr_idx, ThingIndex idx, int choic
 
 static char md_name_buf[WORLD_MISDEED_NAME_MAX + 4] = "";
 static int md_test_label_idx = 0;
-static struct { int x, y, px; char text[CREATURE_NAME_MAX + 1]; } md_label;
+static struct { int x, y, px; char text[CREATURE_NAME_MAX + 48]; } md_label;
 /* the two choices' boxes on the Rap Sheet, as drawn last: x, y, w, h (w 0: none) */
 static int md_pick_box[2][4];
 
@@ -1257,6 +1258,11 @@ void world_misdeeds_rap_background(struct GuiMenu *gmnu)
     snprintf(text, sizeof(text), "Joined day %d, served %ld days", (int)rec->joined_day, served);
     md_text(x0, y, w, small_px, 1, text);
     y += S(9);
+    if (world_keepsakes_line(thing)[0] != '\0')
+    {
+        md_text(x0, y, w, small_px, 1, world_keepsakes_line(thing)); /* a keepsake */
+        y += S(8);
+    }
     /* the priors: two columns of label and number */
     static const char *const labels[MdC_COUNT] = {"Heroes slain", "Wild slain", "Rivals slain", "Hurt taken", "Night brawls",
         "Home brawls", "In lava", "In water", "Hard labour", "Farthest", "Roamed", "Outposts", "Hearts", "Survived", "Felled", ""};
@@ -1446,14 +1452,14 @@ void world_misdeeds_draw_label(const struct Thing *thing, long scr_x, long top_y
     md_label.px = min(max(flower_h / 4, 8), 14);
     md_label.x = (int)scr_x + local_state.engine_window_x; /* (the world is drawn in the view's own window) */
     md_label.y = (int)top_y + local_state.engine_window_y - md_label.px * 2;
-    snprintf(md_label.text, sizeof(md_label.text), "%s", name);
+    snprintf(md_label.text, sizeof(md_label.text), "%s%s", name, world_keepsakes_label(thing)); /* and a keepsake */
 }
 
 void world_misdeeds_draw_overlay(void)
 {
     if (md_label.text[0] == 0)
         return;
-    const int w = md_label.px * 14;
+    const int w = md_label.px * 28;
     md_text(md_label.x - w / 2, max(md_label.y, 0), w, md_label.px, 1, md_label.text);
     md_label.text[0] = 0;
 }
