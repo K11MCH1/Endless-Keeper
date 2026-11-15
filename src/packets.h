@@ -209,6 +209,7 @@ enum TbPacketAction {
         PckA_WorldDelete,        /* endless world: !delete dungeon, confirmed in the player's box (party dungeons, 2026-11-10) */
         PckA_WorldMisdeedName,   /* endless world: Rename a creature (the thing and the name packed in par1 and par2) */
         PckA_WorldMisdeedPick,   /* endless world: pick a creature's vice (par1 the thing, par2 which of the two) */
+        PckA_WorldChampion,      /* endless world: the Champion: par1 >> 28 what (1 make, 2 possess), subtile (par1 & 0x0FFFFFFF, par2) */
 };
 
 /** Packet flags for non-action player operation. **/

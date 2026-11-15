@@ -112,6 +112,7 @@
 #include "world_daynight.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
+#include "world_champion.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -3373,6 +3374,8 @@ struct Thing* cause_creature_death(struct Thing *thing, CrDeathFlags flags)
 
     creature_throw_out_gold(thing);
     if (!flag_is_set(flags, CrDed_NotReallyDying))
+        world_champion_falls(thing); /* endless: a Champion comes back */
+    if (!flag_is_set(flags, CrDed_NotReallyDying))
         world_misdeeds_dying(thing); /* endless: Unfinished Business, Bad Blood */
     if (!flag_is_set(flags, CrDed_NotReallyDying))
         world_progress_creature_died(thing); /* endless: a raid's book (not for a raider leaving or a freeze) */
@@ -3695,7 +3698,7 @@ long calculate_melee_damage(struct Thing *creatng, short damage_percent)
     const struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     const struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
     long strength = calculate_correct_creature_strength(creatng);
-    long damage = compute_creature_attack_melee_damage(strength, crconf->luck, cctrl->exp_level, creatng);
+    long damage = compute_creature_attack_melee_damage(strength, crconf->luck, world_champion_level(creatng, cctrl->exp_level), creatng); /* endless: a Champion */
     if (damage_percent != 0)
     {
         damage = (damage * damage_percent) / 100;
@@ -3726,7 +3729,7 @@ long calculate_shot_damage(struct Thing *creatng, ThingModel shot_model)
     const struct ShotConfigStats* shotst = get_shot_model_stats(shot_model);
     const struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     const struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
-    return compute_creature_attack_spell_damage(shotst->damage, crconf->luck, cctrl->exp_level, creatng->owner);
+    return compute_creature_attack_spell_damage(shotst->damage, crconf->luck, world_champion_level(creatng, cctrl->exp_level), creatng->owner); /* endless: a Champion */
 }
 
 static void shot_init_lizard(const struct Thing *target, short angle_xy, unsigned char dexterity, struct Thing *shotng)

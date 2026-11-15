@@ -45,6 +45,7 @@
 
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_champion.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -717,7 +718,7 @@ HitPoints calculate_correct_creature_max_health(const struct Thing *thing)
     struct Dungeon* dungeon;
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-    HitPoints max_health = compute_creature_max_health(crconf->health, cctrl->exp_level);
+    HitPoints max_health = compute_creature_max_health(crconf->health, world_champion_level(thing, cctrl->exp_level)); /* endless: a Champion */
     // Apply modifier.
     if (!is_neutral_thing(thing))
     {
@@ -755,7 +756,7 @@ long calculate_correct_creature_armour(const struct Thing *thing)
     struct Dungeon* dungeon;
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-    long max_param = compute_creature_max_armour(crconf->armour, cctrl->exp_level);
+    long max_param = compute_creature_max_armour(crconf->armour, world_champion_level(thing, cctrl->exp_level)); /* endless: a Champion */
     long armour_cap = 204;
     if (creature_under_spell_effect(thing, CSAfF_Armour))
     {
@@ -786,7 +787,7 @@ long calculate_correct_creature_defense(const struct Thing *thing)
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-    long max_param = compute_creature_max_defense(crconf->defense, cctrl->exp_level);
+    long max_param = compute_creature_max_defense(crconf->defense, world_champion_level(thing, cctrl->exp_level)); /* endless: a Champion */
     // TODO: Add a dungeon modifier.
     return max_param;
 }
@@ -795,7 +796,7 @@ long calculate_correct_creature_dexterity(const struct Thing *thing)
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-    long max_param = compute_creature_max_dexterity(crconf->dexterity, cctrl->exp_level);
+    long max_param = compute_creature_max_dexterity(crconf->dexterity, world_champion_level(thing, cctrl->exp_level)); /* endless: a Champion */
     // TODO: Add a dungeon modifier.
     return max_param;
 }

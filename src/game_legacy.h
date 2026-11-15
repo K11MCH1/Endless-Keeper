@@ -397,6 +397,9 @@ struct Game {
        (0: none), copied here by the server so that a thin client's Rap Sheet has it. */
     uint16_t world_misdeed_view_thing[PLAYERS_MAX];
     uint8_t world_misdeed_view[PLAYERS_MAX][128];
+    /* The keeper's Champion (world_champion.c): each keeper's Champion and its creation turn (0: none) */
+    ThingIndex world_champion[PLAYERS_MAX];
+    int32_t world_champion_born[PLAYERS_MAX];
     /** The wind shots' lists of the creatures they pushed (thing_data.h; they were in every thing). wind_nodes_used:
      *  the highest node ever handed out; wind_free_head: the chain of nodes given back (0: none). All zero is empty. */
     struct WindNode wind_nodes[WIND_NODES_COUNT];
