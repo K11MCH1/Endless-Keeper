@@ -115,6 +115,7 @@
 #include "world_pools.h"
 #include "room_entrance.h"
 #include "world_progress.h"
+#include "world_chemistry.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -9280,6 +9281,7 @@ void world_process_turn(void)
     world_testfreeze_hook();
     world_daynight_turn();
     world_wild_turn();
+    world_chemistry_turn(); /* Foul Chemistry: gas and fire */
     world_circles_turn();
     world_misdeeds_turn();
     world_outposts_turn();

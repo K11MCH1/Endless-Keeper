@@ -61,6 +61,7 @@
 #include "world_progress.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
+#include "world_chemistry.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1309,12 +1310,15 @@ long shot_hit_creature_at(struct Thing *shotng, struct Thing *trgtng, struct Coo
             return 1;
         }
     }
+    HitPoints chem_damage = 0; /* endless: Foul Chemistry */
     if (shotng->shot.damage != 0)
     {
         HitPoints damage_done;
         HitPoints vice_damage = world_misdeeds_adjust_damage(trgtng, shooter, shotng->shot.damage); /* endless: the vices */
         if (flag_is_set(shotst->model_flags, ShMF_Fire))
             vice_damage = creature_fire_adjust_damage(trgtng, vice_damage);
+        vice_damage = world_chemistry_shot_damage(shotng, trgtng, vice_damage); /* endless: Foul Chemistry */
+        chem_damage = vice_damage;
         if (thing_exists(shooter)) {
             damage_done = apply_damage_to_thing_and_display_health(trgtng, vice_damage, shooter->owner);
         } else {
@@ -1347,6 +1351,7 @@ long shot_hit_creature_at(struct Thing *shotng, struct Thing *trgtng, struct Coo
             cctrl->disease_caster_plyridx = shotng->owner;
         }
     }
+    world_chemistry_shot_hit(shotng, shooter, trgtng, chem_damage); /* endless: Foul Chemistry */
     if (shotst->model_flags & ShMF_GroupUp)
     {
         if (thing_is_creature(shooter))
