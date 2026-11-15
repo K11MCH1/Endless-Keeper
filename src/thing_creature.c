@@ -112,6 +112,7 @@
 #include "world_daynight.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
+#include "world_laws.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1239,6 +1240,8 @@ TbBool set_thing_spell_flags_f(struct Thing *thing, SpellKind spell_idx, GameTur
             healing_recovery = (thing->health + creature_heal_spell_adjust(thing, world_heal_amount(world_power_caster,
                 powerst->strength[spell_level], powerst->strength, POWER_MAX_LEVEL + 1))); /* a keeper casts at most power level 8 */
         }
+        if ((healing_recovery > thing->health) && world_law_blocks_heal(thing))
+            healing_recovery = thing->health; /* endless worlds: a circle's law, nothing heals outside a Lair */
         if (healing_recovery < 0)
         {
             thing->health = 0;
@@ -3617,7 +3620,7 @@ struct Thing *kill_creature(struct Thing *creatng, struct Thing *killertng, Play
         output_message_far_from_thing(creatng, SMsg_BattleWon, MESSAGE_DURATION_BATTLE);
     }
     SYNCDBG(18, "Almost finished");
-    if (!creature_can_be_set_unconscious(creatng, killertng, flags))
+    if (!creature_can_be_set_unconscious(creatng, killertng, flags) || world_law_no_prisoners(creatng))
     {
         if (!flag_is_set(flags, CrDed_NoEffects))
         {

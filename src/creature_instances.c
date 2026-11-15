@@ -57,6 +57,7 @@
 #include "world_colours.h"
 #include "world_progress.h"
 #include "world_circles.h"
+#include "world_laws.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -666,6 +667,8 @@ long instf_dig(struct Thing *creatng, int32_t *param)
     if (slabmap_block_invalid(slb)) {
         return 0;
     }
+    if (world_law_blocks_dig(creatng, stl_x, stl_y))
+        return 0; /* endless worlds: a circle's law, imps will not dig at night outside claimed land */
     long dig_damage = calculate_damage_did_to_slab_with_single_hit(creatng, slb);
     if ((slb->health > dig_damage) || slab_kind_is_indestructible(slb->kind))
     {
@@ -677,6 +680,7 @@ long instf_dig(struct Thing *creatng, int32_t *param)
         if (taskkind == SDDigTask_MineGold)
         {
             gold = calculate_gold_digged_out_of_slab_with_single_hit(dig_damage, slb);
+            gold = world_law_gold(creatng->owner, stl_x, stl_y, gold); /* endless worlds: a circle's law */
             creatng->creature.gold_carried += gold;
             dungeon->lvstats.gold_mined += gold;
         }
@@ -689,6 +693,7 @@ long instf_dig(struct Thing *creatng, int32_t *param)
         if (!slab_kind_is_indestructible(slb->kind))
             slb->health -= dig_damage; // otherwise, we won't get the final lot of gold
         gold = calculate_gold_digged_out_of_slab_with_single_hit(dig_damage, slb);
+        gold = world_law_gold(creatng->owner, stl_x, stl_y, gold); /* endless worlds: a circle's law */
         creatng->creature.gold_carried += gold;
         dungeon->lvstats.gold_mined += gold;
         mine_out_block(stl_x, stl_y, creatng->owner);

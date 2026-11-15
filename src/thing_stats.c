@@ -45,6 +45,7 @@
 
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_laws.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1012,6 +1013,8 @@ TbBool apply_health_to_thing(struct Thing *thing, HitPoints amount)
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     HitPoints new_health = thing->health;
+    if ((amount > 0) && world_law_blocks_heal(thing))
+        return false; /* endless worlds: a circle's law, nothing heals outside a Lair */
     if ((cctrl->max_health != new_health) && (amount > 0))
     {
         new_health += amount;

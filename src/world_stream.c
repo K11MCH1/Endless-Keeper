@@ -115,6 +115,7 @@
 #include "world_pools.h"
 #include "room_entrance.h"
 #include "world_progress.h"
+#include "world_laws.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -9281,6 +9282,7 @@ void world_process_turn(void)
     world_daynight_turn();
     world_wild_turn();
     world_circles_turn();
+    world_laws_turn();
     world_misdeeds_turn();
     world_outposts_turn();
     world_testgold();

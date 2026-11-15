@@ -37,6 +37,7 @@
 #include "game_legacy.h"
 #include "world_misdeeds.h"
 #include "world_pools.h"
+#include "world_laws.h"
 #include "post_inc.h"
 #include <stdint.h>
 
@@ -329,6 +330,11 @@ TbBool generate_creature_at_random_entrance(struct Dungeon * dungeon, ThingModel
         ERRORLOG("Could not get a random entrance for player %d",(int)dungeon->owner);
         return false;
     }
+    /* endless worlds: a circle's law, portals there bring nothing (another portal of the keeper's may) */
+    for (int tries = 0; (tries < 8) && world_law_blocks_portal(room); tries++)
+        room = pick_random_room_of_role(dungeon->owner, RoRoF_CrPoolSpawn);
+    if (room_is_invalid(room) || world_law_blocks_portal(room))
+        return false;
     struct Thing* creatng = create_creature_at_entrance(room, crmodel);
     if (thing_is_invalid(creatng)) {
         return false;

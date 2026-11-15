@@ -47,6 +47,7 @@
 #include "kfx/renderer/RendererManager.h"
 #include "server_admin.h"
 #include "thing_stats.h"
+#include "world_laws.h"
 #include "post_inc.h"
 
 /* circles 1-4: the share of the nearest keeper's best creature level, in percent; 5-9: the fixed level */
@@ -292,8 +293,8 @@ static void wc_breach(PlayerNumber plyr_idx, int circle, const char *how)
 {
     wc_breached[plyr_idx] = (uint8_t)circle;
     const TbBool local = is_my_player_number(plyr_idx) && !netstate_dedicated();
-    SYNCLOG("World circles: player %d breaches circle %d (%s)%s", (int)plyr_idx, circle, how,
-        local ? ": banner" : "");
+    SYNCLOG("World circles: player %d breaches circle %d (%s)%s; its law: %d", (int)plyr_idx, circle, how,
+        local ? ": banner" : "", world_law_of_circle(circle));
     if (local)
         wc_banner_start(circle);
     else
@@ -487,6 +488,9 @@ void world_circles_draw(void)
     }
     wc_draw_text(name, y, name_units, name_s, true);
     wc_draw_text(line, y + name_h + name_h / 8, line_units, line_s, false);
+    const char *law = world_law_text(wc_banner_circle); /* Circle Laws: the place's own rule */
+    if (law != NULL)
+        wc_draw_text(law, y + name_h + name_h / 8 + name_h * 5 / 8, max(line_units * 2 / 3, 1), line_s, false); /* smaller: it is longer */
 }
 
 /******************************************************************************/

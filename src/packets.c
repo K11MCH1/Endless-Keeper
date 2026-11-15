@@ -114,6 +114,7 @@
 #include "world_misdeeds.h"
 #include "world_pages.h"
 #include "net_state.h"
+#include "world_laws.h"
 #include "post_inc.h"
 
 /* the double-click arrays (frontend.h) are indexed by user: one for every packet */
@@ -211,7 +212,7 @@ struct Room *keeper_build_room(NetUserId user,long stl_x,long stl_y,long plyr_id
         }
         struct Coord3d pos;
         set_coords_to_slab_center(&pos, subtile_slab(stl_x), subtile_slab(stl_y));
-        create_price_effect(&pos, plyr_idx, roomst->cost);
+        create_price_effect(&pos, plyr_idx, world_law_room_cost(plyr_idx, stl_x, stl_y, roomst->cost));
     }
     return room;
 }

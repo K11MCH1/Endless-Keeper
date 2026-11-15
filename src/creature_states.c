@@ -88,6 +88,7 @@
 #include "world_stream.h"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_laws.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -4341,6 +4342,8 @@ TbBool process_creature_hunger(struct Thing *thing)
         return false;
     SYNCDBG(19,"Hungering %s index %d",thing_model_name(thing), (int)thing->index);
     cctrl->hunger_level++;
+    if (world_law_double_hunger(thing))
+        cctrl->hunger_level++; /* endless worlds: a circle's law, creatures eat twice as often */
     if (!hunger_is_creature_hungry(thing))
         return false;
     // HungerHealthLoss is disabled if set to 0 on rules.cfg.
