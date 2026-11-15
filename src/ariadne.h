@@ -202,6 +202,8 @@ extern const struct HugStart blocked_x_hug_start[][2];
 extern const struct HugStart blocked_y_hug_start[][2];
 extern const struct HugStart blocked_xy_hug_start[][2][2];
 extern TbBool nav_map_initialised;
+/** A world (or level) ends: its mesh is no longer the map's until init_navigation builds the next one. */
+void nav_level_end(void);
 
 extern NavColour *LastTriangulatedMap;
 extern int32_t ix_Border;

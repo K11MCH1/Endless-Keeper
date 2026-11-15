@@ -62,6 +62,7 @@
 #include "packets.h"
 #include "net_game.h"
 #include "world_pages.h"
+#include "net_state.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -1035,6 +1036,8 @@ void init_keeper_map_exploration_by_creatures(struct PlayerInfo *player)
 
 void turn_user_cursor_light(NetUserId user, TbBool turn_on)
 {
+    if (netstate_is_client())
+        return; /* the cursor lights are the server's (set_mouse_light) */
     const int idx = get_user_state(user)->cursor_light_idx;
     if (idx == 0)
         return;
@@ -1056,6 +1059,8 @@ void init_user_state(NetUserId user, PlayerNumber player_id)
     ustate->player_id = player_id;
     ustate->teleport_destination = 19;
     ustate->battleid = 1;
+    if (netstate_is_client())
+        return; /* a thin client taking its seat: the server made this user's cursor light, and its state brings it */
     struct InitLight ilght;
     memset(&ilght, 0, sizeof(struct InitLight));
     ilght.radius = 2560;

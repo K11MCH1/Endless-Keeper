@@ -248,6 +248,9 @@ static TbBool work_state_is_ordinary(long state)
     case PST_CastPowerOnTarget:
     case PSt_Sell:
     case PST_CastGenericLevelPower:
+    case PSt_CreateDigger: /* the Create Imp spell (magic.cfg PLAYER_STATE_CREATEDIGGER), cast with its cost and
+                              ground checks; it was missing, so a joined player's Create Imp was refused as a cheat.
+                              The cheat menu's "Place digger mode" is PSt_MkDigger and stays refused */
         return true;
     default:
         return false;

@@ -2302,6 +2302,23 @@ static void relock_hell_hounds(void)
     }
 }
 
+/** No computer assistant in endless worlds (2026-11-15, computer_assistant_allowed): one a human keeper had switched
+ *  on before goes off, once after each start or load. */
+static void assistants_off(void)
+{
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        if (!world_player_is_human(p) || !player_exists(get_player(p)) ||
+            flag_is_set(get_player(p)->allocflags, PlaF_CompCtrl))
+            continue; /* (an away keeper's caretaker is a computer keeper of its own: world_caretaker.c) */
+        struct Dungeon *dungeon = get_players_num_dungeon(p);
+        if (dungeon_invalid(dungeon) || ((dungeon->computer_enabled & 0x01) == 0))
+            continue;
+        dungeon->computer_enabled &= ~0x01;
+        SYNCLOG("World progress: player %d's computer assistant is switched off (none in endless worlds)", (int)p);
+    }
+}
+
 /** Worlds begun before 2026-11-15 locked Flies, Beetles and Spiders until a portal of their biomes: they are allowed
  *  again for every keeper who got the kit (wpr_free_creatures). Once after each start or load, with the Hell Hounds. */
 static void unlock_free_creatures(void)
@@ -2371,6 +2388,7 @@ void world_progress_turn(void)
             wpr_hound_check = false;
             relock_hell_hounds();
             unlock_free_creatures();
+            assistants_off();
         }
     }
     wp_poison_turn();

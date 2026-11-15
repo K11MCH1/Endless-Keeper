@@ -1878,6 +1878,28 @@ static int nav_defer_depth;
 static TbBool nav_deferred_any;
 static long nav_dsx, nav_dsy, nav_dex, nav_dey;
 
+void nav_level_end(void)
+{
+    /* Endless Keeper: the mesh was the world's that ended; the next level's slabs and chunks are not patched into it,
+       init_navigation builds the new one (a joined game that left a world and joined again patched the first world's
+       mesh with the new world's first chunks: hundreds of "triangle_find8: Infinite loop" and "insert_point: triangle
+       not found" at every load after the first, 2026-11-15) */
+    nav_map_initialised = 0;
+    nav_defer_depth = 0;
+    nav_deferred_any = false;
+    /* and the mesh itself goes back to what a fresh game has (all of it zero, as transfer_navigation_state lists it):
+       on a thin client it is part of the server's rewindable state, so after a first world it held that server's mesh,
+       and the next world's first chunks were cut into it (1473 errors at a joiner's second load, none at its first) */
+    const size_t len = transfer_navigation_state(NULL, NavigationState_Restore);
+    void *zero = calloc(1, len);
+    if (zero != NULL)
+    {
+        transfer_navigation_state(zero, NavigationState_Restore);
+        free(zero);
+    }
+    tri_initialised = 0;
+}
+
 void nav_defer_begin(void)
 {
     if (nav_defer_depth++ == 0)

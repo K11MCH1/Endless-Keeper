@@ -10781,6 +10781,7 @@ void world_process_turn(void)
 void world_level_end(void)
 {
     world_autosave_finish(); /* (an autosave still being written on its own thread is this world's) */
+    nav_level_end(); /* the navigation mesh was this world's: init_navigation builds the next level's */
     abilities_spread = false; /* the next world (or a load) spreads them again */
     cm_load_n = cm_load_i = cm_freeze_n = cm_freeze_i = 0; /* the chunk manager's queued work was this world's */
     cm_soon_n = 0;

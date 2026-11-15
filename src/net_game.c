@@ -260,6 +260,11 @@ TbBool user_cheats_allowed(NetUserId user)
 
 TbBool computer_assistant_allowed(void)
 {
+    /* Endless Keeper (the user, 2026-11-15: "Disable the assist toggle"): no computer assistant in endless worlds. The
+       panel's button is greyed out and the server ignores the toggle; a dungeon made while the world runs had no
+       computer keeper behind it anyway ("Computer player N has invalid dungeon" every turn it was on) */
+    if (world_mode_active())
+        return false;
     return get_user_state(SERVER_ID)->prefs[UPref_ComputerAssistantDisabled] == 0;
 }
 
@@ -649,7 +654,7 @@ static void forget_user(NetUserId user)
         return;
     }
     delete_power_hand(user);
-    if (ustate->cursor_light_idx != 0) {
+    if ((ustate->cursor_light_idx != 0) && !netstate_is_client()) { /* (a thin client's lights are the server's) */
         light_delete_light(ustate->cursor_light_idx);
     }
     for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_COUNT; plyr_idx++) {

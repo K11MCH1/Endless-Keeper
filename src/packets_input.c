@@ -185,6 +185,9 @@ TbBool process_dungeon_control_packet_dungeon_build_room(NetUserId user)
 
 TbBool process_dungeon_power_hand_state(NetUserId user)
 {
+    if (get_net_user_player_number(user) < 0)
+        return false; /* a watcher (a dedicated server's own view, a joiner not seated yet) has no hand: its checks asked
+                         for player -1 ("Tried to get non-existing player -1!", 2026-11-15) */
     struct PlayerInfo* player = get_player(get_net_user_player_number(user));
     struct UserState* ustate = get_user_state(user);
     PlayerNumber plyr_idx = player->id_number;

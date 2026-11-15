@@ -1409,6 +1409,19 @@ short complete_level(struct PlayerInfo *player)
 
 static void set_mouse_light(NetUserId user, TbBool valid, struct Coord3d pos)
 {
+    if (netstate_is_client())
+    {
+        /* a thin client: the lights are the server's (game.lish and the light lists come with its state); changing them
+       here linked lights into lists the server's state then overwrote, until a list ran in a circle and the game froze
+       (2026-11-15: all three players of a server, "Infinite loop detected when sweeping lights list"). The server moves each player's cursor light from their packets
+       (update_mouse_light); here only this machine's own note of where the mouse is */
+        if (valid && (user == get_local_user()))
+        {
+            pos.z.val = get_floor_height_at(&pos);
+            game.mouse_light_pos = pos;
+        }
+        return;
+    }
     const int idx = get_user_state(user)->cursor_light_idx;
     if (idx == 0)
         return;
@@ -1451,6 +1464,8 @@ void update_local_mouse_light(void)
 
     NetUserId user = get_local_user();
     set_mouse_light(user, valid, pos);
+    if (netstate_is_client())
+        return; /* (the light is the server's) */
 
     const int idx = get_user_state(user)->cursor_light_idx;
     if (idx != 0)
