@@ -20,6 +20,7 @@
 #include "world_wild.h"
 #include "world_circles.h"
 #include "world_misdeeds.h"
+#include "world_prisoners.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -163,6 +164,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_PRISONERS 0x31465250u /* "PRF1": ransomed heroes waiting to come back with a raid (world_prisoners.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -2465,6 +2467,7 @@ static void freeze_thing(const struct Thing *thing, MapSubtlCoord stl_x0, MapSub
                     const uint16_t md = world_misdeeds_freeze(thing); /* Misdeeds: its record's number */
                     e->spare[0] = (uint8_t)(md & 0xFF);
                     e->spare[1] = (uint8_t)(md >> 8);
+                    e->spare[2] = world_prisoners_freeze(thing); /* Chain Gangs: its irons */
                 }
             }
             if (creature_is_kept_in_prison(thing))
@@ -2993,6 +2996,7 @@ static void place_world_thing(const struct WorldThing *th, const struct WorldCre
             cctrl->kills_num_enemy = ext->kills_num_enemy;
             cctrl->blood_type = ext->blood_type;
             world_misdeeds_thaw(thing, (uint16_t)(ext->spare[0] | (ext->spare[1] << 8)));
+            world_prisoners_thaw(thing, ext->spare[2]); /* Chain Gangs: back in its irons */
         }
         if ((th->flags & (WTF_Prisoner | WTF_Tortured)) && !creature_control_invalid(cctrl))
         {
@@ -9282,6 +9286,7 @@ void world_process_turn(void)
     world_wild_turn();
     world_circles_turn();
     world_misdeeds_turn();
+    world_prisoners_turn();
     world_outposts_turn();
     world_testgold();
     world_tagdig();
@@ -9659,6 +9664,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_PRISONERS, world_prisoners_save_size, world_prisoners_save, world_prisoners_load, world_prisoners_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 
@@ -10716,4 +10722,24 @@ int world_loaded_chunks(int32_t *wcx, int32_t *wcy, int max)
             }
     }
     return n;
+}
+
+/** Test hooks (Chain Gangs): the engine slab 7 chunks east of the start, with its chunks loaded. */
+TbBool world_test_far_spot(MapSlabCoord *sx, MapSlabCoord *sy)
+{
+    if (W.gen == NULL)
+        return false;
+    struct WgStructRef start;
+    wg_start_ref(W.gen, &start);
+    *sx = (MapSlabCoord)engine_slab_x(start.heart_x + 7 * WG_CHUNK);
+    *sy = (MapSlabCoord)engine_slab_y(start.heart_y);
+    world_load_chunks_round(*sx, *sy, 0);
+    return true;
+}
+
+/** Test hooks: the chunk holding an engine slab freezes at once (as the chunk manager freezes one). */
+void world_test_freeze_chunk(MapSlabCoord sx, MapSlabCoord sy)
+{
+    cm_unload_chunk(floor_div(world_slab_x_of(sx), WORLD_CHUNK_SLABS), floor_div(world_slab_y_of(sy), WORLD_CHUNK_SLABS));
+    cm_after_changes();
 }

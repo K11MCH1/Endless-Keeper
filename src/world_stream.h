@@ -167,6 +167,10 @@ TbBool world_view_slab(MapSlabCoord *slb_x, MapSlabCoord *slb_y);
 /** Where a user is looking (possessed creature or dungeon camera): game state, the same on every machine. */
 TbBool world_user_view_slab(int user, MapSlabCoord *slb_x, MapSlabCoord *slb_y);
 void world_slab_to_world(MapSlabCoord slb_x, MapSlabCoord slb_y, int64_t *wx, int64_t *wy);
+/** Test hooks: the engine slab 7 chunks east of the start, its chunks loaded. */
+TbBool world_test_far_spot(MapSlabCoord *sx, MapSlabCoord *sy);
+/** Test hooks: freezes the chunk holding an engine slab at once. */
+void world_test_freeze_chunk(MapSlabCoord sx, MapSlabCoord sy);
 void world_remove_thing_quietly(struct Thing *thing);
 /** Is a world chunk made already (stored, or on the map)? */
 TbBool world_chunk_made(int32_t cx, int32_t cy);

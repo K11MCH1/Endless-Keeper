@@ -45,6 +45,7 @@
 
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_prisoners.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -825,6 +826,7 @@ long calculate_correct_creature_maxspeed(const struct Thing *thing)
         if (player_uses_power_obey(thing->owner))
             speed = 5 * speed / 4;
     }
+    speed = world_prisoners_speed(thing, speed); /* endless: a chain gang slacks */
     return world_misdeeds_speed(thing, speed); /* endless: the vices */
 }
 
@@ -861,7 +863,7 @@ GoldAmount calculate_correct_creature_pay(const struct Thing *thing)
             pay = (pay * game.conf.rules[dungeon->owner].gameplay.torture_payday) / 100;
         pay = pay * (100 - world_room_bonus(thing->owner, WRB_TreasuryPay)) / 100; /* endless: the Treasury's level */
     }
-    return pay;
+    return world_prisoners_pay(thing, pay); /* endless: a chain gang takes no wage */
 }
 
 GoldAmount calculate_correct_creature_training_cost(const struct Thing *thing)

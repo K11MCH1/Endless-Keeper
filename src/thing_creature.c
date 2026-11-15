@@ -112,6 +112,7 @@
 #include "world_daynight.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
+#include "world_prisoners.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -174,6 +175,8 @@ TbBool thing_can_be_controlled_as_passenger(struct Thing *thing)
 
 TbBool creature_is_for_dungeon_diggers_list(const struct Thing *creatng)
 {
+    if ((world_prisoners_gang_size > 0) && world_prisoners_chained(creatng) && !player_is_roaming(creatng->owner))
+        return true; /* endless: a captive in irons works as a digger */
     return creature_kind_is_for_dungeon_diggers_list(creatng->owner,creatng->model);
 }
 
@@ -4878,6 +4881,8 @@ TbBool thing_is_creature_digger(const struct Thing *thing)
 {
   if (!thing_is_creature(thing))
     return false;
+  if ((world_prisoners_gang_size > 0) && world_prisoners_chained(thing))
+    return true; /* endless: a captive in irons works as a digger */
   return any_flag_is_set(get_creature_model_flags(thing),(CMF_IsSpecDigger|CMF_IsDiggingCreature));
 }
 
