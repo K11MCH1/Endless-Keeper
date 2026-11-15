@@ -70,6 +70,11 @@ void world_outpost_heart_destroyed(const struct Thing *heartng);
 /** A new world, a load, the end: outposts on (a world made before them turns them off while it loads). */
 void world_outposts_reset(void);
 void world_outposts_set_enabled(TbBool on);
+/** The biome keeps' shapes (XTR2 record "BKP1", read after the outposts' own record). */
+size_t world_keeps_save_size(void);
+void world_keeps_save(uint8_t *buf);
+TbBool world_keeps_load(const uint8_t *buf, size_t len);
+void world_keeps_reset(void);
 size_t world_outposts_save_size(void);
 void world_outposts_save(uint8_t *buf);
 TbBool world_outposts_load(const uint8_t *buf, size_t len);

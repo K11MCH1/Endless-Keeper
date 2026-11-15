@@ -163,6 +163,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_KEEPS 0x31504B42u    /* "BKP1": the biome keeps' shapes (world_outpost.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -8743,12 +8744,15 @@ static void world_teststrong_hook(void)
                 continue;
             int64_t wx, wy;
             world_slab_to_world(subtile_slab(th->mappos.x.stl.num), subtile_slab(th->mappos.y.stl.num), &wx, &wy);
-            if ((wx < x0) || (wy < y0) || (wx >= x0 + n) || (wy >= y0 + n))
+            /* (2 slabs round the box too: a lava keep's bridge) */
+            if ((wx < x0 - 2) || (wy < y0 - 2) || (wx >= x0 + n + 2) || (wy >= y0 + n + 2))
                 continue;
             if (th->class_id == TCls_Trap)
             {
                 traps++;
                 shown += th->trap.revealed ? 1 : 0;
+                if (th->model == get_id(trap_desc, "SENTRY"))
+                    SYNCLOG("World test:   a Sentry trap at world (%lld,%lld)", (long long)wx, (long long)wy);
             } else if (th->class_id == TCls_Door)
             {
                 doors++;
@@ -8766,8 +8770,11 @@ static void world_teststrong_hook(void)
                 slab_subtile_center((MapSlabCoord)engine_slab_y(ey)));
             SYNCLOG("World test: the outpost's entrance door %s", thing_exists(door) ? "breaks" : "is not there");
             if (thing_exists(door))
+            {
                 destroy_door(door);
-            return;
+                return;
+            }
+            /* a keep without a front door (a biome keep): a creature goes in as for the bigger ones */
         }
         struct Coord3d pos;
         pos.x.val = subtile_coord_center(slab_subtile_center((MapSlabCoord)engine_slab_x(gx)));
@@ -9191,10 +9198,68 @@ static void client_follow_new_heart(void)
     last_y = y;
 }
 
+/** Test hook KFX_WORLD_CLIENTSCAN="T,wx,wy,r" (any machine, meant for a joined thin client): from turn T, every 100
+ *  turns to T+600, what this machine has in the box of world slabs r round (wx, wy): slabs by sort (and whose) and
+ *  things by class, so a joined player's view of a place can be set beside the server's. */
+static void world_clientscan_hook(void)
+{
+    static int read = 0;
+    static long t0 = -1;
+    static long long cwx, cwy;
+    static int cr;
+    if (!read)
+    {
+        read = 1;
+        const char *v = getenv("KFX_WORLD_CLIENTSCAN");
+        if ((v == NULL) || (sscanf(v, "%ld,%lld,%lld,%d", &t0, &cwx, &cwy, &cr) != 4))
+            t0 = -1;
+    }
+    const long t = (long)game.play_gameturn - t0;
+    if ((t0 < 0) || (t < 0) || (t > 600) || ((t % 100) != 0))
+        return;
+    int loaded = 0, claimed = 0, rooms = 0, mine = 0, walls = 0, liquid = 0, hard = 0, doors_slab = 0;
+    for (long long y = cwy - cr; y <= cwy + cr; y++)
+        for (long long x = cwx - cr; x <= cwx + cr; x++)
+        {
+            MapSlabCoord ex, ey;
+            if (!world_engine_slab(x, y, &ex, &ey))
+                continue;
+            const struct SlabMap *slb = get_slabmap_block(ex, ey);
+            if (slabmap_block_invalid(slb))
+                continue;
+            loaded++;
+            if (slb->kind == SlbT_CLAIMED) claimed++;
+            else if ((slb->kind == SlbT_LAVA) || (slb->kind == SlbT_WATER)) liquid++;
+            else if (slb->kind == SlbT_ROCK_FLOOR) hard++;
+            else if (slab_kind_is_door(slb->kind)) doors_slab++;
+            else if (slab_kind_is_room(slb->kind)) { rooms++; mine += (slabmap_owner(slb) == my_player_number); }
+            else if (slab_kind_is_room_wall(slb->kind) || ((slb->kind >= SlbT_WALLDRAPE) && (slb->kind <= SlbT_DAMAGEDWALL))) walls++;
+        }
+    int traps = 0, objects = 0, creatures = 0, doors = 0;
+    for (long i = 1; i < THINGS_COUNT; i++)
+    {
+        const struct Thing *th = thing_get(i);
+        if (!thing_exists(th))
+            continue;
+        int64_t wx, wy;
+        world_slab_to_world(subtile_slab(th->mappos.x.stl.num), subtile_slab(th->mappos.y.stl.num), &wx, &wy);
+        if ((wx < cwx - cr) || (wx > cwx + cr) || (wy < cwy - cr) || (wy > cwy + cr))
+            continue;
+        if (th->class_id == TCls_Trap) traps++;
+        else if (th->class_id == TCls_Object) objects++;
+        else if (th->class_id == TCls_Creature) creatures++;
+        else if (th->class_id == TCls_Door) doors++;
+    }
+    SYNCLOG("World test: client scan round (%lld,%lld) r %d: %d slabs here: claimed %d, rooms %d (%d mine), walls %d, "
+        "liquid %d, hard %d, door slabs %d; traps %d, doors %d, objects %d, creatures %d", cwx, cwy, cr, loaded, claimed, rooms,
+        mine, walls, liquid, hard, doors_slab, traps, doors, objects, creatures);
+}
+
 void world_client_turn(void)
 {
     if (!W.active)
         return;
+    world_clientscan_hook();
     world_coop_refresh(); /* who is whose ally of a party (they see what each other sees) */
     client_follow_new_heart();
     world_colours_turn();
@@ -9274,6 +9339,7 @@ void world_process_turn(void)
     world_testheart_hook();
     world_testportal_hook();
     world_testoutpost_hook();
+    world_clientscan_hook(); /* (the same on the simulating machine, to set beside a client's) */
     world_teststrong_hook();
     world_testbox_hook();
     world_treasurytest_hook();
@@ -9659,6 +9725,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_KEEPS, world_keeps_save_size, world_keeps_save, world_keeps_load, world_keeps_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 

@@ -111,6 +111,7 @@ struct OpPlan {
     int n;                             /* the box's side */
     int fill;                          /* fortresses: the box round the middle (half side) whose cells it decides */
     uint8_t dir;                       /* the entrance's side: 0 north, 1 east, 2 south, 3 west */
+    uint8_t shape;                     /* its biome keep's shape (KS_*, below; 0 none) */
     uint8_t cell[SH_N_MAX * SH_N_MAX];
     uint8_t room[SH_N_MAX * SH_N_MAX]; /* the slab kind of an OpC_Room cell */
     uint8_t ground[SH_N_MAX * SH_N_MAX]; /* the land's own ground under the box (WgSlab; sized strongholds) */
@@ -146,6 +147,7 @@ struct OpState {
     uint8_t level;                     /* the heroes' level, from the keeper that broke in */
     uint8_t found_level;               /* the finder's best creature level when its ground was made */
     uint16_t gates_done;               /* bit g: gate g sent its heroes */
+    uint8_t shape;                     /* its biome keep's shape (KS_*; 0 today's), decided with its size */
 };
 
 static struct OpState *op_states;
@@ -155,7 +157,7 @@ static TbBool op_on = true;
 
 static struct {
     TbBool valid, has;
-    uint8_t family, tier, found_level;
+    uint8_t family, tier, found_level, shape;
     int64_t rx, ry;
     int stamps;
     struct OpPlan plan;
@@ -1541,12 +1543,14 @@ static TbBool op_region_rng(int64_t rx, int64_t ry, struct OpRng *rng)
 }
 
 /** The box an outpost takes with its way in (world slabs). */
+#define KS_LAVA_RING 2 /* a lava keep's ring of lava outside its box (KS_Lava, below) */
 static void op_box(const struct OpPlan *p, int64_t *x1, int64_t *y1, int64_t *x2, int64_t *y2)
 {
-    *x1 = p->x0;
-    *y1 = p->y0;
-    *x2 = p->x0 + p->n - 1;
-    *y2 = p->y0 + p->n - 1;
+    const int ring = (p->shape == 1) ? KS_LAVA_RING : 0; /* (1: KS_Lava) */
+    *x1 = p->x0 - ring;
+    *y1 = p->y0 - ring;
+    *x2 = p->x0 + p->n - 1 + ring;
+    *y2 = p->y0 + p->n - 1 + ring;
     if (p->tier == ShT_Legacy)
     {
         const int64_t px = p->x0 + p->ex + (int64_t)p->odx * OP_PATH, py = p->y0 + p->ey + (int64_t)p->ody * OP_PATH;
@@ -1670,6 +1674,11 @@ static void sh_plan_extent(const struct OpPlan *p, int64_t *x1, int64_t *y1, int
         const int64_t px = p->x0 + p->exx[e] + (int64_t)edx[p->exdir[e] & 3] * p->exlen[e];
         const int64_t py = p->y0 + p->exy[e] + (int64_t)edy[p->exdir[e] & 3] * p->exlen[e];
         bx1 = min(bx1, px); by1 = min(by1, py); bx2 = max(bx2, px); by2 = max(by2, py);
+    }
+    if (p->shape == 1) /* KS_Lava: its ring of lava */
+    {
+        bx1 = min(bx1, p->x0 - KS_LAVA_RING); by1 = min(by1, p->y0 - KS_LAVA_RING);
+        bx2 = max(bx2, p->x0 + p->n - 1 + KS_LAVA_RING); by2 = max(by2, p->y0 + p->n - 1 + KS_LAVA_RING);
     }
     *x1 = bx1;
     *y1 = by1;
@@ -1907,6 +1916,427 @@ static void sh_finish(struct OpPlan *p, struct OpRng *rng, int found_level)
 }
 
 /******************************************************************************/
+/* biome keeps (roadmap "Biome Keeps", 2026-11-13): a stronghold decided from now on is built to suit the biome at its
+   middle (a province by the land it belongs to); the Earthen Caverns and Rocky Depths keep today's shapes, and so does
+   every stronghold decided before (its shape is saved: XTR2 record "BKP1"). Each shape reshapes the finished plan, so
+   it works at all five sizes and for outposts and fortresses alike:
+     lava (Volcanic Rifts)   the land in its box is lava; one causeway leads in from its entrance, a Sentry trap on
+                             every step of it; its other ways out are gone
+     ice (Frozen Hollows)    no corridor wider than one slab: of the halls only the shortest ways between its doors,
+                             portals, rooms and heart stay open, the rest is wall
+     islands (Flooded)       its halls and the land in its box are water: rooms, portal rooms and the heart's chamber
+                             are islands, walls with nothing to wall off go too
+     tomb (Sandstone Wastes) the heart's chamber is sealed (its doors, and the openings of the ring round it that
+                             seals it with the fewest, are walls: it must be dug into); Boulder traps line the way
+     tower (Crystal Caverns) not a single door; Lightning traps only, and twice as many
+     maze (Ancient Ruins)    the front gate is walled up; three breaches lead in from the other sides; a quarter of
+                             its inner walls have fallen to earth
+   A Small or Moderate outpost without a front door (tower, maze) wakes when a keeper's creature comes into its box. */
+enum ShKeepShape { KS_None = 0, KS_Lava, KS_Ice, KS_Islands, KS_Tomb, KS_Tower, KS_Maze, KS_COUNT };
+static const char *const ks_names[KS_COUNT] = {"none", "lava", "ice", "islands", "tomb", "tower", "maze"};
+
+static const char *ks_name(int shape)
+{
+    return ((shape >= 0) && (shape < KS_COUNT)) ? ks_names[shape] : "?";
+}
+
+static int ks_for_biome(int biome)
+{
+    switch (world_biome_parent(biome))
+    {
+    case WgB_Volcanic: return KS_Lava;
+    case WgB_Frozen: return KS_Ice;
+    case WgB_Flooded: return KS_Islands;
+    case WgB_Sandstone: return KS_Tomb;
+    case WgB_Crystal: return KS_Tower;
+    case WgB_Ruins: return KS_Maze;
+    default: return KS_None;
+    }
+}
+
+static int ks_forced(void);
+
+/** The shape a stronghold decided now at a world slab gets. */
+static int ks_shape_at(int64_t wx, int64_t wy)
+{
+    const int forced = ks_forced();
+    if (forced >= 0)
+        return forced;
+    struct WgWorld *gen = world_generator();
+    return (gen != NULL) ? ks_for_biome(wg_biome_at(gen, wx, wy)) : KS_None;
+}
+
+/** Test hook KFX_WORLD_KEEPSHAPE=name: every stronghold decided gets that shape, whatever its biome. */
+static int ks_forced(void)
+{
+    static int forced = -2;
+    if (forced == -2)
+    {
+        const char *v = getenv("KFX_WORLD_KEEPSHAPE");
+        forced = -1;
+        for (int k = 0; (v != NULL) && (k < KS_COUNT); k++)
+            if (strcmp(v, ks_names[k]) == 0)
+                forced = k;
+    }
+    return forced;
+}
+
+static TbBool ks_passable(uint8_t c)
+{
+    return (c == OpC_Floor) || (c == OpC_Hall) || (c == OpC_Causeway) || (c == OpC_Door) || (c == OpC_Room) ||
+        (c == OpC_Heart) || (c == OpC_Path);
+}
+
+static TbBool ks_in_gate_room(const struct OpPlan *p, int x, int y)
+{
+    for (int g = 0; g < p->ngates; g++)
+        if ((p->grx2[g] > p->grx1[g]) && (x >= p->grx1[g]) && (x <= p->grx2[g]) && (y >= p->gry1[g]) && (y <= p->gry2[g]))
+            return true;
+    return false;
+}
+
+static TbBool ks_in_heart_room(const struct OpPlan *p, int x, int y)
+{
+    return (abs(x - p->hx) <= 3) && (abs(y - p->hy) <= 3);
+}
+
+/** Where a way in starts: an outpost's entrance, else its first way out (the cell inside the box's edge). */
+static void ks_entrance(const struct OpPlan *p, int *x, int *y, int *dx, int *dy)
+{
+    if ((p->family == ShF_Outpost) || (p->nexits == 0))
+    {
+        *x = p->ex;
+        *y = p->ey;
+        *dx = p->odx;
+        *dy = p->ody;
+        return;
+    }
+    *x = p->exx[0];
+    *y = p->exy[0];
+    *dx = sh_dx[p->exdir[0] & 3];
+    *dy = sh_dy[p->exdir[0] & 3];
+}
+
+/** Drops the traps and things that no longer stand on floor. */
+static void ks_drop_stranded(struct OpPlan *p)
+{
+    int k = 0;
+    for (int t = 0; t < p->ntraps; t++)
+        if (ks_passable(sh_at(p, p->tx[t], p->ty[t])) && (sh_at(p, p->tx[t], p->ty[t]) != OpC_Door))
+        {
+            p->tx[k] = p->tx[t];
+            p->ty[k] = p->ty[t];
+            p->tmodel[k] = p->tmodel[t];
+            k++;
+        }
+    p->ntraps = k;
+    k = 0;
+    for (int i = 0; i < p->nitems; i++)
+        if (ks_passable(sh_at(p, p->items[i].x, p->items[i].y)))
+            p->items[k++] = p->items[i];
+    p->nitems = k;
+}
+
+/** Breadth first from (x, y) over open cells: parent[] of each reached cell (-1 the start, -2 not reached). */
+static void ks_bfs(const struct OpPlan *p, int x, int y, int *parent)
+{
+    static int queue[SH_N_MAX * SH_N_MAX];
+    for (int i = 0; i < p->n * p->n; i++)
+        parent[i] = -2;
+    if (!sh_in(p, x, y))
+        return;
+    int head = 0, tail = 0;
+    parent[OPI(p, x, y)] = -1;
+    queue[tail++] = OPI(p, x, y);
+    while (head < tail)
+    {
+        const int c = queue[head++];
+        for (int k = 0; k < 4; k++)
+        {
+            const int nx = c % p->n + sh_dx[k], ny = c / p->n + sh_dy[k];
+            if (!sh_in(p, nx, ny))
+                continue;
+            const int ni = OPI(p, nx, ny);
+            if ((parent[ni] != -2) || !ks_passable(p->cell[ni]))
+                continue;
+            parent[ni] = c;
+            queue[tail++] = ni;
+        }
+    }
+}
+
+static void ks_trap(struct OpPlan *p, int x, int y, const char *name)
+{
+    const long m = get_id(trap_desc, name);
+    if ((m <= 0) || sh_trap_at(p, x, y) || (p->ntraps >= SH_MAX_TRAPS))
+        return;
+    p->tx[p->ntraps] = (uint8_t)x;
+    p->ty[p->ntraps] = (uint8_t)y;
+    p->tmodel[p->ntraps] = (uint16_t)m;
+    p->ntraps++;
+}
+
+static void sh_keep_shape(struct OpPlan *p, int shape)
+{
+    if ((shape <= KS_None) || (shape >= KS_COUNT) || (p->tier >= ShT_COUNT))
+        return;
+    struct OpRng rng = {op_mix(world_seed() ^ (uint64_t)p->rx * 0x4B455350ULL ^ ((uint64_t)p->ry << 21) ^ (uint64_t)shape ^
+        ((uint64_t)p->family << 60))};
+    const int n = p->n;
+    static int parent[SH_N_MAX * SH_N_MAX];
+    int ex, ey, edx, edy;
+    ks_entrance(p, &ex, &ey, &edx, &edy);
+    switch (shape)
+    {
+    case KS_Lava:
+    {
+        for (int i = 0; i < n * n; i++)
+            if ((p->cell[i] == OpC_None) || (p->cell[i] == OpC_Earth) || (p->cell[i] == OpC_Path))
+                p->cell[i] = OpC_Lava;
+        /* the one way in: from the entrance out to the box's edge */
+        for (int k = 1; sh_in(p, ex + edx * k, ey + edy * k); k++)
+        {
+            const int x = ex + edx * k, y = ey + edy * k;
+            if (p->cell[OPI(p, x, y)] != OpC_Lava)
+                continue;
+            p->cell[OPI(p, x, y)] = OpC_Causeway;
+            ks_trap(p, x, y, "SENTRY"); /* on every step of it */
+        }
+        /* only the way out in front of the entrance stays */
+        int keep = -1;
+        for (int e = 0; (e < p->nexits) && (keep < 0); e++)
+            if (((p->exdir[e] & 3) == 0 && edy < 0) || ((p->exdir[e] & 3) == 1 && edx > 0) ||
+                ((p->exdir[e] & 3) == 2 && edy > 0) || ((p->exdir[e] & 3) == 3 && edx < 0))
+                keep = e;
+        if (keep > 0)
+        {
+            p->exx[0] = p->exx[keep];
+            p->exy[0] = p->exy[keep];
+            p->exdir[0] = p->exdir[keep];
+            p->exlen[0] = p->exlen[keep];
+        }
+        p->nexits = (keep >= 0) ? 1 : min(p->nexits, 1);
+        break;
+    }
+    case KS_Ice:
+    {
+        ks_bfs(p, ex, ey, parent);
+        static uint8_t keep[SH_N_MAX * SH_N_MAX];
+        memset(keep, 0, sizeof(keep));
+        for (int i = 0; i < n * n; i++)
+        {
+            const uint8_t c = p->cell[i];
+            const int x = i % n, y = i / n;
+            const TbBool target = (c == OpC_Door) || (c == OpC_Room) || (c == OpC_Heart) || sh_gate_at(p, x, y) ||
+                ks_in_gate_room(p, x, y) || ks_in_heart_room(p, x, y);
+            if (!target || (parent[i] == -2))
+                continue;
+            for (int j = i; j >= 0; j = parent[j])
+                keep[j] = 1;
+        }
+        for (int e = 0; e < p->nexits; e++)
+        {
+            /* the ways out too */
+            const int i = OPI(p, p->exx[e], p->exy[e]);
+            if (sh_in(p, p->exx[e], p->exy[e]) && (parent[i] != -2))
+                for (int j = i; j >= 0; j = parent[j])
+                    keep[j] = 1;
+        }
+        for (int i = 0; i < n * n; i++)
+        {
+            const int x = i % n, y = i / n;
+            if (((p->cell[i] == OpC_Floor) || (p->cell[i] == OpC_Hall)) && !keep[i] && !ks_in_gate_room(p, x, y) &&
+                !ks_in_heart_room(p, x, y))
+                p->cell[i] = OpC_Wall;
+        }
+        break;
+    }
+    case KS_Islands:
+    {
+        for (int i = 0; i < n * n; i++)
+        {
+            const int x = i % n, y = i / n;
+            if ((p->cell[i] == OpC_None) || (p->cell[i] == OpC_Earth) || (p->cell[i] == OpC_Path) ||
+                (((p->cell[i] == OpC_Hall) || (p->cell[i] == OpC_Floor)) && !ks_in_gate_room(p, x, y) &&
+                !ks_in_heart_room(p, x, y) && !sh_gate_at(p, x, y)))
+                p->cell[i] = OpC_Water;
+        }
+        /* walls that wall nothing off any more */
+        for (int i = 0; i < n * n; i++)
+        {
+            if (p->cell[i] != OpC_Wall)
+                continue;
+            TbBool by_floor = false;
+            for (int dy = -1; (dy <= 1) && !by_floor; dy++)
+                for (int dx = -1; (dx <= 1) && !by_floor; dx++)
+                {
+                    const int x = i % n + dx, y = i / n + dy;
+                    if (sh_in(p, x, y) && (p->cell[OPI(p, x, y)] != OpC_Water) && (p->cell[OPI(p, x, y)] != OpC_Wall) &&
+                        ks_passable(p->cell[OPI(p, x, y)]))
+                        by_floor = true;
+                }
+            if (!by_floor)
+                p->cell[i] = OpC_Water;
+        }
+        break;
+    }
+    case KS_Tomb:
+    {
+        for (int i = 0; i < n * n; i++)
+            if ((p->cell[i] == OpC_Door) && (abs(i % n - p->hx) <= 5) && (abs(i / n - p->hy) <= 5))
+                p->cell[i] = OpC_Wall;
+        /* and the openings of a ring round the heart's chamber: of the rings 2 to 6 slabs out that seal it off from
+           the entrance, the one with the fewest openings (the larger one when as few) */
+        {
+            static uint8_t saved[SH_N_MAX * SH_N_MAX];
+            memcpy(saved, p->cell, sizeof(saved));
+            int best_r = -1, best_cost = INT_MAX;
+            for (int r = 2; r <= min(6, n / 2 - 1); r++)
+            {
+                int cost = 0;
+                for (int i = 0; i < n * n; i++)
+                    if ((max(abs(i % n - p->hx), abs(i / n - p->hy)) == r) && ks_passable(p->cell[i]))
+                    {
+                        p->cell[i] = OpC_Wall;
+                        cost++;
+                    }
+                ks_bfs(p, ex, ey, parent);
+                TbBool sealed = !sh_in(p, p->hx, p->hy) || (parent[OPI(p, p->hx, p->hy)] == -2);
+                for (int g = 0; g < p->ngates; g++) /* the heart's portal inside too */
+                    if ((p->gflags[g] & ShG_Heart) && sh_in(p, p->gx[g], p->gy[g]) && (parent[OPI(p, p->gx[g], p->gy[g])] != -2))
+                        sealed = false;
+                memcpy(p->cell, saved, sizeof(saved));
+                if (sealed && (cost <= best_cost))
+                {
+                    best_cost = cost;
+                    best_r = r;
+                }
+            }
+            if (best_r >= 0)
+            {
+                for (int i = 0; i < n * n; i++)
+                    if ((max(abs(i % n - p->hx), abs(i / n - p->hy)) == best_r) && ks_passable(p->cell[i]))
+                        p->cell[i] = OpC_Wall;
+            } else
+            {
+                /* no ring seals it: wall the shortest way in, again and again, until nothing reaches it */
+                for (int guard = 0; guard < 64; guard++)
+                {
+                    ks_bfs(p, ex, ey, parent);
+                    const int h = OPI(p, p->hx, p->hy);
+                    if (!sh_in(p, p->hx, p->hy) || (parent[h] == -2))
+                        break;
+                    /* the cell of that way where it first comes within 2 slabs of the heart */
+                    int cut = -1;
+                    for (int j = h; j >= 0; j = parent[j])
+                        if (max(abs(j % n - p->hx), abs(j / n - p->hy)) == 2)
+                            cut = j;
+                    if (cut < 0)
+                        break;
+                    p->cell[cut] = OpC_Wall;
+                }
+            }
+        }
+        /* a door the seal has left opening onto wall goes too */
+        for (int i = 0; i < n * n; i++)
+        {
+            if (p->cell[i] != OpC_Door)
+                continue;
+            const int x = i % n, y = i / n;
+            const TbBool ns = ks_passable(sh_at(p, x, y - 1)) && ks_passable(sh_at(p, x, y + 1));
+            const TbBool ew = ks_passable(sh_at(p, x - 1, y)) && ks_passable(sh_at(p, x + 1, y));
+            if (!ns && !ew)
+                p->cell[i] = OpC_Wall;
+        }
+        /* boulders along the way from the entrance to the heart's chamber */
+        ks_bfs(p, ex, ey, parent);
+        int best = -1, best_d = INT_MAX;
+        for (int i = 0; i < n * n; i++)
+        {
+            if (parent[i] == -2)
+                continue;
+            const int d = abs(i % n - p->hx) + abs(i / n - p->hy);
+            if (d < best_d)
+            {
+                best_d = d;
+                best = i;
+            }
+        }
+        int step = 0;
+        for (int j = best; j >= 0; j = parent[j])
+            if (((++step) % 3) == 0)
+            {
+                const int x = j % n, y = j / n;
+                if ((p->cell[j] != OpC_Door) && !sh_gate_at(p, x, y) && !sh_item_at(p, x, y))
+                    ks_trap(p, x, y, "BOULDER");
+            }
+        break;
+    }
+    case KS_Tower:
+    {
+        for (int i = 0; i < n * n; i++)
+            if (p->cell[i] == OpC_Door)
+                p->cell[i] = OpC_Floor;
+        const long lightning = get_id(trap_desc, "LIGHTNING");
+        const int had = p->ntraps;
+        for (int t = 0; (t < p->ntraps) && (lightning > 0); t++)
+            p->tmodel[t] = (uint16_t)lightning;
+        /* as many again, on free floor */
+        int fx[SH_MAX_TRAPS], fy[SH_MAX_TRAPS];
+        const int got = sh_free_floor(p, &rng, 1, 1, n - 2, n - 2, fx, fy, min(had, SH_MAX_TRAPS));
+        for (int k = 0; k < got; k++)
+            if (!sh_gate_at(p, fx[k], fy[k]))
+                ks_trap(p, fx[k], fy[k], "LIGHTNING");
+        break;
+    }
+    case KS_Maze:
+    {
+        if (p->family == ShF_Outpost)
+            p->cell[OPI(p, ex, ey)] = OpC_Wall; /* the front gate is walled up */
+        /* three breaches, from the middle of each other side inwards to the first open cell */
+        for (int side = 0; side < 4; side++)
+        {
+            const int sx = sh_dx[side], sy = sh_dy[side];
+            if ((sx == edx) && (sy == edy))
+                continue;
+            int x = (sx > 0) ? n - 1 : ((sx < 0) ? 0 : n / 2 + op_rand(&rng, 5) - 2);
+            int y = (sy > 0) ? n - 1 : ((sy < 0) ? 0 : n / 2 + op_rand(&rng, 5) - 2);
+            for (int k = 0; (k < n) && sh_in(p, x, y); k++, x -= sx, y -= sy)
+            {
+                const uint8_t c = p->cell[OPI(p, x, y)];
+                if (ks_passable(c) && (c != OpC_Path))
+                    break;
+                if ((c == OpC_Lava) || (c == OpC_Water))
+                    continue;
+                p->cell[OPI(p, x, y)] = OpC_Path;
+            }
+        }
+        /* fallen walls */
+        for (int y = 1; y < n - 1; y++)
+            for (int x = 1; x < n - 1; x++)
+            {
+                if ((p->cell[OPI(p, x, y)] != OpC_Wall) || (op_rand(&rng, 100) >= 25))
+                    continue;
+                TbBool by_room = false; /* (and walls by a door stay: a door stands between two walls) */
+                for (int dy = -1; dy <= 1; dy++)
+                    for (int dx = -1; dx <= 1; dx++)
+                        by_room |= (sh_at(p, x + dx, y + dy) == OpC_Door);
+                for (int k = 0; k < 4; k++)
+                    by_room |= (sh_at(p, x + sh_dx[k], y + sh_dy[k]) == OpC_Room) ||
+                        (sh_at(p, x + sh_dx[k], y + sh_dy[k]) == OpC_Heart);
+                if (!by_room)
+                    p->cell[OPI(p, x, y)] = OpC_Earth;
+            }
+        break;
+    }
+    default:
+        break;
+    }
+    ks_drop_stranded(p);
+    p->shape = (uint8_t)shape;
+}
+
+/******************************************************************************/
 /* plans: decided, cached */
 
 static TbBool op_plan_build(const struct OpState *st, struct OpPlan *p)
@@ -1915,14 +2345,20 @@ static TbBool op_plan_build(const struct OpState *st, struct OpPlan *p)
     {
         if (st->tier == ShT_Legacy)
             return op_plan_make_legacy(st->rx, st->ry, p);
-        return op_plan_make_sized(st->rx, st->ry, st->tier, st->found_level, p);
+        if (!op_plan_make_sized(st->rx, st->ry, st->tier, st->found_level, p))
+            return false;
+        sh_keep_shape(p, st->shape);
+        return true;
     }
     if ((st->tier >= ShT_COUNT))
         return false;
     struct WgStructRef ref;
     if (!ft_find_ref(st->rx, st->ry, &ref))
         return false;
-    return ft_plan_make(&ref, st->tier, st->found_level, p);
+    if (!ft_plan_make(&ref, st->tier, st->found_level, p))
+        return false;
+    sh_keep_shape(p, st->shape);
+    return true;
 }
 
 static const struct OpPlan *op_plan_of(const struct OpState *st)
@@ -1933,7 +2369,8 @@ static const struct OpPlan *op_plan_of(const struct OpState *st)
     const int i = (int)(op_mix((uint64_t)st->rx * 0x9E3779B1ULL ^ ((uint64_t)st->ry << 32) ^ ((uint64_t)st->family << 62)) %
         OP_CACHE);
     if (op_cache[i].valid && (op_cache[i].family == st->family) && (op_cache[i].rx == st->rx) && (op_cache[i].ry == st->ry) &&
-        (op_cache[i].tier == st->tier) && (op_cache[i].found_level == st->found_level) && (op_cache[i].stamps == stamps))
+        (op_cache[i].tier == st->tier) && (op_cache[i].found_level == st->found_level) && (op_cache[i].stamps == stamps) &&
+        (op_cache[i].shape == st->shape))
         return op_cache[i].has ? &op_cache[i].plan : NULL;
     op_cache[i].valid = true;
     op_cache[i].family = st->family;
@@ -1941,6 +2378,7 @@ static const struct OpPlan *op_plan_of(const struct OpState *st)
     op_cache[i].ry = st->ry;
     op_cache[i].tier = st->tier;
     op_cache[i].found_level = st->found_level;
+    op_cache[i].shape = st->shape;
     op_cache[i].stamps = stamps;
     op_cache[i].has = op_plan_build(st, &op_cache[i].plan);
     return op_cache[i].has ? &op_cache[i].plan : NULL;
@@ -1959,6 +2397,9 @@ static TbBool op_region_reach(int64_t rx, int64_t ry, int64_t *x1, int64_t *y1, 
     *y2 = my0 + SH_N_MAX - 1 + OP_PATH;
     return true;
 }
+
+static int ks_shape_at(int64_t wx, int64_t wy);
+static const char *ks_name(int shape);
 
 /** Decides an outpost region the first time a chunk it may cover is generated. */
 static struct OpState *op_decide_outpost(int64_t rx, int64_t ry, int32_t gen_cx, int32_t gen_cy)
@@ -2011,8 +2452,9 @@ static struct OpState *op_decide_outpost(int64_t rx, int64_t ry, int32_t gen_cx,
         return st;
     }
     st->tier = (uint8_t)tier;
-    SYNCLOG("World: a %s heroes outpost at world slab (%lld,%lld) (finder's best level %d)", sh_tier_names[st->tier],
-        (long long)st->cx, (long long)st->cy, lv);
+    st->shape = (uint8_t)ks_shape_at(st->cx, st->cy);
+    SYNCLOG("World: a %s heroes outpost at world slab (%lld,%lld) (finder's best level %d)%s%s", sh_tier_names[st->tier],
+        (long long)st->cx, (long long)st->cy, lv, st->shape ? ", a biome keep: " : "", st->shape ? ks_name(st->shape) : "");
     return st;
 }
 
@@ -2042,8 +2484,10 @@ static struct OpState *ft_decide(const struct WgStructRef *ref, int32_t gen_cx, 
         return NULL;
     st->found_level = (uint8_t)max(1, min(lv, 255));
     st->tier = (uint8_t)tier;
-    SYNCLOG("World: a %s hero fortress at world slab (%lld,%lld) (finder's best level %d)", sh_tier_names[tier],
-        (long long)ref->origin_x, (long long)ref->origin_y, lv);
+    st->shape = (uint8_t)ks_shape_at(ref->origin_x, ref->origin_y);
+    SYNCLOG("World: a %s hero fortress at world slab (%lld,%lld) (finder's best level %d)%s%s", sh_tier_names[tier],
+        (long long)ref->origin_x, (long long)ref->origin_y, lv, st->shape ? ", a biome keep: " : "",
+        st->shape ? ks_name(st->shape) : "");
     return st;
 }
 
@@ -2147,6 +2591,35 @@ static int sh_overlay_plan(const struct OpPlan *p, int32_t cx, int32_t cy, struc
             ov->door[i] = 0;
             decided++;
         }
+    }
+    if (p->shape == 1)
+    {
+        /* a lava keep (KS_Lava): a ring of lava round its box, and the bridge over it in front of its way in, a
+           Sentry trap on every step */
+        static const int edx[4] = {0, 1, 0, -1}, edy[4] = {-1, 0, 1, 0};
+        const long sentry = get_id(trap_desc, "SENTRY");
+        for (int64_t gy = max(p->y0 - KS_LAVA_RING, wy1); gy <= min(p->y0 + p->n - 1 + KS_LAVA_RING, wy2); gy++)
+            for (int64_t gx = max(p->x0 - KS_LAVA_RING, wx1); gx <= min(p->x0 + p->n - 1 + KS_LAVA_RING, wx2); gx++)
+            {
+                if ((gx >= p->x0) && (gy >= p->y0) && (gx < p->x0 + p->n) && (gy < p->y0 + p->n))
+                    continue;
+                TbBool bridge = false;
+                for (int k = 1; (k <= KS_LAVA_RING) && (p->nexits > 0); k++)
+                    bridge |= (gx == p->x0 + p->exx[0] + (int64_t)edx[p->exdir[0] & 3] * k) &&
+                        (gy == p->y0 + p->exy[0] + (int64_t)edy[p->exdir[0] & 3] * k);
+                const int i = (int)((gy - wy1) * WG_CHUNK + (gx - wx1));
+                ov->set[i] = 1;
+                ov->heroes[i] = bridge;
+                ov->wall[i] = 0;
+                ov->door[i] = 0;
+                ov->kind[i] = bridge ? SlbT_CLAIMED : SlbT_LAVA;
+                decided++;
+                if (bridge && (sentry > 0))
+                {
+                    const struct TrapConfigStats *trapst = get_trap_model_stats((ThingModel)sentry);
+                    op_overlay_thing(ov, cx, cy, gx, gy, TCls_Trap, (uint16_t)sentry, 1, (uint16_t)max(trapst->shots, 1), 0);
+                }
+            }
     }
     if ((p->family == ShF_Outpost) && !sized)
     {
@@ -2610,6 +3083,23 @@ static void op_runtime(const struct OpPlan *p, struct OpState *st)
 {
     struct OpRng rng = {op_mix(world_seed() ^ ((uint64_t)game.play_gameturn << 20) ^ (uint64_t)p->rx * 31 ^ (uint64_t)p->ry ^
         ((uint64_t)p->family << 60))};
+    if ((p->family == ShF_Outpost) && (p->tier < ShT_Medium) && ((st->shape == KS_Tower) || (st->shape == KS_Maze)) &&
+        !(st->flags & OPF_Opened))
+    {
+        /* a biome keep without a front door: it wakes when a keeper's creature comes into its box */
+        MapSlabCoord sx1, sy1, sx2, sy2;
+        if (world_engine_slab(p->x0, p->y0, &sx1, &sy1) && world_engine_slab(p->x0 + p->n - 1, p->y0 + p->n - 1, &sx2, &sy2))
+        {
+            const struct Thing *in = op_keeper_creature_in(sx1, sy1, sx2, sy2);
+            if (in != NULL)
+            {
+                st->flags |= OPF_DoorSeen | OPF_Opened;
+                st->level = (uint8_t)max(1, min(world_keeper_top_level(in->owner), 255));
+                SYNCLOG("World: player %d's creatures come into a %s outpost (a %s keep): its portals wake (heroes level %d)",
+                    (int)in->owner, sh_tier_names[p->tier], ks_name(st->shape), (int)st->level);
+            }
+        }
+    }
     if (p->tier >= ShT_Medium && p->tier < ShT_COUNT)
         sh_runtime_rooms(p, st, &rng);
     else if (p->family == ShF_Outpost)
@@ -2903,7 +3393,9 @@ void world_strongholds_test_dump(void)
                     continue;
                 if (op_plan_make_sized(rx, ry, tier, 1 + tier * 5, &p))
                 {
-                    problems += sh_dump_plan(&p, "dump");
+                    if (ks_forced() > 0)
+                        sh_keep_shape(&p, ks_forced());
+                    problems += sh_dump_plan(&p, (ks_forced() > 0) ? ks_name(ks_forced()) : "dump");
                     tier++;
                 }
             }
@@ -2912,7 +3404,11 @@ void world_strongholds_test_dump(void)
     const int n = wg_structures_in(gen, -1500, -1500, 1500, 1500, 1u << WgT_Fortress, refs, 16);
     for (int t = 0; (t < ShT_COUNT) && (t < n); t++)
         if (ft_plan_make(&refs[t], t, 1 + t * 5, &p))
-            problems += sh_dump_plan(&p, "dump");
+        {
+            if (ks_forced() > 0)
+                sh_keep_shape(&p, ks_forced());
+            problems += sh_dump_plan(&p, (ks_forced() > 0) ? ks_name(ks_forced()) : "dump");
+        }
     SYNCLOG("World test: strongholds dumped: %d problems", problems);
 }
 
@@ -2995,6 +3491,68 @@ struct OpSaved2 {
 #pragma pack()
 #define OP_SAVE_V2 0x80000000u
 #define OP_SAVE_OUTPOSTS_OFF 0x40000000u /* a world made before the outposts: none (its fortresses still count) */
+
+/* the biome keeps' shapes, XTR2 record "BKP1": count, then per stronghold with one: family, rx, ry (int64), shape
+   (a stronghold not in it keeps today's shape) */
+#define KS_SAVED 18
+size_t world_keeps_save_size(void)
+{
+    int n = 0;
+    for (int i = 0; i < op_state_count; i++)
+        if (op_states[i].shape != KS_None)
+            n++;
+    return (n > 0) ? 4 + (size_t)n * KS_SAVED : 0;
+}
+
+void world_keeps_save(uint8_t *buf)
+{
+    uint32_t n = 0;
+    uint8_t *b = buf + 4;
+    for (int i = 0; i < op_state_count; i++)
+    {
+        const struct OpState *st = &op_states[i];
+        if (st->shape == KS_None)
+            continue;
+        b[0] = st->family;
+        memcpy(b + 1, &st->rx, 8);
+        memcpy(b + 9, &st->ry, 8);
+        b[17] = st->shape;
+        b += KS_SAVED;
+        n++;
+    }
+    memcpy(buf, &n, 4);
+}
+
+TbBool world_keeps_load(const uint8_t *buf, size_t len)
+{
+    world_keeps_reset();
+    uint32_t n;
+    if (len < 4)
+        return false;
+    memcpy(&n, buf, 4);
+    if (n > (len - 4) / KS_SAVED)
+        return false;
+    for (uint32_t i = 0; i < n; i++)
+    {
+        const uint8_t *b = buf + 4 + (size_t)i * KS_SAVED;
+        int64_t rx, ry;
+        memcpy(&rx, b + 1, 8);
+        memcpy(&ry, b + 9, 8);
+        struct OpState *st = op_state(b[0], rx, ry, false);
+        if ((st != NULL) && (b[17] < KS_COUNT))
+            st->shape = b[17];
+    }
+    return true;
+}
+
+/** Before a load's extras: every stronghold has today's shape until BKP1 says otherwise. */
+void world_keeps_reset(void)
+{
+    for (int i = 0; i < op_state_count; i++)
+        op_states[i].shape = KS_None;
+    for (int i = 0; i < OP_CACHE; i++)
+        op_cache[i].valid = false;
+}
 
 size_t world_outposts_save_size(void)
 {
