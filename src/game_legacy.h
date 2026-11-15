@@ -397,6 +397,10 @@ struct Game {
        (0: none), copied here by the server so that a thin client's Rap Sheet has it. */
     uint16_t world_misdeed_view_thing[PLAYERS_MAX];
     uint8_t world_misdeed_view[PLAYERS_MAX][128];
+    /** The Ledger of Dread (world_dread.c): each keeper's dread (the level raids are sized from; 0 none) and flags
+     *  (1: mercy), worked out by the server so that a joined player's meter shows it. */
+    uint8_t world_dread[PLAYERS_MAX];
+    uint8_t world_dread_flags[PLAYERS_MAX];
     /** The wind shots' lists of the creatures they pushed (thing_data.h; they were in every thing). wind_nodes_used:
      *  the highest node ever handed out; wind_free_head: the chain of nodes given back (0: none). All zero is empty. */
     struct WindNode wind_nodes[WIND_NODES_COUNT];

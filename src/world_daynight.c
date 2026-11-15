@@ -58,6 +58,7 @@
 #include "world_menu.h"
 #include "world_pages.h"
 #include "net_game.h"
+#include "world_dread.h"
 #include "world_progress.h"
 #include "server_admin.h"
 #include "post_inc.h"
@@ -296,6 +297,7 @@ void world_daynight_draw(void)
     const int off = ((DAYNIGHT_RIM - DAYNIGHT_DISC) / 2) * upp / 16;
     UIRenderer_SubmitPanelSpriteRaw(x + off, y + off, upp, &dn_frame_spr[k], 0);
     UIRenderer_SubmitPanelSpriteRaw(x, y, upp, &dn_rim_spr, 0);
+    world_dread_draw(x, y + size + 2 * upp / 16, size); /* the Ledger of Dread's skull meter, under the dial */
 }
 
 /******************************************************************************/
@@ -505,6 +507,24 @@ static int dn_tier_for(int best)
     return t;
 }
 
+int world_raid_tiers(void)
+{
+    return DN_TIERS;
+}
+
+int world_raid_tier_min(int tier)
+{
+    return dn_tiers[max(0, min(tier, DN_TIERS - 1))].min_level;
+}
+
+int world_raid_tier_of(int level, int *next)
+{
+    const int t = dn_tier_for(level);
+    if (next != NULL)
+        *next = (t + 1 < DN_TIERS) ? dn_tiers[t + 1].min_level : 0;
+    return t;
+}
+
 /** The followers of a tier's parties landing in a biome. */
 struct DnPool {
     ThingModel model[16];
@@ -644,6 +664,8 @@ static void dn_raider_leaves(struct Thing *thing)
     world_remove_thing_quietly(thing);
 }
 
+static TbBool dn_raider_fleeing(const struct Thing *thing);
+
 /** A raider of a retreating invasion: on its way to the nearest landing, or gone when it is there (or can't get
  *  there, or has taken too long). Returns true when it was dealt with (it goes home or has left). */
 static TbBool dn_raider_go_home(struct Thing *thing, struct DnInvasion *inv, TbBool in_update)
@@ -686,6 +708,9 @@ static TbBool dn_raider_go_home(struct Thing *thing, struct DnInvasion *inv, TbB
             return true; /* called from the creature's own update: it leaves on the invasions' turn, not inside it */
         SYNCLOG("World: a raiding %s leaves %s", thing_model_name(thing),
             !found ? "(its landing is off the map)" : (best_d <= DN_HOME_DIST) ? "where it landed" : "where it is (too long on its way)");
+        if (inv->retreating && !dn_raider_fleeing(thing))
+            world_dread_raider_left((PlayerNumber)(inv - dn_inv)); /* (a follower routed by its leader's death didn't
+                                                                     get away: the keeper beat its party) */
         dn_raider_leaves(thing);
         return true;
     }
@@ -822,6 +847,7 @@ static void dn_invasions_turn(long day, GameTurnDelta t)
         {
             SYNCLOG("World: the raid on player %d (day %d) is over", p, (int)dn_inv[p].day);
             memset(&dn_inv[p], 0, sizeof(dn_inv[p]));
+            world_dread_raid_over(p);
             world_progress_raid_over(p);
         }
     }
@@ -906,12 +932,17 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
             DN_SPAWN_MIN_DIST);
         return;
     }
-    /* how many parties: by the player's best creature, each party landing on its own spot */
-    const int best = dn_keeper_best_level(plyr_idx);
+    /* how many parties: by the keeper's dread (the Ledger of Dread, 2026-11-13: the whole army, gold held, traps and
+       doors, the last raids; it was the best creature alone), each party landing on its own spot. Mercy (the army
+       has just been cut down): as few parties as the tier allows. KFX_WORLD_DREAD=0 (test): the best creature. */
+    TbBool mercy = false;
+    const char *dread_env = getenv("KFX_WORLD_DREAD");
+    const int best = ((dread_env != NULL) && (atoi(dread_env) == 0)) ? dn_keeper_best_level(plyr_idx) :
+        world_dread_raid_level(plyr_idx, &mercy);
     const int coop_bonus = world_coop_level_bonus(plyr_idx);
     const int tier = dn_tier_for(best);
-    const int want = dn_tiers[tier].parties_min +
-        (int)dn_rand(&rng, (uint32_t)(dn_tiers[tier].parties_max - dn_tiers[tier].parties_min + 1));
+    const int roll = (int)dn_rand(&rng, (uint32_t)(dn_tiers[tier].parties_max - dn_tiers[tier].parties_min + 1));
+    const int want = dn_tiers[tier].parties_min + (mercy ? 0 : roll);
     MapSlabCoord spot_x[DN_MAX_PARTIES], spot_y[DN_MAX_PARTIES];
     int nspots = 0;
     {
@@ -1057,13 +1088,14 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         made_all += made;
         const long dist = (long)floor(sqrt((double)(sx - hx) * (sx - hx) + (double)(sy - hy) * (sy - hy)) + 0.5);
         SYNCLOG("World: day %ld raid %d party %d of %d: %d heroes tunnel in at engine slab (%d,%d), %ld slabs from the"
-            " heart, %s: %s (player's best level %d, the dungeon's day %ld%s)", day, idx + 1, s + 1, nspots, made, (int)sx,
+            " heart, %s: %s (player's dread %d, the dungeon's day %ld%s)", day, idx + 1, s + 1, nspots, made, (int)sx,
             (int)sy, dist, wg_biome_name(biome), desc, best, world_seat_day(plyr_idx),
             (coop_bonus > 0) ? "; a level higher: the keeper is in a party" : "");
     }
     if (made_all == 0)
         return;
     world_progress_raid(plyr_idx, day, idx, world_seed()); /* its book: only for a raid that came (audit 2026-11-09) */
+    world_dread_raid_made(plyr_idx, made_all);
     inv.active = 1;
     inv.day = (int32_t)day;
     dn_inv[plyr_idx] = inv;
@@ -1301,6 +1333,7 @@ void world_daynight_seat_started(PlayerNumber plyr_idx)
     if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
         return;
     dn_seat_first_day[plyr_idx] = (int32_t)world_day_number();
+    world_dread_seat_started(plyr_idx);
     SYNCLOG("World: player %d's dungeon counts its days from the world's day %d", (int)plyr_idx, (int)dn_seat_first_day[plyr_idx]);
 }
 
@@ -1376,6 +1409,7 @@ void world_daynight_turn(void)
     }
     dn_invasions_turn(day, t);
     dn_killleader_hook();
+    world_dread_turn();
     if (t >= dn_day_turns)
         return;
     /* a first raid that waited for the last raid's heroes to go: it comes now, if its time has passed */

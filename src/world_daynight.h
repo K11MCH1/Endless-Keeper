@@ -19,6 +19,11 @@ struct Thing;
 
 /** Day number (1 = the first day) and whether it is day now; both follow from the game turn. */
 long world_day_number(void);
+/** The raid tiers (world_dread.c's meter): how many there are, the first level of tier t, and the tier of a level
+ *  (*next: the first level of the next tier, 0 at the last). */
+int world_raid_tiers(void);
+int world_raid_tier_min(int tier);
+int world_raid_tier_of(int level, int *next);
 /** The days a keeper's dungeon has lived (1 = its first day): the world's clock, counted from the day it began. */
 long world_seat_day(PlayerNumber plyr_idx);
 /** A keeper's dungeon (re)starts: its days count from today. */

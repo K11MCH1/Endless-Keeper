@@ -112,6 +112,7 @@
 #include "world_daynight.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
+#include "world_dread.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -3376,6 +3377,8 @@ struct Thing* cause_creature_death(struct Thing *thing, CrDeathFlags flags)
         world_misdeeds_dying(thing); /* endless: Unfinished Business, Bad Blood */
     if (!flag_is_set(flags, CrDed_NotReallyDying))
         world_progress_creature_died(thing); /* endless: a raid's book (not for a raider leaving or a freeze) */
+    if (!flag_is_set(flags, CrDed_NotReallyDying))
+        world_dread_creature_died(thing); /* endless: the Ledger of Dread counts a keeper's real losses in a raid */
     // Beyond this point, the creature thing is bound to be deleted
     if ((!flag_is_set(flags,CrDed_NotReallyDying)) || (flag_is_set(game.conf.rules[thing->owner].gameplay.classic_bugs_flags,ClscBug_ResurrectRemoved)))
     {
