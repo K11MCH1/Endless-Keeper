@@ -272,6 +272,9 @@ enum WorldBlobCheck world_blob_check(const unsigned char *data, uint32_t len, ch
 /** Called after a save without a world blob was loaded: no world. */
 void world_load_none(void);
 
+/** The five provinces: may no wall be built on this slab (a flooded ocean, version 7 worlds)? */
+TbBool world_province_forbids_wall(MapSlabCoord slb_x, MapSlabCoord slb_y);
+
 #ifdef __cplusplus
 }
 #endif

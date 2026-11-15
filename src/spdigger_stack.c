@@ -56,6 +56,7 @@
 #include "world_caretaker.h"
 #include "kfx/profiling/KfxProfilingC.h"
 #include "world_misdeeds.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2909,6 +2910,9 @@ long check_place_to_reinforce(struct Thing *creatng, MapSlabCoord slb_x, MapSlab
     if ((slb->kind != SlbT_EARTH) && (slb->kind != SlbT_TORCHDIRT)) {
         SYNCDBG(8,"The slab %d,%d is not a valid type to be reinforced",(int)slb_x, (int)slb_y);
         return 0;
+    }
+    if (world_mode_active() && world_province_forbids_wall(slb_x, slb_y)) {
+        return 0; /* endless worlds: no wall can be built in a flooded ocean (the five provinces) */
     }
     struct Map *mapblk;
     mapblk = get_map_block_at(slab_subtile_center(slb_x), slab_subtile_center(slb_y));

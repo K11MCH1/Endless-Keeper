@@ -849,7 +849,8 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     if (ns < 3)
         return 0;
     int biome = world_biome_at_engine_slab(x, y);
-    if (biome == WgB_DeadMans) /* Dead Man's Land: no burrows either (version 7) */
+    if ((biome == WgB_DeadMans) || (biome == WgB_FloodedOcean)) /* Dead Man's Land: no burrows either; a flooded ocean:
+                                                                    nothing can burrow there (the five provinces) */
         return 0;
     biome = world_biome_parent(biome);
     const struct WildSpawn *list = wild_biomes[biome].on[WiG_Path];

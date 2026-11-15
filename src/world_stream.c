@@ -1245,6 +1245,303 @@ static void apply_outposts(int32_t cx, int32_t cy, struct WorldChunkData *cd)
     }
 }
 
+/******************************************************************************/
+/* The five provinces' rules (roadmap "The Five Provinces", 2026-11-13; the ground is the generator's, version 7):
+     lava oceans       the only ways across are a Bridge, wings, or creatures lava does not burn (the engine's own
+                       rules); their islands are where the rewards for crossing lie: one island chunk in two has a
+                       clearing with gold, and one in four of those a special box as well
+     flooded oceans    nothing can burrow there (wild packs dig no burrows) and no wall can be built (imps do not
+                       reinforce there): every fight is out in the open
+     Dead Man's Land   no gold, no wild packs, no heroes (the generator's and the wild packs' rules); what it has lies
+                       underneath: in one chunk in four (none within 64 slabs of a start), the remains of a
+                       dungeon that fell, a buried room nobody owns (claimable), earth all round it
+   Rivers' fords as the only crossings for raids and wild packs are not built (it needs the pathfinding).
+   Made when a chunk is generated (never inside world_gen.c), from the world's seed and the chunk: a chunk is the same
+   whenever it is made. Test hook KFX_WORLD_TESTPROVINCES="T" (below). */
+static uint64_t prov_hash(int32_t cx, int32_t cy, uint64_t salt)
+{
+    uint64_t h = W.seed ^ ((uint64_t)(int64_t)cx * 0x9E3779B97F4A7C15ULL) ^ ((uint64_t)(int64_t)cy * 0xC2B2AE3D27D4EB4FULL) ^ salt;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    return h;
+}
+
+static void prov_object(struct WorldChunkData *cd, int lx, int ly, const char *name)
+{
+    const long model = get_id(object_desc, name);
+    if ((model <= 0) || (cd->thing_count >= WORLD_MAX_THINGS_PER_CHUNK))
+        return;
+    struct WorldThing *th = &cd->things[cd->thing_count++];
+    memset(th, 0, sizeof(*th));
+    th->oclass = TCls_Object;
+    th->model = (uint16_t)model;
+    th->owner = WOwn_Neutral;
+    th->x = (int32_t)((lx * STL_PER_SLB + 1) * COORD_PER_STL + COORD_PER_STL / 2);
+    th->y = (int32_t)((ly * STL_PER_SLB + 1) * COORD_PER_STL + COORD_PER_STL / 2);
+    th->z = -1;
+    th->health = -1;
+}
+
+static TbBool prov_free_cell(const struct WorldChunkData *cd, int i)
+{
+    return (cd->owner[i] == WOwn_Neutral) && (cd->door[i] == 0) && !cd->wall[i] &&
+        ((cd->kind[i] == SlbT_EARTH) || (cd->kind[i] == SlbT_PATH) || (cd->kind[i] == SlbT_ROCK));
+}
+
+static int prov_test_islands, prov_test_remains;
+
+static void apply_provinces(const struct WgChunk *ch, int32_t cx, int32_t cy, struct WorldChunkData *cd)
+{
+    if ((W.gen_version < 7) || world_attract_active())
+        return;
+    int lava_ocean = 0, deadmans = 0;
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+    {
+        lava_ocean += (ch->biomes[i] == WgB_LavaOcean);
+        deadmans += (ch->biomes[i] == WgB_DeadMans);
+    }
+    /* a lava ocean's island: the land cell of the chunk farthest into it (most land round it) gets a clearing */
+    if (lava_ocean >= WG_CHUNK_CELLS / 2)
+    {
+        int best = -1, best_land = 0;
+        const uint64_t h = prov_hash(cx, cy, 0x49534C45ULL);
+        for (int k = 0; k < WG_CHUNK_CELLS; k++)
+        {
+            const int i = (int)((k + (h % WG_CHUNK_CELLS)) % WG_CHUNK_CELLS);
+            const int lx = i % WG_CHUNK, ly = i / WG_CHUNK;
+            if ((lx < 2) || (ly < 2) || (lx > WG_CHUNK - 3) || (ly > WG_CHUNK - 3) || (ch->biomes[i] != WgB_LavaOcean) ||
+                !prov_free_cell(cd, i) || (cd->kind[i] == SlbT_ROCK))
+                continue;
+            int land = 0;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++)
+                    land += prov_free_cell(cd, (ly + dy) * WG_CHUNK + lx + dx) ? 1 : 0;
+            if (land > best_land)
+            {
+                best_land = land;
+                best = i;
+            }
+        }
+        if ((best >= 0) && (best_land >= 6) && (((h >> 40) % 2) == 0)) /* (one such chunk in two) */
+        {
+            const int lx = best % WG_CHUNK, ly = best / WG_CHUNK;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    const int i = (ly + dy) * WG_CHUNK + lx + dx;
+                    if (prov_free_cell(cd, i))
+                        cd->kind[i] = SlbT_PATH;
+                }
+            prov_object(cd, lx, ly, "GOLD_CHEST");
+            prov_object(cd, lx + 1, ly, "GOLD_CHEST");
+            static const char *const boxes[] = {"SPECBOX_INCLEV", "SPECBOX_MKSAFE", "SPECBOX_HEALALL", "SPECBOX_STEALHR",
+                "SPECBOX_MULTPLY", "SPECBOX_REVMAP"};
+            if (((h >> 20) % 4) == 0)
+                prov_object(cd, lx - 1, ly, boxes[(h >> 24) % (sizeof(boxes) / sizeof(boxes[0]))]);
+            prov_test_islands++;
+            SYNCLOG("World: provinces: chunk (%d,%d): a lava ocean island's reward at world slab (%lld,%lld)%s", (int)cx, (int)cy,
+                (long long)cx * WG_CHUNK + lx, (long long)cy * WG_CHUNK + ly, (((h >> 20) % 4) == 0) ? ", with a special box" : "");
+        }
+    }
+    /* Dead Man's Land: a fallen dungeon's buried room (one chunk in four, away from the starts) */
+    if (deadmans >= WG_CHUNK_CELLS * 3 / 4)
+    {
+        const uint64_t h = prov_hash(cx, cy, 0x52454D53ULL);
+        if ((h % 4) != 0)
+            return;
+        /* not by a start: a keeper starting in Dead Man's Land finds them by going out, not round its heart */
+        if (world_dist_to_nearest_start((int64_t)cx * WG_CHUNK + WG_CHUNK / 2, (int64_t)cy * WG_CHUNK + WG_CHUNK / 2) < 64.0)
+            return;
+        static const SlabKind kinds[] = {SlbT_LIBRARY, SlbT_TRAINING, SlbT_WORKSHOP, SlbT_TEMPLE, SlbT_GRAVEYARD,
+            SlbT_PRISON, SlbT_TORTURE, SlbT_BARRACKS, SlbT_SCAVENGER};
+        const SlabKind kind = kinds[(h >> 8) % (sizeof(kinds) / sizeof(kinds[0]))];
+        const int w = 3 + (int)((h >> 16) % 3), d = 3 + (int)((h >> 20) % 3);
+        const int x0 = 2 + (int)((h >> 24) % (uint64_t)(WG_CHUNK - 4 - w)), y0 = 2 + (int)((h >> 32) % (uint64_t)(WG_CHUNK - 4 - d));
+        for (int y = y0 - 1; y <= y0 + d; y++)
+            for (int x = x0 - 1; x <= x0 + w; x++)
+                if (!prov_free_cell(cd, y * WG_CHUNK + x))
+                    return; /* not clear (a stronghold's ground, liquid): none here */
+        for (int y = y0 - 1; y <= y0 + d; y++)
+            for (int x = x0 - 1; x <= x0 + w; x++)
+            {
+                const int i = y * WG_CHUNK + x;
+                const TbBool in = (x >= x0) && (y >= y0) && (x < x0 + w) && (y < y0 + d);
+                cd->kind[i] = in ? kind : SlbT_EARTH;
+                cd->owner[i] = WOwn_Neutral;
+            }
+        prov_object(cd, x0, y0, "GRAVE_STONE");
+        prov_test_remains++;
+        SYNCLOG("World: provinces: chunk (%d,%d): the buried remains of a %s (%dx%d) at world slab (%lld,%lld)", (int)cx, (int)cy,
+            room_code_name(slab_corresponding_room(kind)), w, d, (long long)cx * WG_CHUNK + x0, (long long)cy * WG_CHUNK + y0);
+    }
+}
+
+/** Flooded oceans: no wall can be built there (endless worlds, version 7). */
+TbBool world_province_forbids_wall(MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    if (!W.active || (W.gen == NULL) || (W.gen_version < 7))
+        return false;
+    return world_biome_at_engine_slab(slb_x, slb_y) == WgB_FloodedOcean;
+}
+
+/** Test hook KFX_WORLD_TESTWALLS="T": the real imps and the flooded ocean's rule. At T, in the nearest flooded ocean
+ *  (an earth slab of it beside other ground) and, to compare, on earth 14 slabs east of player 0's start, a slab
+ *  beside the earth becomes player 0's claimed ground (shown to it) with three of its imps; at T+1000 the walls it
+ *  has round each spot are counted (none in the ocean, some by the start). */
+static void world_testwalls_hook(void)
+{
+    static long base = -2;
+    static int64_t sx[2], sy[2];
+    static TbBool have[2];
+    if (base == -2)
+    {
+        const char *v = getenv("KFX_WORLD_TESTWALLS");
+        base = (v != NULL) ? atol(v) : -1;
+    }
+    if ((base < 0) || (W.gen == NULL))
+        return;
+    const long t = (long)game.play_gameturn - base;
+    if ((t != 0) && (t != 1000))
+        return;
+    if (t == 0)
+    {
+        struct WgStructRef start;
+        wg_start_ref(W.gen, &start);
+        /* the ocean: chunk middles out from the start; then an earth slab of it with ground (not water) beside it */
+        have[0] = have[1] = false;
+        for (int r = 1; (r <= 60) && !have[0]; r++)
+            for (int oy = -r; (oy <= r) && !have[0]; oy++)
+                for (int ox = -r; (ox <= r) && !have[0]; ox++)
+                {
+                    if ((abs(ox) != r) && (abs(oy) != r))
+                        continue;
+                    const int64_t fx = start.heart_x + (int64_t)ox * WG_CHUNK, fy = start.heart_y + (int64_t)oy * WG_CHUNK;
+                    if (wg_biome_at(W.gen, fx, fy) != WgB_FloodedOcean)
+                        continue;
+                    world_load_chunks_round_world(fx, fy, 1);
+                    for (int64_t y = fy - 20; (y <= fy + 20) && !have[0]; y++)
+                        for (int64_t x = fx - 20; (x <= fx + 20) && !have[0]; x++)
+                        {
+                            MapSlabCoord ex, ey;
+                            if (!world_engine_slab(x, y, &ex, &ey) || (wg_biome_at(W.gen, x, y) != WgB_FloodedOcean))
+                                continue;
+                            const struct SlabMap *slb = get_slabmap_block(ex, ey);
+                            const struct SlabMap *nb = get_slabmap_block(ex + 1, ey);
+                            if ((slb->kind == SlbT_EARTH) && !slabmap_block_invalid(nb) && (nb->kind != SlbT_WATER) &&
+                                (nb->kind != SlbT_LAVA) && (nb->kind != SlbT_ROCK))
+                            {
+                                sx[0] = x + 1;
+                                sy[0] = y;
+                                have[0] = true;
+                            }
+                        }
+                }
+        sx[1] = start.heart_x + 14;
+        sy[1] = start.heart_y;
+        have[1] = true;
+        for (int k = 0; k < 2; k++)
+        {
+            MapSlabCoord ex, ey;
+            if (!have[k] || !world_engine_slab(sx[k], sy[k], &ex, &ey))
+            {
+                SYNCLOG("World test: walls: no %s spot", k ? "start" : "flooded ocean");
+                have[k] = false;
+                continue;
+            }
+            place_slab_type_on_map(SlbT_CLAIMED, slab_subtile_center(ex), slab_subtile_center(ey), PLAYER0, 0);
+            for (int y = slab_subtile(ey - 4, 0); y <= slab_subtile(ey + 4, 2); y++) /* shown to player 0 (imps reinforce only what it sees) */
+                for (int x = slab_subtile(ex - 4, 0); x <= slab_subtile(ex + 4, 2); x++)
+                    reveal_map_subtile(x, y, PLAYER0);
+            for (int i = 0; i < 3; i++)
+            {
+                struct Coord3d pos;
+                pos.x.val = subtile_coord_center(slab_subtile_center(ex));
+                pos.y.val = subtile_coord_center(slab_subtile_center(ey));
+                pos.z.val = 0;
+                create_creature(&pos, (ThingModel)get_id(creature_desc, "IMP"), PLAYER0);
+            }
+            SYNCLOG("World test: walls: %s spot at world slab (%lld,%lld), biome %s: a claimed slab and three imps of player 0's",
+                k ? "the start's" : "the flooded ocean's", (long long)sx[k], (long long)sy[k], wg_biome_name(wg_biome_at(W.gen, sx[k], sy[k])));
+        }
+        return;
+    }
+    for (int k = 0; k < 2; k++)
+    {
+        MapSlabCoord ex, ey;
+        if (!have[k] || !world_engine_slab(sx[k], sy[k], &ex, &ey))
+            continue;
+        int walls = 0, earth = 0;
+        for (int dy = -3; dy <= 3; dy++)
+            for (int dx = -3; dx <= 3; dx++)
+            {
+                const struct SlabMap *slb = get_slabmap_block(ex + dx, ey + dy);
+                if (slabmap_block_invalid(slb))
+                    continue;
+                if (slab_kind_is_fortified_wall(slb->kind) && (slabmap_owner(slb) == PLAYER0))
+                    walls++;
+                if (slb->kind == SlbT_EARTH)
+                    earth++;
+            }
+        SYNCLOG("World test: walls: round the %s spot, %d walls of player 0's and %d earth slabs left", k ? "start's" : "flooded ocean's",
+            walls, earth);
+    }
+}
+
+/** Test hook KFX_WORLD_TESTPROVINCES="T": at T the 5x5 chunks round the nearest lava ocean and the nearest Dead Man's
+ *  Land (searched by chunk middles out to 60 chunks) load, and the islands' rewards and buried remains made are
+ *  counted; the nearest flooded ocean: whether a wall may be built there (logged). */
+static void world_testprovinces_hook(void)
+{
+    static long base = -2;
+    if (base == -2)
+    {
+        const char *v = getenv("KFX_WORLD_TESTPROVINCES");
+        base = (v != NULL) ? atol(v) : -1;
+    }
+    if ((base < 0) || (W.gen == NULL) || ((long)game.play_gameturn != base))
+        return;
+    struct WgStructRef start;
+    wg_start_ref(W.gen, &start);
+    static const int want[3] = {WgB_LavaOcean, WgB_DeadMans, WgB_FloodedOcean};
+    for (int k = 0; k < 3; k++)
+    {
+        TbBool found = false;
+        int64_t fx = 0, fy = 0;
+        for (int r = (want[k] == WgB_DeadMans) ? 6 : 1; (r <= 60) && !found; r++) /* (remains keep off the starts) */
+            for (int oy = -r; (oy <= r) && !found; oy++)
+                for (int ox = -r; (ox <= r) && !found; ox++)
+                {
+                    if ((abs(ox) != r) && (abs(oy) != r))
+                        continue;
+                    fx = start.heart_x + (int64_t)ox * WG_CHUNK;
+                    fy = start.heart_y + (int64_t)oy * WG_CHUNK;
+                    found = (wg_biome_at(W.gen, fx, fy) == want[k]);
+                }
+        if (!found)
+        {
+            SYNCLOG("World test: provinces: no %s near the start", wg_biome_name(want[k]));
+            continue;
+        }
+        if (k < 2)
+        {
+            prov_test_islands = prov_test_remains = 0;
+            const int n = world_load_chunks_round_world(fx, fy, 2);
+            SYNCLOG("World test: provinces: %s at world slab (%lld,%lld): %d chunks loaded, %d island rewards and %d buried remains made",
+                wg_biome_name(want[k]), (long long)fx, (long long)fy, n, prov_test_islands, prov_test_remains);
+        } else
+        {
+            MapSlabCoord ex, ey;
+            world_load_chunks_round_world(fx, fy, 0);
+            const TbBool loaded = world_engine_slab(fx, fy, &ex, &ey);
+            SYNCLOG("World test: provinces: flooded ocean at world slab (%lld,%lld): a wall %s be built there",
+                (long long)fx, (long long)fy, (loaded && world_province_forbids_wall(ex, ey)) ? "may not" : "may");
+        }
+    }
+}
+
 /** Reward caves get a few decorations along their edges (2026-11-08): candles and lanterns round a box's shrine,
  *  barrels and lanterns in a hoard's treasury, the biome's rocks, ferns and mushrooms where creatures wait. Seeded by
  *  the world slab, so a cave across chunks gets the same either way. */
@@ -1952,6 +2249,7 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
     place_books(&ch, cx, cy, cd);
     decorate_rewards(&ch, cx, cy, cd);
     apply_outposts(cx, cy, cd);
+    apply_provinces(&ch, cx, cy, cd); /* the five provinces' rules (islands' rewards, buried remains) */
     if (!world_attract_active())
         circles_grade_chunk(cd); /* circles (world_circles.c): enemies as strong as the circle they stand in */
     {
@@ -9274,6 +9572,8 @@ void world_process_turn(void)
     world_testheart_hook();
     world_testportal_hook();
     world_testoutpost_hook();
+    world_testprovinces_hook();
+    world_testwalls_hook();
     world_teststrong_hook();
     world_testbox_hook();
     world_treasurytest_hook();
