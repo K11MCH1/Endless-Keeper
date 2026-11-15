@@ -1302,6 +1302,8 @@ static TbResult magic_use_power_imp(PowerKind power_kind, PlayerNumber plyr_idx,
         SYNCLOG("Player %d attempts to create creature %s at map creature limit", plyr_idx, creature_code_name(powerst->creature_model));
         return Lb_FAIL;
     }
+    if (world_imp_cap_refuses(plyr_idx, power_kind)) /* endless: at most WORLD_MAX_IMPS Imps */
+        return Lb_FAIL;
     if ((mod_flags & PwMod_CastForFree) == 0)
     {
         // If we can't afford the power, fail

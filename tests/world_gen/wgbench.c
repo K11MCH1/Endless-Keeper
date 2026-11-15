@@ -246,6 +246,12 @@ static int do_ppm(uint64_t seed, int version, int cx, int cy, int wc, int hc, co
     return 0;
 }
 
+static int cmp_double(const void *a, const void *b)
+{
+    const double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
 int main(int argc, char **argv)
 {
     uint64_t seed;
@@ -295,6 +301,66 @@ int main(int argc, char **argv)
                    secs / n * 1e6);
             fflush(stdout);
         }
+        return 0;
+    }
+    if (strcmp(argv[1], "dist") == 0) {
+        /* A stutter is the slowest chunk, not the mean: every chunk's own time, the spread, and the slowest ones.
+           WG_PATTERN=line: the chunks of a tunnel going east from the start; spiral: a dungeon growing outwards;
+           unset: the blocks of make_jobs (WG_STRIDE=n spreads them, so no chunk shares cached work). */
+        const char *pat = getenv("WG_PATTERN");
+        struct WgWorld *w = wg_world_create_version(seed, version);
+        struct WgChunk *c = (struct WgChunk *)malloc(sizeof *c);
+        double *t = (double *)malloc(sizeof(double) * (size_t)n), *s = (double *)malloc(sizeof(double) * (size_t)n);
+        double sum = 0;
+        int k, over2 = 0, over5 = 0, top = n < 6 ? n : 6;
+        if (pat != NULL && strcmp(pat, "line") == 0) {
+            for (i = 0; i < n; i++) {
+                jobs[i].cx = i;
+                jobs[i].cy = 0;
+            }
+        } else if (pat != NULL && strcmp(pat, "spiral") == 0) {
+            int x = 0, y = 0, dx = 1, dy = 0, run = 1, done = 0, turns = 0;
+            for (i = 0; i < n; i++) {
+                jobs[i].cx = x;
+                jobs[i].cy = y;
+                x += dx;
+                y += dy;
+                if (++done == run) {
+                    const int tdx = dx;
+                    done = 0;
+                    dx = -dy;
+                    dy = tdx;
+                    if (++turns % 2 == 0)
+                        run++;
+                }
+            }
+        }
+        for (i = 0; i < n; i++) {
+            const double t0 = now_s();
+            wg_generate_chunk(w, jobs[i].cx, jobs[i].cy, c);
+            t[i] = s[i] = now_s() - t0;
+            sum += t[i];
+            over2 += t[i] > 0.002;
+            over5 += t[i] > 0.005;
+        }
+        qsort(s, (size_t)n, sizeof(double), cmp_double);
+        printf("dist: v%d %s %d chunks: mean %.0f us, median %.0f, p90 %.0f, p99 %.0f, max %.0f us; over 2 ms: %d, "
+               "over 5 ms: %d; slowest:", version, pat != NULL ? pat : "blocks", n, sum / n * 1e6, s[n / 2] * 1e6,
+               s[(int)(n * 0.9)] * 1e6, s[(int)(n * 0.99)] * 1e6, s[n - 1] * 1e6, over2, over5);
+        for (k = 0; k < top; k++)
+            for (i = 0; i < n; i++)
+                if (t[i] == s[n - 1 - k]) {
+                    printf(" (%d,%d) %.1f ms", jobs[i].cx, jobs[i].cy, t[i] * 1e3);
+                    break;
+                }
+        printf("\n");
+        /* (everything freed, so that a leak a sanitizer reports is the generator's) */
+        free(t);
+        free(s);
+        free(c);
+        wg_world_destroy(w);
+        free(jobs);
+        free(ref);
         return 0;
     }
 #ifndef _WIN32

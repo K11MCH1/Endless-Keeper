@@ -71,6 +71,7 @@
 #include "tasks_list.h"
 #include "world_pages.h"
 #include "world_menu.h"
+#include "kfx_jobs.h"
 #include "replay.h"
 #include "kfx/save/core/save_codec.h"
 #include "kfx/save/core/save_schema.h"
@@ -93,6 +94,8 @@
 #include "net_state.h"
 #include "world_progress.h"
 #include "world_outpost.h"
+#include "thing_effects.h"
+#include "config_effects.h"
 #include "power_specials.h"
 #include "net_spectator.h"
 #include "roomspace_input.h"
@@ -1372,12 +1375,35 @@ static void decorate_rewards(const struct WgChunk *ch, int32_t cx, int32_t cy, s
     }
 }
 
+/* The start's own chunks as the generator makes them, kept: every stamp copies from the same sixteen, and a chunk
+   under a stamp reads up to four of them, so a new start's ground generated them some fifty times over (2026-11-13:
+   half of the 190 ms a joiner's 25 chunks took). The generator gives the same chunk every time, so a kept one is the
+   same as a fresh one; they are let go when the world's generator is made or ends. */
+#define STAMP_SRC_MAX 16
+static struct StampSrc {
+    int32_t cx, cy;
+    TbBool ok;
+    struct WgChunk ch;
+} stamp_src[STAMP_SRC_MAX];
+static int stamp_src_n, stamp_src_next;
+
+static const struct WgChunk *stamp_source_chunk(int32_t scx, int32_t scy)
+{
+    for (int i = 0; i < stamp_src_n; i++)
+        if ((stamp_src[i].cx == scx) && (stamp_src[i].cy == scy))
+            return stamp_src[i].ok ? &stamp_src[i].ch : NULL;
+    struct StampSrc *s = &stamp_src[(stamp_src_n < STAMP_SRC_MAX) ? stamp_src_n++ : (stamp_src_next++ % STAMP_SRC_MAX)];
+    s->cx = scx;
+    s->cy = scy;
+    s->ok = (wg_generate_chunk(W.gen, scx, scy, &s->ch) == 0);
+    return s->ok ? &s->ch : NULL;
+}
+
 /** Copies the start structure into a freshly generated chunk wherever a stamp covers it: the dungeon's slabs, walls,
  *  doors and things (the player's become the seat's) and its portal. The ground round them stays the chunk's own,
  *  cleared as round the first start. */
 static void apply_stamps(int32_t cx, int32_t cy, struct WorldChunkData *cd)
 {
-    static struct WgChunk src;
     ThingModel wood = get_id(door_desc, "WOOD");
     ThingModel brace = get_id(door_desc, "BRACED");
     struct WgStructRef start;
@@ -1405,18 +1431,19 @@ static void apply_stamps(int32_t cx, int32_t cy, struct WorldChunkData *cd)
         {
             for (int64_t scx = floor_div(ox1 - st->dx, WG_CHUNK); scx <= floor_div(ox2 - st->dx, WG_CHUNK); scx++)
             {
-                if (wg_generate_chunk(W.gen, (int32_t)scx, (int32_t)scy, &src) != 0)
+                const struct WgChunk *src = stamp_source_chunk((int32_t)scx, (int32_t)scy);
+                if (src == NULL)
                     continue;
                 for (int j = 0; j < WG_CHUNK_CELLS; j++)
                 {
                     const int64_t x = scx * WG_CHUNK + j % WG_CHUNK + st->dx, y = scy * WG_CHUNK + j / WG_CHUNK + st->dy;
-                    if ((x < ox1) || (x > ox2) || (y < oy1) || (y > oy2) || !stamp_structure_cell(src.slabs[j], src.owners[j]))
+                    if ((x < ox1) || (x > ox2) || (y < oy1) || (y > oy2) || !stamp_structure_cell(src->slabs[j], src->owners[j]))
                         continue;
                     const int i = (int)((y - cy1) * WG_CHUNK + (x - cx1));
-                    const uint8_t sl = src.slabs[j];
+                    const uint8_t sl = src->slabs[j];
                     structure[i] = 1;
                     cd->kind[i] = (sl < WgS_COUNT) ? wg_kinds[sl] : SlbT_ROCK;
-                    cd->owner[i] = (src.owners[j] == WgO_Player) ? wown : WOwn_Neutral;
+                    cd->owner[i] = (src->owners[j] == WgO_Player) ? wown : WOwn_Neutral;
                     cd->wall[i] = (sl == WgS_Wall);
                     cd->door[i] = 0;
                     if (sl == WgS_DoorWood)
@@ -1426,16 +1453,16 @@ static void apply_stamps(int32_t cx, int32_t cy, struct WorldChunkData *cd)
                     if (slab_kind_has_no_ownership(cd->kind[i]))
                         cd->owner[i] = WOwn_Neutral;
                 }
-                for (int t = 0; !retired && (t < src.thing_count) && (cd->thing_count < WORLD_MAX_THINGS_PER_CHUNK); t++)
+                for (int t = 0; !retired && (t < src->thing_count) && (cd->thing_count < WORLD_MAX_THINGS_PER_CHUNK); t++)
                 {
-                    const struct WgThing *wt = &src.things[t];
+                    const struct WgThing *wt = &src->things[t];
                     const int64_t ssx = (int64_t)floor(wt->x / STL_PER_SLB), ssy = (int64_t)floor(wt->y / STL_PER_SLB);
                     if ((ssx < scx * WG_CHUNK) || (ssx >= scx * WG_CHUNK + WG_CHUNK) || (ssy < scy * WG_CHUNK) ||
                         (ssy >= scy * WG_CHUNK + WG_CHUNK))
                         continue;
                     const int j = (int)((ssy - scy * WG_CHUNK) * WG_CHUNK + (ssx - scx * WG_CHUNK));
                     const int64_t sx = ssx + st->dx, sy = ssy + st->dy;
-                    if ((sx < ox1) || (sx > ox2) || (sy < oy1) || (sy > oy2) || !stamp_structure_cell(src.slabs[j], src.owners[j]))
+                    if ((sx < ox1) || (sx > ox2) || (sy < oy1) || (sy > oy2) || !stamp_structure_cell(src->slabs[j], src->owners[j]))
                         continue;
                     long model = get_id(wt->is_creature ? creature_desc : object_desc, wt->name);
                     if (model <= 0)
@@ -1787,45 +1814,155 @@ static void coop_selftest_levels(PlayerNumber a, const struct Thing *ha)
         (int)probe.things[1].level, (int)probe.things[2].level, (int)probe.things[3].level, raised);
 }
 
-/** Research books: the two reward caves nearest each player start always hold one. */
+/* Research books: the two reward caves nearest each player start always hold one. Which two they are depends on the
+   generator and the start's place alone, but finding them asks the generator for every reward cave within 200 slabs
+   of the start, and that took 44 ms (2026-11-13) in the turn the first cave near a start was made, in every session
+   and at every new start. So each start's answer is kept once it is known, and worked out ahead of need
+   (world_books_ahead): the same question asked of small squares, a few a turn, fills the generator's own memory of
+   where structures are, and the one big question at the end - the very one that was always asked - is then answered
+   from that memory. Asked before it is ready, it is answered at once, as before. */
+#define BOOK_REACH 200
+#define BOOK_SQUARE 64                                               /* slabs: a reward cave's region is 4 chunks wide */
+#define BOOK_SQUARES_SIDE ((2 * BOOK_REACH + BOOK_SQUARE) / BOOK_SQUARE) /* squares across the box of the big question */
+#define BOOK_SQUARES (BOOK_SQUARES_SIDE * BOOK_SQUARES_SIDE)
+struct BookStart {
+    int64_t xs, ys;      /* the start, a world slab */
+    int64_t cave[2][2];  /* its two nearest reward caves (their origins; INT64_MIN: none) */
+    uint8_t ready;
+    uint8_t next;        /* the next square to ask about, while not ready */
+    uint8_t again;       /* times the squares began again */
+    unsigned epoch;      /* the generator's structure memory when the squares began (emptied since: they begin again) */
+};
+static struct BookStart *book_starts;
+static int book_start_n, book_start_cap;
+
+/** The two reward caves nearest a start: the question as it was always asked. */
+static void book_caves_find(int64_t xs, int64_t ys, int64_t cave[2][2])
+{
+    struct WgStructRef near[32];
+    const int n = min(wg_structures_in(W.gen, xs - BOOK_REACH, ys - BOOK_REACH, xs + BOOK_REACH, ys + BOOK_REACH,
+        1u << WgT_Reward, near, 32), 32);
+    double best[2] = {1e30, 1e30};
+    cave[0][0] = cave[0][1] = cave[1][0] = cave[1][1] = INT64_MIN;
+    for (int i = 0; i < n; i++)
+    {
+        const double dx = (double)(near[i].origin_x - xs), dy = (double)(near[i].origin_y - ys);
+        const double d = sqrt(dx * dx + dy * dy);
+        const int slot = (d < best[0]) ? 0 : ((d < best[1]) ? 1 : -1);
+        if (slot < 0)
+            continue;
+        if (slot == 0)
+        {
+            best[1] = best[0];
+            cave[1][0] = cave[0][0];
+            cave[1][1] = cave[0][1];
+        }
+        best[slot] = d;
+        cave[slot][0] = near[i].origin_x;
+        cave[slot][1] = near[i].origin_y;
+    }
+}
+
+/** The kept answer of a start, made (not ready) if it has none; NULL: no memory for one. */
+static struct BookStart *book_start_of(int64_t xs, int64_t ys)
+{
+    for (int i = book_start_n - 1; i >= 0; i--)
+        if ((book_starts[i].xs == xs) && (book_starts[i].ys == ys))
+            return &book_starts[i];
+    if (book_start_n >= book_start_cap)
+    {
+        const int ncap = (book_start_cap > 0) ? book_start_cap * 2 : 16;
+        struct BookStart *n = (struct BookStart *)realloc(book_starts, (size_t)ncap * sizeof(*n));
+        if (n == NULL)
+            return NULL;
+        book_starts = n;
+        book_start_cap = ncap;
+    }
+    struct BookStart *b = &book_starts[book_start_n++];
+    memset(b, 0, sizeof(*b));
+    b->xs = xs;
+    b->ys = ys;
+    return b;
+}
+
+static void book_starts_forget(void)
+{
+    free(book_starts);
+    book_starts = NULL;
+    book_start_n = book_start_cap = 0;
+}
+
+/** One more square of a start's box asked about (nothing is kept of the answer but what the generator remembers);
+ *  after the last, the big question itself. True when the start's answer is ready. */
+static TbBool book_start_step(struct BookStart *b)
+{
+    if (b->ready)
+        return true;
+    const unsigned epoch = wg_structure_memory_epoch(W.gen);
+    if ((b->next > 0) && (b->epoch != epoch) && (b->again < 3))
+    {
+        b->next = 0; /* the generator emptied its memory meanwhile: what the squares put there is gone */
+        b->again++;
+    }
+    if (b->next == 0)
+        b->epoch = epoch;
+    if (b->next < BOOK_SQUARES)
+    {
+        const int64_t x1 = b->xs - BOOK_REACH + (int64_t)(b->next % BOOK_SQUARES_SIDE) * BOOK_SQUARE;
+        const int64_t y1 = b->ys - BOOK_REACH + (int64_t)(b->next / BOOK_SQUARES_SIDE) * BOOK_SQUARE;
+        struct WgStructRef some[8];
+        wg_structures_in(W.gen, x1, y1, min(x1 + BOOK_SQUARE - 1, b->xs + BOOK_REACH), min(y1 + BOOK_SQUARE - 1, b->ys + BOOK_REACH),
+            1u << WgT_Reward, some, 8);
+        b->next++;
+        if (b->next < BOOK_SQUARES)
+            return false;
+        if ((wg_structure_memory_epoch(W.gen) != b->epoch) && (b->again < 3))
+            return false; /* (emptied during the last square: once more, at the next step) */
+    }
+    book_caves_find(b->xs, b->ys, b->cave);
+    b->ready = 1;
+    return true;
+}
+
+/** Is a start's answer known (or never needed: no research books in this world)? */
+static TbBool book_start_ready(int64_t xs, int64_t ys)
+{
+    if (!world_progress_active() || (world_progress_book_model() <= 0))
+        return true;
+    for (int i = book_start_n - 1; i >= 0; i--)
+        if ((book_starts[i].xs == xs) && (book_starts[i].ys == ys))
+            return book_starts[i].ready != 0;
+    return false;
+}
+
 static TbBool book_cave_guaranteed(const struct WgStructRef *ref)
 {
     struct WgStructRef start;
     wg_start_ref(W.gen, &start);
-    int64_t xs[1], ys[1];
     for (int st_i = 0; st_i < 1 + W.stamp_count; st_i++)
     {
-        const int s = 0;
-        world_start_at(&start, st_i, &xs[s], &ys[s]);
-        /* only a start within the search's reach can have this cave among its two (the box below is +-200) */
-        if ((ref->origin_x < xs[s] - 200) || (ref->origin_x > xs[s] + 200) || (ref->origin_y < ys[s] - 200) ||
-            (ref->origin_y > ys[s] + 200))
+        int64_t xs, ys;
+        world_start_at(&start, st_i, &xs, &ys);
+        /* only a start within the search's reach can have this cave among its two (the box is +-200) */
+        if ((ref->origin_x < xs - BOOK_REACH) || (ref->origin_x > xs + BOOK_REACH) || (ref->origin_y < ys - BOOK_REACH) ||
+            (ref->origin_y > ys + BOOK_REACH))
             continue;
-        struct WgStructRef near[32];
-        const int n = min(wg_structures_in(W.gen, xs[s] - 200, ys[s] - 200, xs[s] + 200, ys[s] + 200,
-            1u << WgT_Reward, near, 32), 32);
-        double best[2] = {1e30, 1e30};
-        int64_t cave[2][2] = {{INT64_MIN, INT64_MIN}, {INT64_MIN, INT64_MIN}};
-        for (int i = 0; i < n; i++)
+        int64_t found[2][2];
+        struct BookStart *b = book_start_of(xs, ys);
+        if (b == NULL)
+            book_caves_find(xs, ys, found);
+        else
         {
-            const double dx = (double)(near[i].origin_x - xs[s]), dy = (double)(near[i].origin_y - ys[s]);
-            const double d = sqrt(dx * dx + dy * dy);
-            const int slot = (d < best[0]) ? 0 : ((d < best[1]) ? 1 : -1);
-            if (slot < 0)
-                continue;
-            if (slot == 0)
+            if (!b->ready)
             {
-                best[1] = best[0];
-                cave[1][0] = cave[0][0];
-                cave[1][1] = cave[0][1];
+                book_caves_find(xs, ys, b->cave); /* needed before the squares were through: at once, as it always was */
+                b->ready = 1;
             }
-            best[slot] = d;
-            cave[slot][0] = near[i].origin_x;
-            cave[slot][1] = near[i].origin_y;
+            memcpy(found, b->cave, sizeof(found));
         }
         for (int k = 0; k < 2; k++)
         {
-            if ((cave[k][0] == ref->origin_x) && (cave[k][1] == ref->origin_y))
+            if ((found[k][0] == ref->origin_x) && (found[k][1] == ref->origin_y))
                 return true;
         }
     }
@@ -1995,6 +2132,8 @@ static TbBool regrade_hero(int64_t wx, int64_t wy, long *model, uint8_t *level)
     return true;
 }
 
+static void cm_soon_mats(int32_t cx, int32_t cy, struct WorldChunkData *cd);
+
 static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData *cd)
 {
     static struct WgChunk ch;
@@ -2002,6 +2141,8 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
     cd->cx = cx;
     cd->cy = cy;
     cd->fresh = 1;
+    int64_t gt[7] = {0}; /* KFX_WORLD_PROFILE: when each part of making the chunk was done */
+    const int64_t gt0 = world_prof_now();
     if (wg_generate_chunk(W.gen, cx, cy, &ch) != 0)
     {
         ERRORLOG("World: chunk (%d,%d) could not be generated", (int)cx, (int)cy);
@@ -2009,6 +2150,7 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
             cd->kind[i] = SlbT_ROCK;
         return false;
     }
+    gt[0] = world_prof_now();
     for (int s = 0; s < ch.struct_count; s++)
     {
         if (ch.structs[s].id.type == WgT_Keeper)
@@ -2025,6 +2167,7 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
         for (int s = 0; (s < n) && (s < 4); s++)
             keeper_register(&near[s]);
     }
+    gt[1] = world_prof_now();
     ThingModel wood = get_id(door_desc, "WOOD");
     ThingModel brace = get_id(door_desc, "BRACED");
     for (int i = 0; i < WG_CHUNK_CELLS; i++)
@@ -2084,8 +2227,11 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
         SYNCLOG("World: chunk (%d,%d): %d fortress guards re-graded and %d left out for the nearest player start",
             (int)cx, (int)cy, heroes_regraded, heroes_dropped);
     /* no heart objects: placing the heart pedestal makes the heart (a slab object) */
+    gt[2] = world_prof_now();
     place_books(&ch, cx, cy, cd);
+    gt[3] = world_prof_now();
     decorate_rewards(&ch, cx, cy, cd);
+    gt[4] = world_prof_now();
     apply_outposts(cx, cy, cd);
     if (!world_attract_active())
         circles_grade_chunk(cd); /* circles (world_circles.c): enemies as strong as the circle they stand in */
@@ -2096,7 +2242,16 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
         if (raised > 0)
             SYNCLOG("World: chunk (%d,%d): %d enemies a level higher (the nearest start is a party's)", (int)cx, (int)cy, raised);
     }
+    cm_soon_mats(cx, cy, cd); /* a new start's Welcome Mat, laid while this chunk of its ground was still to come */
+    gt[5] = world_prof_now();
     apply_stamps(cx, cy, cd);
+    gt[6] = world_prof_now();
+    if ((gt0 != 0) && (gt[6] - gt0 >= 3000000))
+        SYNCLOG("World profile: chunk (%d,%d) took %.1f ms to make: the generator %.1f, keepers near %.1f, its ground and "
+            "things %.1f, books %.1f, cave decorations %.1f, outposts and levels %.1f, start copies %.1f", (int)cx, (int)cy,
+            (double)(gt[6] - gt0) / 1e6, (double)(gt[0] - gt0) / 1e6, (double)(gt[1] - gt[0]) / 1e6,
+            (double)(gt[2] - gt[1]) / 1e6, (double)(gt[3] - gt[2]) / 1e6, (double)(gt[4] - gt[3]) / 1e6,
+            (double)(gt[5] - gt[4]) / 1e6, (double)(gt[6] - gt[5]) / 1e6);
     return true;
 }
 
@@ -2111,6 +2266,8 @@ struct RecWriter {
 
 static void rec_put(struct RecWriter *w, const void *p, uint32_t n)
 {
+    if (n == 0)
+        return; /* (nothing to copy; an empty writer has no buffer yet, and memcpy must not be given NULL) */
     if (w->len + n > w->cap)
     {
         uint32_t ncap = (w->cap == 0) ? 4096 : w->cap;
@@ -3197,7 +3354,10 @@ static void place_world_thing(const struct WorldThing *th, const struct WorldCre
         thing = create_trap(&pos, th->model, owner);
         if (!thing_is_invalid(thing))
         {
-            thing->trap.num_shots = th->extra;
+            /* its charges and the look that goes with them: create_trap makes a trap empty and see-through, and
+               the number alone left a trap with charges looking empty (the outposts' traps, and a keeper's own
+               once its ground had been put away and brought back) */
+            set_trap_shots(thing, th->extra);
             thing->trap.revealed = (th->flags & WTF_Revealed) ? 1 : 0; /* hidden until it goes off, then it shows */
         }
         break;
@@ -3249,6 +3409,42 @@ struct FillChunk {
 /* player_utils.c, not in a header: what init_keeper_map_exploration_by_terrain shows a keeper at the level start */
 TbBool map_position_initially_explored_for_player(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y);
 
+/** What a level start shows one keeper (init_keeper_map_exploration_by_terrain): all rock, gold and gems, neutral
+ *  portals and the ground round them, and its own ground, in the chunk at engine slab (sx0, sy0). */
+static int explore_like_level_start_for(PlayerNumber p, MapSlabCoord sx0, MapSlabCoord sy0)
+{
+    int explored = 0;
+    if (!player_exists(get_player(p)) || !player_is_keeper(p))
+        return 0;
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+    {
+        MapSlabCoord x = sx0 + i % WG_CHUNK, y = sy0 + i / WG_CHUNK;
+        if (map_position_initially_explored_for_player(p, x, y) && set_slab_explored(p, x, y))
+            explored++;
+    }
+    return explored;
+}
+
+/** The chunked world (2026-11-13): a keeper's own heart or creature at a subtile: the loaded chunks within r of it
+ *  are shown to that keeper as a level start shows its ground (their rock, gold, gems and portals), once for each
+ *  time a chunk is loaded. Every chunk used to be shown to every keeper when it first loaded
+ *  (explore_like_level_start, below, which the sliding window still uses); but chunks also load for raid parties on
+ *  their way and for other players, so the rock and gold along a raid's route appeared on the maps as the raid
+ *  passed. Chunks that load for someone else now show a keeper nothing until its own creatures come near. */
+static void cm_view(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSubtlCoord stl_y, int r)
+{
+    const int32_t ecx = (int32_t)(subtile_slab(stl_x) / WORLD_CHUNK_SLABS), ecy = (int32_t)(subtile_slab(stl_y) / WORLD_CHUNK_SLABS);
+    for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++)
+        {
+            struct WorldPage *pg = wp_page(ecx + dx, ecy + dy);
+            if ((pg == NULL) || pmask_has(pg->start_view, plyr_idx))
+                continue;
+            pmask_add(&pg->start_view, plyr_idx);
+            explore_like_level_start_for(plyr_idx, (MapSlabCoord)pg->cx * WORLD_CHUNK_SLABS, (MapSlabCoord)pg->cy * WORLD_CHUNK_SLABS);
+        }
+}
+
 /** What a level start shows every keeper (init_keeper_map_exploration_by_terrain): all rock, gold and gems,
  *  neutral portals and the ground round them, and their own ground, in the chunk at engine slab (sx0, sy0). The
  *  level start only covers the chunks there are then; chunks that come in later get it here, so the world's
@@ -3256,6 +3452,8 @@ TbBool map_position_initially_explored_for_player(PlayerNumber plyr_idx, MapSlab
 static int explore_like_level_start(MapSlabCoord sx0, MapSlabCoord sy0)
 {
     int explored = 0;
+    if (world_paged)
+        return 0; /* the chunked world: each keeper is shown the chunks its own heart and creatures want (cm_view) */
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
         if (!player_exists(get_player(p)) || !player_is_keeper(p))
@@ -3268,6 +3466,175 @@ static int explore_like_level_start(MapSlabCoord sx0, MapSlabCoord sy0)
         }
     }
     return explored;
+}
+
+/* Liquid sounds (2026-11-13): the generated lava and water get the original campaign's sound makers, the lava's
+   effect generator (its flames and their crackle) and dripping water, spread out as the campaign spreads them. Its
+   maps put them on the liquid itself, sparsely: lava generators at least ~3 slabs apart (6 on average, one per
+   25-200 lava slabs), dripping water ~13 apart (one per 100-200 water slabs). Here each 8x8 cell of world slabs may
+   hold one lava generator and each 16x16 cell (a chunk) one dripping water: on the first slab, in a seeded order, of
+   the cell's middle (its outer ring left out, so two are at least 3 slabs apart) that is the liquid with at least two
+   neighbours the same, if the cell has at least three such slabs (no sound for a puddle). The cells lie inside one
+   chunk, so the choice never depends on another chunk being loaded. They are made where a chunk comes into the game
+   and belong to their slab (slab objects): a chunk that freezes drops them with its slabs and makes them again when it
+   comes back, so stored chunks and worlds saved before get them too, never twice; a liquid slab that changes (a
+   bridge) loses its own. Test switch: KFX_WORLD_LIQUIDSOUNDS=0 makes none (read in endless worlds only). */
+#define LIQSND_LAVA_CELL 8
+#define LIQSND_WATER_CELL 16
+#define LIQSND_MIN_SLABS 3
+#define LIQSND_LAVA_RANGE (3 * COORD_PER_STL)  /* the campaign gives its lava generators 2-10 subtiles, mostly 4-5 */
+#define LIQSND_WATER_RANGE (5 * COORD_PER_STL)
+
+static int liqsnd_made_lava, liqsnd_made_water;
+
+static TbBool liqsnd_same(MapSlabCoord x, MapSlabCoord y, SlabKind kind)
+{
+    const struct SlabMap *slb = get_slabmap_block(x, y);
+    return !slabmap_block_invalid(slb) && (slb->kind == kind);
+}
+
+static TbBool liqsnd_fits(MapSlabCoord x, MapSlabCoord y, SlabKind kind)
+{
+    if (!liqsnd_same(x, y, kind))
+        return false;
+    const int n = liqsnd_same(x - 1, y, kind) + liqsnd_same(x + 1, y, kind) + liqsnd_same(x, y - 1, kind) +
+        liqsnd_same(x, y + 1, kind);
+    return n >= 2;
+}
+
+/** One liquid's sound makers in a chunk just filled (world chunk wcx, wcy at engine slab sx0, sy0). */
+/** Does a generator of that model stand on (belong to) this slab already? */
+static TbBool liqsnd_has(MapSlabCoord x, MapSlabCoord y, ThingModel model)
+{
+    const short key = slab_parent_key(get_slab_number(x, y));
+    for (int sy = 0; sy < STL_PER_SLB; sy++)
+        for (int sx = 0; sx < STL_PER_SLB; sx++)
+        {
+            const struct Map *mapblk = get_map_block_at(slab_subtile(x, sx), slab_subtile(y, sy));
+            if (map_block_invalid(mapblk))
+                continue;
+            unsigned long k = 0;
+            for (long i = get_mapwho_thing_index(mapblk); (i != 0) && (k < THINGS_COUNT); k++)
+            {
+                const struct Thing *thing = thing_get(i);
+                if (thing_is_invalid(thing))
+                    break;
+                i = thing->next_on_mapblk;
+                if ((thing->class_id == TCls_EffectGen) && (thing->model == model) && (thing->parent_idx == key))
+                    return true;
+            }
+        }
+    return false;
+}
+
+static void liqsnd_chunk_kind(int32_t wcx, int32_t wcy, MapSlabCoord sx0, MapSlabCoord sy0, SlabKind kind, int cell,
+    ThingModel model, unsigned short range, TbBool check)
+{
+    const int inner = cell - 2, area = inner * inner; /* 36 or 196: the step, 11, shares no factor with either */
+    for (int cy = 0; cy < WG_CHUNK; cy += cell)
+        for (int cx = 0; cx < WG_CHUNK; cx += cell)
+        {
+            const int64_t gx = (int64_t)wcx * WG_CHUNK + cx, gy = (int64_t)wcy * WG_CHUNK + cy;
+            int fits = 0, pick = -1;
+            uint64_t h = W.seed ^ ((uint64_t)gx * 0x9E3779B97F4A7C15ULL) ^ ((uint64_t)gy * 0xC2B2AE3D27D4EB4FULL) ^
+                ((uint64_t)kind * 0x4C49515355ULL);
+            h ^= h >> 33;
+            h *= 0xff51afd7ed558ccdULL;
+            h ^= h >> 33;
+            h *= 0xc4ceb9fe1a85ec53ULL;
+            h ^= h >> 33;
+            if (check)
+            {
+                /* after a load: a cell with a maker anywhere in its middle has one (its choice may have moved since: a
+                   bridge built or sold beside it) */
+                TbBool has = false;
+                for (int k = 0; (k < area) && !has; k++)
+                    has = liqsnd_has(sx0 + cx + 1 + k % inner, sy0 + cy + 1 + k / inner, model);
+                if (has)
+                    continue;
+            }
+            const int first = (int)(h % (uint64_t)area);
+            for (int j = 0; j < area; j++)
+            {
+                const int k = (first + 11 * j) % area;
+                if (!liqsnd_fits(sx0 + cx + 1 + k % inner, sy0 + cy + 1 + k / inner, kind))
+                    continue;
+                if (pick < 0)
+                    pick = k;
+                fits++;
+            }
+            if ((pick < 0) || (fits < LIQSND_MIN_SLABS))
+                continue;
+            const MapSlabCoord x = sx0 + cx + 1 + pick % inner, y = sy0 + cy + 1 + pick / inner;
+            struct Coord3d pos;
+            pos.x.val = subtile_coord_center(slab_subtile_center(x));
+            pos.y.val = subtile_coord_center(slab_subtile_center(y));
+            pos.z.val = 0;
+            struct Thing *gen = create_effect_generator(&pos, model, range, game.neutral_player_num,
+                slab_parent_key(get_slab_number(x, y)));
+            if (!thing_exists(gen))
+                return; /* no thing slots left: the rest of this chunk goes without */
+            if (kind == SlbT_LAVA)
+                liqsnd_made_lava++;
+            else
+                liqsnd_made_water++;
+        }
+}
+
+static int liqsnd_on = -1;
+static ThingModel liqsnd_lava_model, liqsnd_water_model;
+static void liqsnd_chunk(const struct WorldChunkData *cd, MapSlabCoord sx0, MapSlabCoord sy0)
+{
+    if (liqsnd_on < 0)
+    {
+        const char *v = getenv("KFX_WORLD_LIQUIDSOUNDS");
+        liqsnd_on = ((v != NULL) && (atoi(v) == 0)) ? 0 : 1;
+        liqsnd_lava_model = (ThingModel)get_id(effectgen_desc, "EFFECTGENERATOR_LAVA");
+        liqsnd_water_model = (ThingModel)get_id(effectgen_desc, "EFFECTGENERATOR_DRIPPING_WATER");
+        if (!liqsnd_on)
+            SYNCLOG("World: liquid sounds off (KFX_WORLD_LIQUIDSOUNDS=0)");
+    }
+    if (!liqsnd_on)
+        return;
+    TbBool lava = false, water = false;
+    for (int i = 0; (i < WG_CHUNK_CELLS) && !(lava && water); i++)
+    {
+        lava |= (cd->kind[i] == SlbT_LAVA);
+        water |= (cd->kind[i] == SlbT_WATER);
+    }
+    if (lava && (liqsnd_lava_model > 0))
+        liqsnd_chunk_kind(cd->cx, cd->cy, sx0, sy0, SlbT_LAVA, LIQSND_LAVA_CELL, liqsnd_lava_model, LIQSND_LAVA_RANGE, false);
+    if (water && (liqsnd_water_model > 0))
+        liqsnd_chunk_kind(cd->cx, cd->cy, sx0, sy0, SlbT_WATER, LIQSND_WATER_CELL, liqsnd_water_model, LIQSND_WATER_RANGE, false);
+}
+
+/** After a save is loaded: the chunks it brought back loaded were not filled, so a world saved before the sounds (or a
+ *  maker lost with a bridge) gets them now, by the same seeded choice; what stands already is left as it is. */
+static void liqsnd_loaded_chunk(int32_t wcx, int32_t wcy, MapSlabCoord sx0, MapSlabCoord sy0)
+{
+    if (liqsnd_on < 0)
+    {
+        static struct WorldChunkData none; /* (reads the switch and the models) */
+        none.cx = wcx;
+        none.cy = wcy;
+        liqsnd_chunk(&none, sx0, sy0);
+    }
+    if (!liqsnd_on)
+        return;
+    TbBool lava = false, water = false;
+    for (int y = 0; (y < WG_CHUNK) && !(lava && water); y++)
+        for (int x = 0; x < WG_CHUNK; x++)
+        {
+            const struct SlabMap *slb = get_slabmap_block(sx0 + x, sy0 + y);
+            if (slabmap_block_invalid(slb))
+                continue;
+            lava |= (slb->kind == SlbT_LAVA);
+            water |= (slb->kind == SlbT_WATER);
+        }
+    if (lava && (liqsnd_lava_model > 0))
+        liqsnd_chunk_kind(wcx, wcy, sx0, sy0, SlbT_LAVA, LIQSND_LAVA_CELL, liqsnd_lava_model, LIQSND_LAVA_RANGE, true);
+    if (water && (liqsnd_water_model > 0))
+        liqsnd_chunk_kind(wcx, wcy, sx0, sy0, SlbT_WATER, LIQSND_WATER_CELL, liqsnd_water_model, LIQSND_WATER_RANGE, true);
 }
 
 /** Writes chunks into the window. The band's columns must have been released (clear_band). */
@@ -3385,6 +3752,7 @@ static void fill_chunks(struct FillChunk *list, int count)
                 ext_of[cd->ext[e].ordinal] = (int16_t)e;
         for (int t = 0; t < cd->thing_count; t++)
             place_world_thing(&cd->things[t], (ext_of[t] >= 0) ? &cd->ext[ext_of[t]] : NULL, stl_x0, stl_y0);
+        liqsnd_chunk(cd, window_chunk_slab(list[c].lcx), window_chunk_slab(list[c].lcy)); /* lava and water sounds */
         /* test hook: KFX_WORLD_REVEAL=1 shows every chunk that comes in (only read in world levels) */
         static int reveal_all = -1;
         if (reveal_all < 0)
@@ -3425,6 +3793,12 @@ static void fill_chunks(struct FillChunk *list, int count)
                     tag_blocks_for_digging_in_area(slab_subtile(sx0 + i % WG_CHUNK, 0), slab_subtile(sy0 + i / WG_CHUNK, 0), p);
         }
     }
+    if ((liqsnd_made_lava + liqsnd_made_water > 0) && (getenv("KFX_WORLD_TESTLIQUID") != NULL))
+    {
+        SYNCLOG("World: liquid sounds: %d lava and %d dripping water generators made for %d chunks", liqsnd_made_lava,
+            liqsnd_made_water, count);
+    }
+    liqsnd_made_lava = liqsnd_made_water = 0;
 }
 
 /** The rock frame round the window. */
@@ -3929,8 +4303,8 @@ static struct WorldPortal *portal_add(int64_t wx, int64_t wy)
     return p;
 }
 
-/** The player's creature limit: WORLD_BASE_CREATURES, plus WORLD_CREATURES_PER_PORTAL for each portal they own,
- *  loaded or frozen. */
+/** The player's creature limit: WORLD_BASE_CREATURES, plus WORLD_CREATURES_PER_PORTAL for each portal they own after
+ *  the first, loaded or frozen. */
 static void update_creature_limit(void)
 {
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
@@ -3944,7 +4318,8 @@ static void update_creature_limit(void)
         for (int i = 0; i < W.portal_count; i++)
             if (W.portals[i].owner == p)
                 owned++;
-        int limit = min(WORLD_BASE_CREATURES + WORLD_CREATURES_PER_PORTAL * owned, WORLD_MAX_CREATURES);
+        /* the first portal adds nothing (the user, 2026-11-15): 10, and 5 more for each portal after it */
+        int limit = min(WORLD_BASE_CREATURES + WORLD_CREATURES_PER_PORTAL * max(owned - 1, 0), WORLD_MAX_CREATURES);
         if (dungeon->max_creatures_attracted != limit)
         {
             if (p == PLAYER0)
@@ -4256,6 +4631,205 @@ static void cm_want_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y, int r)
             floor_div(world_slab_y_of(subtile_slab(stl_y)), WORLD_CHUNK_SLABS), r);
 }
 
+/* Chunks wanted soon: the ring round a place that loaded only its own chunk at once (a raid's landing; 2026-11-13: its
+   nine chunks in one turn were a 30 to 70 ms turn, four fifths of it navigation, ceilings and light), and the rest of
+   the 5x5 block round a new start's heart (a joiner's or a "Start again": the 25 at once were a 200 ms turn for
+   everyone). They are wanted in every pass and go to the front of its queue, the nearer ring first, ahead of chunks
+   nearer the home heart, until they are loaded or CM_SOON_TURNS have gone by. Not saved: after a load the creatures
+   and the hearts there want the same chunks anyway. */
+#define CM_SOON_MAX 96
+#define CM_SOON_TURNS 400
+#define CM_SOON_MATS 2
+static struct CmSoon {
+    int64_t cx, cy;
+    GameTurn until;
+    uint8_t ring;       /* 1: next to the chunk that came at once; 2: the ring beyond it (a new start's) */
+    uint8_t mat_count;  /* Welcome Mats laid while the chunk was still to come (cm_soon_mats) */
+    struct {
+        int64_t sx, sy; /* the new start's heart, a world slab */
+        int level;      /* what the enemies near it came down to */
+    } mat[CM_SOON_MATS];
+} cm_soon[CM_SOON_MAX];
+static int cm_soon_n;
+
+/** An entry's turn has not gone by, and it is this game's (one from a later turn than now is a game loaded since). */
+static TbBool cm_soon_live(const struct CmSoon *s)
+{
+    return (game.play_gameturn <= s->until) && (s->until <= game.play_gameturn + CM_SOON_TURNS);
+}
+
+static struct CmSoon *cm_soon_find(int64_t cx, int64_t cy)
+{
+    for (int i = 0; i < cm_soon_n; i++)
+        if ((cm_soon[i].cx == cx) && (cm_soon[i].cy == cy))
+            return &cm_soon[i];
+    return NULL;
+}
+
+/** The chunk's entry, made if it has none (NULL: the list is full). */
+static struct CmSoon *cm_soon_add(int64_t cx, int64_t cy, int ring)
+{
+    struct CmSoon *s = cm_soon_find(cx, cy);
+    if (s != NULL)
+    {
+        s->until = game.play_gameturn + CM_SOON_TURNS;
+        s->ring = (uint8_t)min((int)s->ring, ring);
+        return s;
+    }
+    if (cm_soon_n >= CM_SOON_MAX)
+        return NULL;
+    s = &cm_soon[cm_soon_n++];
+    memset(s, 0, sizeof(*s));
+    s->cx = cx;
+    s->cy = cy;
+    s->until = game.play_gameturn + CM_SOON_TURNS;
+    s->ring = (uint8_t)ring;
+    return s;
+}
+
+/** The chunk's ring when it is wanted soon (1 or 2); 0: it is not. */
+static int cm_soon_ring(int64_t cx, int64_t cy)
+{
+    const struct CmSoon *s = cm_soon_find(cx, cy);
+    return ((s != NULL) && cm_soon_live(s)) ? max((int)s->ring, 1) : 0;
+}
+
+/** A new start's chunk waits, CM_SOON_HOLD turns at most, while the start's research books are being worked out
+ *  (world_books_ahead): made before that, a reward cave in it would ask the generator the whole question on the spot
+ *  (44 ms). */
+#define CM_SOON_HOLD 60
+static TbBool cm_soon_held(int64_t cx, int64_t cy)
+{
+    const struct CmSoon *s = cm_soon_find(cx, cy);
+    if ((s == NULL) || !cm_soon_live(s) || (s->mat_count == 0))
+        return false;
+    if ((GameTurn)(game.play_gameturn + CM_SOON_TURNS - s->until) > CM_SOON_HOLD)
+        return false;
+    for (int m = 0; (m < s->mat_count) && (m < CM_SOON_MATS); m++)
+        if (!book_start_ready(s->mat[m].sx, s->mat[m].sy))
+            return true;
+    return false;
+}
+
+/** A chunk generated while it was still to come for a new start: the Welcome Mats laid meanwhile (circles_welcome_mat
+ *  found it neither on the map nor in the store) bring its heroes and computer keepers' creatures down as they would
+ *  have, had the chunk come with the start as it used to. As on the map: no imp, no tunneller, and only the ones
+ *  above the mat's level. */
+static void cm_soon_mats(int32_t cx, int32_t cy, struct WorldChunkData *cd)
+{
+    const struct CmSoon *s = cm_soon_find(cx, cy);
+    if ((s == NULL) || (s->mat_count == 0) || !cm_soon_live(s))
+        return;
+    const double reach2 = (double)WC_CIRCLE_SLABS * (double)WC_CIRCLE_SLABS;
+    for (int m = 0; (m < s->mat_count) && (m < CM_SOON_MATS); m++)
+    {
+        const int level = s->mat[m].level;
+        int lowered = 0;
+        for (int t = 0; t < cd->thing_count; t++)
+        {
+            struct WorldThing *th = &cd->things[t];
+            if ((th->oclass != TCls_Creature) || ((int)th->level <= level))
+                continue;
+            const TbBool keeper = (th->owner >= WOwn_Keeper0) && (th->owner < WOwn_HumanBase);
+            if ((th->owner != WOwn_Heroes) && !keeper)
+                continue;
+            if ((game.conf.crtr_conf.model[th->model].model_flags & CMF_IsSpecDigger) != 0)
+                continue;
+            const double dx = (double)((int64_t)cx * WG_CHUNK + floor_div(th->x / COORD_PER_STL, STL_PER_SLB) - s->mat[m].sx);
+            const double dy = (double)((int64_t)cy * WG_CHUNK + floor_div(th->y / COORD_PER_STL, STL_PER_SLB) - s->mat[m].sy);
+            if (dx * dx + dy * dy > reach2)
+                continue;
+            th->level = (uint8_t)level;
+            th->health = -1; /* full, at its new level */
+            lowered++;
+        }
+        if (lowered > 0)
+            SYNCLOG("World circles: chunk (%d,%d), come after the new start at world slab (%ld,%ld): %d enemies brought down "
+                "to level %d", (int)cx, (int)cy, (long)s->mat[m].sx, (long)s->mat[m].sy, lowered, level);
+    }
+}
+
+/** Drops the ones that are loaded or too old (or from a later turn than now: another game was loaded), and wants the
+ *  rest. */
+static void cm_soon_collect(void)
+{
+    int n = 0;
+    for (int i = 0; i < cm_soon_n; i++)
+    {
+        const struct CmSoon s = cm_soon[i];
+        if ((game.play_gameturn > s.until) || (s.until > game.play_gameturn + CM_SOON_TURNS) ||
+            (wp_page(engine_chunk_of(s.cx), engine_chunk_of(s.cy)) != NULL))
+            continue;
+        table_insert(&cm_wanted, (int32_t)s.cx, (int32_t)s.cy);
+        cm_soon[n++] = s;
+    }
+    cm_soon_n = n;
+}
+
+/* New starts made while the world runs whose ground is still coming (load_start_staged). */
+#define START_COMING_MAX 8
+static struct StartComing {
+    PlayerNumber plyr;
+    int64_t hx, hy;      /* its heart, a world slab */
+    GameTurn made, until;
+} start_coming[START_COMING_MAX];
+static int start_coming_n;
+
+void fill_in_explored_area(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+
+/** A new start whose block is whole now (or that has waited CM_SOON_TURNS) shows its keeper what a start made with all
+ *  its ground at once showed it: the open ground joined to its heart, its own ground and the rock, gold and portals of
+ *  its block, and what its creatures see from where they stand. (The keeper's setup did all that the turn it joined,
+ *  when only the heart's chunk was there.) */
+static void starts_coming_check(void)
+{
+    int kept = 0;
+    for (int i = 0; i < start_coming_n; i++)
+    {
+        const struct StartComing sc = start_coming[i];
+        if (sc.until > game.play_gameturn + CM_SOON_TURNS)
+            continue; /* from a later turn than now: another game was loaded */
+        const int64_t ccx = floor_div(sc.hx, WG_CHUNK), ccy = floor_div(sc.hy, WG_CHUNK);
+        int missing = 0;
+        for (int dy = -CM_HEART_RADIUS; dy <= CM_HEART_RADIUS; dy++)
+            for (int dx = -CM_HEART_RADIUS; dx <= CM_HEART_RADIUS; dx++)
+                missing += (wp_page(engine_chunk_of(ccx + dx), engine_chunk_of(ccy + dy)) == NULL) ? 1 : 0;
+        if ((missing > 0) && (game.play_gameturn <= sc.until))
+        {
+            start_coming[kept++] = sc;
+            continue;
+        }
+        world_outpost_heart_here(sc.plyr); /* (every chunk that used to come before the heart has come) */
+        struct PlayerInfo *player = get_player(sc.plyr);
+        struct Thing *heartng = find_players_dungeon_heart(sc.plyr);
+        if (!player_exists(player) || !thing_exists(heartng))
+            continue;
+        /* (a seat that started again elsewhere meanwhile: this is no longer its start) */
+        if ((llabs((long long)(world_slab_x_of(subtile_slab(heartng->mappos.x.stl.num)) - sc.hx)) > 1) ||
+            (llabs((long long)(world_slab_y_of(subtile_slab(heartng->mappos.y.stl.num)) - sc.hy)) > 1))
+            continue;
+        fill_in_explored_area(sc.plyr, heartng->mappos.x.stl.num, heartng->mappos.y.stl.num);
+        for (int dy = -CM_HEART_RADIUS; dy <= CM_HEART_RADIUS; dy++)
+        {
+            for (int dx = -CM_HEART_RADIUS; dx <= CM_HEART_RADIUS; dx++)
+            {
+                if (wp_page(engine_chunk_of(ccx + dx), engine_chunk_of(ccy + dy)) == NULL)
+                    continue;
+                const MapSlabCoord sx0 = (MapSlabCoord)engine_slab_x((ccx + dx) * WG_CHUNK);
+                const MapSlabCoord sy0 = (MapSlabCoord)engine_slab_y((ccy + dy) * WG_CHUNK);
+                for (int c = 0; c < WG_CHUNK_CELLS; c++)
+                    if (map_position_initially_explored_for_player(sc.plyr, sx0 + c % WG_CHUNK, sy0 + c / WG_CHUNK))
+                        set_slab_explored(sc.plyr, sx0 + c % WG_CHUNK, sy0 + c / WG_CHUNK);
+            }
+        }
+        init_keeper_map_exploration_by_creatures(player);
+        SYNCLOG("World: player %d's start at world slab (%ld,%ld) has %s, %ld turns after it was made", (int)sc.plyr,
+            (long)sc.hx, (long)sc.hy, (missing == 0) ? "all its ground" : "waited long enough for its ground",
+            (long)(game.play_gameturn - sc.made));
+    }
+    start_coming_n = kept;
+}
+
 /** The chunks that must be loaded now. Only game state is read, so every machine and replay agrees. The camera
  *  isn't one of them: like players in Minecraft, the player's creatures load (and generate) the world. */
 static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
@@ -4264,6 +4838,7 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
     *home_cx = floor_div(W.home_x, WORLD_CHUNK_SLABS);
     *home_cy = floor_div(W.home_y, WORLD_CHUNK_SLABS);
     cm_want(*home_cx, *home_cy, CM_HEART_RADIUS);
+    cm_soon_collect();
     PlayerBitFlags humans = world_human_mask();
     /* party dungeons (2026-11-10): a co-op dungeon whose player is away keeps nothing loaded (no caretaker): it freezes,
        unless another player's creatures or ground keep its chunks */
@@ -4312,6 +4887,17 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
             continue;
         if (owner_in_mask(thing->owner, humans) || world_raid_hero(thing) || world_alarm_hero(thing))
             cm_want_subtile(thing->mappos.x.stl.num, thing->mappos.y.stl.num, CM_CREATURE_RADIUS);
+        if (world_paged && owner_in_mask(thing->owner, humans))
+            cm_view(thing->owner, thing->mappos.x.stl.num, thing->mappos.y.stl.num, CM_CREATURE_RADIUS);
+    }
+    /* and the ground round each human keeper's heart is shown to it (player 0's home too) */
+    for (PlayerNumber p = 0; world_paged && (p < PLAYERS_COUNT); p++)
+    {
+        if (!owner_in_mask(p, humans))
+            continue;
+        const struct Thing *heartng = find_players_dungeon_heart(p);
+        if (thing_exists(heartng))
+            cm_view(p, heartng->mappos.x.stl.num, heartng->mappos.y.stl.num, CM_HEART_RADIUS);
     }
     /* awake keepers keep their whole box; one of the player's creatures within a keeper's threat radius loads its
        box, so that it is set up and wakes (update_keepers) */
@@ -4503,6 +5089,10 @@ static int cm_candidate_cmp(const void *a, const void *b)
     return 0;
 }
 
+/* KFX_WORLD_PROFILE: where the time of the chunk loads went since it was last read (world_load_chunks_round logs a
+   burst's share of each: a raid's landing or a new start loads 9 or 25 chunks in one turn) */
+static int64_t cm_ns_data, cm_ns_fill, cm_ns_refresh;
+
 /** Loads one world chunk into a new page. */
 static TbBool cm_load_chunk(int64_t cx, int64_t cy, uint32_t now)
 {
@@ -4514,12 +5104,14 @@ static TbBool cm_load_chunk(int64_t cx, int64_t cy, uint32_t now)
     struct FillChunk fc;
     fc.lcx = (int)(cx - W.origin_cx);
     fc.lcy = (int)(cy - W.origin_cy);
+    const int64_t t0 = world_prof_now();
     WORLD_PROF(WPS_LdData, fc.cd = chunk_data_for((int32_t)cx, (int32_t)cy));
     if (fc.cd == NULL)
     {
         wp_free(ecx, ecy);
         return false;
     }
+    const int64_t t1 = world_prof_now();
     area_take();
     WORLD_PROF(WPS_LdFill, fill_chunks(&fc, 1));
     free(fc.cd);
@@ -4528,9 +5120,16 @@ static TbBool cm_load_chunk(int64_t cx, int64_t cy, uint32_t now)
         dungeon_area_of_page(wp_page(ecx, ecy), tot, room);
         area_set(tot, room, 1);
     }
+    const int64_t t2 = world_prof_now();
     cm_refresh_chunk(ecx, ecy);
     if (W.lair_wait_count > 0)
         lair_waits_process();
+    if (t0 != 0)
+    {
+        cm_ns_data += t1 - t0;
+        cm_ns_fill += t2 - t1;
+        cm_ns_refresh += world_prof_now() - t2;
+    }
     return true;
 }
 
@@ -4701,7 +5300,12 @@ static void cm_plan_pass(uint32_t now)
         }
         cand[ncand].cx = s->cx;
         cand[ncand].cy = s->cy;
-        cand[ncand].d = (s->cx - hcx) * (s->cx - hcx) + (s->cy - hcy) * (s->cy - hcy);
+        /* (the chunks round a landing or a new start that came in alone go first, the nearer ring before the farther:
+           cm_soon) */
+        const int ring = cm_soon_ring(s->cx, s->cy);
+        if ((ring > 0) && cm_soon_held(s->cx, s->cy))
+            continue; /* a new start's, waiting a few turns for the start's research books */
+        cand[ncand].d = (ring > 0) ? (int64_t)ring - 1000 : (s->cx - hcx) * (s->cx - hcx) + (s->cy - hcy) * (s->cy - hcy);
         ncand++;
     }
     /* room for another chunk: up to WORLD_MAX_THINGS_PER_CHUNK things, and about 100 triangles and 50 points of the
@@ -4799,9 +5403,54 @@ static void cm_do_queued(uint32_t now, int *loaded, int *ngone)
     }
 }
 
+/** Research books ahead (book_cave_guaranteed): a little of a start's answer every turn. A new start whose ground is
+ *  still coming goes first and gets BOOKS_AHEAD_NS of the turn (its chunks wait for it: cm_soon_held); after that the
+ *  level's own start and every seat's, the newest first, one square a turn. */
+#define BOOKS_AHEAD_NS 3000000
+static void world_books_ahead(void)
+{
+    static int cursor, cursor_stamps = -1;
+    if ((W.gen == NULL) || !world_progress_active() || (world_progress_book_model() <= 0))
+        return;
+    for (int i = 0; i < start_coming_n; i++)
+    {
+        struct BookStart *b = book_start_of(start_coming[i].hx, start_coming[i].hy);
+        if ((b == NULL) || b->ready)
+            continue;
+        const int64_t t0 = get_time_tick_ns();
+        while (!book_start_step(b) && (get_time_tick_ns() - t0 < BOOKS_AHEAD_NS))
+        {
+        }
+        return;
+    }
+    if ((cursor_stamps != W.stamp_count) || (book_start_n == 0))
+    {
+        cursor = 0; /* a start was made or given up, or another world began: from the first again */
+        cursor_stamps = W.stamp_count;
+    }
+    struct WgStructRef start;
+    wg_start_ref(W.gen, &start);
+    while (cursor <= W.stamp_count)
+    {
+        /* 0: the level's own start; 1 and up: the seats' starts, the newest first */
+        int64_t xs, ys;
+        world_start_at(&start, (cursor == 0) ? 0 : W.stamp_count + 1 - cursor, &xs, &ys);
+        struct BookStart *b = book_start_of(xs, ys);
+        if ((b != NULL) && !b->ready)
+        {
+            book_start_step(b);
+            return;
+        }
+        cursor++;
+    }
+}
+
 static void chunk_manager_turn(void)
 {
     world_lair_test();
+    if (start_coming_n > 0)
+        starts_coming_check();
+    world_books_ahead();
     const TbBool pass = ((game.play_gameturn % CM_PERIOD) == 0);
     if (!pass && (cm_load_i >= cm_load_n) && (cm_freeze_i >= cm_freeze_n))
     {
@@ -4852,6 +5501,8 @@ int world_load_chunks_round(MapSlabCoord slb_x, MapSlabCoord slb_y, int r)
     const int64_t cy = floor_div(world_slab_y_of(slb_y), WORLD_CHUNK_SLABS);
     const uint32_t now = (uint32_t)max((long)game.play_gameturn, 1L);
     int loaded = 0;
+    const int64_t burst_t0 = world_prof_now();
+    cm_ns_data = cm_ns_fill = cm_ns_refresh = 0;
     for (int dy = -r; dy <= r; dy++)
     {
         for (int dx = -r; dx <= r; dx++)
@@ -4872,8 +5523,37 @@ int world_load_chunks_round(MapSlabCoord slb_x, MapSlabCoord slb_y, int r)
         }
     }
     if (loaded > 0)
+    {
+        const int64_t after_t0 = world_prof_now();
         cm_after_changes();
+        if (burst_t0 != 0)
+            SYNCLOG("World profile: %d chunks loaded at once round world chunk (%ld,%ld): %.1f ms (their data %.1f, fill %.1f,"
+                " navigation, ceilings and light %.1f, afterwards %.1f)", loaded, (long)cx, (long)cy,
+                (double)(world_prof_now() - burst_t0) / 1e6, (double)cm_ns_data / 1e6, (double)cm_ns_fill / 1e6,
+                (double)cm_ns_refresh / 1e6, (double)(world_prof_now() - after_t0) / 1e6);
+    }
     return loaded;
+}
+
+int world_load_chunks_landing(MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    if (!W.active || !world_paged)
+        return 0;
+    const int loaded = world_load_chunks_round(slb_x, slb_y, 0);
+    const int64_t cx = floor_div(world_slab_x_of(slb_x), WORLD_CHUNK_SLABS);
+    const int64_t cy = floor_div(world_slab_y_of(slb_y), WORLD_CHUNK_SLABS);
+    for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++)
+            if (((dx != 0) || (dy != 0)) && (wp_page(engine_chunk_of(cx + dx), engine_chunk_of(cy + dy)) == NULL))
+                cm_soon_add(cx + dx, cy + dy, 1); /* (list full: the creatures there want them too, in the usual order) */
+    return loaded;
+}
+
+int world_load_chunks_landing_world(int64_t wx, int64_t wy)
+{
+    if (!W.active)
+        return 0;
+    return world_load_chunks_landing((MapSlabCoord)engine_slab_x(wx), (MapSlabCoord)engine_slab_y(wy));
 }
 
 /******************************************************************************/
@@ -5021,6 +5701,66 @@ TbBool world_read_slab_box(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, Ma
     if (stored + generated > 0)
         SYNCLOG("World: read %ldx%ld slabs, %d chunks from the store and %d from the generator", (long)w,
             (long)((int64_t)y2 - y1 + 1), stored, generated);
+    return true;
+}
+
+TbBool world_read_slab_box_known(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSlabCoord y2, uint8_t *kinds,
+    uint8_t *player_owned, PlayerNumber plyr_idx, int *unknown)
+{
+    const uint8_t wown = owner_to_world(plyr_idx);
+    *unknown = 0;
+    if (!W.active || (W.gen == NULL) || (x2 < x1) || (y2 < y1))
+        return false;
+    const int64_t w = (int64_t)x2 - x1 + 1;
+    const int64_t wcx1 = floor_div(world_slab_x_of(x1), WG_CHUNK), wcx2 = floor_div(world_slab_x_of(x2), WG_CHUNK);
+    const int64_t wcy1 = floor_div(world_slab_y_of(y1), WG_CHUNK), wcy2 = floor_div(world_slab_y_of(y2), WG_CHUNK);
+    for (int64_t wcy = wcy1; wcy <= wcy2; wcy++)
+    {
+        for (int64_t wcx = wcx1; wcx <= wcx2; wcx++)
+        {
+            const int64_t ex0 = engine_slab_x(wcx * WG_CHUNK), ey0 = engine_slab_y(wcy * WG_CHUNK);
+            int src = 0; /* 0: not looked up yet, 1: remembered (pe), -1: not known */
+            const struct PeekEntry *pe = NULL;
+            for (int ly = 0; ly < WG_CHUNK; ly++)
+            {
+                const int64_t y = ey0 + ly;
+                if ((y < y1) || (y > y2))
+                    continue;
+                for (int lx = 0; lx < WG_CHUNK; lx++)
+                {
+                    const int64_t x = ex0 + lx;
+                    if ((x < x1) || (x > x2))
+                        continue;
+                    const size_t o = (size_t)((y - y1) * w + (x - x1));
+                    if (slab_is_live(x, y))
+                    {
+                        struct SlabMap *slb = get_slabmap_block((MapSlabCoord)x, (MapSlabCoord)y);
+                        kinds[o] = (uint8_t)slb->kind;
+                        player_owned[o] = (slabmap_owner(slb) == plyr_idx);
+                        continue;
+                    }
+                    if (src == 0)
+                    {
+                        const struct PeekEntry *e = (peek_cache != NULL) ? peek_cache_slot(wcx, wcy) : NULL;
+                        pe = ((e != NULL) && e->valid && (e->cx == wcx) && (e->cy == wcy)) ? e : NULL;
+                        src = (pe != NULL) ? 1 : -1;
+                        if (src < 0)
+                            (*unknown)++;
+                    }
+                    const int i = ly * WG_CHUNK + lx;
+                    if (src == 1)
+                    {
+                        kinds[o] = pe->kind[i];
+                        player_owned[o] = (pe->owner[i] == wown);
+                    } else
+                    {
+                        kinds[o] = SlbT_ROCK;
+                        player_owned[o] = 0;
+                    }
+                }
+            }
+        }
+    }
     return true;
 }
 
@@ -5253,6 +5993,8 @@ static TbBool world_init_state(void)
     if ((W.gen_version < WORLD_GEN_OLDEST) || (W.gen_version > WG_GENERATOR_LATEST))
         W.gen_version = WORLD_GEN_OLDEST;
     W.gen = wg_world_create_version(W.seed, W.gen_version);
+    stamp_src_n = stamp_src_next = 0; /* (a new generator: the start's chunks kept for the stamps were another's, */
+    book_starts_forget();             /* and so were the starts' nearest reward caves) */
     if (W.gen == NULL)
         return false;
     W.active = true;
@@ -5400,14 +6142,19 @@ static int64_t place_ext_x, place_ext_y;
 /** Can a start's copy go here: no keeper, fortress, portal or heroes outpost near, and only ground not made yet. */
 static TbBool stamp_place_free(const struct WorldStamp *st)
 {
-    struct WgStructRef refs[2];
     int64_t x1, y1, x2, y2;
     stamp_rect(st, &x1, &y1, &x2, &y2);
     x2 += place_ext_x;
     y2 += place_ext_y;
+    /* The outposts are asked about first, ahead of their turn below: that question is cheap and says no to more than
+       half the places, and the generator's answer is the dear one (2026-11-13: twelve joiners' places took 216 ms
+       with the generator asked first, 107 ms this way; the same places, each question being a plain yes or no). */
+    if (world_outpost_in_box(x1 - 8, y1 - 8, x2 + 8, y2 + 8))
+        return false;
     /* no keeper, fortress or portal near (a reward cave under it is just covered) */
     const unsigned mask = (1u << WgT_Keeper) | (1u << WgT_Fortress) | (1u << WgT_Portal);
-    if (wg_structures_in(W.gen, x1 - 8, y1 - 8, x2 + 8, y2 + 8, mask, refs, 2) > 0)
+    /* (only how many: given room for two, the generator built them, a keeper's or a fortress's whole layout) */
+    if (wg_structures_in(W.gen, x1 - 8, y1 - 8, x2 + 8, y2 + 8, mask, NULL, 0) > 0)
         return false;
     if (world_outpost_in_box(x1 - 8, y1 - 8, x2 + 8, y2 + 8))
         return false; /* nor a heroes outpost */
@@ -5415,7 +6162,8 @@ static TbBool stamp_place_free(const struct WorldStamp *st)
     for (int64_t cy = floor_div(y1 - 8, WG_CHUNK); cy <= floor_div(y2 + 8, WG_CHUNK); cy++)
         for (int64_t cx = floor_div(x1 - 8, WG_CHUNK); cx <= floor_div(x2 + 8, WG_CHUNK); cx++)
             if ((table_find(&W.store, (int32_t)cx, (int32_t)cy) != NULL) ||
-                (world_paged && (wp_page(engine_chunk_of(cx), engine_chunk_of(cy)) != NULL)))
+                (world_paged && (wp_page(engine_chunk_of(cx), engine_chunk_of(cy)) != NULL)) ||
+                (cm_soon_ring(cx, cy) > 0)) /* (still coming for another new start or a landing: made, as it used to be) */
                 return false;
     return true;
 }
@@ -5552,8 +6300,9 @@ static TbBool choose_seat_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
                 const long r = radius + outs[o];
                 const long a = (angle + turns[t]) & ANGLE_MASK;
                 struct WorldStamp st = {plyr, ((int64_t)LbSinL(a) * r) / 65536, -((int64_t)LbCosL(a) * r) / 65536};
-                if (!stamp_place_free(&st))
-                    continue;
+                /* the cheap tests first (each is a plain yes or no, so the place chosen is the same in any order): the
+                   distances are integer sums, the land reads biomes on a grid, and "no structure near" is the dearest
+                   question the generator is asked (2026-11-13: a joiner's place took 7 to 100 ms) */
                 /* 1000-2000 slabs from the nearest solo start (the first player's is at offset 0,0), the co-op
                    starts' gap from those */
                 const int64_t nearest = nearest_start2(plyr, st.dx, st.dy, false);
@@ -5562,6 +6311,8 @@ static TbBool choose_seat_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
                 if (nearest_start2(plyr, st.dx, st.dy, true) < coop_gap * coop_gap)
                     continue;
                 if (!stamp_land_fits(&st))
+                    continue;
+                if (!stamp_place_free(&st))
                     continue;
                 if (pass > 0)
                     SYNCLOG("World: player %d's start goes nearer the co-op starts than %d slabs (no room on the spiral)",
@@ -5603,13 +6354,14 @@ static TbBool choose_coop_offset(PlayerNumber plyr, int64_t *dx, int64_t *dy)
             const long r = radius + out;
             const long a = (angle + turns[t]) & ANGLE_MASK;
             struct WorldStamp st = {plyr, ((int64_t)LbSinL(a) * r) / 65536, -((int64_t)LbCosL(a) * r) / 65536};
-            if (!stamp_place_free(&st))
-                continue;
+            /* (the cheap tests first, as in choose_seat_offset: the same place is chosen) */
             if (nearest_start2(plyr, st.dx, st.dy, false) < (int64_t)COOP_SPAWN_GAP * COOP_SPAWN_GAP)
                 continue;
             if (nearest_start2(plyr, st.dx, st.dy, true) < (int64_t)SPAWN_SPACING * SPAWN_SPACING)
                 continue;
             if (!stamp_land_fits(&st))
+                continue;
+            if (!stamp_place_free(&st))
                 continue;
             *dx = st.dx;
             *dy = st.dy;
@@ -5772,11 +6524,88 @@ static void world_start_test(void)
     SYNCLOG("World starttest: %d of %s placed, %d province samples near them", placed, v, provinces);
 }
 
-static PlayerBitFlags make_seat_starts(void)
+/* KFX_WORLD_PROFILE: what the last new starts' search for a place took (seats_joined) */
+static int64_t start_ns_place;
+
+/** A new start made while the world runs: the chunks its heart stands on come at once (the keeper's setup needs the
+ *  heart on the map), the rest of the 5x5 block round it in the chunk manager's next passes, the nearer ring first
+ *  (cm_soon; 2026-11-13: the 25 at once were a 200 ms turn for everyone at every join and every "Start again").
+ *  Returns the chunks loaded at once; *coming: how many were left for the next passes. Without a heart after that
+ *  (its room reaches further than a slab from its middle, or there was no room for a chunk) the whole block comes at
+ *  once, as it always did. */
+static int load_start_staged(PlayerNumber p, int64_t hx, int64_t hy, int *coming)
+{
+    *coming = 0;
+    const int64_t ccx = floor_div(hx, WG_CHUNK), ccy = floor_div(hy, WG_CHUNK);
+    /* the chunks under the heart: its middle slab and the eight round it (two or four chunks by a chunk's edge) */
+    const int64_t nx1 = floor_div(hx - 1, WG_CHUNK), nx2 = floor_div(hx + 1, WG_CHUNK);
+    const int64_t ny1 = floor_div(hy - 1, WG_CHUNK), ny2 = floor_div(hy + 1, WG_CHUNK);
+    int loaded = 0;
+    for (int64_t cy = ny1; cy <= ny2; cy++)
+        for (int64_t cx = nx1; cx <= nx2; cx++)
+            loaded += world_load_chunks_round_world(cx * WG_CHUNK, cy * WG_CHUNK, 0);
+    if (!thing_exists(find_players_dungeon_heart(p)))
+        return loaded + world_load_chunks_round_world(hx, hy, CM_HEART_RADIUS);
+    {
+        /* The block was always made row by row, the heart appearing with its own chunk: the heroes' outposts and
+           fortresses first reached by an earlier chunk were sized by another keeper's heart. They still are, now that
+           those chunks come after the heart: the rows above it, and its own row up to it. */
+        const int64_t bx1 = (ccx - CM_HEART_RADIUS) * WG_CHUNK, bx2 = (ccx + CM_HEART_RADIUS) * WG_CHUNK + WG_CHUNK - 1;
+        const int64_t above[4] = {bx1, (ccy - CM_HEART_RADIUS) * WG_CHUNK, bx2, ny2 * WG_CHUNK - 1};
+        const int64_t beside[4] = {bx1, ny2 * WG_CHUNK, nx2 * WG_CHUNK + WG_CHUNK - 1, ny2 * WG_CHUNK + WG_CHUNK - 1};
+        world_outpost_heart_late(p, above, beside, game.play_gameturn + CM_SOON_TURNS);
+    }
+    for (int dy = -CM_HEART_RADIUS; dy <= CM_HEART_RADIUS; dy++)
+    {
+        for (int dx = -CM_HEART_RADIUS; dx <= CM_HEART_RADIUS; dx++)
+        {
+            if (wp_page(engine_chunk_of(ccx + dx), engine_chunk_of(ccy + dy)) != NULL)
+                continue;
+            if (cm_soon_add(ccx + dx, ccy + dy, max(abs(dx), abs(dy))) != NULL)
+                (*coming)++;
+            else /* the list is full: at once, as it always was */
+                loaded += world_load_chunks_round_world((ccx + dx) * WG_CHUNK, (ccy + dy) * WG_CHUNK, 0);
+        }
+    }
+    return loaded;
+}
+
+/** A new start whose ground is still coming: the Welcome Mat just laid for it goes with every chunk near it that is
+ *  still to come (its own block's, and those of a start or a landing made a moment before: all of them were on the
+ *  map when such ground came at once), and the start is kept until its block is whole (starts_coming_check). */
+static void start_ground_coming(PlayerNumber p, int64_t hx, int64_t hy)
+{
+    const int level = world_circles_welcome_level(p);
+    const double near2 = (double)(WC_CIRCLE_SLABS + WG_CHUNK) * (double)(WC_CIRCLE_SLABS + WG_CHUNK);
+    for (int i = 0; i < cm_soon_n; i++)
+    {
+        struct CmSoon *s = &cm_soon[i];
+        const double dx = (double)(s->cx * WG_CHUNK + WG_CHUNK / 2 - hx), dy = (double)(s->cy * WG_CHUNK + WG_CHUNK / 2 - hy);
+        if (!cm_soon_live(s) || (s->mat_count >= CM_SOON_MATS) || (dx * dx + dy * dy > near2))
+            continue;
+        s->mat[s->mat_count].sx = hx;
+        s->mat[s->mat_count].sy = hy;
+        s->mat[s->mat_count].level = level;
+        s->mat_count++;
+    }
+    if (start_coming_n >= START_COMING_MAX)
+        return;
+    struct StartComing *sc = &start_coming[start_coming_n++];
+    sc->plyr = p;
+    sc->hx = hx;
+    sc->hy = hy;
+    sc->made = game.play_gameturn;
+    sc->until = game.play_gameturn + CM_SOON_TURNS;
+}
+
+/** staged: the world is running (a joiner, "Start again"): only the heart's chunks of a new start come this turn. */
+static PlayerBitFlags make_seat_starts(TbBool staged)
 {
     PlayerBitFlags made = pmask_none();
+    start_ns_place = 0;
     if (!world_paged || (W.gen == NULL))
         return made;
+    const int64_t place_t0 = world_prof_now();
     struct WgStructRef start;
     wg_start_ref(W.gen, &start);
     for (PlayerNumber p = (respawn_seat == PLAYER0) ? PLAYER0 : 1; p < PLAYERS_COUNT; p++)
@@ -5840,26 +6669,35 @@ static PlayerBitFlags make_seat_starts(void)
         world_circles_player_reset(p); /* a new dungeon: only the first circle is breached */
         world_sword_player_reset(p); /* and a guest's invitations and drive end */
     }
+    start_ns_place = world_prof_now() - place_t0;
     /* their ground comes once every new start has its place (a pair's two are in the same chunks) */
     for (int n = 0; n < W.stamp_count; n++)
     {
         const struct WorldStamp *st = &W.stamps[n];
         if ((st->plyr < 0) || (st->plyr >= PLAYERS_COUNT) || !pmask_has(made, st->plyr))
             continue;
-        const int loaded = world_load_chunks_round((MapSlabCoord)engine_slab_x(start.heart_x + st->dx),
-            (MapSlabCoord)engine_slab_y(start.heart_y + st->dy), 2);
-        SYNCLOG("World: player %d starts at world slab (%ld,%ld), %d chunks loaded%s", (int)st->plyr,
-            (long)(start.heart_x + st->dx), (long)(start.heart_y + st->dy), loaded,
-            (world_coop_partner(st->plyr) != PLAYER_NONE) ? " (an allied keeper's start)" : "");
-        circles_welcome_mat((PlayerNumber)st->plyr, start.heart_x + st->dx, start.heart_y + st->dy);
+        const int64_t hx = start.heart_x + st->dx, hy = start.heart_y + st->dy;
+        int coming = 0;
+        const int loaded = (staged && (start_coming_n < START_COMING_MAX)) ?
+            load_start_staged((PlayerNumber)st->plyr, hx, hy, &coming) :
+            world_load_chunks_round((MapSlabCoord)engine_slab_x(hx), (MapSlabCoord)engine_slab_y(hy), CM_HEART_RADIUS);
+        char more[48] = "";
+        if (coming > 0)
+            snprintf(more, sizeof(more), ", %d more in the next turns", coming);
+        SYNCLOG("World: player %d starts at world slab (%ld,%ld), %d chunks loaded%s%s", (int)st->plyr, (long)hx, (long)hy,
+            loaded, more, (world_coop_partner(st->plyr) != PLAYER_NONE) ? " (an allied keeper's start)" : "");
+        circles_welcome_mat((PlayerNumber)st->plyr, hx, hy);
+        if (coming > 0)
+            start_ground_coming((PlayerNumber)st->plyr, hx, hy);
     }
     return made;
 }
 
 /** After the level's players are set up: hearts, keepers. Called from the first world turn. */
 /** Levels to 100 (2026-11-07): a creature's abilities in the order it learns them; the 1st and 2nd keep
- *  their levels, the 3rd comes at level 10, the 4th at 20, the 5th at 30 ... Every model, heroes too; it gives the
- *  same result when run again (a load), and every creature's abilities follow at once. */
+ *  their levels, the 3rd comes at level 10, the 4th at 20, the 5th at 30 ... Every model, heroes too, but the Imp
+ *  (the user, 2026-11-15: Imps keep their stock levels, Speed at 3 and Teleport at 10); it gives the same result when
+ *  run again (a load), and every creature's abilities follow at once. */
 static TbBool abilities_spread = false;
 static void world_spread_abilities(void)
 {
@@ -5874,9 +6712,27 @@ static void world_spread_abilities(void)
     if (level_cap <= CREATURE_MAX_LEVEL)
         return; /* creatures stop at level 10 here: the stock levels stay */
     int changed = 0;
+    const long imp = get_id(creature_desc, "IMP");
     for (ThingModel model = 1; model < game.conf.crtr_conf.model_count; model++)
     {
         struct CreatureModelConfig *crconf = creature_stats_get(model);
+        if (model == imp)
+        {
+            /* the Imp's abilities keep their stock levels; a world saved before has the moved ones in its config
+               overlay, which the load puts back: the stock ones (the config as loaded from files) again */
+            if (conf_baseline != NULL)
+            {
+                const struct CreatureModelConfig *stock = &conf_baseline->crtr_conf.model[model];
+                for (int i = 0; i < LEARNED_INSTANCES_COUNT; i++)
+                    if ((crconf->learned_instance_id[i] == stock->learned_instance_id[i]) &&
+                        (crconf->learned_instance_level[i] != stock->learned_instance_level[i]))
+                    {
+                        crconf->learned_instance_level[i] = stock->learned_instance_level[i];
+                        changed++;
+                    }
+            }
+            continue;
+        }
         int order[LEARNED_INSTANCES_COUNT];
         int n = 0;
         for (int i = 0; i < LEARNED_INSTANCES_COUNT; i++)
@@ -5922,7 +6778,16 @@ static void world_spread_abilities(void)
                 if (crconf->learned_instance_id[i] > 0)
                     snprintf(levels + strlen(levels), sizeof(levels) - strlen(levels), "%s%d", levels[0] ? "," : "", (int)crconf->learned_instance_level[i]);
         }
-        SYNCLOG("World: creatures learn their 3rd ability at level 10, then every 10 levels (%d moved; the Wizard's at %s)", changed, levels);
+        char imp_levels[64] = "";
+        if (imp > 0)
+        {
+            const struct CreatureModelConfig *crconf = creature_stats_get((ThingModel)imp);
+            for (int i = 0; i < LEARNED_INSTANCES_COUNT; i++)
+                if (crconf->learned_instance_id[i] > 0)
+                    snprintf(imp_levels + strlen(imp_levels), sizeof(imp_levels) - strlen(imp_levels), "%s%d", imp_levels[0] ? "," : "", (int)crconf->learned_instance_level[i]);
+        }
+        SYNCLOG("World: creatures learn their 3rd ability at level 10, then every 10 levels (%d moved; the Wizard's at %s;"
+            " the Imp's stay at %s)", changed, levels, imp_levels);
     }
 }
 
@@ -5952,7 +6817,7 @@ void world_imp_mined_gold(struct Thing *creatng)
 static void world_first_turn(void)
 {
     world_pools_first_turn(); /* the script's pool, before any portal draws from it */
-    const PlayerBitFlags new_seats = make_seat_starts();
+    const PlayerBitFlags new_seats = make_seat_starts(false); /* (the world is starting: all their ground at once) */
     bind_hearts();
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
@@ -6030,7 +6895,9 @@ static void seats_joined(PlayerNumber first, PlayerNumber second)
 {
     if (!W.active || !world_paged)
         return;
-    const PlayerBitFlags made = make_seat_starts();
+    const int64_t join_t0 = world_prof_now();
+    const PlayerBitFlags made = make_seat_starts(true);
+    const int64_t join_t1 = world_prof_now();
     bind_hearts();
     for (int k = 0; k < 2; k++)
     {
@@ -6058,6 +6925,11 @@ static void seats_joined(PlayerNumber first, PlayerNumber second)
             pmask_has(made, plyr_idx) ? " with a new start dungeon" : "", thing_exists(heartng) ? (int)heartng->index : 0);
     }
     coop_keep(); /* a new start sets the keeper's allies anew: its partner is one again */
+    if (join_t0 != 0) /* KFX_WORLD_PROFILE: what a join cost the turn it came in */
+        SYNCLOG("World profile: player %d's join took %.1f ms of this turn (finding its start's place %.1f, the ground "
+            "that came at once %.1f, the keeper's setup %.1f)", (int)first, (double)(world_prof_now() - join_t0) / 1e6,
+            (double)start_ns_place / 1e6, (double)(join_t1 - join_t0 - start_ns_place) / 1e6,
+            (double)(world_prof_now() - join_t1) / 1e6);
 }
 
 void world_seat_joined(PlayerNumber plyr_idx)
@@ -7198,9 +8070,10 @@ static void world_log_dig_tasks(const char *when)
         when, n, (long long)wx1, (long long)wx2, (long long)wy1, (long long)wy2, on_edge);
 }
 
-/** Test hook: KFX_WORLD_TAGDIG="dx,dy,w,h[,1]" marks that rectangle of slabs (relative to the player's heart) for
- *  digging as the player at turn 30, the way a drag with the hand does; with ,1 it reveals the rectangle first.
- *  Only read in world levels. */
+/** Test hook: KFX_WORLD_TAGDIG="dx,dy,w,h[,1[,n]]" marks that rectangle of slabs (relative to the player's heart) for
+ *  digging as the player at turn 30, the way a drag with the hand does; with ,1 it reveals the rectangle first; with a
+ *  sixth number n it is marked again every n turns, as a player keeps marking a road, and the log says how far from
+ *  the heart the imps have been. Only read in world levels. */
 /** Test hook KFX_WORLD_TESTGOLD="dx,dy,w,h": at turn 25 the earth there (slabs from player 0's heart) is gold. */
 static void world_testgold(void)
 {
@@ -7361,23 +8234,58 @@ static void world_explore_hook(void)
 static void world_tagdig(void)
 {
     const char *env = world_tagdig_env();
-    /* "...@T": at turn T instead (a joined player arrives later than turn 30) */
+    /* "...@T": at turn T instead of 30 (a joined player arrives later than turn 30) */
     const char *at30 = (env != NULL) ? strchr(env, '@') : NULL;
-    if ((env == NULL) || (game.play_gameturn != (GameTurn)((at30 != NULL) ? atol(at30 + 1) : 30)))
+    const GameTurn start = (GameTurn)((at30 != NULL) ? atol(at30 + 1) : 30);
+    int dx = 0, dy = 0, w = 0, h = 0, reveal = 0, every = 0;
+    if ((env == NULL) || (sscanf(env, "%d,%d,%d,%d,%d,%d", &dx, &dy, &w, &h, &reveal, &every) < 4))
         return;
-    int dx = 0, dy = 0, w = 0, h = 0, reveal = 0;
-    if (sscanf(env, "%d,%d,%d,%d,%d", &dx, &dy, &w, &h, &reveal) < 4)
+    /* With a sixth number n: every n turns the rectangle is marked again, as a player keeps marking a road when new
+       ground comes into view (marked once, the imps stop where the ground loaded at turn 30 ended), and the log says
+       how far from the heart the player's imps have been: how far the road has got. */
+    const TbBool first = (game.play_gameturn == start);
+    const TbBool again = (every > 0) && (game.play_gameturn > start) && ((game.play_gameturn % (GameTurn)every) == 0);
+    if (!first && !again)
         return;
     struct Dungeon *dungeon = get_players_num_dungeon(PLAYER0);
     struct Thing *heart = dungeon_invalid(dungeon) ? INVALID_THING : thing_get(dungeon->dnheart_idx);
     if (!thing_exists(heart))
         return;
     MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
-    int tagged = 0, unrevealed = 0;
-    for (int y = 0; y < h; y++)
+    if (again)
     {
-        for (int x = 0; x < w; x++)
+        static long farthest;
+        long now_far = 0;
+        int imps = 0;
+        const struct StructureList *slist = get_list_for_thing_class(TCls_Creature);
+        long guard = 0;
+        for (ThingIndex i = slist->index; (i > 0) && (guard++ < THINGS_COUNT);)
         {
+            const struct Thing *thing = thing_get(i);
+            if (thing_is_invalid(thing))
+                break;
+            i = thing->next_of_class;
+            if ((thing->owner != PLAYER0) || ((get_creature_model_flags(thing) & CMF_IsSpecDigger) == 0))
+                continue;
+            imps++;
+            const long ex = labs((long)subtile_slab(thing->mappos.x.stl.num) - (long)hx);
+            const long ey = labs((long)subtile_slab(thing->mappos.y.stl.num) - (long)hy);
+            now_far = max(now_far, max(ex, ey));
+        }
+        farthest = max(farthest, now_far);
+        SYNCLOG("World tagdig progress: %d imps, the farthest %ld slabs from the heart now, %ld at the most so far", imps,
+            now_far, farthest);
+    }
+    int tagged = 0, unrevealed = 0;
+    /* (marking again and again: along the rectangle's long side, so that the slabs marked while the task list has room
+       are the ones nearest its start; marked once: row by row, as it always was) */
+    const TbBool along = (every > 0) && (w > h);
+    const int n_outer = along ? w : h, n_inner = along ? h : w;
+    for (int a = 0; a < n_outer; a++)
+    {
+        for (int b = 0; b < n_inner; b++)
+        {
+            const int x = along ? a : b, y = along ? b : a;
             MapSlabCoord sx = hx + dx + x, sy = hy + dy + y;
             if ((sx < 1) || (sy < 1) || (sx >= game.map_tiles_x - 1) || (sy >= game.map_tiles_y - 1))
                 continue;
@@ -7390,8 +8298,10 @@ static void world_tagdig(void)
                 tagged++;
         }
     }
-    SYNCLOG("World tagdig: marked %d slabs (%d of them unexplored) at heart%+d,%+d, %dx%d", tagged, unrevealed, dx, dy, w, h);
-    world_log_dig_tasks("after marking");
+    if (first || (tagged > 0))
+        SYNCLOG("World tagdig: marked %d slabs (%d of them unexplored) at heart%+d,%+d, %dx%d", tagged, unrevealed, dx, dy, w, h);
+    if (first)
+        world_log_dig_tasks("after marking");
 }
 
 /** Test hook: KFX_WORLD_AUTOSHIFT="E2,S1,W3,N1" moves the window by itself (3 chunks per step, one step every
@@ -9338,6 +10248,147 @@ static void world_testbox_hook(void)
     }
 }
 
+/** Test hook KFX_WORLD_TESTLIQUID="T": the nearest lava and water to the start (searched chunk by chunk, out to 40
+ *  chunks): at T their 3x3 chunks load; every 100 turns from T+30 to T+1030 the lava and dripping water generators in
+ *  those chunks are counted (chunks left alone freeze within a few hundred turns; at T+700 they load again). */
+static int testliquid_count(int64_t wx, int64_t wy, int *lava, int *water)
+{
+    const MapSlabCoord sx = (MapSlabCoord)engine_slab_x(wx), sy = (MapSlabCoord)engine_slab_y(wy);
+    const ThingModel lm = (ThingModel)get_id(effectgen_desc, "EFFECTGENERATOR_LAVA");
+    const ThingModel wm = (ThingModel)get_id(effectgen_desc, "EFFECTGENERATOR_DRIPPING_WATER");
+    const struct StructureList *slist = get_list_for_thing_class(TCls_EffectGen);
+    long guard = 0;
+    int other = 0;
+    *lava = *water = 0;
+    for (long i = slist->index; (i > 0) && (guard++ <= (long)slist->count);)
+    {
+        struct Thing *thing = thing_get(i);
+        if (thing_is_invalid(thing))
+            break;
+        i = thing->next_of_class;
+        if ((labs((long)subtile_slab(thing->mappos.x.stl.num) - sx) > 24) || (labs((long)subtile_slab(thing->mappos.y.stl.num) - sy) > 24))
+            continue;
+        const SlabKind k = get_slabmap_block(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num))->kind;
+        if ((thing->model == lm) && (k == SlbT_LAVA))
+            (*lava)++;
+        else if ((thing->model == wm) && (k == SlbT_WATER))
+            (*water)++;
+        else
+            other++;
+    }
+    return other;
+}
+
+/** Test hook KFX_WORLD_TESTLIQUID (a joined thin client): logs the first 40 sounds of the lava's effect generator
+ *  that the server's stream makes it play. */
+void world_test_note_sample(long smptbl_idx)
+{
+    static int on = -1, heard = 0;
+    static long lava_first = 0, lava_count = 0;
+    if (on < 0)
+    {
+        on = (getenv("KFX_WORLD_TESTLIQUID") != NULL) ? 1 : 0;
+        const ThingModel lm = (ThingModel)get_id(effectgen_desc, "EFFECTGENERATOR_LAVA");
+        const struct EffectGeneratorConfigStats *egenstat = (lm > 0) ? get_effectgenerator_model_stats(lm) : NULL;
+        if (egenstat != NULL)
+        {
+            lava_first = egenstat->sound_sample_idx;
+            lava_count = max(1, (long)egenstat->sound_sample_rng);
+        }
+    }
+    if (!on || (lava_first <= 0) || (smptbl_idx < lava_first) || (smptbl_idx >= lava_first + lava_count) || (heard >= 40))
+        return;
+    heard++;
+    SYNCLOG("World test: liquid: this client plays the lava's sound %ld (%d heard)", smptbl_idx, heard);
+}
+
+static void world_testliquid_hook(void)
+{
+    static long base = -2;
+    static int64_t lx, ly, wx, wy;
+    static TbBool have_lava, have_water;
+    if (base == -2)
+    {
+        const char *v = getenv("KFX_WORLD_TESTLIQUID");
+        base = (v != NULL) ? atol(v) : -1;
+    }
+    if ((base < 0) || (W.gen == NULL))
+        return;
+    const long t = (long)game.play_gameturn - base;
+    if (t == 0)
+    {
+        struct WgStructRef start;
+        wg_start_ref(W.gen, &start);
+        have_lava = have_water = false;
+        for (int r = 0; (r <= 40) && !(have_lava && have_water); r++)
+            for (int oy = -r; oy <= r; oy++)
+                for (int ox = -r; ox <= r; ox++)
+                {
+                    if ((abs(ox) != r) && (abs(oy) != r))
+                        continue;
+                    for (int k = 0; k < 16; k++)
+                    {
+                        const int64_t x = start.heart_x + (int64_t)ox * WG_CHUNK + (k % 4) * 4;
+                        const int64_t y = start.heart_y + (int64_t)oy * WG_CHUNK + (k / 4) * 4;
+                        const int s = wg_terrain_at(W.gen, x, y);
+                        if ((s == WgS_Lava) && !have_lava) { have_lava = true; lx = x; ly = y; }
+                        if ((s == WgS_Water) && !have_water) { have_water = true; wx = x; wy = y; }
+                    }
+                }
+        SYNCLOG("World test: liquid: lava %s at world slab (%lld,%lld), water %s at (%lld,%lld)", have_lava ? "found" : "not found",
+            (long long)lx, (long long)ly, have_water ? "found" : "not found", (long long)wx, (long long)wy);
+    }
+    if ((t != 0) && (t != 700) && ((t < 30) || (t > 1030) || ((t - 30) % 100 != 0)))
+        return;
+    for (int which = 0; which < 2; which++)
+    {
+        if (!(which ? have_water : have_lava))
+            continue;
+        const int64_t x = which ? wx : lx, y = which ? wy : ly;
+        if ((t == 0) || (t == 700))
+        {
+            const int n = world_load_chunks_round((MapSlabCoord)engine_slab_x(x), (MapSlabCoord)engine_slab_y(y), 1);
+            SYNCLOG("World test: liquid: %d chunks loaded round the %s", n, which ? "water" : "lava");
+            continue;
+        }
+        int nl, nw;
+        const int other = testliquid_count(x, y, &nl, &nw);
+        if (which == 0)
+        {
+            /* the lava's flames near it (its generators at work: they need a player's view near) and the views */
+            const ThingModel flame = (ThingModel)get_id(effectelem_desc, "EFFECTELEMENT_LAVA_FLAME_STATIONARY");
+            const MapSlabCoord ex = (MapSlabCoord)engine_slab_x(x), ey = (MapSlabCoord)engine_slab_y(y);
+            const struct StructureList *el = get_list_for_thing_class(TCls_EffectElem);
+            long g = 0;
+            int flames = 0;
+            for (long i = el->index; (i > 0) && (g++ <= (long)el->count);)
+            {
+                struct Thing *thing = thing_get(i);
+                if (thing_is_invalid(thing))
+                    break;
+                i = thing->next_of_class;
+                if ((thing->model == flame) && (labs((long)subtile_slab(thing->mappos.x.stl.num) - ex) <= 24) &&
+                    (labs((long)subtile_slab(thing->mappos.y.stl.num) - ey) <= 24))
+                    flames++;
+            }
+            SYNCLOG("World test: liquid: %d lava flames near the lava now", flames);
+            for (NetUserId u = 0; u < MAX_NET_USERS; u++)
+            {
+                const PlayerNumber pl = get_net_user_player_number(u);
+                if (pl < 0)
+                    continue;
+                MapCoord vx = 0, vy = 0;
+                const int32_t rad = user_get_visibility_bounds(u, &vx, &vy);
+                SYNCLOG("World test: liquid: user %d (player %d) sees %d slabs round world slab (%ld,%ld)", (int)u, (int)pl,
+                    (int)(rad / (COORD_PER_STL * STL_PER_SLB)), (long)world_slab_x_of(coord_slab(vx)), (long)world_slab_y_of(coord_slab(vy)));
+            }
+        }
+        SYNCLOG("World test: liquid: round the %s (%s): %d lava and %d dripping water generators on their liquid, %d other",
+            which ? "water" : "lava", (wp_page_of_slab((MapSlabCoord)engine_slab_x(x), (MapSlabCoord)engine_slab_y(y)) != NULL) ?
+            "loaded" : "frozen", nl, nw, other);
+    }
+}
+
 /** Test hook KFX_WORLD_TESTFREEZE="T": at T, 7 chunks east of the start, a heroes' Knight with a set mood (hunger 1234,
  *  annoyance 777, 5 kills, 2 paydays owed), a dead Archer, and a heroes' prison holding a neutral Fly; the chunk
  *  freezes when nothing keeps it; at T+700 it loads again and what came back is logged. */
@@ -9404,6 +10455,17 @@ static void world_testfreeze_hook(void)
             if (thing_exists(trap))
                 trap->trap.revealed = (k == 0) ? 1 : 0;
         }
+        /* and an armed one (an Alarm: it harms nobody here): its charges and the look of an armed trap are to
+           come back with it */
+        {
+            struct Coord3d tpos;
+            tpos.x.val = subtile_coord_center(slab_subtile_center(sx + 1));
+            tpos.y.val = subtile_coord_center(slab_subtile_center(sy + 2));
+            tpos.z.val = 0;
+            struct Thing *trap = create_trap(&tpos, (ThingModel)get_id(trap_desc, "ALARM"), PLAYER_GOOD);
+            if (thing_exists(trap))
+                rearm_trap(trap);
+        }
         SYNCLOG("World test: freeze: knight %d, body %d, prison %d, fly %d at engine slab (%d,%d)",
             thing_exists(knight) ? (int)knight->index : -1, thing_exists(body) ? (int)body->index : -1,
             room_is_invalid(room) ? -1 : (int)room->index, thing_exists(fly) ? (int)fly->index : -1, (int)sx, (int)sy);
@@ -9453,9 +10515,11 @@ static void world_testfreeze_hook(void)
             break;
         i = thing->next_of_class;
         if ((labs((long)subtile_slab(thing->mappos.x.stl.num) - sx) <= 8) && (labs((long)subtile_slab(thing->mappos.y.stl.num) - sy) <= 8))
-            SYNCLOG("World test: freeze: trap %s at engine slab (%d,%d) owner %d: %s", thing_model_name(thing),
-                (int)subtile_slab(thing->mappos.x.stl.num), (int)subtile_slab(thing->mappos.y.stl.num), (int)thing->owner,
-                thing->trap.revealed ? "shows" : "hidden");
+            SYNCLOG("World test: freeze: trap %s at engine slab (%d,%d) owner %d: %s, %d charges, drawn %s",
+                thing_model_name(thing), (int)subtile_slab(thing->mappos.x.stl.num),
+                (int)subtile_slab(thing->mappos.y.stl.num), (int)thing->owner, thing->trap.revealed ? "shows" : "hidden",
+                (int)thing->trap.num_shots, ((thing->rendering_flags & TRF_Transpar_Flags) == TRF_Transpar_4) ?
+                "see-through (as an empty trap)" : "solid (as an armed trap)");
     }
 }
 
@@ -9557,6 +10621,7 @@ void world_process_turn(void)
 {
     if (!W.active)
         return;
+    world_autosave_poll(); /* the dawn autosave is written on its own thread: says how it went, once it is written */
     world_spread_abilities();
     sync_camera_after_zoom();
     if (!world_paged)
@@ -9571,10 +10636,14 @@ void world_process_turn(void)
         bind_hearts();
         /* saves from before chunks that come in were explored as at a level start: the loaded chunks get it now */
         int explored = 0;
+        liqsnd_made_lava = liqsnd_made_water = 0;
         if (world_paged)
         {
             for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
             {
+                liqsnd_loaded_chunk((int32_t)floor_div(world_slab_x_of((int64_t)pg->cx * WORLD_CHUNK_SLABS), WG_CHUNK),
+                    (int32_t)floor_div(world_slab_y_of((int64_t)pg->cy * WORLD_CHUNK_SLABS), WG_CHUNK),
+                    (MapSlabCoord)pg->cx * WORLD_CHUNK_SLABS, (MapSlabCoord)pg->cy * WORLD_CHUNK_SLABS); /* liquid sounds */
                 explored += explore_like_level_start((MapSlabCoord)pg->cx * WORLD_CHUNK_SLABS, (MapSlabCoord)pg->cy * WORLD_CHUNK_SLABS);
                 panel_map_update((MapSubtlCoord)pg->cx * CHUNK_STL, (MapSubtlCoord)pg->cy * CHUNK_STL, CHUNK_STL, CHUNK_STL);
             }
@@ -9582,9 +10651,15 @@ void world_process_turn(void)
         {
             for (int lcy = 0; lcy < WORLD_WINDOW_CHUNKS; lcy++)
                 for (int lcx = 0; lcx < WORLD_WINDOW_CHUNKS; lcx++)
+                {
+                    liqsnd_loaded_chunk(W.origin_cx + lcx, W.origin_cy + lcy, window_chunk_slab(lcx), window_chunk_slab(lcy));
                     explored += explore_like_level_start(window_chunk_slab(lcx), window_chunk_slab(lcy));
+                }
             panel_map_update(0, 0, game.map_subtiles_x, game.map_subtiles_y);
         }
+        SYNCLOG("World: liquid sounds after the load: %d lava and %d dripping water generators made on the loaded ground",
+            liqsnd_made_lava, liqsnd_made_water);
+        liqsnd_made_lava = liqsnd_made_water = 0;
         if (explored > 0)
             SYNCLOG("World: %d slabs of the loaded chunks explored as at a level start (rock, gold, gems, portals)", explored);
     }
@@ -9624,6 +10699,7 @@ void world_process_turn(void)
     world_testbox_hook();
     world_treasurytest_hook();
     world_testfreeze_hook();
+    world_testliquid_hook();
     world_daynight_turn();
     world_wild_turn();
     world_circles_turn();
@@ -9704,8 +10780,13 @@ void world_process_turn(void)
 
 void world_level_end(void)
 {
+    world_autosave_finish(); /* (an autosave still being written on its own thread is this world's) */
     abilities_spread = false; /* the next world (or a load) spreads them again */
     cm_load_n = cm_load_i = cm_freeze_n = cm_freeze_i = 0; /* the chunk manager's queued work was this world's */
+    cm_soon_n = 0;
+    start_coming_n = 0;
+    stamp_src_n = stamp_src_next = 0; /* the start's chunks kept for the stamps were this world's generator's */
+    book_starts_forget();             /* and so were the starts' nearest reward caves */
     area_next_full = 0;
     gold_dirty = false;
     gold_next = 0;
@@ -10172,6 +11253,31 @@ static void world_tokens_to_key(void)
     SYNCLOG("World: the world had no key; it takes this machine's, %d owners' tokens made its own", n);
 }
 
+/* A loaded page's part of the world blob: its map blocks and slabs as save records (world_save_blob). */
+#define BLOB_PAGE_BATCH 64
+struct BlobPage {
+    const struct WorldPage *pg;
+    struct SaveBuffer records;
+    struct SaveError err;
+    TbBool ok;
+};
+
+static void blob_pages_job(uint32_t start, uint32_t end, uint32_t thread, void *args)
+{
+    (void)thread;
+    struct BlobPage *batch = (struct BlobPage *)args;
+    for (uint32_t k = start; k < end; k++)
+    {
+        struct BlobPage *b = &batch[k];
+        TbBool ok = true;
+        for (int i = 0; ok && (i < WP_CHUNK_STL_CELLS); i++)
+            ok = (save_encode_record(&b->records, &save_desc_Map, &b->pg->map[i], SVM_Save, &b->err) == SVR_Ok);
+        for (int i = 0; ok && (i < WP_CHUNK_SLAB_CELLS); i++)
+            ok = (save_encode_record(&b->records, &save_desc_SlabMap, &b->pg->slab[i], SVM_Save, &b->err) == SVR_Ok);
+        b->ok = ok;
+    }
+}
+
 TbBool world_save_blob(unsigned char **data, uint32_t *len)
 {
     *data = NULL;
@@ -10224,29 +11330,45 @@ TbBool world_save_blob(unsigned char **data, uint32_t *len)
         rec_put(&w, schema.data, schema.len);
         save_buf_free(&schema);
         rec_u32(&w, (uint32_t)wp_count());
-        for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+        /* The pages' records are made on the job threads, a batch of pages at a time, and put into the blob in the
+           pages' own order: the same bytes as making them one after another, in a fraction of the time (2026-11-13:
+           0.3 ms a page, 15 ms of every save with 50 chunks loaded and far more in a busy world). */
+        struct WorldPage *pg = wp_first();
+        while (pg != NULL)
         {
-            struct SaveBuffer page;
-            memset(&page, 0, sizeof(page));
-            TbBool page_ok = true;
-            for (int i = 0; page_ok && (i < WP_CHUNK_STL_CELLS); i++)
-                page_ok = (save_encode_record(&page, &save_desc_Map, &pg->map[i], SVM_Save, &err) == SVR_Ok);
-            for (int i = 0; page_ok && (i < WP_CHUNK_SLAB_CELLS); i++)
-                page_ok = (save_encode_record(&page, &save_desc_SlabMap, &pg->slab[i], SVM_Save, &err) == SVR_Ok);
-            if (!page_ok)
+            static struct BlobPage batch[BLOB_PAGE_BATCH];
+            int n = 0;
+            for (; (pg != NULL) && (n < BLOB_PAGE_BATCH); pg = pg->next)
             {
-                ERRORLOG("World: chunk page (%d,%d) could not be saved: %s", (int)pg->cx, (int)pg->cy, err.message);
-                save_buf_free(&page);
+                memset(&batch[n], 0, sizeof(batch[n]));
+                batch[n++].pg = pg;
+            }
+            kfx_parallel_for((uint32_t)n, 1, blob_pages_job, batch);
+            TbBool batch_ok = true;
+            for (int i = 0; i < n; i++)
+            {
+                const struct WorldPage *bp = batch[i].pg;
+                if (batch_ok && !batch[i].ok)
+                {
+                    ERRORLOG("World: chunk page (%d,%d) could not be saved: %s", (int)bp->cx, (int)bp->cy, batch[i].err.message);
+                    batch_ok = false;
+                }
+                if (batch_ok)
+                {
+                    rec_put(&w, &bp->cx, 4);
+                    rec_put(&w, &bp->cy, 4);
+                    rec_u32(&w, batch[i].records.len);
+                    rec_put(&w, batch[i].records.data, batch[i].records.len);
+                    rec_put(&w, bp->ext, sizeof(bp->ext));
+                    rec_put(&w, bp->ext_initial, sizeof(bp->ext_initial));
+                }
+                save_buf_free(&batch[i].records);
+            }
+            if (!batch_ok)
+            {
                 free(w.buf);
                 return false;
             }
-            rec_put(&w, &pg->cx, 4);
-            rec_put(&w, &pg->cy, 4);
-            rec_u32(&w, page.len);
-            rec_put(&w, page.data, page.len);
-            rec_put(&w, pg->ext, sizeof(pg->ext));
-            rec_put(&w, pg->ext_initial, sizeof(pg->ext_initial));
-            save_buf_free(&page);
         }
     }
     /* lair waits and the keepers' last-near turns (they steer the game; a network resync must carry them) */

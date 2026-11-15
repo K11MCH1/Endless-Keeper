@@ -59,6 +59,68 @@ int world_attract_active(void)
     return attract_on;
 }
 
+/* the start's steps: milliseconds since this process began (Windows knows when), for the log line at the first scene */
+#define ATTRACT_MARKS 32
+static struct { const char *what; uint32_t ms; } marks[ATTRACT_MARKS];
+static volatile long mark_count = 0;
+static TbBool marks_written = false;
+
+static uint32_t ms_since_process_began(void)
+{
+#ifdef _WIN32
+    FILETIME made, ended, kernel, user, now;
+    if (!GetProcessTimes(GetCurrentProcess(), &made, &ended, &kernel, &user))
+        return 0;
+    typedef void (WINAPI *PreciseTime)(LPFILETIME);
+    static PreciseTime precise = NULL;
+    static TbBool looked = false;
+    if (!looked)
+    {
+        looked = true;
+        precise = (PreciseTime)(void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetSystemTimePreciseAsFileTime");
+    }
+    if (precise != NULL)
+        precise(&now);
+    else
+        GetSystemTimeAsFileTime(&now);
+    const unsigned long long a = ((unsigned long long)made.dwHighDateTime << 32) | made.dwLowDateTime;
+    const unsigned long long b = ((unsigned long long)now.dwHighDateTime << 32) | now.dwLowDateTime;
+    return (b > a) ? (uint32_t)((b - a) / 10000ull) : 0;
+#else
+    return 0;
+#endif
+}
+
+void world_attract_mark(const char *what)
+{
+    if (marks_written)
+        return;
+#ifdef _WIN32
+    const long i = InterlockedIncrement(&mark_count) - 1;
+#else
+    const long i = mark_count++;
+#endif
+    if ((i < 0) || (i >= ATTRACT_MARKS))
+        return;
+    marks[i].ms = ms_since_process_began();
+    marks[i].what = what;
+}
+
+static void write_marks(void)
+{
+    if (marks_written)
+        return;
+    world_attract_mark("first scene shown");
+    marks_written = true;
+    char line[1024];
+    int at = snprintf(line, sizeof(line), "Attract: start timing (ms since the process began):");
+    const long n = min((long)ATTRACT_MARKS, (long)mark_count);
+    for (long i = 0; (i < n) && (at > 0) && (at < (int)sizeof(line)); i++)
+        if (marks[i].what != NULL)
+            at += snprintf(line + at, sizeof(line) - at, "%s %s %u", (i > 0) ? "," : "", marks[i].what, (unsigned)marks[i].ms);
+    SYNCLOG("%s", line);
+}
+
 void world_attract_configure(const char *shared_name)
 {
 #ifdef _WIN32
@@ -102,6 +164,8 @@ void world_attract_frame(const unsigned char *rgba, int width, int height, int b
         memcpy(dst, rgba, row * (size_t)height);
     shared->width[slot] = (uint32_t)width;
     shared->height[slot] = (uint32_t)height;
+    if (shared->frame == 0)
+        world_attract_mark("first picture");
     shared->frame++;
 }
 
@@ -130,6 +194,7 @@ static struct {
     int scene;
     GameTurn scene_from, quiet_from, next_drop;
     int phase;                /* 0 fading in / playing, 1 fading out */
+    int scenes;               /* scenes started so far */
     struct AttractGroup groups[3];
     int group_count;
     ThingIndex things[ATTRACT_MAX];
@@ -358,6 +423,7 @@ static void start_scene(void)
     }
     #undef NEAR_LEVEL
     A.scene_from = game.play_gameturn;
+    A.scenes++;
     A.quiet_from = 0;
     A.next_drop = game.play_gameturn;
     A.phase = 0;
@@ -392,6 +458,8 @@ void world_attract_turn(void)
 {
     if (!attract_on)
         return;
+    if (game.play_gameturn == 1)
+        world_attract_mark("turn 1");
 #ifdef _WIN32
     /* the launcher has gone (or started the real game and closed this one's memory): so does this */
     if ((launcher_process != NULL) && ((game.play_gameturn % 20) == 0) && (WaitForSingleObject(launcher_process, 0) == WAIT_OBJECT_0))
@@ -411,7 +479,9 @@ void world_attract_turn(void)
     }
     if (!A.ready)
     {
-        if (game.play_gameturn < 6)
+        /* the world's first turn (turns 0 and 1, world_process_turn before this) has put the heart: the first battle
+           starts at turn 1 (the launcher's window waits for it) */
+        if (game.play_gameturn < 1)
         {
             if (shared != NULL)
                 shared->fade = 255;
@@ -433,6 +503,7 @@ void world_attract_turn(void)
         make_rival(RIVAL_A);
         make_rival(RIVAL_B);
         A.ready = true;
+        world_attract_mark("scene");
         start_scene();
     }
     move_camera();
@@ -450,8 +521,11 @@ void world_attract_turn(void)
         }
         return;
     }
+    /* the first scene is there after a turn (the launcher's window waits for it, and fades the picture in itself) */
     if (shared != NULL)
-        shared->fade = (uint32_t)max(0, 255 - (int)age * 20);
+        shared->fade = (uint32_t)max(0, 255 - (int)age * ((A.scenes <= 1) ? 200 : 20));
+    if ((shared != NULL) && (shared->fade < 80)) /* what the launcher waits for to show its window */
+        write_marks();
     /* the hands drop their creatures in, a few at first and then one by one */
     if (now >= A.next_drop)
     {

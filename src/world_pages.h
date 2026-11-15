@@ -47,6 +47,7 @@ struct WorldPage {
     int32_t cx, cy;                                 /**< engine chunk */
     struct WorldPage *next;                         /**< the list of loaded pages */
     uint32_t wanted_turn;                           /**< the chunk manager's last pass that wanted it (0: not yet) */
+    PlayerBitFlags start_view;                      /**< the keepers shown its rock, gold, gems and portals since it loaded */
     struct Map map[WP_CHUNK_STL_CELLS];             /**< as game.map */
     NavColour nav[WP_CHUNK_STL_CELLS];              /**< as game.navigation_map */
     unsigned short stat_light[WP_CHUNK_STL_CELLS];  /**< as game.lish.stat_light_map */

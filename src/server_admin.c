@@ -159,8 +159,13 @@ static void emit(const char *json)
         A.events_head = (A.events_head + 1) % ADMIN_EVENTS_KEPT;
         A.events_count--;
     }
-    A.events[(A.events_head + A.events_count) % ADMIN_EVENTS_KEPT] = strdup(json);
-    A.events_count++;
+    char *kept = strdup(json);
+    if (kept != NULL)
+    {
+        /* (out of memory: the line is sent but not kept; a NULL in the list crashed the next admin's log-in) */
+        A.events[(A.events_head + A.events_count) % ADMIN_EVENTS_KEPT] = kept;
+        A.events_count++;
+    }
     out_append(json);
 }
 

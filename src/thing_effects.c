@@ -56,6 +56,7 @@
 #include "net_state.h"
 #include "world_progress.h"
 #include "world_boss.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -827,6 +828,23 @@ TngUpdateRet process_effect_generator(struct Thing *thing)
         delete_thing_structure(thing, 0);
         return TUFRet_Deleted;
     }
+    if (world_mode_active())
+    {
+        /* endless worlds (2026-11-13, their lava and water have many): the delay counts down first, and a viewer is
+           looked for only when the generator is due (a hundred players' views, each turn, for each one, was the cost) */
+        if (thing->effect_generator.generation_delay > 0)
+            thing->effect_generator.generation_delay--;
+        if (thing->effect_generator.generation_delay > 0)
+            return TUFRet_Modified;
+        if (!any_player_close_enough_to_see(&thing->mappos))
+        {
+            struct EffectGeneratorConfigStats* egs = get_effectgenerator_model_stats(thing->model);
+            thing->effect_generator.generation_delay = egs->generation_delay_min +
+                UNSYNC_RANDOM(egs->generation_delay_max - egs->generation_delay_min + 1);
+            return TUFRet_Modified;
+        }
+    } else
+    {
     if ( !any_player_close_enough_to_see(&thing->mappos) )
     {
         SYNCDBG(18,"No player sees %s at (%d,%d,%d)",thing_model_name(thing),(int)thing->mappos.x.stl.num,(int)thing->mappos.y.stl.num,(int)thing->mappos.z.stl.num);
@@ -837,6 +855,7 @@ TngUpdateRet process_effect_generator(struct Thing *thing)
     if (thing->effect_generator.generation_delay > 0)
     {
         return TUFRet_Modified;
+    }
     }
     struct EffectGeneratorConfigStats* egenstat = get_effectgenerator_model_stats(thing->model);
     for (long i = 0; i < egenstat->generation_amount; i++)

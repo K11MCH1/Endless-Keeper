@@ -233,6 +233,10 @@ TbBool world_is_chunked(void);
  *  hold (x2-x1+1)*(y2-y1+1) cells, row by row; player_owned is 1 where plyr_idx owns the slab. */
 TbBool world_read_slab_box(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSlabCoord y2, uint8_t *kinds,
     uint8_t *player_owned, PlayerNumber plyr_idx);
+/** The same without reading anything (it costs nothing): the slabs of chunks that are neither loaded nor remembered
+ *  from an earlier read are given as rock, and *unknown counts those chunks. */
+TbBool world_read_slab_box_known(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSlabCoord y2, uint8_t *kinds,
+    uint8_t *player_owned, PlayerNumber plyr_idx, int *unknown);
 /** Chunked world: loads the chunks within r of the chunk holding an engine slab now (a raid's landing spot).
  *  Returns how many were loaded. */
 int world_load_chunks_round(MapSlabCoord slb_x, MapSlabCoord slb_y, int r);
@@ -241,6 +245,11 @@ TbBool world_test_stray_spot(MapSlabCoord *sx, MapSlabCoord *sy);
 void world_test_stray_freeze(MapSlabCoord sx, MapSlabCoord sy);
 /** The same round a world slab (loaded or not). */
 int world_load_chunks_round_world(int64_t wx, int64_t wy, int r);
+/** Chunked world, a raid's landing: loads the chunk holding an engine slab now, and has the eight round it come in
+ *  first in the chunk manager's next passes (one turn's work spread over a few). Returns how many were loaded now. */
+int world_load_chunks_landing(MapSlabCoord slb_x, MapSlabCoord slb_y);
+/** The same for a world slab (loaded or not). */
+int world_load_chunks_landing_world(int64_t wx, int64_t wy);
 /** Chunked world: reads up to `budget` chunks of a box of engine slabs that aren't loaded into world_read_slab_box's
  *  cache ahead of time (no effect on the game; it only spreads the work). Returns how many it read. */
 int world_peek_warm(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSlabCoord y2, int budget);
@@ -296,6 +305,9 @@ enum WorldBlobCheck {
 enum WorldBlobCheck world_blob_check(const unsigned char *data, uint32_t len, char *why, size_t why_len);
 /** Called after a save without a world blob was loaded: no world. */
 void world_load_none(void);
+
+/** Test hook KFX_WORLD_TESTLIQUID: a thin client notes a sound the server's stream made it play. */
+void world_test_note_sample(long smptbl_idx);
 
 #ifdef __cplusplus
 }

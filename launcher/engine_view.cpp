@@ -37,6 +37,20 @@ Uint64 g_still_saved_at = 0;
 bool g_first_noted = false;
 float g_focus_x = -1, g_focus_y = -1, g_at_x = -1, g_at_y = -1; /* asked for; where it is (it follows softly) */
 
+struct Mark { const char *what; unsigned ms; };
+std::vector<Mark> g_marks;
+
+unsigned ms_since_process_began()
+{
+    FILETIME made, ended, kernel, user, now;
+    if (!GetProcessTimes(GetCurrentProcess(), &made, &ended, &kernel, &user))
+        return 0;
+    GetSystemTimePreciseAsFileTime(&now);
+    const unsigned long long a = ((unsigned long long)made.dwHighDateTime << 32) | made.dwLowDateTime;
+    const unsigned long long b = ((unsigned long long)now.dwHighDateTime << 32) | now.dwLowDateTime;
+    return (b > a) ? (unsigned)((b - a) / 10000ull) : 0;
+}
+
 void stop_process()
 {
     if (g_process != nullptr)
@@ -134,9 +148,9 @@ bool start_process()
     snprintf(name, sizeof(name), "EndlessKeeperAttract_%lu", (unsigned long)GetCurrentProcessId());
     wchar_t args[1024];
     swprintf(args, 1024, L"\"%ls\" -attract %hs -level 1 -campaign levels/endless -seed %u -nointro -nosound -altinput -log attract.log"
-        L" -cfg INGAME_RES=%dx%dw32 -cfg FRAMES_PER_SECOND=30 -cfg AUTOMATIC_REPLAYS=FALSE -cfg FREEZE_GAME_ON_FOCUS_LOST=FALSE"
+        L" -cfg \"FRONTEND_RES=%dx%dw32 %dx%dw32 %dx%dw32\" -cfg INGAME_RES=%dx%dw32 -cfg FRAMES_PER_SECOND=30 -cfg AUTOMATIC_REPLAYS=FALSE -cfg FREEZE_GAME_ON_FOCUS_LOST=FALSE"
         L" -cfg CURSOR_EDGE_CAMERA_PANNING=FALSE -cfg API_ENABLED=FALSE",
-        g_exe.c_str(), name, (unsigned)(SDL_GetPerformanceCounter() % 99999989u) + 1, VIEW_W, VIEW_H);
+        g_exe.c_str(), name, (unsigned)(SDL_GetPerformanceCounter() % 99999989u) + 1, VIEW_W, VIEW_H, VIEW_W, VIEW_H, VIEW_W, VIEW_H, VIEW_W, VIEW_H);
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     memset(&si, 0, sizeof(si));
@@ -149,6 +163,7 @@ bool start_process()
         return false;
     }
     note("Background: started %s", narrow(args).c_str());
+    start_mark("background started");
     CloseHandle(pi.hThread);
     g_process = pi.hProcess;
     g_started_at = SDL_GetTicks();
@@ -157,9 +172,8 @@ bool start_process()
 
 } // namespace
 
-bool engine_view_init(SDL_Renderer *renderer, const std::wstring &game_exe, const std::wstring &game_dir)
+bool engine_view_start(const std::wstring &game_exe, const std::wstring &game_dir)
 {
-    g_ren = renderer;
     g_exe = game_exe;
     g_dir = game_dir;
     if (GetFileAttributesW(game_exe.c_str()) == INVALID_FILE_ATTRIBUTES)
@@ -178,9 +192,14 @@ bool engine_view_init(SDL_Renderer *renderer, const std::wstring &game_exe, cons
     g_shared->capacity = capacity;
     g_shared->launcher_pid = GetCurrentProcessId();
     g_pictures = (const unsigned char *)(g_shared + 1);
-    load_still();
     g_wanted = true;
     return start_process();
+}
+
+void engine_view_attach(SDL_Renderer *renderer)
+{
+    g_ren = renderer;
+    load_still();
 }
 
 void engine_view_pause()
@@ -222,7 +241,7 @@ void engine_view_shutdown()
 
 void engine_view_update(float dt)
 {
-    if (g_shared == nullptr)
+    if ((g_shared == nullptr) || (g_ren == nullptr))
         return;
     if (g_wanted && (g_process != nullptr) && (WaitForSingleObject(g_process, 0) == WAIT_OBJECT_0))
     {
@@ -267,6 +286,7 @@ void engine_view_update(float dt)
                 {
                     g_first_noted = true;
                     note("Background: the first picture came %d ms after the game was started", (int)(SDL_GetTicks() - g_started_at));
+                    start_mark("first picture");
                 }
             }
         }
@@ -318,6 +338,24 @@ void engine_view_focus(float x, float y)
 bool engine_view_ready()
 {
     return (g_shared != nullptr) && g_have_picture && (g_shared->fade < 80);
+}
+
+void start_mark(const char *what)
+{
+    if (g_marks.size() < 40)
+        g_marks.push_back({what, ms_since_process_began()});
+}
+
+std::string start_timing_line()
+{
+    std::string line = "Launcher: start timing (ms since it began):";
+    char buf[96];
+    for (size_t i = 0; i < g_marks.size(); i++)
+    {
+        snprintf(buf, sizeof(buf), "%s %s %u", (i > 0) ? "," : "", g_marks[i].what, g_marks[i].ms);
+        line += buf;
+    }
+    return line;
 }
 
 void engine_view_note(const char *text)

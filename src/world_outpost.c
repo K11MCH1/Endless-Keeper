@@ -1452,9 +1452,60 @@ static int op_level_cap(void)
 #endif
 }
 
+/* Hearts that count as not yet there for some ground (world_outpost_heart_late). A new start's 25 chunks were always
+   made in one go, row by row, and its heart appeared with its own chunk halfway down: a stronghold first reached by
+   an earlier chunk was sized by the heart nearest it then - another keeper's. Now only the heart's chunk comes at
+   once and the rest over the next turns (2026-11-13), so the start says which ground used to come before its heart
+   (two boxes of world slabs: the rows above, and the heart's row up to the heart), and a stronghold that may reach
+   that ground is sized without that heart, as it was. */
+#define SH_LATE_MAX 8
+static struct ShLate {
+    PlayerNumber plyr;
+    int64_t box[2][4]; /* x1, y1, x2, y2 */
+    GameTurn until;
+} sh_late[SH_LATE_MAX];
+static int sh_late_n;
+
+void world_outpost_heart_late(PlayerNumber plyr_idx, const int64_t above[4], const int64_t beside[4], GameTurn until)
+{
+    world_outpost_heart_here(plyr_idx);
+    if (sh_late_n >= SH_LATE_MAX)
+        return; /* (too many new starts at once: these few strongholds are sized with the heart there) */
+    struct ShLate *l = &sh_late[sh_late_n++];
+    l->plyr = plyr_idx;
+    memcpy(l->box[0], above, sizeof(l->box[0]));
+    memcpy(l->box[1], beside, sizeof(l->box[1]));
+    l->until = until;
+}
+
+void world_outpost_heart_here(PlayerNumber plyr_idx)
+{
+    int n = 0;
+    for (int i = 0; i < sh_late_n; i++)
+        if (sh_late[i].plyr != plyr_idx)
+            sh_late[n++] = sh_late[i];
+    sh_late_n = n;
+}
+
+/** Is the player's heart to be left out when a stronghold that may reach this box of world slabs is sized? */
+static TbBool sh_heart_late(PlayerNumber plyr_idx, int64_t x1, int64_t y1, int64_t x2, int64_t y2)
+{
+    for (int i = 0; i < sh_late_n; i++)
+    {
+        const struct ShLate *l = &sh_late[i];
+        if ((l->plyr != plyr_idx) || (game.play_gameturn > l->until))
+            continue;
+        for (int k = 0; k < 2; k++)
+            if ((l->box[k][0] <= l->box[k][2]) && (l->box[k][1] <= l->box[k][3]) && (x1 <= l->box[k][2]) &&
+                (l->box[k][0] <= x2) && (y1 <= l->box[k][3]) && (l->box[k][1] <= y2))
+                return true;
+    }
+    return false;
+}
+
 /** The best creature level of the human keeper whose heart is nearest a world slab (all of them when no heart is
- *  on the map). */
-static int sh_finder_level(int64_t wx, int64_t wy)
+ *  on the map). The box is the ground the stronghold being sized may reach (sh_heart_late). */
+static int sh_finder_level(int64_t wx, int64_t wy, int64_t bx1, int64_t by1, int64_t bx2, int64_t by2)
 {
     /* test hook: KFX_WORLD_FINDERLEVEL=N decides every new stronghold as if its finder's best creature were level N */
     static int forced = -2;
@@ -1474,7 +1525,7 @@ static int sh_finder_level(int64_t wx, int64_t wy)
         const int lv = world_keeper_top_level(pl);
         top = max(top, lv);
         const struct Thing *heart = find_players_dungeon_heart(pl);
-        if (!thing_exists(heart))
+        if (!thing_exists(heart) || ((sh_late_n > 0) && sh_heart_late(pl, bx1, by1, bx2, by2)))
             continue;
         int64_t hx, hy;
         world_slab_to_world(subtile_slab(heart->mappos.x.stl.num), subtile_slab(heart->mappos.y.stl.num), &hx, &hy);
@@ -2014,9 +2065,14 @@ static struct OpState *op_decide_outpost(int64_t rx, int64_t ry, int32_t gen_cx,
         return st;
     static struct OpPlan legacy;
     int64_t x1, y1, x2, y2;
+    int64_t lx1 = INT64_MAX, ly1 = INT64_MAX, lx2 = INT64_MIN, ly2 = INT64_MIN; /* the old outpost's box, when it has one */
     if (op_plan_make_legacy(rx, ry, &legacy))
     {
         op_box(&legacy, &x1, &y1, &x2, &y2);
+        lx1 = x1;
+        ly1 = y1;
+        lx2 = x2;
+        ly2 = y2;
         if (sh_box_made(x1, y1, x2, y2, gen_cx, gen_cy))
         {
             st = op_state(ShF_Outpost, rx, ry, true);
@@ -2042,7 +2098,8 @@ static struct OpState *op_decide_outpost(int64_t rx, int64_t ry, int32_t gen_cx,
         st->tier = ShT_None; /* its ground was made without it */
         return st;
     }
-    const int lv = sh_finder_level(st->cx, st->cy);
+    /* (the box: a chunk under the region's reach or its old outpost's box decides it, world_outpost_overlay) */
+    const int lv = sh_finder_level(st->cx, st->cy, min(x1, lx1), min(y1, ly1), max(x2, lx2), max(y2, ly2));
     st->found_level = (uint8_t)max(1, min(lv, 255));
     static struct OpPlan trial;
     int tier = sh_tier_for_level(lv);
@@ -2078,7 +2135,9 @@ static struct OpState *ft_decide(const struct WgStructRef *ref, int32_t gen_cx, 
         st->tier = ShT_Legacy; /* the generator's fortress is there already */
         return st;
     }
-    const int lv = sh_finder_level(ref->origin_x, ref->origin_y);
+    /* (the box: a chunk within FT_REACH of the fortress's own box decides it, world_outpost_overlay) */
+    const int lv = sh_finder_level(ref->origin_x, ref->origin_y, ref->bbox_x1 - FT_REACH, ref->bbox_y1 - FT_REACH,
+        ref->bbox_x2 + FT_REACH, ref->bbox_y2 + FT_REACH);
     int tier = sh_tier_for_level(lv);
     static struct OpPlan trial;
     while ((tier > ShT_Small) && !(ft_plan_make(ref, tier, max(1, min(lv, 255)), &trial) && ft_fits(&trial)))
@@ -2391,6 +2450,7 @@ TbBool world_outpost_nearest(int64_t wx, int64_t wy, int64_t *x0, int64_t *y0, i
 
 void world_outposts_reset(void)
 {
+    sh_late_n = 0;
     free(op_states);
     op_states = NULL;
     op_state_count = op_state_cap = 0;

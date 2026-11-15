@@ -36,6 +36,8 @@
 #include <json-dom.h>
 #include <minizip/unzip.h>
 #include "kfx/renderer/RendererManager.h" // RendererPhysicalWidth
+#include "world_attract.h"
+#include "config_campaigns.h"
 #include "post_inc.h"
 #include "bflib_sprite.h"
 
@@ -235,11 +237,11 @@ static int load_file_sprites(const char *path, const char *file_desc, unsigned i
 {
     SYNCDBG(8, "Starting");
     int add_flag = 0;
+    fastUnzHoldCache(); /* Endless Keeper: the zip's list of files is made once for all its passes below */
     if (load_flags & CLF_Sprites && add_custom_sprite(path))
     {
         add_flag |= CLF_Sprites;
     }
-
     if (load_flags & CLF_Icons && add_custom_json(path, "icons.json", &process_icon))
     {
         add_flag |= CLF_Icons;
@@ -259,6 +261,7 @@ static int load_file_sprites(const char *path, const char *file_desc, unsigned i
     {
         add_flag |= CLF_LensMists;
     }
+    fastUnzReleaseCache();
 
     if (file_desc != NULL)
     {
@@ -527,6 +530,13 @@ void init_custom_sprites(LevelNumber lvnum)
     memset(fp_to_td_sprite_add, 0, sizeof(fp_to_td_sprite_add));
     next_free_sprite = 0;
 
+    if (world_attract_active() && (lvnum <= 0) && !is_campaign_loaded())
+    {
+        /* Endless Keeper: the launcher's background shows no menu: its sprites are loaded with its level a moment later
+           (from the campaign's folders too), so the start's load, half a second, is left out */
+        SYNCLOG("Custom sprites: left for the level (the launcher's background has no menu)");
+        return;
+    }
 
     char *dname = prepare_file_path(FGrp_FxData, NULL);
     if (dname == NULL || dname[0] == 0) {
@@ -1157,18 +1167,52 @@ static uint8_t nearest_color(uint32_t value, const uint8_t * palette)
     }
     return nearest;
 }
+struct RgbToPalPart {
+    uint8_t *table;
+    const uint8_t *palette;
+    uint32_t from, to;
+};
+
+static int SDLCALL rgb_to_pal_part(void *data)
+{
+    const struct RgbToPalPart *part = (const struct RgbToPalPart *)data;
+    for (uint32_t i = part->from; i < part->to; ++i) {
+        part->table[i] = nearest_color(i, part->palette);
+    }
+    return 0;
+}
+
 static uint8_t *create_rgb_to_pal_table(const uint8_t *palette)
 {
     const uint32_t table_size = MAX_COLOR_VALUE * MAX_COLOR_VALUE * MAX_COLOR_VALUE;
     uint8_t *table = calloc(table_size, 1);
     if (!table) {
-        ERRORLOG("Cannot allocate rgb conversion table");    
+        ERRORLOG("Cannot allocate rgb conversion table");
         return NULL;
     }
-
-    for (uint32_t i = 0; i < table_size; ++i) {
-        table[i] = nearest_color(i, palette);
+    /* Endless Keeper: 262144 entries of 256 comparisons each (about 120 ms on one core, at every start): shared out
+       among the processor's cores; each entry is worked out on its own, so the table is the same */
+    #define RGB_TO_PAL_PARTS 8
+    struct RgbToPalPart parts[RGB_TO_PAL_PARTS];
+    SDL_Thread *threads[RGB_TO_PAL_PARTS] = {NULL};
+    int count = SDL_GetNumLogicalCPUCores();
+    count = (count < 1) ? 1 : ((count > RGB_TO_PAL_PARTS) ? RGB_TO_PAL_PARTS : count);
+    for (int t = 0; t < count; t++) {
+        parts[t].table = table;
+        parts[t].palette = palette;
+        parts[t].from = (uint32_t)((uint64_t)table_size * t / count);
+        parts[t].to = (uint32_t)((uint64_t)table_size * (t + 1) / count);
+        if (t > 0)
+            threads[t] = SDL_CreateThread(rgb_to_pal_part, "rgb_to_pal", &parts[t]);
     }
+    rgb_to_pal_part(&parts[0]);
+    for (int t = 1; t < count; t++) {
+        if (threads[t] != NULL)
+            SDL_WaitThread(threads[t], NULL);
+        else
+            rgb_to_pal_part(&parts[t]); /* no thread: done here */
+    }
+    #undef RGB_TO_PAL_PARTS
     return table;
 }
 

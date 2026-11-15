@@ -193,6 +193,11 @@ int wg_generate_chunk(struct WgWorld *world, int32_t cx, int32_t cy, struct WgCh
 int wg_structures_in(struct WgWorld *world, int64_t x1, int64_t y1, int64_t x2, int64_t y2,
                      unsigned type_mask, struct WgStructRef *out, int max);
 
+/** A number that changes when the generator empties what it remembers of structure places. Results never depend
+ *  on that memory; a caller that fills it ahead of a large wg_structures_in, a small box at a time, can tell from
+ *  this that it has to begin again. */
+unsigned wg_structure_memory_epoch(const struct WgWorld *world);
+
 /** The ground at a world slab as the terrain stage makes it, before gems and structures (a WgSlab): for the engine's
  *  own structures to fit into the land. Not part of worldgen.py: it changes no chunk. */
 int wg_terrain_at(struct WgWorld *world, int64_t x, int64_t y);

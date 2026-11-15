@@ -44,6 +44,8 @@
 #include "bflib_video.h"
 #include "kfx/renderer/RendererManager.h"
 #include "world_attract.h"
+#include "chat_box.h"
+#include "player_data.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -120,6 +122,24 @@ static int draw_chat_sender(PlayerNumber plyr_idx, long x, long y, int units_per
     return LbTextStringWidthM(prefix, units_per_px);
 }
 
+/** Endless worlds: where the message lines start and how large they are drawn (the user, 2026-11-15: in the view's
+ *  top left corner, and smaller). x and y: the first line's text, as message_draw places it; *tx: the text's units
+ *  per pixel; *upp: the units per pixel the icons and spacing take, scaled as the text is. */
+void message_world_place(long *x, long *y, int *tx, int *upp)
+{
+    const int full = font_size_units_per_px(chat_font_size);
+    const int small = max(16, full * WORLD_MSG_SIZE / 16); /* never smaller than the font itself */
+    const int u = (int)((long)units_per_pixel * small / max(full, 1));
+    const int margin = 6 * units_per_pixel / 16; /* the day's dial stands as far from the top */
+    const long left = local_state.show_gui ? status_panel_width : 0;
+    /* the icons stand left of and above their line's text: up to 10 units left, 20 up (a creature's hand symbol) */
+    *x = left + margin + 10 * u / 16;
+    /* 10 pixels higher on a 2560 x 1440 screen (the user, 2026-11-15), the same share of the height on any other */
+    *y = max(0, margin + 20 * u / 16 - 28 * units_per_pixel / 160);
+    *tx = small;
+    *upp = u;
+}
+
 void message_draw(void)
 {
     if (world_attract_active())
@@ -129,31 +149,39 @@ void message_draw(void)
     int ps_units_per_px;
     int icon_units_per_px;
     int tx_units_per_px = font_size_units_per_px(chat_font_size);
+    int upp = units_per_pixel;
+    long x0, y0;
+    if (world_mode_active())
+    {
+        message_world_place(&x0, &y0, &tx_units_per_px, &upp);
+        if (((get_local_user_state()->init_flags & UsrIF_NewMPMessage) != 0) && !chat_box_draws_typing())
+            y0 += tx_units_per_px * CHAT_LINE_SPACING_PERCENT / 100; /* the typing line stands first */
+    }
     const struct TbSprite* spr;
     {
         //just used for height, color irrelevant here
         spr = get_panel_sprite(GPS_plyrsym_symbol_player_red_std_b);
-        ps_units_per_px = (22 * units_per_pixel) / spr->SHeight;
+        ps_units_per_px = (22 * upp) / spr->SHeight;
         icon_units_per_px = (LbTextLineHeight() * tx_units_per_px) / spr->SHeight;
     }
     TbBool low_res = (MyScreenHeight < 400);
     int h = LbTextLineHeight();
-    long y = 28 * units_per_pixel / 16;
+    long y = world_mode_active() ? y0 : 28 * upp / 16;
     if (game.armageddon_cast_turn != 0)
     {
         if ( (bonus_timer_enabled()) || (script_timer_enabled()) || display_variable_enabled() )
         {
-            y += (h*units_per_pixel/16) << (unsigned char)low_res;
+            y += (h*upp/16) << (unsigned char)low_res;
         }
     }
     for (int i = 0; i < game.active_messages_count; i++)
     {
         if (game.messages[i].target_idx == my_player_number || game.messages[i].target_idx == -1
          || (observer_is_active() && game.messages[i].target_idx == PLAYER_NEUTRAL)) {
-            long x = 148 * units_per_pixel / 16;
+            long x = world_mode_active() ? x0 : 148 * upp / 16;
             LbTextSetWindow(0, 0, MyScreenWidth, MyScreenHeight);
             RendererClearDrawFlags(Lb_TEXT_ONE_COLOR);
-            int text_offset = 32 * units_per_pixel / 16;
+            int text_offset = 32 * upp / 16;
             if ((game.messages[i].type == MsgType_Player) || (game.messages[i].type == MsgType_Spectator) || (game.messages[i].type == MsgType_Local)) {
                 text_offset = text_offset * icon_units_per_px / ps_units_per_px;
             }
@@ -186,39 +214,39 @@ void message_draw(void)
                 case MsgType_Creature:
                 {
                     spr_idx = get_creature_model_graphics(game.messages[i].plyr_idx, CGI_HandSymbol);
-                    x -= (7 * units_per_pixel / 16);
-                    y -= (20 * units_per_pixel / 16);
+                    x -= (7 * upp / 16);
+                    y -= (20 * upp / 16);
                     break;
                 }
                 case MsgType_CreatureSpell:
                 {
                     struct SpellConfig* spconf = get_spell_config(game.messages[i].plyr_idx);
                     spr_idx = spconf->medsym_sprite_idx;
-                    x -= (10 * units_per_pixel / 16);
-                    y -= (10 * units_per_pixel / 16);
+                    x -= (10 * upp / 16);
+                    y -= (10 * upp / 16);
                     break;
                 }
                 case MsgType_Room:
                 {
                     const struct RoomConfigStats* roomst = get_room_kind_stats(game.messages[i].plyr_idx);
                     spr_idx = roomst->medsym_sprite_idx;
-                    x -= (10 * units_per_pixel / 16);
-                    y -= (10 * units_per_pixel / 16);
+                    x -= (10 * upp / 16);
+                    y -= (10 * upp / 16);
                     break;
                 }
                 case MsgType_KeeperSpell:
                 {
                     struct PowerConfigStats* powerst = get_power_model_stats(game.messages[i].plyr_idx);
                     spr_idx = powerst->medsym_sprite_idx;
-                    x -= (10 * units_per_pixel / 16);
-                    y -= (10 * units_per_pixel / 16);
+                    x -= (10 * upp / 16);
+                    y -= (10 * upp / 16);
                     break;
                 }
                 case MsgType_Query:
                 {
                     spr_idx = (game.messages[i].plyr_idx + GPS_plyrsym_symbol_room_yellow_std_a);
-                    x -= (10 * units_per_pixel / 16);
-                    y -= (10 * units_per_pixel / 16);
+                    x -= (10 * upp / 16);
+                    y -= (10 * upp / 16);
                     break;
                 }
                 case MsgType_Custom:
@@ -236,8 +264,8 @@ void message_draw(void)
                 {
                     struct InstanceInfo* inst_inf = creature_instance_info_get(game.messages[i].plyr_idx);
                     spr_idx = inst_inf->symbol_spridx;
-                    x -= (10 * units_per_pixel / 16);
-                    y -= (10 * units_per_pixel / 16);
+                    x -= (10 * upp / 16);
+                    y -= (10 * upp / 16);
                     break;
                 }
                 default:
@@ -286,7 +314,7 @@ void message_draw(void)
                 }
                 case MsgType_Creature:
                 {
-                    y += (20 * units_per_pixel / 16) << (unsigned char)low_res;
+                    y += (20 * upp / 16) << (unsigned char)low_res;
                     break;
                 }
                 case MsgType_CreatureSpell:
@@ -295,7 +323,7 @@ void message_draw(void)
                 case MsgType_Query:
                 case MsgType_CreatureInstance:
                 {
-                    y += (10 * units_per_pixel / 16) << (unsigned char)low_res;
+                    y += (10 * upp / 16) << (unsigned char)low_res;
                     break;
                 }
             }

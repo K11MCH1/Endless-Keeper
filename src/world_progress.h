@@ -218,6 +218,20 @@ int world_perks_tokens_to_key(void);
 const struct WorldPerks *world_perks_entry(int i);
 void world_perks_reset(void);
 
+/** Endless worlds (the user, 2026-11-15): a creature's wage and what a room charges it (training, scavenging) grow by
+ *  2% with every level, each level on the one before: base * 1.02^exp_level (exp_level 0 is level 1). */
+GoldAmount world_level_scaled_gold(GoldAmount base, int exp_level);
+
+/* Imps (2026-11-15): a keeper has at most WORLD_MAX_IMPS; Create Imp is refused at that many. */
+#define WORLD_MAX_IMPS 13
+/** The keeper's Imps now (its special diggers, as the dungeon counts them). */
+int world_imp_count(PlayerNumber plyr_idx);
+/** Create Imp, cast by this keeper: true when it is refused (the keeper has WORLD_MAX_IMPS); the keeper is told in its
+ *  notifications (on a server: its own machine, by a notice). */
+TbBool world_imp_cap_refuses(PlayerNumber plyr_idx, int power_kind);
+/** A server's notice to this machine: true when it was the Imp cap's (shown here, not as chat). */
+TbBool world_imp_net_notice(const char *text);
+
 #ifdef __cplusplus
 }
 #endif

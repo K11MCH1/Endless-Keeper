@@ -30,11 +30,14 @@
 #include <limits.h>
 #include "bflib_basics.h"
 #include "bflib_math.h"
+#include "bflib_planar.h"
 #include "bflib_sprite.h"
 #include "bflib_video.h"
 #include "config.h"
 #include "config_creature.h"
+#include "config_crtrstates.h"
 #include "config_terrain.h"
+#include "config_trapdoor.h"
 #include "creature_control.h"
 #include "creature_groups.h"
 #include "creature_states.h"
@@ -42,6 +45,7 @@
 #include "dungeon_data.h"
 #include "game_legacy.h"
 #include "globals.h"
+#include "map_blocks.h"
 #include "map_data.h"
 #include "player_data.h"
 #include "player_instances.h"
@@ -49,11 +53,13 @@
 #include "slab_data.h"
 #include "thing_creature.h"
 #include "thing_data.h"
+#include "thing_doors.h"
 #include "thing_effects.h"
 #include "thing_factory.h"
 #include "thing_list.h"
 #include "thing_stats.h"
 #include "thing_navigate.h"
+#include "thing_physics.h"
 #include "kfx/renderer/RendererBridge_UI.h"
 #include "world_menu.h"
 #include "world_pages.h"
@@ -66,6 +72,9 @@
 #include "world_progress.h"
 #include "server_admin.h"
 #include "world_seasons.h"
+#include "world_creature_window.h"
+#include "vidfade.h"
+#include "world_wallbreak.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -119,6 +128,13 @@ long world_day_number(void)
     dn_read_lengths();
     dn_time(game.play_gameturn, &day, &t);
     return day;
+}
+
+GameTurn world_daylight_began(void)
+{
+    dn_read_lengths();
+    const GameTurnDelta cycle = dn_day_turns + dn_night_turns;
+    return (GameTurn)((game.play_gameturn / cycle) * cycle);
 }
 
 long world_day_turns(void)
@@ -284,6 +300,44 @@ static void dn_make_frame(int k)
     dn_frame_spr[k].SHeight = DAYNIGHT_DISC;
 }
 
+/** The day's number under the dial (the user, 2026-11-15: "a day counter under the dial like "Day 1""). It is the
+ *  world's day, which the clock raises at each dawn; while the dial shows the night it says "Night X", the night
+ *  after day X. The game's
+ *  plain font, light with a dark edge so that it reads over any ground, centred on the dial. Its letters are a whole
+ *  multiple of the font's own (even strokes on every screen) and never smaller than the font: a number too long to
+ *  stand centred (a server's world reaches four figures in two weeks) moves left, off the screen's edge, instead.
+ *  (x, y): the dial's left end and its lower edge. Returns how far below y the next thing can begin: the letters and
+ *  the room the 'y' hangs into. */
+static int dn_draw_day(int x, int y, int size)
+{
+    const int upp = units_per_pixel;
+    /* test hook: KFX_WORLD_DAYLABEL=12345 shows that number */
+    static long shown = -2;
+    if (shown == -2)
+    {
+        const char *e = getenv("KFX_WORLD_DAYLABEL");
+        shown = (e != NULL) ? atol(e) : -1;
+    }
+    char text[24];
+    /* as the dial shows it (the user, 2026-11-15): "Day X" while the sun is up, "Night X" while the moon is */
+    snprintf(text, sizeof(text), "%s %ld", world_is_day() ? "Day" : "Night", (shown > 0) ? shown : world_day_number());
+    const int own = max(world_window_plain_cap(), 1);
+    const int cap = own * max((6 * upp / 16 + own / 2) / own, 1);
+    const int gap = max(3 * upp / 16, 2);
+    const int edge = max((cap + 8) / 16, 1);
+    const int wide = world_window_plain_width(text, cap);
+    const int air = edge + max(upp / 16, 1); /* the dark edge, and a unit between it and the screen's edge */
+    const int tx = min(x + size / 2 - wide / 2, MyScreenWidth - air - wide), ty = y + gap;
+    const unsigned char dark = colours[0][0][0];
+    /* (the room given is the text's own width and a little: it is never made smaller to fit) */
+    for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++)
+            if ((dx != 0) || (dy != 0))
+                world_window_plain(tx + dx * edge, ty + dy * edge, wide + 4, cap, 0, dark, text);
+    world_window_plain(tx, ty, wide + 4, cap, 0, world_window_ink(WwI_Bright), text);
+    return gap + cap + (3 * cap + 7) / 8;
+}
+
 void world_daynight_draw(void)
 {
     if (world_attract_active())
@@ -310,7 +364,9 @@ void world_daynight_draw(void)
     UIRenderer_SubmitPanelSpriteRaw(x + off, y + off, upp, &dn_frame_spr[k], 0);
     UIRenderer_SubmitPanelSpriteRaw(x, y, upp, &dn_rim_spr, 0);
     world_seasons_draw_ring(x, y, size); /* the year round the dial */
-    world_boss_draw(x, y + size + 2 * upp / 16, size); /* the World Boss timer, under the dial */
+    const int day_h = dn_draw_day(x, y + size, size);
+    /* the World Boss timer, under the day's number: three units clear of it, as a button under a line is */
+    world_boss_draw(x, y + size + day_h + 3 * upp / 16, size);
 }
 
 /******************************************************************************/
@@ -407,8 +463,9 @@ static int dn_raids_on_day(long day)
     return (day < 5) ? 2 : (day < 9) ? 3 : 4;
 }
 
-/** Time of day of raid i of n: one in each part of the day, at a time fixed by the seed. The first day's raids
- *  wait for its second half; no raid starts in the first or last twentieth of a day. */
+/** Time of day of raid i of n: one in each part of the day, at a time fixed by the seed. No raid starts in the first
+ *  or last twentieth of a day. A dungeon's first day (the user, 2026-11-15): its first raid (the one that always
+ *  comes) waits for the second half, and the others (each one time in two) come between morning and midday. */
 static uint64_t dn_player_salt(PlayerNumber plyr_idx);
 
 /** Time of raid i for a player: each player's at its own time in the slot (all of them landed in one turn, each
@@ -418,25 +475,41 @@ static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_
 static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_idx)
 {
     const GameTurnDelta edge = dn_light(day) / 20;
-    const GameTurnDelta start = (day == 1) ? dn_light(day) / 2 : edge;
-    const GameTurnDelta span = dn_light(day) - edge - start;
+    GameTurnDelta start = edge, end = dn_light(day) - edge;
+    int slots = n, j = i; /* raid i is in slot j of the part of the day it comes in */
+    if (world_seat_day(plyr_idx) <= 1)
+    {
+        const GameTurnDelta midday = dn_light(day) / 2;
+        if ((i == 0) || (n < 2))
+        {
+            start = midday; /* the raid that always comes: the second half, as before */
+            slots = 1;
+            j = 0;
+        } else
+        {
+            end = midday; /* the others: between morning and midday */
+            slots = n - 1;
+            j = i - 1;
+        }
+    }
+    const GameTurnDelta span = end - start;
     /* breathing room (2026-11-11): DN_RAID_GAP between two raids, or as much as the day has room for (four raids
        don't fit four minutes apart in a 12-minute day); what is left over is shared out as each raid's leeway */
     GameTurnDelta gap = 0;
-    if (n > 1)
+    if (slots > 1)
     {
         gap = DN_RAID_GAP;
-        const GameTurnDelta most = span * 4 / 5 / (n - 1);
+        const GameTurnDelta most = span * 4 / 5 / (slots - 1);
         if (gap > most)
             gap = most;
     }
-    GameTurnDelta slot = (span - gap * (n - 1)) / n;
+    GameTurnDelta slot = (span - gap * (slots - 1)) / slots;
     if (slot < 1)
         slot = 1;
     uint64_t h = dn_mix(world_seed() ^ dn_mix((uint64_t)day * 0x632BE59BD9B4E019ULL + (uint64_t)i));
     if (plyr_idx != PLAYER0)
         h = dn_mix(h ^ dn_player_salt(plyr_idx));
-    return start + (gap + slot) * i + (GameTurnDelta)(h % (uint64_t)slot);
+    return start + (gap + slot) * j + (GameTurnDelta)(h % (uint64_t)slot);
 }
 
 /** The slabs the landing search reads: a box of engine slabs (world_read_slab_box), loaded or not. */
@@ -473,7 +546,8 @@ static int dn_line_blockers(const struct DnArea *a, MapSlabCoord x0, MapSlabCoor
         const MapSlabCoord x = x0 + (MapSlabCoord)floor((double)(x1 - x0) * i / n + 0.5);
         const MapSlabCoord y = y0 + (MapSlabCoord)floor((double)(y1 - y0) * i / n + 0.5);
         const SlabKind kind = dn_kind(a, x, y);
-        if ((kind == SlbT_ROCK) || (kind == SlbT_GEMS) || (kind == SlbT_LAVA))
+        if ((kind == SlbT_ROCK) || (kind == SlbT_GEMS) || (kind == SlbT_LAVA) || (kind == SlbT_GOLD) ||
+            (kind == SlbT_DENSEGOLD)) /* (gold too, 2026-11-13: a Tunneller cannot dig it either) */
             blockers++;
     }
     return blockers;
@@ -698,9 +772,10 @@ static TbBool dn_raider_go_home(struct Thing *thing, struct DnInvasion *inv, TbB
     const TbBool late = ((GameTurnDelta)(game.play_gameturn - since) > DN_RETREAT_TURNS);
     if (!found && !late)
     {
-        /* its landing's ground went: it comes back, and the raider goes there next time */
+        /* its landing's ground went: it comes back, and the raider goes there next time (the landing's own chunk now,
+           the ones round it in the next turns: nine at once were a 40 to 70 ms turn at every dawn) */
         for (int s = 0; s < inv->nspots; s++)
-            world_load_chunks_round_world(inv->spot_x[s], inv->spot_y[s], 1);
+            world_load_chunks_landing_world(inv->spot_x[s], inv->spot_y[s]);
         return true;
     }
     if (!found || (best_d <= DN_HOME_DIST) || late)
@@ -733,6 +808,798 @@ static TbBool dn_raider_fleeing(const struct Thing *thing)
     return !creature_control_invalid(cctrl) && (cctrl->party.original_objective == DN_FLEEING_MARK);
 }
 
+/******************************************************************************/
+/* A raid leader's way to the heart (2026-11-13).
+ *
+ * The stock Tunneller digs a straight line and follows whatever it cannot dig (rock, gold, gems, a keeper's
+ * reinforced walls) by "wall hugging". That froze where two such faces meet at an inside corner, and where its line
+ * clipped the corner of a seam: it walks the middle of its own one-slab tunnel, so the step towards the wall it hugs
+ * always looks free, and it turned on the spot in four small steps for ever (seen at a dungeon's corner and beside a
+ * gold seam: no raid of five arrived). A raid's leader is led slab by slab instead:
+ * - straight for the heart, a slab at a time along the line (earth is dug, open ground walked);
+ * - where the slab ahead is something it cannot dig it goes round it, keeping it on one hand, as the campaigns'
+ *   Tunnellers go round a dungeon's walls. It leaves the obstacle where it is nearer the heart than where it met it
+ *   and the way on is free;
+ * - a dungeon closed by reinforced walls is such an obstacle: the leader goes round and round it. A hole in the walls
+ *   (a slab that is not reinforced, a corridor's mouth) lets it in as it comes by, it steps onto the keeper's open
+ *   ground wherever that lies beside it, and whenever it can walk to the heart it does (through a door too: heroes
+ *   break doors). Walls are never dug: a dungeon with no hole and no door is not entered;
+ * - a dungeon with long walled corridors can take longer than a day to go round, so after RG_SCOUT_SLABS slabs round
+ *   without a way in the leader makes for the nearest hole there is: the nearest ground the heart can be walked to
+ *   from, by the cheapest way over open ground and earth, never through a wall. With no hole it goes on round.
+ * Every leg is one slab, to the slab beside it, so the stock code only ever walks or digs straight ahead and its wall
+ * hugging never starts. Kept per creature and not saved: after a load the leader starts again from where it stands. */
+#define RG_WALK_CHECK 128   /* turns between two looks for a way to walk to the heart */
+#define RG_WALK_SOON 16     /* the same beside one of the keeper's doors, on the keeper's ground, at a way's end */
+#define RG_ARRIVED 48       /* this near the middle of the slab it was sent to, it is sent on */
+#define RG_LEG_TURNS 400    /* a slab not reached in this long is left alone for a while (a dug slab takes about 50) */
+#define RG_AVOID_TURNS 2000
+#define RG_NO_ENTRY_TURNS 600 /* the keeper's ground it stood on led nowhere: it doesn't step aside for more that long */
+#define RG_SCOUT_SLABS 120  /* slabs round without a way in before it looks for the nearest hole (and again after) */
+#define RG_PATHS 8          /* ways to a hole kept at once (one a leader) */
+#define RG_PATH_MAX 1024    /* slabs of such a way at the most */
+enum { RG_Direct = 0, RG_Round, RG_Path };
+enum { RG_HandNone = 0, RG_HandRight, RG_HandLeft }; /* the side the obstacle is kept on */
+
+struct RaidGuide {
+    ThingIndex thing;        /* whose: the stamp, with born */
+    GameTurn born;
+    uint8_t started, mode, hand, dir;
+    uint8_t leg_set, path, hit_first_set, hit_first_dir; /* path: its way to a hole, slot + 1 (0: none) */
+    int32_t laps, round_steps;
+    int32_t round_total, scout_at; /* slabs gone round in all; when it next looks for a hole */
+    int64_t goal_x, goal_y;  /* the heart it is going for (world slabs, as all below) */
+    int64_t line_x, line_y;  /* where its straight line began */
+    int64_t leg_x, leg_y;    /* the slab it was sent to last */
+    int64_t hit_x, hit_y;    /* where it met what it is going round */
+    int64_t hit_d2;          /* how far from the heart that was (squared) */
+    int64_t avoid_x, avoid_y; /* a slab it could not get onto */
+    GameTurn avoid_until;
+    GameTurn leg_turn;       /* when it was sent to the slab */
+    GameTurn walk_turn;      /* when it last looked for a way to walk in */
+    GameTurn no_entry_until;
+};
+struct RaidPath {
+    ThingIndex thing;        /* whose (0: free) */
+    GameTurn made;
+    uint16_t len, at;        /* its steps, and the next one */
+    int64_t x, y;            /* the slab the next step leaves from */
+    uint8_t dir[RG_PATH_MAX];
+};
+static struct RaidGuide rg_table[CREATURES_COUNT];
+static struct RaidPath rg_paths[RG_PATHS];
+static const int8_t rg_dx[4] = {0, 1, 0, -1}, rg_dy[4] = {-1, 0, 1, 0}; /* north, east, south, west */
+static int rg_log_budget = 400;
+
+static void rg_reset(void)
+{
+    memset(rg_table, 0, sizeof(rg_table));
+    memset(rg_paths, 0, sizeof(rg_paths));
+    rg_log_budget = 400;
+}
+
+static void rg_drop_path(struct RaidGuide *g)
+{
+    if ((g->path > 0) && (g->path <= RG_PATHS) && (rg_paths[g->path - 1].thing == g->thing))
+        rg_paths[g->path - 1].thing = 0;
+    g->path = 0;
+}
+
+static struct RaidGuide *rg_of(const struct Thing *creatng)
+{
+    const long i = creatng->ccontrol_idx;
+    if ((i <= 0) || (i >= CREATURES_COUNT))
+        return NULL;
+    struct RaidGuide *g = &rg_table[i];
+    if ((g->thing != creatng->index) || (g->born != (GameTurn)creatng->creation_turn))
+    {
+        rg_drop_path(g);
+        memset(g, 0, sizeof(*g));
+        g->thing = creatng->index;
+        g->born = (GameTurn)creatng->creation_turn;
+    }
+    return g;
+}
+
+/** A slab a raid's Tunneller can go onto: open ground it can walk, or earth it can dig. Not rock, gold, gems, lava,
+ *  a wall, a door, or ground that isn't loaded. */
+static TbBool rg_free(MapSlabCoord x, MapSlabCoord y)
+{
+    const struct SlabMap *slb = get_slabmap_block(x, y);
+    if (slabmap_block_invalid(slb))
+        return false;
+    const SlabKind k = slb->kind;
+    if ((k == SlbT_EARTH) || (k == SlbT_TORCHDIRT))
+        return true;
+    if ((k == SlbT_ROCK) || (k == SlbT_LAVA))
+        return false;
+    const struct SlabConfigStats *st = get_slab_kind_stats(k);
+    if ((st->block_flags & (SlbAtFlg_IsDoor | SlbAtFlg_Filled | SlbAtFlg_Valuable | SlbAtFlg_Digable)) != 0)
+        return false; /* doors, walls, gold, gems, anything else to be dug */
+    /* open ground: its middle is clear (a room's floor is; a kind's own flags say "blocking" for every room, which
+       is only true of its pillars) */
+    const struct Map *mapblk = get_map_block_at(slab_subtile_center(x), slab_subtile_center(y));
+    return !map_block_invalid(mapblk) && ((mapblk->flags & SlbAtFlg_Blocking) == 0);
+}
+
+static TbBool rg_avoided(const struct RaidGuide *g, MapSlabCoord x, MapSlabCoord y)
+{
+    if (game.play_gameturn >= g->avoid_until)
+        return false;
+    int64_t wx, wy;
+    world_slab_to_world(x, y, &wx, &wy);
+    return (wx == g->avoid_x) && (wy == g->avoid_y);
+}
+
+/** The same, for this leader now: not the slab it could not get onto a while ago. */
+static TbBool rg_open(const struct RaidGuide *g, MapSlabCoord x, MapSlabCoord y)
+{
+    return rg_free(x, y) && !rg_avoided(g, x, y);
+}
+
+static TbBool rg_keepers(MapSlabCoord x, MapSlabCoord y, PlayerNumber target)
+{
+    const struct SlabMap *slb = get_slabmap_block(x, y);
+    return !slabmap_block_invalid(slb) && (slabmap_owner(slb) == target);
+}
+
+static TbBool rg_earth(MapSlabCoord x, MapSlabCoord y)
+{
+    const struct SlabMap *slb = get_slabmap_block(x, y);
+    return !slabmap_block_invalid(slb) && ((slb->kind == SlbT_EARTH) || (slb->kind == SlbT_TORCHDIRT));
+}
+
+/** The keeper's own open ground (claimed floor or a room's). */
+static TbBool rg_keepers_ground(MapSlabCoord x, MapSlabCoord y, PlayerNumber target)
+{
+    return rg_keepers(x, y, target) && rg_free(x, y) && !rg_earth(x, y);
+}
+
+static TbBool rg_keepers_door(MapSlabCoord x, MapSlabCoord y, PlayerNumber target)
+{
+    const struct SlabMap *slb = get_slabmap_block(x, y);
+    return rg_keepers(x, y, target) && slab_kind_is_door(slb->kind);
+}
+
+/** The steps of a straight line from (lx,ly) to (gx,gy) that leave (cx,cy): the one that keeps nearest the line, and
+ *  the other one that also brings it nearer the goal (-1: none). */
+static void rg_line_steps(int64_t cx, int64_t cy, int64_t lx, int64_t ly, int64_t gx, int64_t gy, int *first, int *second)
+{
+    const int64_t dx = gx - cx, dy = gy - cy;
+    const int dir_x = (dx > 0) ? 1 : 3, dir_y = (dy > 0) ? 2 : 0;
+    *first = -1;
+    *second = -1;
+    if ((dx == 0) && (dy == 0))
+        return;
+    if (dx == 0)
+    {
+        *first = dir_y;
+        return;
+    }
+    if (dy == 0)
+    {
+        *first = dir_x;
+        return;
+    }
+    /* which of the two slabs lies nearer the line (twice the area of the triangle it makes with the line) */
+    const int64_t ax = gx - lx, ay = gy - ly;
+    const int64_t off_x = llabs(ax * (cy - ly) - ay * (cx + rg_dx[dir_x] - lx));
+    const int64_t off_y = llabs(ax * (cy + rg_dy[dir_y] - ly) - ay * (cx - lx));
+    if ((off_x < off_y) || ((off_x == off_y) && (llabs(dx) >= llabs(dy))))
+    {
+        *first = dir_x;
+        *second = dir_y;
+    } else
+    {
+        *first = dir_y;
+        *second = dir_x;
+    }
+}
+
+/** Is this a raid's leader that is led: a raiding Tunneller at the head of its party (or alone) whose raid is on?
+ *  Gives the keeper it raids and the slab of that keeper's heart. */
+static TbBool rg_led(const struct Thing *creatng, PlayerNumber *target, MapSlabCoord *hx, MapSlabCoord *hy)
+{
+    if (!world_raid_hero(creatng) || (creatng->model != get_players_special_digger_model(creatng->owner)))
+        return false;
+    if (creature_is_group_member(creatng) && !creature_is_group_leader(creatng))
+        return false;
+    if (dn_raider_fleeing(creatng))
+        return false;
+    const int p = dn_raider_invasion(creatng);
+    if ((p < 0) || dn_inv[p].retreating || !world_human_heart_loaded((PlayerNumber)p))
+        return false;
+    const struct Thing *heartng = find_players_dungeon_heart((PlayerNumber)p);
+    if (!thing_exists(heartng))
+        return false;
+    *target = (PlayerNumber)p;
+    *hx = subtile_slab(heartng->mappos.x.stl.num);
+    *hy = subtile_slab(heartng->mappos.y.stl.num);
+    return true;
+}
+
+/** Can the leader walk to the heart now (an open way, or one through a door, which heroes break)? */
+static TbBool rg_can_walk_in(struct Thing *creatng, PlayerNumber target)
+{
+    struct Thing *heartng = find_players_dungeon_heart(target);
+    if (!thing_exists(heartng) || player_cannot_win(target))
+        return false;
+    return creature_can_navigate_to(creatng, &heartng->mappos, NavRtF_Default);
+}
+
+/** What a slab of ground that isn't loaded is to the search, by its kind: 0 barred, 1 open, 2 earth, 3 the keeper's door. */
+static uint8_t rg_kind_class(SlabKind k, TbBool keepers)
+{
+    if ((k == SlbT_EARTH) || (k == SlbT_TORCHDIRT))
+        return 2;
+    if (slab_kind_is_door(k))
+        return keepers ? 3 : 0;
+    if ((k == SlbT_ROCK) || (k == SlbT_LAVA))
+        return 0;
+    const struct SlabConfigStats *st = get_slab_kind_stats(k);
+    return ((st->block_flags & (SlbAtFlg_Filled | SlbAtFlg_Valuable | SlbAtFlg_Digable)) != 0) ? 0 : 1;
+}
+
+/** The nearest hole: the cheapest way from the leader, over open ground (1 a slab) and earth it can dig (3), never
+ *  through a wall, to ground the heart can be walked to from (through the keeper's doors too: heroes break them).
+ *  The ground looked at is the box a raid's landing is chosen in (as far round the heart as raids land): what is
+ *  loaded, and what the landing search remembers of the rest; nothing is read for it, and ground that is not known
+ *  counts as rock (*unknown: how many chunks of it). Returns the way's slot + 1, or 0: no hole (or the leader is
+ *  outside that box). */
+static int rg_scout(const struct Thing *creatng, const struct RaidGuide *g, PlayerNumber target, MapSlabCoord hx, MapSlabCoord hy,
+    int *dug, int *unknown)
+{
+    const MapSlabCoord cx = subtile_slab(creatng->mappos.x.stl.num), cy = subtile_slab(creatng->mappos.y.stl.num);
+    const MapSlabCoord reach = DN_SPAWN_DIST + DN_SPAWN_SLACK;
+    const MapSlabCoord x1 = hx - reach, y1 = hy - reach;
+    const int w = 2 * reach + 1, h = 2 * reach + 1;
+    *unknown = 0;
+    if ((cx < x1) || (cy < y1) || (cx >= x1 + w) || (cy >= y1 + h))
+        return 0;
+    const int n = w * h;
+    uint8_t *cls = (uint8_t *)malloc((size_t)n);   /* 0 barred, 1 open, 2 earth, 3 the keeper's door; +16 joined to the heart */
+    uint8_t *from = (uint8_t *)malloc((size_t)n);  /* the step that reached it; 0xFF not reached */
+    uint8_t *kinds = (uint8_t *)malloc((size_t)n), *mine = (uint8_t *)malloc((size_t)n);
+    int32_t *queue = (int32_t *)malloc(sizeof(int32_t) * 3 * (size_t)n);
+    int slot = 0;
+    if ((cls != NULL) && (from != NULL) && (queue != NULL) && (kinds != NULL) && (mine != NULL))
+    {
+        const TbBool known = world_read_slab_box_known(x1, y1, x1 + w - 1, y1 + h - 1, kinds, mine, target, unknown);
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                const MapSlabCoord sx = x1 + x, sy = y1 + y;
+                uint8_t c = 0;
+                if (rg_avoided(g, sx, sy))
+                    c = 0;
+                else if (!slabmap_block_invalid(get_slabmap_block(sx, sy)))
+                {
+                    /* loaded: as the leader's own steps see it */
+                    if (rg_keepers_door(sx, sy, target))
+                        c = 3;
+                    else if (rg_earth(sx, sy))
+                        c = 2;
+                    else if (rg_free(sx, sy))
+                        c = 1;
+                } else if (known)
+                    c = rg_kind_class((SlabKind)kinds[y * w + x], mine[y * w + x] != 0);
+                cls[y * w + x] = c;
+            }
+        const int heart = (hy - y1) * w + (hx - x1), leader = (cy - y1) * w + (cx - x1);
+        cls[heart] = 1;  /* (the heart's own slab, whatever stands on it) */
+        if ((cls[leader] & 15) != 3)
+            cls[leader] = 1;
+        /* the ground the heart can be walked to from */
+        int head = 0, tail = 0;
+        queue[tail++] = heart;
+        cls[heart] |= 16;
+        while (head < tail)
+        {
+            const int i = queue[head++];
+            const int x = i % w, y = i / w;
+            for (int d = 0; d < 4; d++)
+            {
+                const int nx = x + rg_dx[d], ny = y + rg_dy[d];
+                if ((nx < 0) || (ny < 0) || (nx >= w) || (ny >= h))
+                    continue;
+                const int k = ny * w + nx;
+                if (((cls[k] & 16) != 0) || (((cls[k] & 15) != 1) && ((cls[k] & 15) != 3)))
+                    continue;
+                cls[k] |= 16;
+                queue[tail++] = k;
+            }
+        }
+        /* the cheapest way from the leader to it: every queue entry is a slab and the turns of digging left on it
+           (an earth slab waits two entries more than an open one), so the entries come out in the order of cost */
+        int found = -1;
+        if ((cls[leader] & 16) == 0)
+        {
+            memset(from, 0xFF, (size_t)n);
+            head = 0;
+            tail = 0;
+            from[leader] = 4;
+            queue[tail++] = leader * 4;
+            while ((head < tail) && (found < 0))
+            {
+                const int e = queue[head++];
+                const int i = e >> 2;
+                if ((e & 3) != 0)
+                {
+                    queue[tail++] = e - 1;
+                    continue;
+                }
+                const int x = i % w, y = i / w;
+                for (int d = 0; (d < 4) && (found < 0); d++)
+                {
+                    const int nx = x + rg_dx[d], ny = y + rg_dy[d];
+                    if ((nx < 0) || (ny < 0) || (nx >= w) || (ny >= h))
+                        continue;
+                    const int k = ny * w + nx;
+                    if ((cls[k] & 16) != 0)
+                        found = i; /* beside ground joined to the heart (or one of the keeper's doors on a way to it) */
+                }
+                for (int d = 0; (d < 4) && (found < 0); d++)
+                {
+                    const int nx = x + rg_dx[d], ny = y + rg_dy[d];
+                    if ((nx < 0) || (ny < 0) || (nx >= w) || (ny >= h))
+                        continue;
+                    const int k = ny * w + nx;
+                    if ((from[k] != 0xFF) || (((cls[k] & 15) != 1) && ((cls[k] & 15) != 2)))
+                        continue;
+                    from[k] = (uint8_t)d;
+                    queue[tail++] = k * 4 + (((cls[k] & 15) == 2) ? 2 : 0);
+                }
+            }
+        }
+        if (found >= 0)
+        {
+            /* back along the steps that reached it */
+            int len = 0, earth = 0;
+            for (int i = found; (i != leader) && (len <= RG_PATH_MAX); len++)
+            {
+                if ((cls[i] & 15) == 2)
+                    earth++;
+                const int d = from[i];
+                i = i - rg_dy[d] * w - rg_dx[d];
+            }
+            if ((len > 0) && (len <= RG_PATH_MAX))
+            {
+                int s = -1;
+                for (int k = 0; k < RG_PATHS; k++)
+                    if (rg_paths[k].thing == 0)
+                        s = k;
+                for (int k = 0; (s < 0) && (k < RG_PATHS); k++)
+                {
+                    TbBool oldest = true;
+                    for (int j = 0; j < RG_PATHS; j++)
+                        oldest = oldest && (rg_paths[k].made <= rg_paths[j].made);
+                    if (oldest)
+                        s = k;
+                }
+                struct RaidPath *p = &rg_paths[s];
+                p->thing = creatng->index;
+                p->made = game.play_gameturn;
+                p->len = (uint16_t)len;
+                p->at = 0;
+                world_slab_to_world(cx, cy, &p->x, &p->y);
+                int at = len;
+                for (int i = found; i != leader;)
+                {
+                    const int d = from[i];
+                    p->dir[--at] = (uint8_t)d;
+                    i = i - rg_dy[d] * w - rg_dx[d];
+                }
+                slot = s + 1;
+                *dug = earth;
+            }
+        }
+    }
+    free(cls);
+    free(from);
+    free(queue);
+    free(kinds);
+    free(mine);
+    return slot;
+}
+
+/** The leader's next slab from where it stands. False: walled in on every side. */
+static TbBool rg_step(const struct Thing *creatng, struct RaidGuide *g, PlayerNumber target, MapSlabCoord hx, MapSlabCoord hy,
+    MapSlabCoord *nx, MapSlabCoord *ny)
+{
+    const MapSlabCoord cx = subtile_slab(creatng->mappos.x.stl.num), cy = subtile_slab(creatng->mappos.y.stl.num);
+    int64_t wcx, wcy, wgx, wgy;
+    world_slab_to_world(cx, cy, &wcx, &wcy);
+    world_slab_to_world(hx, hy, &wgx, &wgy);
+    /* a new heart, or the leader isn't where its way left it (a fight, the hand, a push): its line starts here */
+    if (!g->started || (g->goal_x != wgx) || (g->goal_y != wgy) ||
+        (g->leg_set && (llabs(wcx - g->leg_x) + llabs(wcy - g->leg_y) > 1)))
+    {
+        rg_drop_path(g);
+        g->started = 1;
+        g->mode = RG_Direct;
+        g->goal_x = wgx;
+        g->goal_y = wgy;
+        g->line_x = wcx;
+        g->line_y = wcy;
+    }
+    int dir = -1;
+    /* the keeper's open ground beside it: in it goes (not from the keeper's ground itself, nor soon after such
+       ground led nowhere) */
+    if (!rg_keepers(cx, cy, target) && (game.play_gameturn >= g->no_entry_until))
+        for (int d = 0; (d < 4) && (dir < 0); d++)
+            if (rg_keepers_ground(cx + rg_dx[d], cy + rg_dy[d], target) && rg_open(g, cx + rg_dx[d], cy + rg_dy[d]))
+                dir = d;
+    if ((dir < 0) && (g->mode == RG_Path))
+    {
+        /* on its way to a hole: the next step of it, while the way is still there */
+        struct RaidPath *p = ((g->path > 0) && (g->path <= RG_PATHS)) ? &rg_paths[g->path - 1] : NULL;
+        if ((p != NULL) && (p->thing == creatng->index) && (p->at < p->len) && (p->x == wcx) && (p->y == wcy) &&
+            rg_open(g, cx + rg_dx[p->dir[p->at]], cy + rg_dy[p->dir[p->at]]))
+        {
+            dir = p->dir[p->at];
+            p->at++;
+            world_slab_to_world(cx + rg_dx[dir], cy + rg_dy[dir], &p->x, &p->y);
+        } else
+        {
+            /* the way is gone (its hole was walled up meanwhile), or it led nowhere: straight for the heart again, and
+               another look for a hole after a few slabs round what bars it then */
+            const TbBool at_its_end = (p != NULL) && (p->thing == creatng->index) && (p->at >= p->len);
+            rg_drop_path(g);
+            g->mode = RG_Direct;
+            g->line_x = wcx;
+            g->line_y = wcy;
+            g->scout_at = g->round_total + (at_its_end ? RG_SCOUT_SLABS : 8);
+        }
+    }
+    const int64_t d2 = (wgx - wcx) * (wgx - wcx) + (wgy - wcy) * (wgy - wcy);
+    if ((dir < 0) && (g->mode == RG_Round) && (d2 < g->hit_d2))
+    {
+        /* nearer the heart than where it met the obstacle, and the way on is free: it leaves it */
+        int a, b;
+        rg_line_steps(wcx, wcy, wcx, wcy, wgx, wgy, &a, &b);
+        if (((a >= 0) && rg_open(g, cx + rg_dx[a], cy + rg_dy[a])) || ((b >= 0) && rg_open(g, cx + rg_dx[b], cy + rg_dy[b])))
+        {
+            g->mode = RG_Direct;
+            g->line_x = wcx;
+            g->line_y = wcy;
+            if (rg_log_budget > 0)
+            {
+                rg_log_budget--;
+                SYNCLOG("World: the leader (index %d) raiding player %d is past what barred its way after %d slabs round it",
+                    (int)creatng->index, (int)target, (int)g->round_steps);
+            }
+        }
+    }
+    if ((dir < 0) && (g->mode == RG_Direct))
+    {
+        int a, b;
+        rg_line_steps(wcx, wcy, g->line_x, g->line_y, wgx, wgy, &a, &b);
+        if (a < 0)
+            return false; /* (on the heart's own slab: the keeper's ground, the stock code has it by now) */
+        if (rg_open(g, cx + rg_dx[a], cy + rg_dy[a]))
+            dir = a;
+        else if ((b >= 0) && rg_open(g, cx + rg_dx[b], cy + rg_dy[b]))
+            dir = b;
+        else
+        {
+            /* barred: it goes round, the obstacle on one hand. The first time the hand is the heart's side (straight
+               ahead of the heart: by the creature's number); after that it keeps the hand it has. */
+            g->mode = RG_Round;
+            g->hit_x = wcx;
+            g->hit_y = wcy;
+            g->hit_d2 = d2;
+            g->round_steps = 0;
+            g->laps = 0;
+            g->hit_first_set = 0;
+            if (g->scout_at == 0)
+                g->scout_at = g->round_total + RG_SCOUT_SLABS;
+            if (g->hand == RG_HandNone)
+            {
+                const TbBool turn_left = (b >= 0) ? (b == ((a + 3) & 3)) : ((creatng->index & 1) != 0);
+                g->hand = turn_left ? RG_HandRight : RG_HandLeft;
+            }
+            g->dir = (uint8_t)((g->hand == RG_HandRight) ? ((a + 3) & 3) : ((a + 1) & 3));
+            if (rg_log_budget > 0)
+            {
+                rg_log_budget--;
+                const struct SlabMap *slb = get_slabmap_block(cx + rg_dx[a], cy + rg_dy[a]);
+                SYNCLOG("World: the leader (index %d) raiding player %d meets %s of player %ld, %ld,%ld slabs from the heart:"
+                    " it goes round it, keeping it on its %s", (int)creatng->index, (int)target,
+                    slabmap_block_invalid(slb) ? "ground not loaded" : slab_code_name(slb->kind),
+                    slabmap_block_invalid(slb) ? -1L : slabmap_owner(slb), (long)(wcx - wgx), (long)(wcy - wgy),
+                    (g->hand == RG_HandRight) ? "right" : "left");
+            }
+        }
+    }
+    if ((dir < 0) && (g->mode == RG_Round))
+    {
+        /* the hand's side first, then straight on, then away from it, then back */
+        const int h = g->dir;
+        const int toward = (g->hand == RG_HandRight) ? ((h + 1) & 3) : ((h + 3) & 3);
+        const int away = (g->hand == RG_HandRight) ? ((h + 3) & 3) : ((h + 1) & 3);
+        const int order[4] = {toward, h, away, (h + 2) & 3};
+        for (int k = 0; (k < 4) && (dir < 0); k++)
+            if (rg_open(g, cx + rg_dx[order[k]], cy + rg_dy[order[k]]))
+                dir = order[k];
+        if (dir < 0)
+            return false;
+        if ((wcx == g->hit_x) && (wcy == g->hit_y))
+        {
+            if (!g->hit_first_set)
+            {
+                g->hit_first_set = 1;
+                g->hit_first_dir = (uint8_t)dir;
+            } else if ((dir == g->hit_first_dir) && (g->round_steps > 3))
+            {
+                /* once round, and no way in: a dungeon closed by its walls. Round again: a hole may come. */
+                g->laps++;
+                if ((rg_log_budget > 0) && ((g->laps <= 3) || ((g->laps % 10) == 0)))
+                {
+                    rg_log_budget--;
+                    SYNCLOG("World: the leader (index %d) raiding player %d has been round what bars its way %d time%s"
+                        " (%d slabs) and found no way in: it goes round again", (int)creatng->index, (int)target,
+                        (int)g->laps, (g->laps == 1) ? "" : "s", (int)g->round_steps);
+                }
+                g->round_steps = 0;
+            }
+        }
+        g->dir = (uint8_t)dir;
+        g->round_steps++;
+        g->round_total++;
+        if (g->round_total >= g->scout_at)
+        {
+            /* a long time round and no way in: is there a hole anywhere near? */
+            g->scout_at = g->round_total + RG_SCOUT_SLABS;
+            int dug = 0, unknown = 0;
+            const int64_t t0 = world_prof_now();
+            const int slot = rg_scout(creatng, g, target, hx, hy, &dug, &unknown);
+            if (t0 != 0)
+                SYNCLOG("World profile: a raid leader's look for a hole took %.2f ms", (double)(world_prof_now() - t0) / 1e6);
+            if (slot > 0)
+            {
+                struct RaidPath *p = &rg_paths[slot - 1];
+                rg_drop_path(g);
+                g->path = (uint8_t)slot;
+                g->mode = RG_Path;
+                dir = p->dir[0];
+                p->at = 1;
+                world_slab_to_world(cx + rg_dx[dir], cy + rg_dy[dir], &p->x, &p->y);
+            }
+            if (rg_log_budget > 0)
+            {
+                rg_log_budget--;
+                if (slot > 0)
+                    SYNCLOG("World: the leader (index %d) raiding player %d has gone round %d slabs without a way in: it makes"
+                        " for the nearest hole, %d slabs on (%d of them earth to dig)", (int)creatng->index, (int)target,
+                        (int)g->round_total, (int)rg_paths[slot - 1].len, dug);
+                else
+                    SYNCLOG("World: the leader (index %d) raiding player %d has gone round %d slabs without a way in, and"
+                        " there is no hole in the ground known round the heart (%d chunks of it not known): it goes on round",
+                        (int)creatng->index, (int)target, (int)g->round_total, unknown);
+            }
+        }
+    }
+    if (dir < 0)
+        return false;
+    *nx = cx + rg_dx[dir];
+    *ny = cy + rg_dy[dir];
+    world_slab_to_world(*nx, *ny, &g->leg_x, &g->leg_y);
+    g->leg_set = 1;
+    g->leg_turn = game.play_gameturn;
+    return true;
+}
+
+static void rg_leg_pos(struct Thing *creatng, MapSlabCoord nx, MapSlabCoord ny, struct Coord3d *pos)
+{
+    pos->x.val = subtile_coord_center(slab_subtile_center(nx));
+    pos->y.val = subtile_coord_center(slab_subtile_center(ny));
+    pos->z.val = get_thing_height_at(creatng, pos);
+}
+
+/** The leader goes in on foot: the stock hero code has it from here. */
+static void rg_walk_in(struct Thing *creatng, struct RaidGuide *g, PlayerNumber target, const char *how)
+{
+    if (rg_log_budget > 0)
+    {
+        rg_log_budget--;
+        SYNCLOG("World: the leader (index %d) raiding player %d %s: it goes in on foot", (int)creatng->index, (int)target, how);
+    }
+    rg_drop_path(g);
+    g->started = 0; /* (if it ever digs on, its line starts where it stands then; it keeps its hand) */
+    g->leg_set = 0;
+    internal_set_thing_state(creatng, CrSt_GoodDoingNothing);
+}
+
+/** Has the leader walked its way to a hole to the end? (It looks for the way in there at once.) */
+static TbBool rg_at_end(const struct Thing *creatng, const struct RaidGuide *g, const struct CreatureControl *cctrl)
+{
+    if ((g->mode != RG_Path) || (g->path <= 0) || (g->path > RG_PATHS))
+        return false;
+    const struct RaidPath *p = &rg_paths[g->path - 1];
+    return (p->thing == creatng->index) && (p->at >= p->len) &&
+        (get_chessboard_distance(&creatng->mappos, &cctrl->moveto_pos) <= RG_ARRIVED);
+}
+
+/** The slab the leader was sent to and has not reached: where it is, if it is still its way (true). */
+static TbBool rg_leg_pending(const struct Thing *creatng, struct RaidGuide *g, MapSlabCoord *lx, MapSlabCoord *ly)
+{
+    if (!g->leg_set || !world_engine_slab(g->leg_x, g->leg_y, lx, ly))
+        return false;
+    const MapSlabCoord cx = subtile_slab(creatng->mappos.x.stl.num), cy = subtile_slab(creatng->mappos.y.stl.num);
+    if (abs(cx - *lx) + abs(cy - *ly) > 1)
+        return false; /* it isn't beside it any more */
+    if ((GameTurnDelta)(game.play_gameturn - g->leg_turn) > RG_LEG_TURNS)
+    {
+        /* it never got there: that slab is left alone for a while */
+        g->avoid_x = g->leg_x;
+        g->avoid_y = g->leg_y;
+        g->avoid_until = game.play_gameturn + RG_AVOID_TURNS;
+        if (rg_log_budget > 0)
+        {
+            rg_log_budget--;
+            SYNCLOG("World: the leader (index %d) of a raid could not get onto a slab in %d turns: it leaves that slab alone",
+                (int)creatng->index, RG_LEG_TURNS);
+        }
+        return false;
+    }
+    return rg_open(g, *lx, *ly);
+}
+
+short world_raid_leader_leg(struct Thing *creatng)
+{
+    PlayerNumber target;
+    MapSlabCoord hx, hy;
+    if (!rg_led(creatng, &target, &hx, &hy))
+        return 0;
+    struct RaidGuide *g = rg_of(creatng);
+    if (g == NULL)
+        return 0;
+    struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
+    cctrl->party.target_plyr_idx = target; /* (the hero AI may have looked elsewhere) */
+    const MapSlabCoord cx = subtile_slab(creatng->mappos.x.stl.num), cy = subtile_slab(creatng->mappos.y.stl.num);
+    /* a way to walk to the heart: looked for now and then; sooner beside one of the keeper's doors, on the keeper's
+       ground and at the end of its way to a hole */
+    const TbBool on_keepers = rg_keepers(cx, cy, target);
+    TbBool by_door = false;
+    for (int d = 0; d < 4; d++)
+        by_door = by_door || rg_keepers_door(cx + rg_dx[d], cy + rg_dy[d], target);
+    const TbBool at_end = rg_at_end(creatng, g, cctrl);
+    const GameTurnDelta since = (GameTurnDelta)(game.play_gameturn - g->walk_turn);
+    if ((g->walk_turn == 0) || (since >= RG_WALK_CHECK) || at_end || ((by_door || on_keepers) && (since >= RG_WALK_SOON)))
+    {
+        g->walk_turn = game.play_gameturn;
+        if (rg_can_walk_in(creatng, target))
+        {
+            rg_walk_in(creatng, g, target, on_keepers ? "stands on the keeper's ground" : by_door ?
+                "stands at a door on a way to the heart" : at_end ? "is at the hole" : "can walk to the heart");
+            return 1;
+        }
+        if (on_keepers)
+            g->no_entry_until = game.play_gameturn + RG_NO_ENTRY_TURNS;
+    }
+    /* on its way to the slab it was sent to: nothing to do until it stands there */
+    MapSlabCoord lx, ly;
+    if (rg_leg_pending(creatng, g, &lx, &ly))
+    {
+        const TbBool same = (subtile_slab(cctrl->moveto_pos.x.stl.num) == lx) && (subtile_slab(cctrl->moveto_pos.y.stl.num) == ly);
+        if (same && (get_chessboard_distance(&creatng->mappos, &cctrl->moveto_pos) > RG_ARRIVED))
+            return 2;
+        if (!same && ((cx != lx) || (cy != ly)))
+        {
+            rg_leg_pos(creatng, lx, ly, &cctrl->moveto_pos); /* (sent elsewhere meanwhile: back on its way) */
+            return 2;
+        }
+    }
+    MapSlabCoord nx, ny;
+    if (!rg_step(creatng, g, target, hx, hy, &nx, &ny))
+        return 0;
+    rg_leg_pos(creatng, nx, ny, &cctrl->moveto_pos);
+    return 2;
+}
+
+/** Sends the leader on its way from an idle state (true: it tunnels again). */
+static TbBool rg_send(struct Thing *creatng, struct RaidGuide *g, PlayerNumber target, MapSlabCoord hx, MapSlabCoord hy)
+{
+    MapSlabCoord nx, ny;
+    const MapSlabCoord cx = subtile_slab(creatng->mappos.x.stl.num), cy = subtile_slab(creatng->mappos.y.stl.num);
+    if (!rg_leg_pending(creatng, g, &nx, &ny) || ((cx == nx) && (cy == ny)))
+    {
+        if (!rg_step(creatng, g, target, hx, hy, &nx, &ny))
+            return false;
+    }
+    struct Coord3d pos;
+    rg_leg_pos(creatng, nx, ny, &pos);
+    return send_tunneller_to_point_in_dungeon(creatng, target, &pos);
+}
+
+/** The leader and a fortified wall (2026-11-15, the user: "Tunnellers can break through fortified walls but only the
+ *  ones outside of the rings of anchors against the dark"): when the next slab of its straight line to the heart is
+ *  such a wall (and the line's other slab is not open), it breaks it (a minute, world_wallbreak.c) instead of going
+ *  round. True while it works; when the wall is dug out its line starts again from where it stands and it goes on. */
+static TbBool rg_break_wall(struct Thing *creatng, struct RaidGuide *g, MapSlabCoord hx, MapSlabCoord hy)
+{
+    const MapSlabCoord cx = subtile_slab(creatng->mappos.x.stl.num), cy = subtile_slab(creatng->mappos.y.stl.num);
+    int64_t wcx, wcy, wgx, wgy;
+    world_slab_to_world(cx, cy, &wcx, &wcy);
+    world_slab_to_world(hx, hy, &wgx, &wgy);
+    int a, b;
+    rg_line_steps(wcx, wcy, wcx, wcy, wgx, wgy, &a, &b);
+    if (a < 0)
+        return false;
+    const TbBool a_open = rg_open(g, cx + rg_dx[a], cy + rg_dy[a]);
+    const TbBool b_open = (b >= 0) && rg_open(g, cx + rg_dx[b], cy + rg_dy[b]);
+    int d = -1;
+    if (!a_open && world_wallbreak_can(cx + rg_dx[a], cy + rg_dy[a]))
+        d = a;
+    else if (!a_open && !b_open && (b >= 0) && world_wallbreak_can(cx + rg_dx[b], cy + rg_dy[b]))
+        d = b;
+    if (d < 0)
+        return false;
+    const int r = world_wallbreak_work(creatng, cx + rg_dx[d], cy + rg_dy[d]);
+    if (r == 1)
+        return true;
+    if (r == 2)
+    {
+        rg_drop_path(g);
+        g->mode = RG_Direct;
+        g->line_x = wcx;
+        g->line_y = wcy;
+    }
+    return false;
+}
+
+TbBool world_raid_leader_send(struct Thing *creatng)
+{
+    PlayerNumber target;
+    MapSlabCoord hx, hy;
+    if (!rg_led(creatng, &target, &hx, &hy))
+        return false;
+    struct RaidGuide *g = rg_of(creatng);
+    if (g == NULL)
+        return false;
+    if (world_wallbreak_busy(creatng) || rg_break_wall(creatng, g, hx, hy))
+        return true; /* at a wall it breaks: it stays */
+    struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
+    cctrl->party.target_plyr_idx = target;
+    if ((g->walk_turn == 0) || ((GameTurnDelta)(game.play_gameturn - g->walk_turn) >= RG_WALK_SOON) || rg_at_end(creatng, g, cctrl))
+    {
+        g->walk_turn = game.play_gameturn;
+        if (rg_can_walk_in(creatng, target))
+        {
+            rg_walk_in(creatng, g, target, "can walk to the heart");
+            return true;
+        }
+    }
+    return rg_send(creatng, g, target, hx, hy);
+}
+
+TbBool world_raid_leader_resume(struct Thing *creatng)
+{
+    PlayerNumber target;
+    MapSlabCoord hx, hy;
+    if (!rg_led(creatng, &target, &hx, &hy))
+        return false;
+    struct RaidGuide *g = rg_of(creatng);
+    if ((g != NULL) && world_wallbreak_busy(creatng))
+        return true; /* at a wall it breaks: it stays */
+    if ((g == NULL) || ((GameTurnDelta)(game.play_gameturn - g->walk_turn) < RG_WALK_CHECK))
+        return false;
+    g->walk_turn = game.play_gameturn;
+    if (rg_can_walk_in(creatng, target))
+        return false;
+    struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
+    cctrl->party.target_plyr_idx = target;
+    if (!rg_send(creatng, g, target, hx, hy))
+        return false;
+    if (rg_log_budget > 0)
+    {
+        rg_log_budget--;
+        SYNCLOG("World: the leader (index %d) raiding player %d has no way to walk to the heart: it digs on",
+            (int)creatng->index, (int)target);
+    }
+    return true;
+}
+
 void world_raid_creature_died(struct Thing *thing)
 {
     if (!world_raid_hero(thing) || !creature_is_group_leader(thing))
@@ -763,6 +1630,14 @@ void world_raid_creature_died(struct Thing *thing)
     dn_inv[p].flee_turn = game.play_gameturn; /* (the chunk manager wants their landings from now on) */
     SYNCLOG("World: the leader (%s) of a party raiding player %d died: its %d heroes go home", thing_model_name(thing), p,
         fled);
+}
+
+TbBool world_raid_hero_retreating(const struct Thing *thing)
+{
+    if (!world_raid_hero(thing))
+        return false;
+    const int p = dn_raider_invasion(thing);
+    return (p >= 0) && (dn_inv[p].retreating || dn_raider_fleeing(thing));
 }
 
 TbBool world_raid_hero_goes_home(struct Thing *thing)
@@ -997,10 +1872,12 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
     for (int s = 0; s < nspots; s++)
     {
         const MapSlabCoord sx = spot_x[s], sy = spot_y[s];
-        /* the chunked world: the landing chunks come in now; the heroes keep chunks loaded round them from then on */
-        const int landing_chunks = world_load_chunks_round(sx, sy, 1);
+        /* the chunked world: the landing's own chunk comes in now and the eight round it in the next turns, first in
+           the chunk manager's queue (all nine at once were a 30 to 70 ms turn; the heroes stand still for their first
+           24 turns and more, and keep chunks loaded round them from then on) */
+        const int landing_chunks = world_load_chunks_landing(sx, sy);
         if (landing_chunks > 0)
-            SYNCLOG("World: day %ld raid %d: %d chunks loaded round landing %d", day, idx + 1, landing_chunks, s + 1);
+            SYNCLOG("World: day %ld raid %d: the chunk of landing %d loaded, the ones round it follow", day, idx + 1, s + 1);
         const int biome = world_biome_at_engine_slab(sx, sy);
         struct DnPool pool;
         dn_make_pool(tier, biome, &pool);
@@ -1178,6 +2055,7 @@ TbBool world_raids_load(const uint8_t *buf, size_t len)
 
 void world_raids_reset(void)
 {
+    rg_reset();
     memset(dn_inv, 0, sizeof(dn_inv));
     memset(dn_owed_day, 0, sizeof(dn_owed_day));
 }
@@ -1299,6 +2177,269 @@ static void dn_killleader_hook(void)
     }
 }
 
+/** Test hook KFX_WORLD_RAIDWATCH="<every>[,<map every>[,<radius>]]": every <every> turns the log says where each
+ *  raiding party's leader is and what it is doing; every <map every> turns it draws the ground round each leader,
+ *  <radius> slabs each way (# rock, . earth, , torch earth, W the raided keeper's reinforced wall, w another wall,
+ *  x a damaged wall, D/d a door, o the keeper's claimed floor, c other claimed floor, R/r a room, space a path,
+ *  ~ water, ^ lava, g gold, G gems, + other diggable ground, % other solid ground; T the leader, h a raider,
+ *  k one of the keeper's creatures, i one of its imps, H its heart). */
+static char dn_watch_slab_char(MapSlabCoord x, MapSlabCoord y, PlayerNumber target)
+{
+    const struct SlabMap *slb = get_slabmap_block(x, y);
+    if (slabmap_block_invalid(slb))
+        return '?';
+    const SlabKind k = slb->kind;
+    const long own = slabmap_owner(slb);
+    if (k == SlbT_ROCK)
+        return '#';
+    if (k == SlbT_GOLD)
+        return 'g';
+    if (k == SlbT_GEMS)
+        return 'G';
+    if (k == SlbT_EARTH)
+        return '.';
+    if (k == SlbT_TORCHDIRT)
+        return ',';
+    if (k == SlbT_DAMAGEDWALL)
+        return 'x';
+    if (slab_kind_is_fortified_wall(k))
+        return (own == target) ? 'W' : 'w';
+    if (slab_kind_is_door(k))
+        return (own == target) ? 'D' : 'd';
+    if (k == SlbT_LAVA)
+        return '^';
+    if (k == SlbT_WATER)
+        return '~';
+    if (k == SlbT_PATH)
+        return ' ';
+    if (k == SlbT_CLAIMED)
+        return (own == target) ? 'o' : 'c';
+    if (slab_kind_is_room(k))
+        return (own == target) ? 'R' : 'r';
+    const struct SlabConfigStats *st = get_slab_kind_stats(k);
+    if ((st->block_flags & SlbAtFlg_Blocking) != 0)
+        return ((st->block_flags & SlbAtFlg_Digable) != 0) ? '+' : '%';
+    return '_';
+}
+
+static void dn_watch_mark(char *grid, int side, MapSlabCoord x0, MapSlabCoord y0, const struct Thing *thing, char c)
+{
+    const MapSlabCoord x = subtile_slab(thing->mappos.x.stl.num) - x0, y = subtile_slab(thing->mappos.y.stl.num) - y0;
+    if ((x < 0) || (y < 0) || (x >= side) || (y >= side))
+        return;
+    char *at = &grid[y * (side + 1) + x];
+    if ((*at != 'T') && ((*at != 'H') || (c == 'T')))
+        *at = c;
+}
+
+static void dn_watch_mark_dungeon(char *grid, int side, MapSlabCoord x0, MapSlabCoord y0, PlayerNumber plyr_idx,
+    char fighter, char digger, TbBool raiders_only)
+{
+    struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
+    if (dungeon_invalid(dungeon))
+        return;
+    for (int list = 0; list < 2; list++)
+    {
+        long i = (list == 0) ? dungeon->creatr_list_start : dungeon->digger_list_start;
+        long guard = 0;
+        while ((i > 0) && (guard++ < CREATURES_COUNT))
+        {
+            struct Thing *thing = thing_get(i);
+            if (!thing_exists(thing))
+                break;
+            struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+            if (creature_control_invalid(cctrl))
+                break;
+            i = cctrl->players_next_creature_idx;
+            if (raiders_only && !world_raid_hero(thing))
+                continue;
+            dn_watch_mark(grid, side, x0, y0, thing, (list == 0) ? fighter : digger);
+        }
+    }
+}
+
+/** Test hook KFX_WORLD_RAIDDOOR="<turn>[,<slabs>]": at that turn player 0's start gets a doorway in its west wall,
+ *  two slabs north of the heart's row: the wall slab becomes claimed floor with a wooden door on it, and <slabs>
+ *  slabs outside it become open path (0 when a raid has dug its ring there already: imps wall up a short path that
+ *  leads nowhere within minutes). A raid going round the walls should stop at the door and break it. */
+static void dn_raiddoor_hook(void)
+{
+    static long at = -2, stub = 0;
+    if (at == -2)
+    {
+        const char *v = getenv("KFX_WORLD_RAIDDOOR");
+        at = -1;
+        if (v != NULL)
+            sscanf(v, "%ld,%ld", &at, &stub);
+    }
+    if ((at < 0) || ((long)game.play_gameturn != at))
+        return;
+    const struct Thing *heartng = find_players_dungeon_heart(PLAYER0);
+    if (!thing_exists(heartng))
+        return;
+    const MapSlabCoord hx = subtile_slab(heartng->mappos.x.stl.num), hy = subtile_slab(heartng->mappos.y.stl.num);
+    /* the first reinforced wall west of the heart on that row */
+    MapSlabCoord wx = hx;
+    const MapSlabCoord wy = hy - 2;
+    for (int k = 1; k < 12; k++)
+    {
+        const struct SlabMap *slb = get_slabmap_block(hx - k, wy);
+        if (!slabmap_block_invalid(slb) && slab_kind_is_fortified_wall(slb->kind))
+        {
+            wx = hx - k;
+            break;
+        }
+    }
+    if (wx == hx)
+    {
+        SYNCLOG("World test: raid door: no wall found west of the heart");
+        return;
+    }
+    place_slab_type_on_map(SlbT_CLAIMED, slab_subtile_center(wx), slab_subtile_center(wy), PLAYER0, 0);
+    for (long k = 1; k <= stub; k++)
+        place_slab_type_on_map(SlbT_PATH, slab_subtile_center(wx - k), slab_subtile_center(wy), game.neutral_player_num, 0);
+    script_place_door(PLAYER0, (ThingModel)get_id(door_desc, "WOOD"), wx, wy, false, true);
+    const struct SlabMap *slb = get_slabmap_block(wx, wy);
+    SYNCLOG("World test: raid door: a doorway %ld slabs west of the heart, 2 north: the slab is now %s of player %ld",
+        (long)(hx - wx), slab_code_name(slb->kind), slabmap_owner(slb));
+}
+
+static void dn_raidwatch_hook(void)
+{
+    static long every = -1, map_every = 0, radius = 10;
+    static int32_t last_x[CREATURES_COUNT], last_y[CREATURES_COUNT];
+    static GameTurn since[CREATURES_COUNT];
+    if (every < 0)
+    {
+        const char *v = getenv("KFX_WORLD_RAIDWATCH");
+        every = 0;
+        if (v != NULL)
+            sscanf(v, "%ld,%ld,%ld", &every, &map_every, &radius);
+        radius = max(2L, min(radius, 30L));
+        if (every > 0)
+            SYNCLOG("World test: watching raid leaders every %ld turns (a map every %ld, %ld slabs each way)", every,
+                map_every, radius);
+    }
+    if ((every <= 0) || ((game.play_gameturn % every) != 0))
+        return;
+    struct Dungeon *heroes = get_players_num_dungeon(PLAYER_GOOD);
+    if (dungeon_invalid(heroes))
+        return;
+    for (int list = 0; list < 2; list++)
+    {
+        long i = (list == 0) ? heroes->creatr_list_start : heroes->digger_list_start;
+        long guard = 0;
+        while ((i > 0) && (guard++ < CREATURES_COUNT))
+        {
+            struct Thing *thing = thing_get(i);
+            if (!thing_exists(thing))
+                break;
+            struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+            if (creature_control_invalid(cctrl))
+                break;
+            i = cctrl->players_next_creature_idx;
+            if (!world_raid_hero(thing) || creature_is_dying(thing))
+                continue;
+            /* a party's leader, or a raider on its own */
+            if (!creature_is_group_leader(thing) && creature_is_group_member(thing))
+                continue;
+            const PlayerNumber target = cctrl->party.target_plyr_idx;
+            const MapSlabCoord sx = subtile_slab(thing->mappos.x.stl.num), sy = subtile_slab(thing->mappos.y.stl.num);
+            int64_t wx, wy;
+            world_slab_to_world(sx, sy, &wx, &wy);
+            long hdx = 0, hdy = 0;
+            struct Thing *heartng = (target >= 0) ? find_players_dungeon_heart(target) : INVALID_THING;
+            if (thing_exists(heartng))
+            {
+                hdx = sx - subtile_slab(heartng->mappos.x.stl.num);
+                hdy = sy - subtile_slab(heartng->mappos.y.stl.num);
+            }
+            const int c = thing->index % CREATURES_COUNT;
+            if ((last_x[c] != (int32_t)wx) || (last_y[c] != (int32_t)wy) || (since[c] == 0))
+            {
+                last_x[c] = (int32_t)wx;
+                last_y[c] = (int32_t)wy;
+                since[c] = game.play_gameturn;
+            }
+            const struct SlabMap *here = get_slabmap_block(sx, sy);
+            const MapSubtlCoord bx = stl_num_decode_x(cctrl->navi.first_colliding_block),
+                by = stl_num_decode_y(cctrl->navi.first_colliding_block);
+            const struct SlabMap *blk = get_slabmap_for_subtile(bx, by);
+            int followers = 0;
+            {
+                long g2 = 0;
+                struct Thing *memb = creature_is_group_leader(thing) ? get_first_follower_creature_in_group(thing) :
+                    INVALID_THING;
+                while (thing_exists(memb) && (g2++ < CREATURES_COUNT))
+                {
+                    struct CreatureControl *mctrl = creature_control_get_from_thing(memb);
+                    if (creature_control_invalid(mctrl))
+                        break;
+                    if (memb != thing)
+                        followers++;
+                    memb = (mctrl->next_in_group > 0) ? thing_get(mctrl->next_in_group) : INVALID_THING;
+                }
+            }
+            SYNCLOG("World raidwatch: %s %d (level %d, %d followers) raiding player %d: %ld,%ld slabs from its heart, on"
+                " %s of player %ld, on this slab for %ld turns; state %s then %s, instance %s, objective %d; goal %ld,%ld"
+                " slabs from here; wallhug state %d side %d angle %d push %d retry %d; next step %ld,%ld from here;"
+                " block to dig %ld,%ld subtiles from here: %s of player %ld",
+                thing_model_name(thing), (int)thing->index, (int)cctrl->exp_level + 1, followers, (int)target, hdx, hdy,
+                slab_code_name(here->kind), slabmap_owner(here), (long)(game.play_gameturn - since[c]),
+                creature_state_code_name(thing->active_state), creature_state_code_name(thing->continue_state),
+                creature_instance_code_name(cctrl->instance_id), (int)cctrl->party.objective,
+                (long)subtile_slab(cctrl->moveto_pos.x.stl.num) - sx, (long)subtile_slab(cctrl->moveto_pos.y.stl.num) - sy,
+                (int)cctrl->navi.navstate, (int)cctrl->navi.side, (int)cctrl->navi.angle, (int)cctrl->navi.push_counter,
+                (int)cctrl->navi.wallhug_retry_counter,
+                (long)cctrl->navi.pos_next.x.val - (long)thing->mappos.x.val,
+                (long)cctrl->navi.pos_next.y.val - (long)thing->mappos.y.val,
+                (long)bx - thing->mappos.x.stl.num, (long)by - thing->mappos.y.stl.num,
+                slabmap_block_invalid(blk) ? "nothing" : slab_code_name(blk->kind),
+                slabmap_block_invalid(blk) ? -1L : slabmap_owner(blk));
+            {
+                const long gi = thing->ccontrol_idx;
+                const struct RaidGuide *g = ((gi > 0) && (gi < CREATURES_COUNT)) ? &rg_table[gi] : NULL;
+                /* how much of the ground round it its keeper has seen (does a raid show the ground it crosses?) */
+                int seen = 0;
+                for (int ry = -3; ry <= 3; ry++)
+                    for (int rx = -3; rx <= 3; rx++)
+                    {
+                        const struct Map *mb = get_map_block_at(slab_subtile_center(sx + rx), slab_subtile_center(sy + ry));
+                        if (!map_block_invalid(mb) && (target >= 0) && map_block_revealed(mb, target))
+                            seen++;
+                    }
+                if ((g != NULL) && (g->thing == thing->index) && g->started)
+                    SYNCLOG("World raidled: %d %s, hand %s, %d slabs round, %d times round; its keeper has seen %d of the 49 slabs round it",
+                        (int)thing->index, (g->mode == RG_Round) ? "going round" : (g->mode == RG_Path) ? "on its way to a hole" :
+                        "straight for the heart", (g->hand == RG_HandRight) ? "right" : (g->hand == RG_HandLeft) ? "left" : "none",
+                        (int)g->round_steps, (int)g->laps, seen);
+            }
+            if ((map_every <= 0) || ((game.play_gameturn % map_every) != 0))
+                continue;
+            const int side = (int)(2 * radius + 1);
+            char *grid = (char *)malloc((size_t)(side + 1) * side);
+            if (grid == NULL)
+                continue;
+            const MapSlabCoord x0 = sx - radius, y0 = sy - radius;
+            for (int y = 0; y < side; y++)
+            {
+                for (int x = 0; x < side; x++)
+                    grid[y * (side + 1) + x] = dn_watch_slab_char(x0 + x, y0 + y, target);
+                grid[y * (side + 1) + side] = 0;
+            }
+            if (target >= 0)
+                dn_watch_mark_dungeon(grid, side, x0, y0, target, 'k', 'i', false);
+            dn_watch_mark_dungeon(grid, side, x0, y0, PLAYER_GOOD, 'h', 'h', true);
+            if (thing_exists(heartng))
+                dn_watch_mark(grid, side, x0, y0, heartng, 'H');
+            dn_watch_mark(grid, side, x0, y0, thing, 'T');
+            for (int y = 0; y < side; y++)
+                SYNCLOG("World raidmap %d: |%s|", (int)thing->index, &grid[y * (side + 1)]);
+            free(grid);
+        }
+    }
+}
+
 void world_raids_player_retreat(PlayerNumber plyr_idx)
 {
     if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
@@ -1309,7 +2450,7 @@ void world_raids_player_retreat(PlayerNumber plyr_idx)
     inv->retreating = 1;
     inv->retreat_turn = game.play_gameturn;
     for (int s = 0; s < inv->nspots; s++)
-        world_load_chunks_round_world(inv->spot_x[s], inv->spot_y[s], 1);
+        world_load_chunks_landing_world(inv->spot_x[s], inv->spot_y[s]);
     SYNCLOG("World: the heroes raiding player %d go home (its keeper starts again)", (int)plyr_idx);
 }
 
@@ -1383,6 +2524,8 @@ void world_daynight_after_turn(void)
 void world_daynight_turn(void)
 {
     dn_read_lengths();
+    dn_raidwatch_hook(); /* test hooks */
+    dn_raiddoor_hook();
     long day;
     GameTurnDelta t;
     dn_time(game.play_gameturn, &day, &t);

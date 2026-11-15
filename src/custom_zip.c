@@ -38,6 +38,29 @@
 static VALUE zip_cache_v;
 static VALUE *zip_cache = &zip_cache_v;
 
+/* Endless Keeper: a zip's cache can be held across several passes over that zip (load_file_sprites reads up to five
+   json files out of each sprite zip, and each pass built the whole cache again: a tenth of a second of every sprite
+   load). While held, building it again for the same zip keeps it, and clearing it waits for the release. */
+static TbBool cache_held = false, held_cache_built = false;
+static ZPOS64_T held_entries = 0;
+static uLong held_comment_size = 0;
+
+void fastUnzHoldCache(void)
+{
+    fastUnzReleaseCache();
+    cache_held = true;
+}
+
+void fastUnzReleaseCache(void)
+{
+    cache_held = false;
+    if (held_cache_built)
+    {
+        held_cache_built = false;
+        value_fini(zip_cache);
+    }
+}
+
 int fastUnzLocateFile(unzFile zip, const char *szFileName, int iCaseSensitivity)
 {
     //return unzLocateFile(file, szFileName, iCaseSensitivity);
@@ -62,6 +85,15 @@ int fastUnzLocateFile(unzFile zip, const char *szFileName, int iCaseSensitivity)
 int fastUnzConstructCache(unzFile zip)
 {
     char szCurrentFileName[PATH_MAX];
+    unz_global_info64 info = {0};
+    const TbBool have_info = (unzGetGlobalInfo64(zip, &info) == UNZ_OK);
+    if (cache_held && held_cache_built)
+    {
+        if (have_info && (info.number_entry == held_entries) && (info.size_comment == held_comment_size))
+            return UNZ_OK; /* the zip held: its cache is there */
+        held_cache_built = false; /* another zip after all: built anew */
+        value_fini(zip_cache);
+    }
     if (value_type(zip_cache) != VALUE_NULL)
     {
         ERRORLOG("Zip cache is not clear!");
@@ -89,11 +121,19 @@ int fastUnzConstructCache(unzFile zip)
         value_init_int64(value_array_append(rec), file_pos.pos_in_zip_directory);
         value_init_int64(value_array_append(rec), file_pos.num_of_file);
     }
+    if (cache_held)
+    {
+        held_cache_built = true;
+        held_entries = have_info ? info.number_entry : 0;
+        held_comment_size = have_info ? info.size_comment : 0;
+    }
     return UNZ_OK;
 }
 
 int fastUnzClearCache()
 {
+    if (cache_held)
+        return 0; /* kept for the next pass over the zip held */
     value_fini(zip_cache);
     return 0;
 }

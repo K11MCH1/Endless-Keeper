@@ -47,6 +47,7 @@
 #include "custom_sprites.h"
 #include "lvl_script_lib.h"
 #include "keeperfx.hpp"
+#include "bflib_sound.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2402,6 +2403,13 @@ static void load_creature_sound_from_path(long crtr_model, const char* sound_key
     for (int i = 0; i < exp_n; i++)
         SYNCDBG(7, "  [%d] '%s'", i, expanded[i]);
 
+    if (SoundDisabled)
+    {
+        /* Endless Keeper: no sound in this run (-nosound: the launcher's background, a dedicated server): the files are
+           not read (each one failed to decode, throwing three C++ exceptions, at every load of the configs) */
+        SYNCDBG(5, "Custom sound: %s.%s left out (sound is off)", creature_code_name(crtr_model), sound_key);
+        return;
+    }
     int result = load_creature_custom_sounds(crtr_model, sound_key,
         (const char*)expanded, exp_n, config_textname);
     if (!result)

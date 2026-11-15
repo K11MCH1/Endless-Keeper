@@ -39,6 +39,7 @@
 #include "vidfade.h"
 
 #include "keeperfx.hpp"
+#include "world_attract.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -378,6 +379,11 @@ TbBool show_actv_bitmap_screen(TbClockMSec tmdelay)
 TbBool display_loading_screen(void)
 {
     draw_clear_screen();
+    /* Endless Keeper: nobody sees the launcher's hidden background load (the launcher shows its window at the first
+       scene, and holds the picture black until then): no loading picture and no fade of it, a quarter of a second at
+       a large size */
+    if (world_attract_active())
+        return true;
     TbBool done = init_bitmap_screen(&astd_bmp, RBmp_WaitLoading);
     if (done)
     {

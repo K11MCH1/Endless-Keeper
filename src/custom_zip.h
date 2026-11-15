@@ -47,6 +47,13 @@ int fastUnzConstructCache(unzFile zip);
 int fastUnzClearCache(void);
 
 /**
+ * @brief Endless Keeper: keep the next zip's cache over several passes (each opening that zip again) until
+ * fastUnzReleaseCache(): building it again for the same zip keeps it, and fastUnzClearCache() waits.
+ */
+void fastUnzHoldCache(void);
+void fastUnzReleaseCache(void);
+
+/**
  * @brief Read a single named entry out of a map's mapNNNNN.zip bundle into a freshly
  * malloc'd buffer.
  *

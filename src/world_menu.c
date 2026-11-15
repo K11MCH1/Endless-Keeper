@@ -1710,8 +1710,115 @@ void world_menu_write_index(void)
     fclose(f);
 }
 
+/* The dawn autosave is written on its own thread (SaveManager_SaveInBackground: built in the turn, it held every
+   player's game up for most of a second, 2026-11-13). What is said of it waits here until it is written. */
+static struct {
+    TbBool pending;
+    char why[16];
+    char name[SAVE_TEXTNAME_LEN];
+    int slot;
+} wm_autosave_bg;
+
+static void wm_autosave_said(TbBool saved, const char *why, const char *name, int slot)
+{
+    if (!saved)
+    {
+        WARNLOG("Endless Mode: autosave (%s) to slot %d failed", why, slot);
+        server_admin_log("error", "Saving the world (%s) to slot %d failed", why, slot);
+        return;
+    }
+    SYNCLOG("Endless Mode: autosaved (%s) as \"%s\" in slot %d", why, name, slot);
+    server_admin_log("save", "The world is saved (%s): \"%s\" in slot %d", why, name, slot);
+    if (netstate_dedicated())
+        world_menu_write_index();
+}
+
+void world_autosave_poll(void)
+{
+    if (!wm_autosave_bg.pending)
+        return;
+    const enum SaveBackgroundState state = SaveManager_BackgroundPoll();
+    if (state == SBg_Busy)
+        return;
+    wm_autosave_bg.pending = false;
+    wm_autosave_said(state != SBg_Failed, wm_autosave_bg.why, wm_autosave_bg.name, wm_autosave_bg.slot);
+}
+
+void world_autosave_finish(void)
+{
+    if (!wm_autosave_bg.pending)
+        return;
+    SaveManager_BackgroundWait();
+    world_autosave_poll();
+}
+
+/** May this autosave be written on its own thread? Only the dawn's: the others come as the world or the game ends,
+ *  or at an admin's word, and are done when the call returns. KFX_SAVE_SYNC=1 writes every save in the turn, as
+ *  before. */
+static TbBool wm_autosave_in_background(const char *why)
+{
+    static int sync = -1;
+    if (sync < 0)
+        sync = ((getenv("KFX_SAVE_SYNC") != NULL) && (atoi(getenv("KFX_SAVE_SYNC")) > 0)) ? 1 : 0;
+    return !sync && (strcmp(why, "dawn") == 0);
+}
+
+/** A whole file, malloc'd (NULL: it can't be read). */
+static uint8_t *wm_read_whole(const char *fname, long *len)
+{
+    *len = 0;
+    FILE *f = (fname != NULL) ? fopen(fname, "rb") : NULL;
+    if (f == NULL)
+        return NULL;
+    uint8_t *data = NULL;
+    if ((fseek(f, 0, SEEK_END) == 0) && ((*len = ftell(f)) > 0) && (fseek(f, 0, SEEK_SET) == 0))
+    {
+        data = (uint8_t *)malloc((size_t)*len);
+        if ((data != NULL) && (fread(data, 1, (size_t)*len, f) != (size_t)*len))
+        {
+            free(data);
+            data = NULL;
+        }
+    }
+    fclose(f);
+    return data;
+}
+
+/** Test hook KFX_SAVE_BGCHECK=1: the autosave just begun on its own thread is waited for, the same moment is saved
+ *  again in the turn, as every save was before, and the two files are compared byte for byte. */
+static void wm_autosave_check(int slot)
+{
+    static int check = -1;
+    if (check < 0)
+        check = ((getenv("KFX_SAVE_BGCHECK") != NULL) && (atoi(getenv("KFX_SAVE_BGCHECK")) > 0)) ? 1 : 0;
+    if (!check)
+        return;
+    SaveManager_BackgroundWait();
+    long alen = 0, blen = 0;
+    uint8_t *a = wm_read_whole(prepare_file_fmtpath(FGrp_Save, WM_SAVE_FNAME, slot), &alen);
+    const TbBool saved = SaveManager_Save(slot);
+    uint8_t *b = wm_read_whole(prepare_file_fmtpath(FGrp_Save, WM_SAVE_FNAME, slot), &blen);
+    long differ = -1;
+    for (long i = 0; (i < alen) && (i < blen) && (differ < 0); i++)
+        if (a[i] != b[i])
+            differ = i;
+    if ((a == NULL) || (b == NULL) || !saved)
+        SYNCLOG("Save check: slot %d could not be compared (on its own thread %ld bytes, in the turn %ld bytes%s)", slot, alen,
+            blen, saved ? "" : ", which failed");
+    else if ((differ < 0) && (alen == blen))
+        SYNCLOG("Save check: slot %d written on its own thread and written in the turn are the same file, byte for byte "
+            "(%ld bytes)", slot, alen);
+    else
+        SYNCLOG("Save check: slot %d DIFFERS: on its own thread %ld bytes, in the turn %ld bytes, first difference at "
+            "byte %ld", slot, alen, blen, differ);
+    free(a);
+    free(b);
+}
+
 void world_autosave(const char *why)
 {
+    const int64_t began = get_time_tick_ns();
+    world_autosave_finish(); /* (the last one, if it is still being written: this one comes after it) */
     if (!world_mode_active() || !world_menu_endless_campaign_loaded() || replay.load_enable)
         return;
     if (world_attract_active())
@@ -1754,16 +1861,23 @@ void world_autosave(const char *why)
     }
     if (slot < 0)
         slot = (free_slot >= 0) ? free_slot : slots;
-    if (!SaveManager_FillSlot(slot, name) || !SaveManager_Save(slot))
+    if (!SaveManager_FillSlot(slot, name))
     {
-        WARNLOG("Endless Mode: autosave (%s) to slot %d failed", why, slot);
-        server_admin_log("error", "Saving the world (%s) to slot %d failed", why, slot);
+        wm_autosave_said(false, why, name, slot);
         return;
     }
-    SYNCLOG("Endless Mode: autosaved (%s) as \"%s\" in slot %d", why, name, slot);
-    server_admin_log("save", "The world is saved (%s): \"%s\" in slot %d", why, name, slot);
-    if (netstate_dedicated())
-        world_menu_write_index();
+    if (wm_autosave_in_background(why) && SaveManager_SaveInBackground(slot))
+    {
+        wm_autosave_bg.pending = true;
+        snprintf(wm_autosave_bg.why, sizeof(wm_autosave_bg.why), "%s", why);
+        snprintf(wm_autosave_bg.name, sizeof(wm_autosave_bg.name), "%s", name);
+        wm_autosave_bg.slot = slot;
+        SYNCLOG("Endless Mode: autosave (%s) to slot %d is being written on its own thread; it held the game %.1f ms", why,
+            slot, (double)(get_time_tick_ns() - began) / 1e6);
+        wm_autosave_check(slot);
+        return; /* (world_autosave_poll says how it went, a second or so from now) */
+    }
+    wm_autosave_said(SaveManager_Save(slot), why, name, slot);
 }
 
 /******************************************************************************/

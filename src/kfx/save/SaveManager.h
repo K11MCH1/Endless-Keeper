@@ -28,6 +28,24 @@ extern "C" {
 /******************************************************************************/
 /** Saves the running game in a slot. fill the slot's entry first (SaveManager_FillSlot). */
 int SaveManager_Save(int slot);
+
+/** A save being written on its own thread (SaveManager_SaveInBackground). */
+enum SaveBackgroundState {
+    SBg_None = 0,   /* none begun, or the last one's result has been taken */
+    SBg_Busy,       /* still being built or written */
+    SBg_Done,       /* written */
+    SBg_Failed      /* not written (the log says why) */
+};
+/** Saves the running game in a slot without holding the game up for it: what the save is made of is copied now, and
+ *  the file is built and written on another thread (building it takes most of a second in an endless world). Fill
+ *  the slot's entry first. False when it can't be done now - no memory for the copy, the last such save still being
+ *  written - and nothing was begun: save with SaveManager_Save then. One at a time. */
+int SaveManager_SaveInBackground(int slot);
+/** How the save begun with SaveManager_SaveInBackground stands. A finished one's result is given once. Main thread. */
+enum SaveBackgroundState SaveManager_BackgroundPoll(void);
+/** Waits for a save that is still being written. Its result stays for SaveManager_BackgroundPoll. Saving, loading
+ *  and a new config baseline wait by themselves. */
+void SaveManager_BackgroundWait(void);
 /** Loads a slot. A refused load changes nothing; see SaveLoadOutcome. *why says why it was refused. */
 enum SaveLoadOutcome SaveManager_Load(int slot, enum SaveCheckResult *why);
 /** Cheap check of a slot's file: header, chunk headers and title. detail may be NULL. */
@@ -89,6 +107,9 @@ enum SaveResult SaveManager_ReadReplayHeader(TbFileHandle file, struct Catalogue
 class SaveManager {
 public:
     bool Save(int slot);
+    bool SaveInBackground(int slot);
+    enum SaveBackgroundState BackgroundPoll();
+    void BackgroundWait();
     enum SaveLoadOutcome Load(int slot, SaveCheckResult *why);
     enum SaveCheckResult Check(int slot, char *detail, size_t detail_len);
     enum SaveCheckResult Verify(int slot, char *detail, size_t detail_len);

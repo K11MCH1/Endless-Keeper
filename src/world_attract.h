@@ -39,6 +39,8 @@ void world_attract_configure(const char *shared_name);
 int world_attract_active(void);
 /** Every world turn: the director. */
 void world_attract_turn(void);
+/** A step of the start (any run; cheap): the background's run writes them all in one log line when its first scene shows. */
+void world_attract_mark(const char *what);
 /** A drawn frame (RGBA; bottom_up: its first row is the picture's last). Any thread. */
 void world_attract_frame(const unsigned char *rgba, int width, int height, int bottom_up);
 

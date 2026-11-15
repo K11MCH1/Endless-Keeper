@@ -72,6 +72,10 @@ TbBool world_menu_endless_campaign_loaded(void);
 
 /** Autosave of an endless run, in its own slot: at dawn and when the player quits to the menu. */
 void world_autosave(const char *why);
+/** The dawn autosave is written on its own thread: every world turn, says how it went once it is written. */
+void world_autosave_poll(void);
+/** Waits for an autosave still being written, and says how it went (the world or the game is ending). */
+void world_autosave_finish(void);
 int world_menu_slot_for_seed(const char *seed);
 int world_menu_new_world_state(void);
 void world_menu_write_index(void);

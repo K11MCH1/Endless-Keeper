@@ -72,6 +72,7 @@
 #endif
 
 #include "world_stream.h"
+#include "world_attract.h"
 #include "post_inc.h"
 
 extern TbBool force_player_num;
@@ -229,9 +230,12 @@ static TbBool init_level(void)
     sound_restore_to_campaign_snapshot();
     // Load configs which may have per-campaign part, and can even be modified within a level
     level_load_time_phase(LevelLoadTime_Sprites);
+    world_attract_mark("level");
     init_custom_sprites(get_selected_level_number());
     level_load_time_phase(LevelLoadTime_Configs);
+    world_attract_mark("level sprites");
     load_stats_files();
+    world_attract_mark("level configs");
     level_load_time_phase(LevelLoadTime_GameSetup);
     check_and_auto_fix_stats();
     // Config is fully loaded and fixed up here, and the level script hasn't run
@@ -272,7 +276,9 @@ static TbBool init_level(void)
         show_onscreen_msg(200,"%s: No Script %d", get_string(GUIStr_Error), level);
         JUSTMSG("Unable to load script level %d from %s", level, campaign.name);
     }
+    world_attract_mark("map");
     world_level_start();
+    world_attract_mark("world");
     level_load_time_phase(LevelLoadTime_Navigation);
     init_navigation();
     level_load_time_phase(LevelLoadTime_GameSetup);

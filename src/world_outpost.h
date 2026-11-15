@@ -49,6 +49,11 @@ struct OutpostOverlay {
 int world_outpost_overlay(int32_t cx, int32_t cy, struct OutpostOverlay *ov);
 /** Is there an outpost (or its way in) in this box of world slabs? */
 TbBool world_outpost_in_box(int64_t x1, int64_t y1, int64_t x2, int64_t y2);
+/** A new start's heart counts as not yet there when a stronghold that may reach either of two boxes of world slabs
+ *  (x1, y1, x2, y2: the ground that used to be made before the heart's own chunk) is sized; until the turn given,
+ *  or world_outpost_heart_here. */
+void world_outpost_heart_late(PlayerNumber plyr_idx, const int64_t above[4], const int64_t beside[4], GameTurn until);
+void world_outpost_heart_here(PlayerNumber plyr_idx);
 /** Test hook (KFX_WORLD_OPSURVEY=range): decides every outpost region within range slabs of the start and logs how
  *  many have one and the biomes they stand in. */
 void world_outpost_survey(int64_t range);

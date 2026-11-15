@@ -28,6 +28,7 @@
 #include "thing_objects.h"
 #include "thing_data.h"
 #include "thing_list.h"
+#include "thing_traps.h"
 #include "thing_effects.h"
 #include "creature_control.h"
 #include "map_events.h"
@@ -55,6 +56,11 @@
 #include "world_seasons.h"
 #include "world_watchfire.h"
 #include "world_dark.h"
+#include "world_wallbreak.h"
+#include "net_state.h"
+#include "net_game.h"
+#include "player_utils.h"
+#include "config_magic.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -325,9 +331,11 @@ void world_progress_request(int mode)
 
 static void hell_hound_entrance(void);
 static TbBool wpr_hound_check; /* (defined with relock_hell_hounds) */
+static TbBool wpr_trap_check; /* (defined with repair_trap_looks) */
 void world_progress_level_start(void)
 {
     world_hand_reset(); /* nobody is hurried in a new level */
+    world_wallbreak_reset();
     memset(game.world_room_level, 0, sizeof(game.world_room_level));
     memset(game.world_room_allowed, 0, sizeof(game.world_room_allowed));
     memset(game.world_room_researching, 0, sizeof(game.world_room_researching));
@@ -341,6 +349,7 @@ void world_progress_level_start(void)
     wpr_kit_given = false;
     wpr_kit_players = pmask_none();
     wpr_hound_check = true;
+    wpr_trap_check = true;
     if ((wpr_mode > 0) && (book_model <= 0))
     {
         WARNLOG("World progress: no RESEARCH_BOOK object in this map pack; progression off");
@@ -498,12 +507,13 @@ void world_progress_new_player(PlayerNumber plyr_idx)
 
 /******************************************************************************/
 /* creatures (2026-11-07): the ones a room locks wait for that room (stock attraction wants it built); the
-   others come with portals: owning one unlocks the creatures of its biome, where the campaign has them */
+   others come with portals: owning one unlocks the creatures of its biome, where the campaign has them.
+   Flies, Beetles and Spiders (the user, 2026-11-15) come from any portal: no biome holds them back, only the rooms
+   their entrance asks for (none, a Lair of 1, a Hatchery and a Lair of 9) - wpr_free_creatures */
 #define WPR_BIOME(b) (1u << (b))
+static const char *const wpr_free_creatures[] = {"FLY", "BUG", "SPIDER"};
+#define WPR_FREE_CREATURES ((int)(sizeof(wpr_free_creatures) / sizeof(wpr_free_creatures[0])))
 static const struct { const char *name; uint32_t biomes; } wpr_portal_creatures[] = {
-    {"FLY",        WPR_BIOME(WgB_Earthen) | WPR_BIOME(WgB_Flooded)},
-    {"BUG",        WPR_BIOME(WgB_Earthen) | WPR_BIOME(WgB_Sandstone)},
-    {"SPIDER",     WPR_BIOME(WgB_Rocky) | WPR_BIOME(WgB_Frozen) | WPR_BIOME(WgB_Ruins)},
     {"BILE_DEMON", WPR_BIOME(WgB_Rocky) | WPR_BIOME(WgB_Volcanic) | WPR_BIOME(WgB_Ruins)},
     {"DRAGON",     WPR_BIOME(WgB_Volcanic) | WPR_BIOME(WgB_Crystal) | WPR_BIOME(WgB_Sandstone)},
     {"HELL_HOUND", WPR_BIOME(WgB_Volcanic)}, /* 2026-11-12: with a Lair of 9, not a Scavenger Room */
@@ -1451,6 +1461,66 @@ static void give_boon(PlayerNumber plyr_idx, int grade, uint64_t roll)
 }
 
 /** The options of a book: one from the highest open tier, one of the book's biome, one more; distinct. */
+/* A book's kind (the user, 2026-11-15): drawn first, by chance, then the book's choices are all of that kind. Rooms,
+   spells (keeper powers), traps (with doors: both are the Workshop's), duplicates; spells only once the keeper has the
+   Library, traps and doors only once it has the Workshop. A kind with nothing left to teach gives its chance to the
+   others. */
+enum WprBookKind { WBK_Room, WBK_Spell, WBK_Trap, WBK_Duplicate, WBK_COUNT };
+static const int wbk_chance[WBK_COUNT] = {40, 30, 20, 10};
+static const char *const wbk_names[WBK_COUNT] = {"rooms", "spells", "traps and doors", "duplicates"};
+#define WPR_WORKSHOP 2
+
+static int wbk_of(int i)
+{
+    if (i >= WPR_ITEMS)
+        return WBK_Duplicate;
+    switch (wpr_items[i].kind)
+    {
+    case WprK_Power: return WBK_Spell;
+    case WprK_Trap:
+    case WprK_Door: return WBK_Trap;
+    default: return WBK_Room;
+    }
+}
+
+/** Keeps only the open items of one kind, drawn by wbk_chance among the kinds the keeper may get; returns how many
+ *  are left (0: no kind it may get has anything). */
+static int book_kind_filter(PlayerNumber plyr_idx, int *open, int n, uint64_t roll)
+{
+    const struct WprPlayer *wp = &wpr_players[plyr_idx];
+    const TbBool library = (wp->unlocked & ((uint64_t)1 << WPR_LIBRARY)) || item_had(plyr_idx, WPR_LIBRARY);
+    const TbBool workshop = (wp->unlocked & ((uint64_t)1 << WPR_WORKSHOP)) || item_had(plyr_idx, WPR_WORKSHOP);
+    int count[WBK_COUNT] = {0};
+    for (int k = 0; k < n; k++)
+        count[wbk_of(open[k])]++;
+    if (!library)
+        count[WBK_Spell] = 0;
+    if (!workshop)
+        count[WBK_Trap] = 0;
+    int total = 0;
+    for (int b = 0; b < WBK_COUNT; b++)
+        total += (count[b] > 0) ? wbk_chance[b] : 0;
+    if (total <= 0)
+        return 0;
+    int pick = (int)(wpr_mix(roll ^ 0x4B494E44ULL) % (uint64_t)total), kind = 0;
+    for (int b = 0; b < WBK_COUNT; b++)
+    {
+        if (count[b] <= 0)
+            continue;
+        kind = b;
+        if (pick < wbk_chance[b])
+            break;
+        pick -= wbk_chance[b];
+    }
+    int m = 0;
+    for (int k = 0; k < n; k++)
+        if (wbk_of(open[k]) == kind)
+            open[m++] = open[k];
+    SYNCLOG("World progress: player %d's book is of %s (%d of them open; library %d, workshop %d)", (int)plyr_idx,
+        wbk_names[kind], m, (int)library, (int)workshop);
+    return m;
+}
+
 static int choose_options(const int *open, int n, int biome, uint64_t roll, int *opt)
 {
     int count = 0;
@@ -1580,8 +1650,14 @@ TbBool world_progress_activate(struct Thing *thing, struct PlayerInfo *player)
         unlock_item(plyr_idx, WPR_TRAINING, &pos);
         return true;
     }
+    const int nk = book_kind_filter(plyr_idx, open, n, roll);
+    if (nk == 0)
+    {
+        give_boon(plyr_idx, grade, roll); /* nothing of a kind it may get yet */
+        return true;
+    }
     int opt[3];
-    const int k = choose_options(open, n, biome, roll, opt);
+    const int k = choose_options(open, nk, biome, roll, opt);
     static int automatic = -1;
     if (automatic < 0)
         automatic = ((getenv("KFX_WORLD_PROGRESS") != NULL) && (strcmp(getenv("KFX_WORLD_PROGRESS"), "auto") == 0)) ? 1 : 0;
@@ -2226,15 +2302,75 @@ static void relock_hell_hounds(void)
     }
 }
 
+/** Worlds begun before 2026-11-15 locked Flies, Beetles and Spiders until a portal of their biomes: they are allowed
+ *  again for every keeper who got the kit (wpr_free_creatures). Once after each start or load, with the Hell Hounds. */
+static void unlock_free_creatures(void)
+{
+    for (int k = 0; k < WPR_FREE_CREATURES; k++)
+    {
+        const long model = get_id(creature_desc, wpr_free_creatures[k]);
+        if ((model <= 0) || (model >= game.conf.crtr_conf.model_count))
+            continue;
+        for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+        {
+            if (!pmask_has(wpr_kit_players, p) || !world_player_is_human(p) || !player_exists(get_player(p)))
+                continue;
+            struct Dungeon *dungeon = get_players_num_dungeon(p);
+            if (dungeon_invalid(dungeon) || dungeon->creature_allowed[model])
+                continue;
+            dungeon->creature_allowed[model] = 1;
+            SYNCLOG("World progress: player %d's portals bring %s in any biome now", (int)p, wpr_free_creatures[k]);
+        }
+    }
+}
+
+/** Until 2026-11-15 the world gave a trap it brought back its charges without the look of an armed trap, so the
+ *  outposts' traps (and a keeper's own, once its ground had been put away and brought back) were drawn see-through,
+ *  as empty traps are. New ones are right from the start (world_stream.c); the ones a save still holds are put right
+ *  here, once after each start or load: a trap with charges gets the look the game gives it when it is armed. */
+static TbBool wpr_trap_check = true;
+static void repair_trap_looks(void)
+{
+    const struct StructureList *slist = get_list_for_thing_class(TCls_Trap);
+    long i = slist->index, guard = 0;
+    int charged = 0, mended = 0;
+    while ((i != 0) && (guard++ <= THINGS_COUNT))
+    {
+        struct Thing *traptng = thing_get(i);
+        if (thing_is_invalid(traptng))
+            break;
+        i = traptng->next_of_class;
+        if (traptng->trap.num_shots == 0)
+            continue; /* empty: see-through is its look */
+        charged++;
+        const struct TrapConfigStats *trapst = get_trap_model_stats(traptng->model);
+        if ((traptng->rendering_flags & TRF_Transpar_Flags) == (trapst->transparency_flag & TRF_Transpar_Flags))
+            continue;
+        set_trap_shots(traptng, traptng->trap.num_shots);
+        mended++;
+    }
+    if (charged > 0)
+        SYNCLOG("World: %d traps with charges on the loaded ground; %d of them looked empty and look armed again", charged,
+            mended);
+}
+
+static void wimp_test_turn(void);
 void world_progress_turn(void)
 {
+    wimp_test_turn();
     if (world_mode_active() && ((game.play_gameturn % 64) == 2))
     {
         ban_powers();
+        if (wpr_trap_check)
+        {
+            wpr_trap_check = false;
+            repair_trap_looks();
+        }
         if (wpr_hound_check && world_progress_active())
         {
             wpr_hound_check = false;
             relock_hell_hounds();
+            unlock_free_creatures();
         }
     }
     wp_poison_turn();
@@ -2243,6 +2379,7 @@ void world_progress_turn(void)
     world_hand_test_turn();
     world_watchfire_turn();
     world_dark_turn();
+    world_wallbreak_turn(); /* Beetles and raid Tunnellers break fortified walls */
     if (!world_progress_active())
         return;
     test_books();
@@ -2339,6 +2476,7 @@ TbBool world_progress_load(const uint8_t *buf, size_t len)
     const int mode = buf[8], count = buf[9];
     wpr_kit_given = true; /* a loaded run had its kit long ago */
     wpr_hound_check = true; /* (see relock_hell_hounds) */
+    wpr_trap_check = true; /* (see repair_trap_looks) */
     wpr_kit_players = pmask_none();
     if (len < 10 + (size_t)count * sizeof(struct WprSaved))
         return false;
@@ -2783,3 +2921,96 @@ void world_progress_present(void)
 #ifdef __cplusplus
 }
 #endif
+
+/******************************************************************************/
+/* Imps (the user, 2026-11-15): at most WORLD_MAX_IMPS a keeper; Create Imp at that many is refused with a word in the
+   notifications. */
+
+#define WIMP_TEXT "You have reached the max allowed imps."
+#define WIMP_NOTE_MARK "\x01IC"
+
+int world_imp_count(PlayerNumber plyr_idx)
+{
+    const struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
+    return dungeon_invalid(dungeon) ? 0 : (int)dungeon->num_active_diggers;
+}
+
+/** On this machine: the refusal in the notifications, once (clicking again keeps the one there, for longer). */
+static void wimp_tell_here(int power_kind)
+{
+    for (int i = 0; i < game.active_messages_count; i++)
+        if ((game.messages[i].target_idx == my_player_number) && (strcmp(game.messages[i].text, WIMP_TEXT) == 0))
+        {
+            game.messages[i].expiration_turn = get_gameturn() + GUI_MESSAGES_DELAY;
+            return;
+        }
+    targeted_message_add(MsgType_KeeperSpell, power_kind, my_player_number, GUI_MESSAGES_DELAY, "%s", WIMP_TEXT);
+}
+
+TbBool world_imp_cap_refuses(PlayerNumber plyr_idx, int power_kind)
+{
+    if (!world_mode_active() || (plyr_idx < 0) || (plyr_idx >= PLAYERS_COUNT))
+        return false;
+    const struct PowerConfigStats *powerst = get_power_model_stats(power_kind);
+    if ((powerst == NULL) || (powerst->creature_model != get_players_special_digger_model(plyr_idx)))
+        return false;
+    const int imps = world_imp_count(plyr_idx);
+    if (imps < WORLD_MAX_IMPS)
+        return false;
+    SYNCLOG("World: player %d has %d Imps (at most %d): Create Imp refused", (int)plyr_idx, imps, WORLD_MAX_IMPS);
+    if (plyr_idx == my_player_number)
+        wimp_tell_here(power_kind);
+    else if (netstate_is_server())
+    {
+        /* the keeper plays on another machine: the server tells it (world_imp_net_notice there) */
+        const NetUserId u = get_player_primary_user(get_player(plyr_idx));
+        if ((u > SERVER_ID) && (u < MAX_NET_USERS))
+        {
+            char text[16];
+            snprintf(text, sizeof(text), WIMP_NOTE_MARK "%d", (int)power_kind);
+            server_admin_notice(u, text);
+        }
+    }
+    return true;
+}
+
+/** Test hook KFX_WORLD_IMPTEST=T: from turn T, every 20 turns, player 0 casts Create Imp (free) beside its heart, ten
+ *  times; each try is logged with the Imp count before and after. */
+static void wimp_test_turn(void)
+{
+    static long at = -2;
+    if (at == -2)
+    {
+        const char *v = getenv("KFX_WORLD_IMPTEST");
+        at = (v != NULL) ? atol(v) : -1;
+    }
+    const long t = (long)game.play_gameturn - at;
+    if ((at < 0) || (t < 0) || (t > 200) || ((t % 20) != 0))
+        return;
+    struct Thing *heartng = get_player_soul_container(PLAYER0);
+    if (!thing_exists(heartng))
+        return;
+    const int before = world_imp_count(PLAYER0);
+    get_player(PLAYER0)->power_of_cooldown_turn = 0;
+    const TbResult r = magic_use_power_on_subtile(PLAYER0, PwrK_MKDIGGER, 0, heartng->mappos.x.stl.num,
+        heartng->mappos.y.stl.num + 2, PwCast_None, PwMod_CastForFree);
+    SYNCLOG("World imp test: try %ld: %d Imps before, %d after (%s)", t / 20 + 1, before, world_imp_count(PLAYER0),
+        (r == Lb_FAIL) ? "refused" : "made");
+}
+
+TbBool world_imp_net_notice(const char *text)
+{
+    if ((text == NULL) || (strncmp(text, WIMP_NOTE_MARK, 3) != 0))
+        return false;
+    wimp_tell_here(atoi(text + 3));
+    return true;
+}
+
+GoldAmount world_level_scaled_gold(GoldAmount base, int exp_level)
+{
+    int64_t v = (int64_t)base * 10000; /* in ten-thousandths, so that small wages grow too */
+    for (int i = 0; i < exp_level; i++)
+        v = v * 102 / 100;
+    v = (v + 5000) / 10000;
+    return (GoldAmount)((v > 32767) ? 32767 : v); /* (as the game's own formula saturates it) */
+}

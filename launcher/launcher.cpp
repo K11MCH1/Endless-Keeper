@@ -523,7 +523,13 @@ static void check_updates()
     std::thread([] {
         std::vector<Release> list;
         std::string why;
+        const Uint64 asked_at = SDL_GetTicks();
         const bool ok = fetch_releases(REPO, list, why);
+        {
+            char line[96];
+            snprintf(line, sizeof(line), "Update check: %s in %d ms", ok ? "answered" : "failed", (int)(SDL_GetTicks() - asked_at));
+            engine_view_note(line);
+        }
         std::lock_guard<std::mutex> lock(g_mx);
         if (ok)
         {
@@ -1405,6 +1411,7 @@ int main(int, char **)
         while (!g_game_dir.empty() && ((g_game_dir.back() == L'\\') || (g_game_dir.back() == L'/')))
             g_game_dir.pop_back();
     }
+    start_mark("main");
     DeleteFileW((g_self_exe + L".old").c_str()); /* the launcher an update replaced */
     {
         /* and the files it had in use then, which the update renamed out of the way */
@@ -1430,6 +1437,7 @@ int main(int, char **)
         g_lcfg.save();
     }
     load_language(g_lcfg.get("LAUNCHER_LANGUAGE", "en"));
+    start_mark("config and language");
     if (opt_play)
     {
         const std::wstring exe = game_exe();
@@ -1445,20 +1453,26 @@ int main(int, char **)
             return 0;
         }
     }
+    /* the background's game first: its load is most of the wait for the window, and needs nothing of the launcher's */
+    const bool battle_started = !opt_no_battle && engine_view_start(game_exe(), g_game_dir);
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
+        engine_view_shutdown();
         MessageBoxA(nullptr, SDL_GetError(), "Endless Keeper", MB_ICONERROR);
         return 1;
     }
+    start_mark("SDL");
     const float display_scale = std::max(1.0f, SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay()));
     g_window = SDL_CreateWindow("Endless Keeper", (int)(1180 * display_scale), (int)(720 * display_scale),
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
     g_renderer = (g_window != nullptr) ? SDL_CreateRenderer(g_window, nullptr) : nullptr;
     if (g_renderer == nullptr)
     {
+        engine_view_shutdown();
         MessageBoxA(nullptr, SDL_GetError(), "Endless Keeper", MB_ICONERROR);
         return 1;
     }
+    start_mark("window and renderer");
     SDL_SetWindowMinimumSize(g_window, (int)(640 * display_scale), (int)(480 * display_scale));
     SDL_SetRenderVSync(g_renderer, 1);
     SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
@@ -1494,11 +1508,16 @@ int main(int, char **)
             io.Fonts->AddFontFromFileTTF(narrow(std::wstring(win) + name).c_str(), 17.0f, &merge);
         }
     }
+    start_mark("fonts");
     ImGui_ImplSDL3_InitForSDLRenderer(g_window, g_renderer);
     ImGui_ImplSDLRenderer3_Init(g_renderer);
     g_header = load_header();
-    g_battle = !opt_no_battle && engine_view_init(g_renderer, game_exe(), g_game_dir);
+    start_mark("header");
+    g_battle = battle_started;
+    if (g_battle)
+        engine_view_attach(g_renderer);
     list_resolutions();
+    start_mark("resolutions");
     {
         const char *test = getenv("EKL_TEST");
         std::string spec = (test != nullptr) ? test : "";
@@ -1532,6 +1551,7 @@ int main(int, char **)
         std::lock_guard<std::mutex> lock(g_mx);
         g_up = UP_FAILED;
     }
+    start_mark("update check started");
     /* the window comes when the game behind it has its first scene (a short wait, and no longer than 12 s) */
     bool window_shown = false;
     const Uint64 opened_at = SDL_GetTicks();
@@ -1573,11 +1593,14 @@ int main(int, char **)
             if (!g_battle || engine_view_ready() || (SDL_GetTicks() - opened_at > 12000))
             {
                 window_shown = true;
+                start_mark(engine_view_ready() ? "background ready" : "no background yet");
                 if (!t_hidden)
                 {
                     SDL_ShowWindow(g_window);
                     SDL_RaiseWindow(g_window);
                 }
+                start_mark("window shown");
+                engine_view_note(start_timing_line().c_str());
                 last = SDL_GetPerformanceCounter();
             } else
             {

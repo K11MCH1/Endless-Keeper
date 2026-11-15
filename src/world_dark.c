@@ -57,10 +57,13 @@ static uint32_t dk_warned_day[PLAYERS_MAX];
 static uint16_t dk_taken[PLAYERS_MAX]; /* slabs taken back in this chunk's pass, by keeper */
 
 /** A word to a keeper wherever it plays: on this machine (the chat box, or the messages), or as the server's notice
- *  to its joined client (which shows it in its chat box or messages). */
+ *  to its joined client (which shows it in its chat box or messages). Not shown any more (the user, 2026-11-15:
+ *  "Remove the notifications. They are too spammy."): only the log has it. */
 static void tell_keeper(PlayerNumber p, const char *text)
 {
     SYNCLOG("World: the dark, to player %d: %s", (int)p, text);
+    if (getenv("KFX_WORLD_DARKTELL") == NULL) /* test switch: shown as before */
+        return;
     if (is_my_player_number(p) && !netstate_dedicated())
     {
         if (chat_box_active())

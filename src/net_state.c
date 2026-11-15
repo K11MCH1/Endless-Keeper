@@ -3905,6 +3905,7 @@ static void client_apply(const uint8_t *data, size_t len)
 {
     struct NsReader r = {data, data + len, false};
     struct NsHeader h;
+    memset(&h, 0, sizeof(h)); /* (a record shorter than its header: no keyframe flag and turn 0, not whatever was here) */
     rd_get(&r, &h, sizeof(h));
     const TbBool keyframe = (h.flags & NsF_Keyframe) != 0;
     if (keyframe)
@@ -4293,7 +4294,10 @@ static void client_play_events(struct NsReader *r)
                 return;
             struct Thing *thing = thing_get(e.thing_idx);
             if (thing_exists(thing))
+            {
                 thing_play_sample(thing, e.smptbl_idx, e.pitch, e.fil1D, e.ctype, e.flags, e.priority, e.loudness);
+                world_test_note_sample(e.smptbl_idx); /* test hook KFX_WORLD_TESTLIQUID */
+            }
             break;
         }
         case NsE_PlayerMessage:

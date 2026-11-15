@@ -22,6 +22,7 @@
 #include "globals.h"
 #include "bflib_basics.h"
 #include "bflib_datetm.h"
+#include "kfx/save/SaveManager.h"
 #include "post_inc.h"
 
 #include <stdlib.h>
@@ -36,6 +37,8 @@ struct Configs *conf_baseline = NULL;
 
 void take_conf_baseline(void)
 {
+    /* (a save still being written on its own thread reads the old baseline: it finishes first) */
+    SaveManager_BackgroundWait();
     if (conf_baseline == NULL)
         conf_baseline = (struct Configs *)malloc(sizeof(struct Configs));
     if (conf_baseline != NULL)

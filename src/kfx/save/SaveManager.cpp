@@ -55,12 +55,18 @@
 #include "thing_creature.h"
 #include "kfx/platform/IPlatform.h"
 #include "world_stream.h"
+#include "bflib_datetm.h"
+#include "kfx_jobs.h"
 #include "post_inc.h"
 
 #include <cstdlib>
 #include <cstring>
 
+#include <algorithm>
 #include <memory>
+#include <string>
+
+#include <SDL3/SDL.h>
 
 #include "kfx/save/SaveManager_Internal.h"
 #include "kfx/save/core/save_bytes.h"
@@ -82,12 +88,210 @@ void set_detail(char *detail, size_t detail_len, const char *text)
 
 /******************************************************************************/
 
+/******************************************************************************/
+/* A save written on its own thread. Building a savegame of an endless world takes most of a second (2026-11-13: the
+ * 124 MB game record 0.5 s to encode and 0.27 s to pack), and the dawn autosave held every player's game up for it.
+ * The main thread now only makes what the save is made of - a copy of the game and the level data, the Lua state, the
+ * endless world's blob, the slot's entry - and a thread builds the file from those and writes it.
+ * The thread reads nothing of the running game: only what is in this struct, the save tables (constants), the
+ * config baseline (the main thread leaves it alone while a save is being written: take_conf_baseline waits) and,
+ * for a thing's union, the object config (read only). It writes no log line; what it found is logged when the main
+ * thread takes the result. */
+namespace {
+
+struct BackgroundSave {
+    SDL_Thread *thread = nullptr;
+    SDL_AtomicInt finished = {0};
+    /* what the save is made of (the thread only reads these) */
+    Game *game_copy = nullptr;
+    IntralevelData *ilvl_copy = nullptr;
+    const Configs *baseline = nullptr;
+    char *lua_data = nullptr;
+    uint32_t lua_len = 0;
+    unsigned char *world_data = nullptr;
+    uint32_t world_len = 0;
+    bool has_world = false;
+    CatalogueEntry centry = {};
+    IFileSystem *filesystem = nullptr;
+    std::string fname;
+    int slot = -1;
+    /* what came of it (written by the thread before it sets finished) */
+    bool ok = false;
+    char error[400] = "";
+    uint32_t file_len = 0;
+    int64_t held_ns = 0, copy_ns = 0, world_ns = 0, build_ns = 0, write_ns = 0;
+    /* a finished save's result, until it is taken */
+    enum SaveBackgroundState result = SBg_None;
+} background_save;
+
+/* The copy of the game, a block a job. */
+const size_t COPY_BLOCK = 2u << 20;
+struct CopyBlocks {
+    uint8_t *dst;
+    const uint8_t *src;
+    size_t len;
+};
+
+void copy_blocks_job(uint32_t start, uint32_t end, uint32_t, void *args)
+{
+    const CopyBlocks *blocks = static_cast<const CopyBlocks *>(args);
+    const size_t from = static_cast<size_t>(start) * COPY_BLOCK;
+    const size_t to = std::min(static_cast<size_t>(end) * COPY_BLOCK, blocks->len);
+    if (from < to)
+        memcpy(blocks->dst + from, blocks->src + from, to - from);
+}
+
+void background_save_free(BackgroundSave &save)
+{
+    free(save.game_copy);
+    free(save.ilvl_copy);
+    free(save.lua_data);
+    free(save.world_data);
+    save.game_copy = nullptr;
+    save.ilvl_copy = nullptr;
+    save.lua_data = nullptr;
+    save.world_data = nullptr;
+}
+
+int background_save_thread(void *)
+{
+    BackgroundSave &save = background_save;
+    /* (below the game's own thread: on a machine with one core free it works while the game waits for its next turn) */
+    SDL_SetCurrentThreadPriority(SDL_THREAD_PRIORITY_LOW);
+    const int64_t t0 = get_time_tick_ns();
+    SaveBufferOwner out;
+    SaveError err;
+    bool ok = true;
+    /* (the copy is not the running game, so Build leaves the endless world out: its blob, made with the copy, follows) */
+    if (savegame::Build(save.game_copy, save.ilvl_copy, save.baseline, save.lua_data, save.lua_len, &save.centry, &out,
+        &err) != SVR_Ok)
+    {
+        snprintf(save.error, sizeof(save.error), "can't build the save: %s", err.message);
+        ok = false;
+    }
+    if (ok && save.has_world && (save_chunk_add(&out, SCID_World, 0, save.world_data, save.world_len, false) != 0))
+    {
+        snprintf(save.error, sizeof(save.error), "can't build the save: out of memory");
+        ok = false;
+    }
+    const int64_t t1 = get_time_tick_ns();
+    if (ok && (save.filesystem->WriteAll(save.fname.c_str(), out.data, out.len) != FsStatus::Ok))
+    {
+        snprintf(save.error, sizeof(save.error), "the file could not be written");
+        ok = false;
+    }
+    save.build_ns = t1 - t0;
+    save.write_ns = get_time_tick_ns() - t1;
+    save.file_len = out.len;
+    save.ok = ok;
+    SDL_SetAtomicInt(&save.finished, 1);
+    return 0;
+}
+
+} // namespace
+
+bool SaveManager::SaveInBackground(int slot)
+{
+    BackgroundSave &save = background_save;
+    if (save.thread != nullptr)
+    {
+        if (!SDL_GetAtomicInt(&save.finished))
+            return false; /* the last one is still being written */
+        BackgroundWait();
+    }
+    if (!EnsureSlot(slot))
+        return false;
+    const int64_t t0 = get_time_tick_ns();
+    /* In the order a save made here takes them: the lights, the Lua state, the game, the endless world. */
+    light_export_system_state(&game.lightst);
+    size_t lua_len = 0;
+    save.lua_data = lua_get_serialised_data(&lua_len);
+    save.game_copy = static_cast<Game *>(malloc(sizeof(Game)));
+    save.ilvl_copy = static_cast<IntralevelData *>(malloc(sizeof(IntralevelData)));
+    if ((save.lua_data == nullptr) || (lua_len > INT32_MAX) || (save.game_copy == nullptr) || (save.ilvl_copy == nullptr))
+    {
+        background_save_free(save); /* (no memory for the copy, or no Lua state: a save made here says why) */
+        return false;
+    }
+    const int64_t t1 = get_time_tick_ns();
+    /* (the game is 138 MB: copied in blocks on the job threads, a third of the time one thread takes) */
+    CopyBlocks blocks = { reinterpret_cast<uint8_t *>(save.game_copy), reinterpret_cast<const uint8_t *>(&game), sizeof(Game) };
+    kfx_parallel_for(static_cast<uint32_t>((sizeof(Game) + COPY_BLOCK - 1) / COPY_BLOCK), 1, copy_blocks_job, &blocks);
+    memcpy(save.ilvl_copy, &intralvl, sizeof(IntralevelData));
+    const int64_t t2 = get_time_tick_ns();
+    save.has_world = world_mode_active();
+    save.world_len = 0;
+    if (save.has_world && !world_save_blob(&save.world_data, &save.world_len))
+    {
+        background_save_free(save);
+        return false;
+    }
+    save.copy_ns = t2 - t1;
+    save.world_ns = get_time_tick_ns() - t2;
+    save.lua_len = static_cast<uint32_t>(lua_len);
+    save.baseline = conf_baseline;
+    save.centry = catalogue_[slot];
+    save.filesystem = &Fs();
+    save.fname = prepare_file_fmtpath(FGrp_Save, SAVED_GAME_FILENAME, slot);
+    save.slot = slot;
+    save.ok = false;
+    save.error[0] = '\0';
+    save.result = SBg_None;
+    save.held_ns = get_time_tick_ns() - t0;
+    SDL_SetAtomicInt(&save.finished, 0);
+    save.thread = SDL_CreateThread(background_save_thread, "save", nullptr);
+    if (save.thread == nullptr)
+    {
+        background_save_free(save);
+        return false;
+    }
+    return true;
+}
+
+void SaveManager::BackgroundWait()
+{
+    BackgroundSave &save = background_save;
+    if (save.thread == nullptr)
+        return;
+    SDL_WaitThread(save.thread, nullptr);
+    save.thread = nullptr;
+    background_save_free(save);
+    if (save.ok)
+    {
+        UpdateLastFileAfterSave(save.slot);
+        api_event("GAME_SAVED");
+        SAVELOG("slot %d written on its own thread: the game was held %.1f ms for it (its copy %.1f, the endless world "
+            "%.1f); building %.1f ms, the file %.1f ms (%u bytes)", save.slot, (double)save.held_ns / 1e6,
+            (double)save.copy_ns / 1e6, (double)save.world_ns / 1e6, (double)save.build_ns / 1e6,
+            (double)save.write_ns / 1e6, (unsigned)save.file_len);
+    } else
+    {
+        SAVEWARN("can't write save file \"%s\": %s", save.fname.c_str(), save.error);
+    }
+    save.result = save.ok ? SBg_Done : SBg_Failed;
+}
+
+enum SaveBackgroundState SaveManager::BackgroundPoll()
+{
+    BackgroundSave &save = background_save;
+    if (save.thread != nullptr)
+    {
+        if (!SDL_GetAtomicInt(&save.finished))
+            return SBg_Busy;
+        BackgroundWait();
+    }
+    const enum SaveBackgroundState result = save.result;
+    save.result = SBg_None;
+    return result;
+}
+
 /**
  * Saves the game state file (savegame).
  * @note FillSlot() should be called before to fill level information.
  */
 bool SaveManager::Save(int slot)
 {
+    BackgroundWait(); /* (a save still being written on its own thread: this one comes after it) */
     if (!EnsureSlot(slot))
     {
         SAVEERR("can't save: slot index %d is out of range", slot);
@@ -284,6 +488,7 @@ static TbBool apply_game_kfxs(const char *fname, struct LoadedSave *loaded_save,
 
 enum SaveLoadOutcome SaveManager::Load(int slot_num, enum SaveCheckResult *why)
 {
+    BackgroundWait(); /* (a save still being written on its own thread may be this very slot's) */
     *why = SvChk_Loadable;
     if (!EnsureSlot(slot_num))
     {
@@ -431,6 +636,9 @@ SaveManager &GetSaveManager()
 extern "C" {
 
 int SaveManager_Save(int slot) { return GetSaveManager().Save(slot); }
+int SaveManager_SaveInBackground(int slot) { return GetSaveManager().SaveInBackground(slot); }
+enum SaveBackgroundState SaveManager_BackgroundPoll(void) { return GetSaveManager().BackgroundPoll(); }
+void SaveManager_BackgroundWait(void) { GetSaveManager().BackgroundWait(); }
 enum SaveLoadOutcome SaveManager_Load(int slot, enum SaveCheckResult *why) { return GetSaveManager().Load(slot, why); }
 enum SaveCheckResult SaveManager_Check(int slot, char *detail, size_t detail_len) { return GetSaveManager().Check(slot, detail, detail_len); }
 enum SaveCheckResult SaveManager_Verify(int slot, char *detail, size_t detail_len) { return GetSaveManager().Verify(slot, detail, detail_len); }

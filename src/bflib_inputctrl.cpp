@@ -39,6 +39,7 @@
 #include "keeperfx.hpp"
 #include <SDL3/SDL.h>
 #include "kfx/renderer/RendererManager.h" // RendererPhysicalWidth
+#include "world_attract.h"
 #include "post_inc.h"
 
 using namespace std;
@@ -224,7 +225,10 @@ void init_inputcontrol(void)
     keymap_sdl_to_bf.insert(pair<int, TbKeyCode>(SDLK_POWER, KC_POWER));
     keymap_sdl_to_bf.insert(pair<int, TbKeyCode>(SDLK_UNDO, KC_UNASSIGNED));
 
-    init_controller_input();
+    /* Endless Keeper: the launcher's hidden background takes no input: no gamepads (looking for them and reading their
+       table of mappings is a tenth of a second of its start) */
+    if (!world_attract_active())
+        init_controller_input();
     LbStopTextInput();
 }
 

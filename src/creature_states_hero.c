@@ -970,6 +970,10 @@ short good_doing_nothing(struct Thing *creatng)
     if (world_raid_hero_goes_home(creatng) || world_stronghold_hero_wanders(creatng)) {
         return 1;
     }
+    // Endless worlds: a raid's leader that went in on foot and has no way to the heart any more digs on
+    if (world_raid_leader_resume(creatng)) {
+        return 1;
+    }
     // Now go the standard hero path - find a target player
     PlayerNumber target_plyr_idx = cctrl->party.target_plyr_idx;
     if (target_plyr_idx != -1)
@@ -1426,6 +1430,10 @@ short tunneller_doing_nothing(struct Thing *creatng)
     if (get_gameturn() - cctrl->idle.start_gameturn <= 1) {
         return 1;
     }
+    // Endless worlds: a raid's leader goes on its way, round what it cannot dig (world_daynight.c)
+    if (world_raid_leader_send(creatng)) {
+        return 1;
+    }
     /* Sometimes we may have no target dungeon. In that case, destination dungeon
      * index is negative. */
     if (cctrl->party.target_plyr_idx == -1)
@@ -1605,7 +1613,11 @@ short tunnelling(struct Thing *creatng)
     struct SlabMap* slb = get_slabmap_for_subtile(creatng->mappos.x.stl.num, creatng->mappos.y.stl.num);
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     struct Coord3d* pos = &cctrl->moveto_pos;
-    if (slabmap_owner(slb) == cctrl->party.target_plyr_idx)
+    // Endless worlds: a raid's leader is led slab by slab round what it cannot dig (world_daynight.c)
+    const short led = world_raid_leader_leg(creatng);
+    if (led == 1)
+        return 1;
+    if ((led == 0) && (slabmap_owner(slb) == cctrl->party.target_plyr_idx))
     {
         internal_set_thing_state(creatng, CrSt_GoodDoingNothing);
         return 1;

@@ -284,8 +284,11 @@ void init_keeper(void)
     init_key_to_strings();
     // Load configs which may have per-campaign part, and even be modified within a level
     recheck_all_mod_exist();
+    world_attract_mark("engine");
     init_custom_sprites(SPRITE_LAST_LEVEL);
+    world_attract_mark("sprites");
     load_stats_files();
+    world_attract_mark("configs");
     check_and_auto_fix_stats();
     init_creature_scores();
     init_top_texture_to_cube_table();
@@ -380,12 +383,15 @@ short setup_game(void)
 
   // Now do more setup
   // Prepare the Game structure
+  world_attract_mark("game setup");
   clear_complete_game();
+  world_attract_mark("game cleared");
   // Moon phase calculation
   calculate_moon_phase(true,true);
   // Start the sound system
   if (!init_sound())
     WARNMSG("Sound system disabled.");
+  world_attract_mark("sound");
   // Note: for some reason, signal handlers must be installed AFTER
   // init_sound(). This will probably change when we'll move sound
   // to SDL - then we'll put that line earlier, before setup_game().
@@ -456,7 +462,9 @@ short setup_game(void)
   {
       if (flag_is_set(start_params.operation_flags, GOF_SingleLevel) && !(game_flags2 & (GF2_Connect | GF2_Server)))
           level_load_time_phase(LevelLoadTime_EngineStartup);
+      world_attract_mark("intro");
       display_loading_screen();
+      world_attract_mark("loading screen");
   }
   LbDataFreeAll(legal_load_files);
 
@@ -464,6 +472,7 @@ short setup_game(void)
   {
       if ( !initial_setup() )
         result = 0;
+      world_attract_mark("data files");
   }
 
   if (result == 1)
@@ -471,11 +480,13 @@ short setup_game(void)
     load_settings();
     if ( !setup_gui_strings_data() )
       result = 0;
+    world_attract_mark("strings");
   }
 
   if (result == 1)
   {
       init_keeper();
+      world_attract_mark("init_keeper");
       set_gamma(settings.gamma_correction, 0);
       set_music_volume(settings.music_volume);
       SetSoundMasterVolume(settings.sound_volume);
@@ -2203,13 +2214,28 @@ static TbBool command_line_is_dedicated(unsigned short argument_count, char *arg
     return false;
 }
 
+/** The launcher's hidden background game (-attract): it runs between the player's games, in the same folder. */
+static TbBool command_line_is_attract(unsigned short argument_count, char *argument_values[])
+{
+    for (int argument_index = 1; argument_index < argument_count; argument_index++) {
+        if (argument_values[argument_index] && (argument_values[argument_index][0] == '-' || argument_values[argument_index][0] == '/')) {
+            if (strcasecmp(argument_values[argument_index] + 1, "attract") == 0)
+                return true;
+        }
+    }
+    return false;
+}
+
 static const char* determine_log_filename(unsigned short argument_count, char *argument_values[])
 {
     for (int argument_index = 1; argument_index < argument_count; argument_index++) {
         if (argument_values[argument_index] && (argument_values[argument_index][0] == '-' || argument_values[argument_index][0] == '/')) {
             char* argument_name = argument_values[argument_index] + 1;
             if (strcasecmp(argument_name, "log") == 0 && argument_index + 1 < argument_count) {
-                remove("keeperfx.log");
+                /* endless: the launcher's background game has a log of its own and leaves keeperfx.log alone: it
+                   is the record of the game the player just left (it was gone as soon as the launcher came back) */
+                if (!command_line_is_attract(argument_count, argument_values))
+                    remove("keeperfx.log");
                 return argument_values[argument_index + 1];
             }
         }
@@ -2289,6 +2315,7 @@ int LbBullfrogMain(unsigned short argc, char *argv[])
     // Determine correct log file based on command line flags
     const char* selected_log_file_name = determine_log_filename(argc, argv);
     LbErrorLogSetup("/", selected_log_file_name, 5);
+    world_attract_mark("log");
     {
         /* the network log: appended (it keeps earlier runs), with real addresses and the time of every line */
         const TbBool dedicated = command_line_is_dedicated(argc, argv);
@@ -2313,14 +2340,17 @@ int LbBullfrogMain(unsigned short argc, char *argv[])
         LbErrorLogClose();
         return 0;
     }
+    world_attract_mark("config");
 
     LbIKeyboardOpen();
+    world_attract_mark("input");
     if (LbDataLoadAll(legal_load_files) != 0)
     {
         ERRORLOG("Error on allocation/loading of legal_load_files.");
         LbErrorLogClose();
         return 0;
     }
+    world_attract_mark("legal files");
     // Setup polyscans
     setup_bflib_render();
     // View the legal screen
@@ -2331,7 +2361,9 @@ int LbBullfrogMain(unsigned short argc, char *argv[])
         return 0;
     }
 
+    world_attract_mark("window");
     retval &= (RendererInit((RendererType)requested_renderer_type) != 0);
+    world_attract_mark("renderer");
     RendererSettings_Load();
     PlatformManager_SetWindowTitle(PROGRAM_NAME);
     LbSetIcon(1);
@@ -2362,10 +2394,12 @@ int LbBullfrogMain(unsigned short argc, char *argv[])
             dbc_initialized = 1;
         }
         load_unifont_files();
+        world_attract_mark("fonts");
     }
     if ( retval == 1 )
     {
         api_init_server();
+        world_attract_mark("game loop");
         game_loop();
         wnet_hub_stop(); /* Endless Keeper: a dedicated server's World List hub, and its router forward */
         LbNetwork_Stop();

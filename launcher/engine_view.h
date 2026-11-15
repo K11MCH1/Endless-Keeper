@@ -4,8 +4,11 @@
 struct SDL_Renderer;
 struct ImDrawList;
 
-/** Starts the game hidden as the launcher's background. False when it can't (the launcher draws a plain one). */
-bool engine_view_init(SDL_Renderer *renderer, const std::wstring &game_exe, const std::wstring &game_dir);
+/** Starts the game hidden as the launcher's background, first thing (it needs no window: its load is most of the wait
+    for the launcher's window). False when it can't (the launcher draws a plain one). */
+bool engine_view_start(const std::wstring &game_exe, const std::wstring &game_dir);
+/** The launcher's renderer is there: the background's pictures can be shown. */
+void engine_view_attach(SDL_Renderer *renderer);
 void engine_view_shutdown();
 /** Takes the game's newest frame; starts the hidden game again when it has ended. */
 void engine_view_update(float dt);
@@ -18,6 +21,9 @@ void engine_view_pause();
 void engine_view_resume();
 /** The hidden game has loaded and its first scene is on (the launcher's window waits for this, for a while). */
 bool engine_view_ready();
+/** A step of the launcher's start: milliseconds since its process began; start_timing_line() lists them all. */
+void start_mark(const char *what);
+std::string start_timing_line();
 /** A line in endlesskeeper-launcher.log, beside the game. */
 void engine_view_note(const char *text);
 /** What is going on in the picture, in a line. */

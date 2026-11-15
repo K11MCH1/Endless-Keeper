@@ -73,6 +73,7 @@
 #include "keeperfx.hpp"
 #include "world_misdeeds.h"
 #include "world_curtain.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -939,6 +940,12 @@ void redraw_display(void)
             {
                 pos_y = (8*units_per_pixel/16 << 3) + chat_line_spacing * game.active_messages_count;
             }
+        }
+        if (world_mode_active())
+        {
+            /* endless: the typing line is the first line in the view's corner; the messages stand under it */
+            int msg_upp = units_per_pixel;
+            message_world_place(&pos_x, &pos_y, &chat_units_per_px, &msg_upp);
         }
         LbTextDrawResized(pos_x, pos_y, chat_units_per_px, text);
     }

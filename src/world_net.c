@@ -1216,10 +1216,22 @@ static void hub_send_text(struct HubClient *c, const char *text)
 static void hub_send_names_all(void);
 static void hub_party_gone(struct HubClient *c);
 
+/* A text message that comes in several frames is put together here, one at a time for the whole hub (the buffer is
+   shared): hub_msg_of is the client whose message is under way. Before 2026-11-13 nothing said whose it was, so one
+   client's continuation frame was added to another's unfinished message and handled as its own. */
+static unsigned char hub_msg[HUB_IN_MAX];
+static size_t hub_msglen;
+static const struct HubClient *hub_msg_of;
+
 static void hub_drop(struct HubClient *c)
 {
     if (!c->used)
         return;
+    if (hub_msg_of == c)
+    {
+        hub_msg_of = NULL; /* its unfinished message goes with it: the slot's next client must not inherit it */
+        hub_msglen = 0;
+    }
     const int role = c->role;
     if (role == HubR_Player)
         hub_party_gone(c); /* its party and its invites end */
@@ -1724,8 +1736,6 @@ static void hub_handshake(struct HubClient *c)
 /** Whole frames in the input; text ones go to hub_handle. */
 static void hub_frames(struct HubClient *c)
 {
-    static unsigned char msg[HUB_IN_MAX];
-    static size_t msglen = 0;
     for (;;)
     {
         if (c->inlen < 2)
@@ -1776,18 +1786,28 @@ static void hub_frames(struct HubClient *c)
             }
         } else if ((op == 0x1) || (op == 0x0))
         {
-            if ((op == 0x1) && (msglen != 0))
-                msglen = 0;
-            if (msglen + len < sizeof(msg))
+            if (op == 0x1)
             {
-                memcpy(msg + msglen, payload, (size_t)len);
-                msglen += (size_t)len;
+                /* a new message: it is this client's (an unfinished one of anybody's is given up) */
+                hub_msglen = 0;
+                hub_msg_of = c;
             }
-            if (fin)
+            /* a continuation is a part only of this client's own message under way */
+            if (hub_msg_of == c)
             {
-                msg[msglen] = '\0';
-                hub_handle(c, (const char *)msg, msglen);
-                msglen = 0;
+                if (hub_msglen + len < sizeof(hub_msg))
+                {
+                    memcpy(hub_msg + hub_msglen, payload, (size_t)len);
+                    hub_msglen += (size_t)len;
+                }
+                if (fin)
+                {
+                    const size_t whole = hub_msglen;
+                    hub_msg[whole] = '\0';
+                    hub_msg_of = NULL;
+                    hub_msglen = 0;
+                    hub_handle(c, (const char *)hub_msg, whole);
+                }
             }
         }
         const size_t used = hl + mk + (size_t)len;
@@ -1802,6 +1822,8 @@ TbBool wnet_hub_start(int port)
 {
     wnet_hub_stop();
     memset(&H, 0, sizeof(H));
+    hub_msg_of = NULL;
+    hub_msglen = 0;
     for (int i = 0; i < HUB_CLIENTS_MAX; i++)
         H.c[i].s = ENET_SOCKET_NULL;
     H.listen = enet_socket_create(ENET_ADDRESS_TYPE_IPV4, ENET_SOCKET_TYPE_STREAM);

@@ -69,6 +69,9 @@ extern int chat_font_size;
 
 void message_update(void);
 void message_draw(void);
+/* endless worlds: message lines at this many sixteenths of the chat font's size (never below the font itself) */
+#define WORLD_MSG_SIZE 11
+void message_world_place(long *x, long *y, int *tx, int *upp);
 void zero_messages(void);
 void message_add(char type, short idx, const char *text);
 /** The message just added is a chat line from this player (an endless server shows the name, server_roles.c). */

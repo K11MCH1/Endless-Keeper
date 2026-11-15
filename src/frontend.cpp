@@ -2080,6 +2080,11 @@ void do_button_release_actions(struct GuiButton *gbtn, unsigned char *s, Gf_Btn_
       if (callback == NULL)
         do_sound_menu_click();
       gmnu->visual_state = 3;
+    } else if ((gbtn->parent_menu != NULL) && (callback == NULL) && (gbtn->gbtype != LbBtnT_EditBox))
+    {
+      /* endless: a button that only opens a menu clicks too (the side panel's Options button, the game's pause menu,
+         was silent: it opens its menu without a handler and without the flag above, which would also close the panel) */
+      do_sound_menu_click();
     }
   }
   SYNCDBG(17,"Finished");
