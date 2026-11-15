@@ -4002,12 +4002,15 @@ FrontendMenuState get_startup_menu_state(void)
   }
   else if ((game.mode_flags & MFlg_DemoMode) != 0)
   { // If starting up the game after intro
-    if (is_full_moon)
+    /* (a menu test, KFX_WORLD_MENU, goes straight to the main menu: the full-moon and birthday screens wait for a
+       click that an unattended test never gives) */
+    const TbBool menu_test = (getenv("KFX_WORLD_MENU") != NULL);
+    if (is_full_moon && !menu_test)
     {
         SYNCLOG("Full moon state selected");
         return FeSt_STORY_POEM;
     } else
-    if (get_team_birthday() != NULL)
+    if ((get_team_birthday() != NULL) && !menu_test)
     {
         SYNCLOG("Birthday state selected");
         return FeSt_STORY_BIRTHDAY;

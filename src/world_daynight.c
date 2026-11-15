@@ -60,6 +60,7 @@
 #include "net_game.h"
 #include "world_progress.h"
 #include "server_admin.h"
+#include "world_anniversary.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -1301,6 +1302,7 @@ void world_daynight_seat_started(PlayerNumber plyr_idx)
     if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
         return;
     dn_seat_first_day[plyr_idx] = (int32_t)world_day_number();
+    world_anniversary_seat_started(plyr_idx); /* a new dungeon: no anniversaries yet */
     SYNCLOG("World: player %d's dungeon counts its days from the world's day %d", (int)plyr_idx, (int)dn_seat_first_day[plyr_idx]);
 }
 
