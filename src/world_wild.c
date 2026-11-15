@@ -59,6 +59,7 @@
 #include "slab_data.h"
 #include "thing_stats.h"
 #include <limits.h>
+#include "world_hunt.h"
 #include "post_inc.h"
 
 #define WILD_CYCLE_TURNS 20     /* one spawn cycle a second */
@@ -301,6 +302,8 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
     const long model = get_id(creature_desc, list[k].name);
     if (model <= 0)
         return 0;
+    if (!world_hunt_pack_allowed((ThingModel)model, x, y))
+        return 0; /* The Hunt: a keeper's rank with the kind thins its packs near that keeper's Heart */
     const int group = list[k].min_group + wild_rand(rng, list[k].max_group - list[k].min_group + 1);
     const MapSlabCoord px = x, py = y;
     /* circles (world_circles.c): a pack is as strong as the circle it appears in */
@@ -914,6 +917,53 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
             " from player %d's heart, %s (night %ld, a burrow of %d slabs)", made, min(beetles, made), list[k].name, low, top,
             (int)x, (int)y, r, (int)pl->plyr[a], wg_biome_name(biome), night, ns);
     return made;
+}
+
+/** The Hunt (world_hunt.c): a wild kind's Alpha comes out of a burrow 24 to 60 slabs from a keeper's heart, levels above
+ *  its circle's packs, and digs for that keeper as a burrow pack's Beetle does. */
+struct Thing *world_wild_alpha(PlayerNumber plyr_idx, ThingModel model, int level_bonus)
+{
+    struct Thing *heart = find_players_dungeon_heart(plyr_idx);
+    if (!world_mode_active() || !thing_exists(heart) || (model <= 0))
+        return INVALID_THING;
+    const MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
+    struct WildRng rng = {wild_mix(world_seed() ^ ((uint64_t)game.play_gameturn * 0x9E3779B97F4A7C15ULL) ^ (uint64_t)model)};
+    for (int t = 0; t < 40; t++)
+    {
+        const int r = WILD_BURROW_MIN + wild_rand(&rng, ((t < 20) ? WILD_BURROW_MAX : WILD_BURROW_MIN + 12) - WILD_BURROW_MIN + 1);
+        const int dx = wild_rand(&rng, 2 * r + 1) - r;
+        int dy = (int)floor(sqrt((double)(r * r - dx * dx)) + 0.5);
+        if (wild_rand(&rng, 2) == 0)
+            dy = -dy;
+        const MapSlabCoord x = hx + dx, y = hy + dy;
+        if (!wild_earth_at(x, y) || !wild_earth_at(x + 1, y) || !wild_earth_at(x, y + 1))
+            continue;
+        wild_open_slab(x, y);
+        wild_open_slab(x + 1, y);
+        wild_open_slab(x, y + 1);
+        const int top = world_circles_level_at_slab(x, y, 1, "a wild Alpha");
+        struct Thing *thing = wild_spawn(&rng, model, x, y, top + level_bonus);
+        if (thing_is_invalid(thing))
+            return INVALID_THING;
+        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        cctrl->party.target_plyr_idx = plyr_idx;
+        cctrl->party.original_objective = WILD_HUNTER_MARK;
+        cctrl->party.objective = CHeroTsk_AttackEnemies;
+        for (int j = 0; j < WILD_MAX_DIGGERS; j++)
+        {
+            if (wild_digger[j].idx != 0)
+                continue;
+            memset(&wild_digger[j], 0, sizeof(wild_digger[j]));
+            wild_digger[j].idx = thing->index;
+            wild_digger[j].made = thing->creation_turn;
+            wild_digger[j].plyr = plyr_idx;
+            wild_digger[j].pack = ++wild_pack_serial;
+            wild_digger[j].next = game.play_gameturn + WILD_DIG_TURNS;
+            break;
+        }
+        return thing;
+    }
+    return INVALID_THING;
 }
 
 void world_wild_turn(void)

@@ -29,6 +29,9 @@ void world_wild_save(uint8_t *buf);
 TbBool world_wild_load(const uint8_t *buf, size_t len);
 /** The level (1-based) of a keeper's strongest creature; 1 for none. */
 int world_keeper_top_level(PlayerNumber plyr_idx);
+/** The Hunt: a wild kind's Alpha out of a burrow near a keeper, level_bonus above its circle's packs (it digs for the
+ *  keeper; INVALID_THING when no earth near the keeper would take a burrow). */
+struct Thing *world_wild_alpha(PlayerNumber plyr_idx, ThingModel model, int level_bonus);
 
 #ifdef __cplusplus
 }
