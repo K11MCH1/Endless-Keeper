@@ -115,6 +115,7 @@
 #include "world_pools.h"
 #include "room_entrance.h"
 #include "world_progress.h"
+#include "world_wars.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -161,6 +162,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_RAIDS 0x31584452u  /* "RDX1": the raids' owed first raid and fleeing clock */
 #define WORLD_EXTRA_AMENITY 0x31584D41u /* "AMX1": Amenity Mastery's bars */
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
+#define WORLD_EXTRA_WARS 0x31524157u    /* "WAR1": the keepers' Portal Wars (world_wars.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
 static void world_extras_reset(void);
@@ -5610,6 +5612,7 @@ static PlayerBitFlags make_seat_starts(void)
         st->dy = dy;
         pmask_add(&made, p);
         world_circles_player_reset(p); /* a new dungeon: only the first circle is breached */
+        world_wars_player_reset(p); /* and its wars are called off */
     }
     /* their ground comes once every new start has its place (a pair's two are in the same chunks) */
     for (int n = 0; n < W.stamp_count; n++)
@@ -9200,6 +9203,7 @@ void world_client_turn(void)
     world_colours_turn();
     world_progress_present();
     world_respawn_prompt_turn();
+    world_wars_local_turn();
     chat_box_turn();
     world_shots_hook();
     world_assist_hook();
@@ -9259,6 +9263,7 @@ void world_process_turn(void)
     world_colours_turn(); /* local presentation only */
     world_progress_present();
     world_respawn_prompt_turn();
+    world_wars_local_turn();
     chat_box_turn();
     world_shots_hook();
     world_mapdrag_hook();
@@ -9281,6 +9286,7 @@ void world_process_turn(void)
     world_daynight_turn();
     world_wild_turn();
     world_circles_turn();
+    world_wars_turn();
     world_misdeeds_turn();
     world_outposts_turn();
     world_testgold();
@@ -9658,6 +9664,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_CIRCLES, world_circles_save_size, world_circles_save, world_circles_load, world_circles_reset},
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
+    {WORLD_EXTRA_WARS, world_wars_save_size, world_wars_save, world_wars_load, world_wars_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))

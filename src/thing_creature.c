@@ -112,6 +112,7 @@
 #include "world_daynight.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
+#include "world_wars.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -3617,6 +3618,8 @@ struct Thing *kill_creature(struct Thing *creatng, struct Thing *killertng, Play
         output_message_far_from_thing(creatng, SMsg_BattleWon, MESSAGE_DURATION_BATTLE);
     }
     SYNCDBG(18, "Almost finished");
+    if (world_war_spare_fallen(creatng))
+        return INVALID_THING; /* endless worlds: a war's attacker goes home hurt (Portal Wars) */
     if (!creature_can_be_set_unconscious(creatng, killertng, flags))
     {
         if (!flag_is_set(flags, CrDed_NoEffects))

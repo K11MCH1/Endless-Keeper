@@ -45,6 +45,7 @@
 
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_wars.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1194,6 +1195,8 @@ HitPoints apply_damage_to_thing(struct Thing *thing, HitPoints dmg, PlayerNumber
     // If it's already dead, then don't interfere.
     if (thing->health < 0)
         return 0;
+    if (thing_is_dungeon_heart(thing) && world_war_spares_heart(dealing_plyr_idx, thing->owner))
+        return 0; /* endless worlds: a war takes the Heart's flame, it never destroys the Heart (Portal Wars) */
     lua_on_apply_damage_to_thing(thing, dmg, dealing_plyr_idx);
 
     HitPoints cdamage;

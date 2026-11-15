@@ -51,6 +51,7 @@
 #include "game_legacy.h"
 #include "engine_redraw.h"
 #include "kfx/profiling/KfxProfilingC.h"
+#include "world_wars.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -3270,6 +3271,8 @@ TbBool creature_look_for_enemy_heart_combat(struct Thing *thing)
         }
     }
     heartng = get_enemy_soul_container_creature_can_see(thing);
+    if (!thing_is_invalid(heartng) && world_war_spares_heart(thing->owner, heartng->owner))
+        return false; /* endless worlds: a war takes the Heart's flame, it does not fight the Heart (Portal Wars) */
     if (thing_is_invalid(heartng) || !(creature_can_navigate_to(thing,&heartng->mappos, NavRtF_Default)))
     {
         return false;

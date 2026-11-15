@@ -397,6 +397,7 @@ struct Game {
        (0: none), copied here by the server so that a thin client's Rap Sheet has it. */
     uint16_t world_misdeed_view_thing[PLAYERS_MAX];
     uint8_t world_misdeed_view[PLAYERS_MAX][128];
+    uint16_t world_war_flame[4];     /* Portal Wars: the things carrying a Heart's flame (world_wars.c) */
     /** The wind shots' lists of the creatures they pushed (thing_data.h; they were in every thing). wind_nodes_used:
      *  the highest node ever handed out; wind_free_head: the chain of nodes given back (0: none). All zero is empty. */
     struct WindNode wind_nodes[WIND_NODES_COUNT];
