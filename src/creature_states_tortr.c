@@ -42,6 +42,7 @@
 #include "game_legacy.h"
 #include "world_pages.h"
 #include "world_progress.h"
+#include "world_rooms.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -545,6 +546,7 @@ void update_torture_points(const struct Thing *thing, const struct Room *room)
         turn_val = turn_val * 4 / 3;
     }
 
+    turn_val = world_room_apply(room, WRM_Torture, thing, turn_val); /* endless: the room's neighbours */
     cctrl->tortured.accumulated_torture_points += turn_val * room->efficiency;
 }
 
