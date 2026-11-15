@@ -60,6 +60,7 @@
 #include "net_game.h"
 #include "world_progress.h"
 #include "server_admin.h"
+#include "world_falseheart.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -1036,7 +1037,8 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
             {
                 /* the Tunneller leads, digging its way to the heart, like ADD_TUNNELLER_PARTY_TO_LEVEL */
                 leader = thing;
-                if (!script_support_send_tunneller_to_dungeon_heart(thing, plyr_idx))
+                if (!world_falseheart_lure(thing, plyr_idx, sx, sy, (uint32_t)thing->index) /* a false Heart nearer? */
+                    && !script_support_send_tunneller_to_dungeon_heart(thing, plyr_idx))
                     cctrl->party.objective = CHeroTsk_AttackEnemies;
                 cctrl->party.target_plyr_idx = plyr_idx;
             } else
