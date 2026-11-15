@@ -115,6 +115,7 @@
 #include "world_pools.h"
 #include "room_entrance.h"
 #include "world_progress.h"
+#include "world_exodus.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -163,6 +164,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_EXODUS 0x314F5845u    /* "EXO1": an Exodus ordered (world_exodus.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -4059,8 +4061,16 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
     /* the other human players' hearts (network games) */
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
-        if (((p == PLAYER0) && !seat_has_stamp(PLAYER0)) || !owner_in_mask(p, humans))
-            continue; /* player 0 at the level's start: the home above */
+        if (!owner_in_mask(p, humans))
+            continue;
+        if ((p == PLAYER0) && !seat_has_stamp(PLAYER0))
+        {
+            /* player 0 at the level's start: the home above, and its Heart wherever it stands now (an Exodus moves it) */
+            struct Thing *h0 = find_players_dungeon_heart(PLAYER0);
+            if (thing_exists(h0))
+                cm_want_subtile(h0->mappos.x.stl.num, h0->mappos.y.stl.num, CM_HEART_RADIUS);
+            continue;
+        }
         struct Thing *heartng = find_players_dungeon_heart(p);
         if (thing_exists(heartng))
             cm_want_subtile(heartng->mappos.x.stl.num, heartng->mappos.y.stl.num, CM_HEART_RADIUS);
@@ -9659,6 +9669,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_EXODUS, world_exodus_save_size, world_exodus_save, world_exodus_load, world_exodus_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 
