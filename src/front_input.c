@@ -92,6 +92,7 @@
 #include "net_state.h"
 #include "chat_box.h"
 #include "world_menu.h"
+#include "world_feats.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -455,7 +456,9 @@ static short get_players_message_inputs(void)
         if (text[0] != '\0') {
             memcpy(local_state.mp_message_text_last, text, PLAYER_MP_MESSAGE_LEN);
         }
-        if (!replay.load_enable && world_delete_command(text)) {
+        if (!replay.load_enable && world_feats_command(text)) {
+            /* endless worlds: "!feats" opens the Keeper's Rap Sheet here; the line isn't sent */
+        } else if (!replay.load_enable && world_delete_command(text)) {
             /* party dungeons: "!delete dungeon" asks first, in a box here; the line isn't sent */
         } else if (observer_is_active() && text[0] == cmd_char) {
             cmd_exec(PLAYER_NEUTRAL, text + 1, cursor_x, cursor_y, true);

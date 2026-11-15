@@ -84,6 +84,7 @@ enum GUI_Menus {
   GMnu_FEPARTY_INVITE     = 54, /* World List: "Join <name> to party?" */
   GMnu_CHAT_BOX           = 55, /* a network endless game's chat box (chat_box.c) */
   GMnu_WORLD_DELETE       = 56, /* endless world: !delete dungeon's "Are you sure?" Yes/No */
+  GMnu_KEEPER_FEATS       = 57, /* endless world: the Keeper's Rap Sheet (world_feats.c) */
 };
 
 #define MENU_INVALID_ID -1

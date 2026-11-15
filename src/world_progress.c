@@ -50,6 +50,7 @@
 #include "room_workshop.h"
 #include "world_circles.h"
 #include "creature_senses.h"
+#include "world_feats.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2178,6 +2179,7 @@ void world_progress_turn(void)
         ban_powers();
     wp_poison_turn();
     test_traps();
+    world_feats_turn();
     if (!world_progress_active())
         return;
     test_books();
@@ -2448,6 +2450,7 @@ void world_player_portal_captured(PlayerNumber plyr_idx, int biome)
     if (network_is_active() && (get_player_primary_user(get_player(plyr_idx)) < 0))
         return;
     wps[plyr_idx].portals++;
+    world_feats_add(plyr_idx, WFt_PortalHunter, 1);
     SYNCLOG("World: player %d captured a portal (%d so far)", (int)plyr_idx, (int)wps[plyr_idx].portals);
     server_admin_player_event(plyr_idx, "%s captured a portal (%s)", server_admin_player_name(plyr_idx),
         ((biome >= 0) && (biome < WgB_COUNT)) ? wg_biome_name(biome) : "?");
@@ -2465,6 +2468,7 @@ void world_progress_seat_reset(PlayerNumber plyr_idx)
     game.world_room_researching[plyr_idx] = 0;
     /* and the mastery bars: the next keeper of the seat began with the last one's (audit 2026-11-11) */
     memset(game.world_room_xp[plyr_idx], 0, sizeof(game.world_room_xp[plyr_idx]));
+    world_feats_seat_reset(plyr_idx); /* the Rap Sheet too */
     wpr_offer_circle[plyr_idx] = 0;
     pmask_del(&wpr_kit_players, plyr_idx); /* the kit is given again when it starts */
     SYNCLOG("World: player %d's level, XP, records and research progress start again from zero", (int)plyr_idx);
@@ -2610,10 +2614,13 @@ void world_heart_destroyed(const struct Thing *heartng)
     if (victim == PLAYER_GOOD)
     {
         wps[by].outposts++;
+        if (!world_is_day())
+            world_feats_add(by, WFt_NightShift, 1);
         server_admin_player_event(by, "%s defeated a heroes outpost", server_admin_player_name(by));
     } else
     {
         wps[by].hearts++;
+        world_feats_add(by, WFt_Heartbreaker, 1);
         if (world_player_is_human(victim))
             server_admin_player_event(by, "%s defeated %s", server_admin_player_name(by), server_admin_player_name(victim));
         else
@@ -2706,6 +2713,7 @@ void world_progress_present(void)
         }
         wpl_seen[p] = (uint8_t)level;
     }
+    world_feats_present();
 }
 
 #ifdef __cplusplus

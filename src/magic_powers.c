@@ -64,6 +64,7 @@
 #include "lua_triggers.h"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_feats.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2092,7 +2093,10 @@ TbResult magic_use_power_direct(PlayerNumber plyr_idx, PowerKind pwkind,
     const struct PowerConfigStats* powerst = get_power_model_stats(pwkind);
     if(powerst->magic_use_func_idx > 0 && magic_use_func_list[powerst->magic_use_func_idx] != NULL)
     {
-        return magic_use_func_list[powerst->magic_use_func_idx](pwkind, plyr_idx, thing, stl_x, stl_y, power_level, allow_flags);
+        const TbResult ret = magic_use_func_list[powerst->magic_use_func_idx](pwkind, plyr_idx, thing, stl_x, stl_y, power_level, allow_flags);
+        if (ret == Lb_SUCCESS)
+            world_feats_power_used(plyr_idx, pwkind); /* the Rap Sheet: Clean hands */
+        return ret;
     }
     else if (powerst->magic_use_func_idx < 0)
     {

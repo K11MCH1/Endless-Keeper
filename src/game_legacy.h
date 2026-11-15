@@ -101,6 +101,7 @@ enum GameNumfieldDFlags {
     GNFldD_unusedparam80 = 0x80,
 };
 /******************************************************************************/
+#define WORLD_FEAT_SLOTS 12 /* the Keeper's Rap Sheet: feats (world_feats.h) and room for more */
 #pragma pack(1)
 
 struct CreaturePool {
@@ -397,6 +398,10 @@ struct Game {
        (0: none), copied here by the server so that a thin client's Rap Sheet has it. */
     uint16_t world_misdeed_view_thing[PLAYERS_MAX];
     uint8_t world_misdeed_view[PLAYERS_MAX][128];
+    /* The Keeper's Rap Sheet (world_feats.c): each keeper's feat counts and tiers reached (here so that thin clients
+       get them; saved in the world's FTS1 record) */
+    uint32_t world_feat_count[PLAYERS_MAX][WORLD_FEAT_SLOTS];
+    uint8_t world_feat_tier[PLAYERS_MAX][WORLD_FEAT_SLOTS];
     /** The wind shots' lists of the creatures they pushed (thing_data.h; they were in every thing). wind_nodes_used:
      *  the highest node ever handed out; wind_free_head: the chain of nodes given back (0: none). All zero is empty. */
     struct WindNode wind_nodes[WIND_NODES_COUNT];

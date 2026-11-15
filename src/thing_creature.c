@@ -112,6 +112,7 @@
 #include "world_daynight.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
+#include "world_feats.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1627,7 +1628,10 @@ void apply_spell_effect_to_thing(struct Thing *thing, SpellKind spell_idx, CrtrE
             return; // Exit the function, spell is already active.
         }
     }
+    const TbBool was_chicken = creature_under_spell_effect(thing, CSAfF_Chicken);
     first_apply_spell_effect_to_thing(thing, spell_idx, spell_level, plyr_idx);
+    if (!was_chicken && creature_under_spell_effect(thing, CSAfF_Chicken))
+        world_feats_chickened(thing, plyr_idx); /* the Rap Sheet: Poultry in motion */
 }
 
 void terminate_thing_spell_effect(struct Thing *thing, SpellKind spell_idx)
