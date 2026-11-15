@@ -88,6 +88,7 @@
 #include "world_stream.h"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_pacts.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1093,6 +1094,8 @@ TbBool attempt_to_destroy_enemy_room(struct Thing *thing, MapSubtlCoord stl_x, M
         return false;
     if (players_creatures_tolerate_each_other(thing->owner, room->owner))
         return false;
+    if (world_pact_spares(thing->owner, room->owner))
+        return false; /* endless worlds: a pact, neither side harms the other's rooms */
     if (room_cannot_vandalise(room->kind))
         return false;
     if (!find_first_valid_position_for_thing_anywhere_in_room(thing, room, &pos))

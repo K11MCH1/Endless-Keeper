@@ -57,6 +57,7 @@
 #include "world_colours.h"
 #include "world_progress.h"
 #include "world_circles.h"
+#include "world_pacts.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -797,6 +798,11 @@ long instf_attack_room_slab(struct Thing *creatng, int32_t *param)
     if (room_is_invalid(room))
     {
         ERRORLOG("The %s index %d is not on room",thing_model_name(creatng),(int)creatng->index);
+        return 0;
+    }
+    if (world_pact_spares(creatng->owner, room->owner))
+    {
+        set_start_state(creatng); /* endless worlds: a pact, neither side harms the other's rooms */
         return 0;
     }
     if (room_cannot_vandalise(room->kind))

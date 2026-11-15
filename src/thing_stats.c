@@ -45,6 +45,7 @@
 
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_pacts.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1194,6 +1195,10 @@ HitPoints apply_damage_to_thing(struct Thing *thing, HitPoints dmg, PlayerNumber
     // If it's already dead, then don't interfere.
     if (thing->health < 0)
         return 0;
+    if (thing_is_dungeon_heart(thing) && world_pact_spares(dealing_plyr_idx, thing->owner))
+        return 0; /* endless worlds: a pact, neither side harms the other's Heart */
+    if (world_pact_hostage(thing))
+        return 0; /* endless worlds: a pact's hostage, untouched */
     lua_on_apply_damage_to_thing(thing, dmg, dealing_plyr_idx);
 
     HitPoints cdamage;

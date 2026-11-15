@@ -70,6 +70,7 @@
 #include "world_colours.h"
 #include "world_stream.h"
 #include "world_attract.h"
+#include "world_pacts.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -237,6 +238,8 @@ long can_thing_be_picked_up_by_player(const struct Thing *thing, PlayerNumber pl
     if (thing_is_creature(thing) && thing_pickup_is_blocked_by_hand_rule(thing, plyr_idx)) {
         return false;
     }
+    if (world_pact_hostage(thing))
+        return false; /* endless worlds: a pact's hostage, untouched (Hostage Pacts) */
     if (thing_is_creature(thing) && creature_is_leaving_and_cannot_be_stopped(thing))
     {
         return false;
@@ -830,6 +833,8 @@ long near_map_block_thing_filter_ready_for_hand_or_slap(const struct Thing *thin
 
 TbBool thing_slappable(const struct Thing *thing, PlayerNumber plyr_idx)
 {
+    if (world_pact_hostage(thing))
+        return false; /* endless worlds: a pact's hostage, untouched (Hostage Pacts) */
     switch (thing->class_id)
     {
     case TCls_Object:
