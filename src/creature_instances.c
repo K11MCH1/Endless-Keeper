@@ -57,6 +57,7 @@
 #include "world_colours.h"
 #include "world_progress.h"
 #include "world_circles.h"
+#include "world_scars.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -822,6 +823,7 @@ long instf_attack_room_slab(struct Thing *creatng, int32_t *param)
     {
         event_create_event_or_update_nearby_existing_event(coord_slab(creatng->mappos.x.val), coord_slab(creatng->mappos.y.val), EvKind_RoomLost, room->owner, room->kind);
     }
+    world_scars_room_hit(room, creatng); /* endless worlds: a room wrecked by raiders is desecrated (Scars) */
     long z = get_floor_filled_subtiles_at(creatng->mappos.x.stl.num, creatng->mappos.y.stl.num);
     if (!delete_room_slab(coord_slab(creatng->mappos.x.val), coord_slab(creatng->mappos.y.val), 1))
     {

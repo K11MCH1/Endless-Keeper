@@ -58,6 +58,7 @@
 #include "world_menu.h"
 #include "world_pages.h"
 #include "net_game.h"
+#include "world_scars.h"
 #include "world_progress.h"
 #include "server_admin.h"
 #include "post_inc.h"
@@ -1376,6 +1377,7 @@ void world_daynight_turn(void)
     }
     dn_invasions_turn(day, t);
     dn_killleader_hook();
+    world_scars_turn();
     if (t >= dn_day_turns)
         return;
     /* a first raid that waited for the last raid's heroes to go: it comes now, if its time has passed */

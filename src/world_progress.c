@@ -50,6 +50,7 @@
 #include "room_workshop.h"
 #include "world_circles.h"
 #include "creature_senses.h"
+#include "world_scars.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2584,6 +2585,7 @@ void world_heart_destroyed(const struct Thing *heartng)
     if (!world_mode_active() || !thing_exists(heartng))
         return;
     world_outpost_heart_destroyed(heartng); /* an outpost's heart drops its spellbook */
+    world_scars_heroes_heart_fell(heartng); /* Scars: a hero's heart-shard */
     world_misdeeds_heart_destroyed(heartng);
     const int i = wpl_hit_slot(heartng);
     const PlayerNumber victim = heartng->owner;

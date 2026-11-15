@@ -56,6 +56,7 @@
 #include "config_spritecolors.h"
 #include "lua_triggers.h"
 #include "lua_cfg_funcs.h"
+#include "world_scars.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1261,6 +1262,7 @@ long calculate_room_efficiency(const struct Room *room)
     }
     if (effic > ROOM_EFFICIENCY_MAX)
         effic = ROOM_EFFICIENCY_MAX;
+    effic = effic * world_scars_room_percent(room) / 100; /* endless worlds: a desecrated room (Scars) */
     SYNCDBG(7, "Finished");
     return effic;
 }
