@@ -115,6 +115,7 @@
 #include "world_pools.h"
 #include "room_entrance.h"
 #include "world_progress.h"
+#include "world_rooms.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -9365,6 +9366,7 @@ void world_level_end(void)
     coop_seats_clear();
     netstate_level_end();
     world_progress_level_end();
+    world_rooms_reset(); /* the rooms' neighbours were this world's */
     world_extras_reset();
     world_levels_reset();
     world_perks_reset();

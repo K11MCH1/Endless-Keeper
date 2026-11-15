@@ -45,6 +45,7 @@
 
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_rooms.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -679,6 +680,7 @@ long compute_creature_work_value_for_room_role(const struct Thing *creatng, Room
     {
         i = compute_creature_work_value(crconf->scavenge_value* game.conf.rules[creatng->owner].rooms.scavenge_efficiency, efficiency, cctrl->exp_level);
     }
+    i = world_room_apply_here(creatng, WRM_Work, i); /* endless: the room's neighbours */
     return process_work_speed_on_work_value(creatng, i);
 }
 
