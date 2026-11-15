@@ -60,6 +60,7 @@
 #include "net_game.h"
 #include "world_progress.h"
 #include "server_admin.h"
+#include "world_prisoners.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -1050,6 +1051,8 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
                 dlen += snprintf(desc + dlen, sizeof(desc) - dlen, "%s%s %d", (made > 1) ? ", " : "",
                     creature_code_name(model), (int)cctrl->exp_level + 1);
         }
+        if (s == 0) /* A Prisoner's Fate: the heroes this keeper ransomed come back with the first party */
+            made += world_prisoners_join_raid(plyr_idx, leader, sx, sy);
         if (made == 0)
             continue;
         world_slab_to_world(sx, sy, &inv.spot_x[inv.nspots], &inv.spot_y[inv.nspots]);

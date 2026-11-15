@@ -20,6 +20,7 @@
 #include "world_wild.h"
 #include "world_circles.h"
 #include "world_misdeeds.h"
+#include "world_prisoners.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -163,6 +164,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_PRISONERS 0x31465250u /* "PRF1": ransomed heroes waiting to come back with a raid (world_prisoners.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -9282,6 +9284,7 @@ void world_process_turn(void)
     world_wild_turn();
     world_circles_turn();
     world_misdeeds_turn();
+    world_prisoners_turn();
     world_outposts_turn();
     world_testgold();
     world_tagdig();
@@ -9659,6 +9662,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_PRISONERS, world_prisoners_save_size, world_prisoners_save, world_prisoners_load, world_prisoners_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 

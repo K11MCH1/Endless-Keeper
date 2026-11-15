@@ -70,6 +70,7 @@
 #include "world_colours.h"
 #include "world_stream.h"
 #include "world_attract.h"
+#include "world_prisoners.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -991,6 +992,8 @@ void drop_held_thing_on_ground(struct Dungeon *dungeon, struct Thing *droptng, c
     remove_thing_from_limbo(droptng);
     if (thing_is_creature(droptng))
     {
+        if (world_prisoners_dropped(dungeon, droptng)) /* endless: A Prisoner's Fate (ransom, interrogation) */
+            return;
         if (game.conf.rules[droptng->owner].creature.instance_delay_on_drop > 0) {
             delay_instances_on_drop(droptng);
         }
