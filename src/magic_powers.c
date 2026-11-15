@@ -64,6 +64,7 @@
 #include "lua_triggers.h"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_consecrate.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -145,6 +146,8 @@ TbBool can_cast_spell_f(PlayerNumber plyr_idx, PowerKind pwkind, MapSubtlCoord s
     {
         return (slab_is_wall(subtile_slab(stl_x), subtile_slab(stl_y)) == false);
     }
+    if (world_consecrated_at(plyr_idx, stl_x, stl_y))
+        return false; /* endless worlds: consecrated ground, the Hand does nothing there (Consecrated Ground) */
     if ((flags & CastChk_SkipAvailiabilty) == 0)
     {
         if (!is_power_available(plyr_idx, pwkind)) {

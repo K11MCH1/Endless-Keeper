@@ -112,6 +112,7 @@
 #include "net_secure.h"
 #define XXH_INLINE_ALL
 #include "../deps/xxhash/xxhash.h"
+#include "world_consecrate.h"
 #include "world_pools.h"
 #include "room_entrance.h"
 #include "world_progress.h"
@@ -9200,6 +9201,7 @@ void world_client_turn(void)
     world_colours_turn();
     world_progress_present();
     world_respawn_prompt_turn();
+    world_consecrate_local_turn();
     chat_box_turn();
     world_shots_hook();
     world_assist_hook();
@@ -9259,6 +9261,7 @@ void world_process_turn(void)
     world_colours_turn(); /* local presentation only */
     world_progress_present();
     world_respawn_prompt_turn();
+    world_consecrate_local_turn();
     chat_box_turn();
     world_shots_hook();
     world_mapdrag_hook();

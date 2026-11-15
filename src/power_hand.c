@@ -70,6 +70,7 @@
 #include "world_colours.h"
 #include "world_stream.h"
 #include "world_attract.h"
+#include "world_consecrate.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1614,6 +1615,8 @@ TbBool can_drop_thing_here_as(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNu
         return false;
     if (((mapblk->flags & SlbAtFlg_Blocking) != 0) || ((mapblk->flags & SlbAtFlg_IsDoor) != 0))
         return false;
+    if (world_consecrated_at(plyr_idx, stl_x, stl_y))
+        return false; /* endless worlds: consecrated ground */
     struct SlabMap *slb;
     slb = get_slabmap_for_subtile(stl_x, stl_y);
     if (game.conf.rules[plyr_idx].gameplay.allies_share_drop)
