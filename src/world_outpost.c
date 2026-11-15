@@ -39,6 +39,12 @@
 #include "world_progress.h"
 #include "world_daynight.h"
 #include "world_circles.h"
+#include "world_daynight.h"
+#include "gui_msgs.h"
+#include "map_blocks.h"
+#include "net_game.h"
+#include "net_state.h"
+#include "server_admin.h"
 #include "bflib_basics.h"
 #include "bflib_math.h"
 #include "config.h"
@@ -135,6 +141,7 @@ enum OpFlags {
     OPF_HeartWoken = 0x02,             /* the heart's portal woke */
     OPF_Looted = 0x04,                 /* the heart fell and dropped its books */
     OPF_DoorSeen = 0x08,               /* its iron door stood: it was really built (a door missing counts after this) */
+    OPF_Aged = 0x10,                   /* cleared, and its time empty is over: heroes came back, or it fell to ruin */
 };
 
 struct OpState {
@@ -146,6 +153,7 @@ struct OpState {
     uint8_t level;                     /* the heroes' level, from the keeper that broke in */
     uint8_t found_level;               /* the finder's best creature level when its ground was made */
     uint16_t gates_done;               /* bit g: gate g sent its heroes */
+    uint32_t cleared_turn;             /* the turn its heart fell (0: not cleared, or before this was kept) */
 };
 
 static struct OpState *op_states;
@@ -2606,10 +2614,83 @@ static void sh_runtime_rooms(const struct OpPlan *p, struct OpState *st, struct 
     }
 }
 
+/******************************************************************************/
+/* ground that ages (roadmap "Ground That Ages", 2026-11-13): a cleared outpost stays empty for OP_EMPTY_DAYS days
+   (the keeper who cleared it is told how long); after that, the first time it is on the map with no keeper's creature
+   in it, its time away has done its work: heroes have come back to it (3 in 5), or it has fallen to ruin (a third of its
+   walls are earth). KFX_WORLD_AGEFAST=k makes its days pass k times as fast. */
+#define OP_EMPTY_DAYS 3
+
+static long op_empty_turns(void)
+{
+    static int fast = -1;
+    if (fast < 0)
+    {
+        const char *v = getenv("KFX_WORLD_AGEFAST");
+        fast = ((v != NULL) && (atoi(v) > 1)) ? atoi(v) : 1;
+    }
+    return max(1L, (long)OP_EMPTY_DAYS * world_day_turns() / fast);
+}
+
+/** A line for one keeper: on screen if it plays on this machine, as a server notice if it is a joined player. */
+static void op_tell(PlayerNumber plyr, const char *text)
+{
+    if ((plyr == my_player_number) && !netstate_dedicated())
+        message_add_fmt(MsgType_Blank, 0, "%s", text);
+    for (NetUserId u = 0; u < MAX_NET_USERS; u++)
+        if ((u != SERVER_ID) && (get_net_user_player_number(u) == plyr))
+        {
+            server_admin_notice(u, text);
+            SYNCLOG("World: told user %d (player %d): %s", (int)u, (int)plyr, text);
+        }
+}
+
+static void op_age(const struct OpPlan *p, struct OpState *st, struct OpRng *rng)
+{
+    if (!(st->flags & OPF_Looted) || (st->flags & OPF_Aged) || (st->cleared_turn == 0) ||
+        ((long)(game.play_gameturn - st->cleared_turn) < op_empty_turns()))
+        return;
+    MapSlabCoord sx1, sy1, sx2, sy2;
+    if (!world_engine_slab(p->x0, p->y0, &sx1, &sy1) || !world_engine_slab(p->x0 + p->n - 1, p->y0 + p->n - 1, &sx2, &sy2))
+        return;
+    if (op_keeper_creature_in(sx1, sy1, sx2, sy2) != NULL)
+        return; /* not while a keeper is there to see it */
+    st->flags |= OPF_Aged;
+    const uint64_t fate = op_mix(world_seed() ^ (uint64_t)p->rx * 0x41474544ULL ^ ((uint64_t)p->ry << 17));
+    /* test hook KFX_WORLD_AGEFATE=heroes or ruin: every cleared outpost goes that way */
+    const char *forced = getenv("KFX_WORLD_AGEFATE");
+    const TbBool heroes = (forced != NULL) ? (strcmp(forced, "heroes") == 0) : ((fate % 5) < 3);
+    if (heroes)
+    {
+        /* as strong as the keepers round it now, as the outposts' heroes are */
+        const int level = max(1, max((int)st->level, sh_finder_level(p->x0 + p->n / 2, p->y0 + p->n / 2)));
+        const int n = 2 + (int)p->tier + op_rand(rng, 2);
+        const int made = op_gate_spawn(p, 0, n, false, level, true, 0, rng);
+        SYNCLOG("World: the cleared %s outpost at slab (%lld,%lld) has heroes again: %d (level %d)", sh_tier_names[p->tier],
+            (long long)p->x0, (long long)p->y0, max(made, 0), level);
+        return;
+    }
+    int fallen = 0;
+    for (MapSlabCoord y = sy1; y <= sy2; y++)
+        for (MapSlabCoord x = sx1; x <= sx2; x++)
+        {
+            struct SlabMap *slb = get_slabmap_block(x, y);
+            if (slabmap_block_invalid(slb) || (slabmap_owner(slb) != PLAYER_GOOD) || !slab_kind_is_fortified_wall(slb->kind) ||
+                (op_rand(rng, 3) != 0))
+                continue;
+            place_slab_type_on_map(SlbT_EARTH, slab_subtile_center(x), slab_subtile_center(y), game.neutral_player_num, 0);
+            fallen++;
+        }
+    SYNCLOG("World: the cleared %s outpost at slab (%lld,%lld) has fallen to ruin: %d walls fell", sh_tier_names[p->tier],
+        (long long)p->x0, (long long)p->y0, fallen);
+}
+
 static void op_runtime(const struct OpPlan *p, struct OpState *st)
 {
     struct OpRng rng = {op_mix(world_seed() ^ ((uint64_t)game.play_gameturn << 20) ^ (uint64_t)p->rx * 31 ^ (uint64_t)p->ry ^
         ((uint64_t)p->family << 60))};
+    if (p->family == ShF_Outpost)
+        op_age(p, st, &rng);
     if (p->tier >= ShT_Medium && p->tier < ShT_COUNT)
         sh_runtime_rooms(p, st, &rng);
     else if (p->family == ShF_Outpost)
@@ -2723,6 +2804,22 @@ void world_outpost_heart_destroyed(const struct Thing *heartng)
             if ((st == NULL) || (st->flags & OPF_Looted))
                 return;
             st->flags |= OPF_Looted;
+            st->cleared_turn = max(1u, (uint32_t)game.play_gameturn);
+            {
+                /* ground that ages: the keeper whose creature is nearest is told how long it stays empty */
+                MapSlabCoord hsx = subtile_slab(heartng->mappos.x.stl.num), hsy = subtile_slab(heartng->mappos.y.stl.num);
+                const struct Thing *near = op_keeper_creature_near(hsx, hsy, 12);
+                if (near != NULL)
+                {
+                    char text[160];
+                    const long days = (op_empty_turns() + world_day_turns() - 1) / max(1L, world_day_turns());
+                    snprintf(text, sizeof(text), "This outpost stays empty for %ld day%s. Then heroes may come back to it, "
+                        "or it falls to ruin.", days, (days == 1) ? "" : "s");
+                    op_tell(near->owner, text);
+                    SYNCLOG("World: player %d is told the outpost stays empty for %ld day%s", (int)near->owner, days,
+                        (days == 1) ? "" : "s");
+                }
+            }
             const int books = sh_books_for(p->tier, op_mix(world_seed() ^ (uint64_t)rx * 0x2545F491ULL ^ (uint64_t)ry ^ 0x48525442ULL));
             SYNCLOG("World: the %s heroes outpost at slab (%lld,%lld) falls: its heart drops %d heroes' spellbook%s",
                 sh_tier_names[p->tier], (long long)p->x0, (long long)p->y0, books, (books == 1) ? "" : "s");
@@ -2995,6 +3092,65 @@ struct OpSaved2 {
 #pragma pack()
 #define OP_SAVE_V2 0x80000000u
 #define OP_SAVE_OUTPOSTS_OFF 0x40000000u /* a world made before the outposts: none (its fortresses still count) */
+
+/* ground that ages: when each outpost was cleared, XTR2 record "OPA1": count, then family, rx, ry (int64) and the turn
+   (u32) per cleared stronghold */
+#define OPA_SAVED 21
+size_t world_outpost_ages_save_size(void)
+{
+    int n = 0;
+    for (int i = 0; i < op_state_count; i++)
+        if (op_states[i].cleared_turn != 0)
+            n++;
+    return (n > 0) ? 4 + (size_t)n * OPA_SAVED : 0;
+}
+
+void world_outpost_ages_save(uint8_t *buf)
+{
+    uint32_t n = 0;
+    uint8_t *b = buf + 4;
+    for (int i = 0; i < op_state_count; i++)
+    {
+        const struct OpState *st = &op_states[i];
+        if (st->cleared_turn == 0)
+            continue;
+        b[0] = st->family;
+        memcpy(b + 1, &st->rx, 8);
+        memcpy(b + 9, &st->ry, 8);
+        memcpy(b + 17, &st->cleared_turn, 4);
+        b += OPA_SAVED;
+        n++;
+    }
+    memcpy(buf, &n, 4);
+}
+
+void world_outpost_ages_reset(void)
+{
+    for (int i = 0; i < op_state_count; i++)
+        op_states[i].cleared_turn = 0;
+}
+
+TbBool world_outpost_ages_load(const uint8_t *buf, size_t len)
+{
+    world_outpost_ages_reset();
+    uint32_t n;
+    if (len < 4)
+        return false;
+    memcpy(&n, buf, 4);
+    if (n > (len - 4) / OPA_SAVED)
+        return false;
+    for (uint32_t i = 0; i < n; i++)
+    {
+        const uint8_t *b = buf + 4 + (size_t)i * OPA_SAVED;
+        int64_t rx, ry;
+        memcpy(&rx, b + 1, 8);
+        memcpy(&ry, b + 9, 8);
+        struct OpState *st = op_state(b[0], rx, ry, false);
+        if (st != NULL)
+            memcpy(&st->cleared_turn, b + 17, 4);
+    }
+    return true;
+}
 
 size_t world_outposts_save_size(void)
 {

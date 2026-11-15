@@ -163,6 +163,8 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_AGES 0x31454741u    /* "AGE1": when each frozen chunk froze (ground that ages) */
+#define WORLD_EXTRA_OPAGES 0x3141504Fu  /* "OPA1": when each heroes outpost was cleared (world_outpost.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -2137,6 +2139,8 @@ static void rec_get_masks16(struct RecReader *r, PlayerBitFlags *masks, int coun
 }
 
 /** Stores a chunk's record; false when it couldn't be (out of memory). */
+static void age_note_frozen(int32_t cx, int32_t cy); /* ground that ages (below) */
+
 static TbBool store_chunk_record(const struct WorldChunkData *cd)
 {
     peek_cache_forget(cd->cx, cd->cy);
@@ -2813,6 +2817,8 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
     KFX_C_ZONE_END(z_frz_remove);
     KFX_C_ZONE_BEGIN(z_frz_store, "Freeze: store the record");
     const TbBool record_stored = store_chunk_record(cd);
+    if (record_stored)
+        age_note_frozen(cd->cx, cd->cy); /* ground that ages: when it froze */
     KFX_C_ZONE_END(z_frz_store);
     if (!record_stored)
     {
@@ -2935,6 +2941,126 @@ static struct Thing *find_heart_near(MapSubtlCoord stl_x, MapSubtlCoord stl_y, c
             return thing;
     }
     return INVALID_THING;
+}
+
+/******************************************************************************/
+/* Ground that ages (roadmap "Ground That Ages", 2026-11-13): the turn each chunk froze is kept, and when it comes back
+   the game works out what the time away has done to it. Bodies rot on as if their chunk had been loaded all along
+   (their age goes back by the time away, so the stock rot rule takes them when it is due). A keeper's own land never
+   ages (a chunk with any slab of a human keeper, a co-op dungeon too). Cleared heroes outposts: world_outpost.c.
+   Chunks frozen before this build have no time kept: they come back as they were. Test switch KFX_WORLD_AGEFAST=k:
+   time away counts k times over. */
+static struct ChunkTable age_table;
+static GameTurnDelta age_elapsed; /* the chunk being placed: its time away (0: none, or a keeper's own land) */
+static int age_rotted;            /* its bodies that rotted away meanwhile */
+static struct ChunkSlot *table_find(const struct ChunkTable *t, int32_t cx, int32_t cy);
+static struct ChunkSlot *table_insert(struct ChunkTable *t, int32_t cx, int32_t cy);
+static void table_free(struct ChunkTable *t);
+
+static void age_note_frozen(int32_t cx, int32_t cy)
+{
+    struct ChunkSlot *s = table_insert(&age_table, cx, cy);
+    if (s == NULL)
+        return;
+    if ((s->data == NULL) || (s->len != 4))
+    {
+        free(s->data);
+        s->data = (uint8_t *)malloc(4);
+        s->len = (s->data != NULL) ? 4 : 0;
+    }
+    if (s->data != NULL)
+    {
+        const uint32_t turn = (uint32_t)game.play_gameturn;
+        memcpy(s->data, &turn, 4);
+    }
+}
+
+/** The time a chunk was away (0: unknown or none); forgets it (it is noted again when the chunk next freezes). */
+static GameTurnDelta age_take(int32_t cx, int32_t cy)
+{
+    struct ChunkSlot *s = table_find(&age_table, cx, cy);
+    if ((s == NULL) || (s->data == NULL) || (s->len != 4))
+        return 0;
+    uint32_t turn;
+    memcpy(&turn, s->data, 4);
+    s->len = 0; /* (kept as an empty slot: nothing to save for it) */
+    if ((uint32_t)game.play_gameturn <= turn)
+        return 0;
+    static int fast = -1;
+    if (fast < 0)
+    {
+        const char *v = getenv("KFX_WORLD_AGEFAST");
+        fast = ((v != NULL) && (atoi(v) > 1)) ? atoi(v) : 1;
+    }
+    return (GameTurnDelta)((uint32_t)game.play_gameturn - turn) * (GameTurnDelta)fast;
+}
+
+static size_t world_ages_save_size(void)
+{
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < age_table.cap; i++)
+        if (age_table.slots[i].used && (age_table.slots[i].len == 4))
+            n++;
+    return (n > 0) ? 4 + (size_t)n * 12 : 0;
+}
+
+static void world_ages_save(uint8_t *buf)
+{
+    uint32_t n = 0;
+    uint8_t *b = buf + 4;
+    for (uint32_t i = 0; i < age_table.cap; i++)
+    {
+        const struct ChunkSlot *s = &age_table.slots[i];
+        if (!s->used || (s->len != 4))
+            continue;
+        memcpy(b, &s->cx, 4);
+        memcpy(b + 4, &s->cy, 4);
+        memcpy(b + 8, s->data, 4);
+        b += 12;
+        n++;
+    }
+    memcpy(buf, &n, 4);
+}
+
+static void world_ages_reset(void)
+{
+    table_free(&age_table);
+}
+
+static TbBool world_ages_load(const uint8_t *buf, size_t len)
+{
+    world_ages_reset();
+    uint32_t n;
+    if (len < 4)
+        return false;
+    memcpy(&n, buf, 4);
+    if (n > (len - 4) / 12)
+        return false;
+    for (uint32_t i = 0; i < n; i++)
+    {
+        int32_t cx, cy;
+        memcpy(&cx, buf + 4 + (size_t)i * 12, 4);
+        memcpy(&cy, buf + 4 + (size_t)i * 12 + 4, 4);
+        struct ChunkSlot *s = table_insert(&age_table, cx, cy);
+        if (s == NULL)
+            return false;
+        free(s->data);
+        s->data = (uint8_t *)malloc(4);
+        if (s->data == NULL)
+            return false;
+        memcpy(s->data, buf + 4 + (size_t)i * 12 + 8, 4);
+        s->len = 4;
+    }
+    return true;
+}
+
+/** Is any of this chunk a human keeper's own land (a co-op dungeon is two human keepers')? */
+static TbBool age_own_land(const struct WorldChunkData *cd)
+{
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+        if ((cd->owner[i] == WOwn_Player) || (cd->owner[i] >= WOwn_HumanBase))
+            return true;
+    return false;
 }
 
 static void place_world_thing(const struct WorldThing *th, const struct WorldCreatureExt *ext, MapSubtlCoord stl_x0,
@@ -3067,6 +3193,13 @@ static void place_world_thing(const struct WorldThing *th, const struct WorldCre
     {
         /* a body; one laid to rest goes back into its graveyard, with its time to rise */
         const TbBool laid = (th->flags & WTF_LaidToRest) != 0;
+        /* ground that ages: a body away longer than bodies last has rotted away meanwhile */
+        if ((age_elapsed > 0) && !laid && (owner >= 0) && (owner < PLAYERS_COUNT) &&
+            (age_elapsed >= (GameTurnDelta)game.conf.rules[owner].creature.body_remains_for))
+        {
+            age_rotted++;
+            return;
+        }
         thing = create_dead_creature(&pos, th->model, laid ? DCrSt_Dying : DCrSt_Dead, owner,
             (CrtrExpLevel)((th->level > 0) ? th->level - 1 : 0));
         if (thing_is_invalid(thing))
@@ -3083,6 +3216,9 @@ static void place_world_thing(const struct WorldThing *th, const struct WorldCre
         }
         if (th->health > 0)
             thing->health = th->health;
+        /* ground that ages: a body rots on for the time its chunk was away (laid to rest: kept as it was) */
+        if ((age_elapsed > 0) && !thing->corpse.laid_to_rest)
+            thing->creation_turn = (thing->creation_turn > (GameTurn)age_elapsed) ? thing->creation_turn - (GameTurn)age_elapsed : 0;
         break;
     }
     case TCls_Door:
@@ -3133,8 +3269,110 @@ static int explore_like_level_start(MapSlabCoord sx0, MapSlabCoord sy0)
 }
 
 /** Writes chunks into the window. The band's columns must have been released (clear_band). */
+/** Ground that ages: a computer keeper's base that was away a day or more has built another room meanwhile: a 3x3 of
+ *  nobody's earth beside its ground or its walls (nothing on it; a wall in the way becomes its way in) is dug out and becomes its room, of a kind it has already, a Lair if
+ *  none, seeded by the chunk and the time away. One room a keeper a day at most. */
+static GameTurn age_keeper_built[256]; /* the turn each keeper (owner code) last built one, +1 (not saved) */
+
+static int age_keeper_room(struct WorldChunkData *cd, GameTurnDelta away)
+{
+    if ((away < (GameTurnDelta)world_day_turns()) || (W.gen == NULL))
+        return 0;
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+        if ((cd->owner[i] == WOwn_Player) || (cd->owner[i] >= WOwn_HumanBase))
+            return 0; /* a human keeper's own land never ages */
+    uint8_t keeper = 0;
+    SlabKind kind = SlbT_LAIR;
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+    {
+        if ((cd->owner[i] >= WOwn_Keeper0) && (cd->owner[i] < WOwn_HumanBase))
+        {
+            if (keeper == 0)
+                keeper = cd->owner[i];
+            if ((cd->owner[i] == keeper) && (slab_corresponding_room(cd->kind[i]) > 0) && (cd->kind[i] != SlbT_DUNGHEART) && (cd->kind[i] != SlbT_BRIDGE) &&
+                (cd->kind[i] != SlbT_ENTRANCE))
+                kind = cd->kind[i];
+        }
+    }
+    if ((keeper == 0) || ((age_keeper_built[keeper] != 0) &&
+        (game.play_gameturn + 1 - age_keeper_built[keeper] < (GameTurn)world_day_turns())))
+        return 0; /* (one room a keeper a day at most: its base's other chunks come back too) */
+    const uint64_t h = W.seed ^ ((uint64_t)(int64_t)cd->cx * 0x9E3779B97F4A7C15ULL) ^ ((uint64_t)(int64_t)cd->cy * 0xC2B2AE3D27D4EB4FULL) ^
+        (uint64_t)away;
+    for (int k = 0; k < WG_CHUNK_CELLS; k++)
+    {
+        const int i = (int)((k + h % WG_CHUNK_CELLS) % WG_CHUNK_CELLS);
+        const int x = i % WG_CHUNK, y = i / WG_CHUNK;
+        if ((x < 1) || (y < 1) || (x > WG_CHUNK - 2) || (y > WG_CHUNK - 2))
+            continue;
+        /* dug out of the earth beside its ground: a 3x3 of nobody's earth that touches the keeper's own */
+        TbBool ok = true, touches = false;
+        int door = -1;
+        for (int dy = -1; (dy <= 1) && ok; dy++)
+            for (int dx = -1; (dx <= 1) && ok; dx++)
+            {
+                const int j = (y + dy) * WG_CHUNK + x + dx;
+                ok = (cd->kind[j] == SlbT_EARTH) && (cd->owner[j] == WOwn_Neutral);
+                for (int t = 0; (t < cd->thing_count) && ok; t++)
+                    ok = !((cd->things[t].x / (COORD_PER_STL * STL_PER_SLB) == x + dx) &&
+                        (cd->things[t].y / (COORD_PER_STL * STL_PER_SLB) == y + dy));
+            }
+        for (int dy = -2; (dy <= 2) && ok && !touches; dy++)
+            for (int dx = -2; (dx <= 2) && !touches; dx++)
+            {
+                if ((abs(dx) == 2) == (abs(dy) == 2))
+                    continue; /* the cells beside the 3x3 (not its corners' diagonals) */
+                const int xx = x + dx, yy = y + dy;
+                if ((xx < 0) || (yy < 0) || (xx >= WG_CHUNK) || (yy >= WG_CHUNK))
+                    continue;
+                const int j = yy * WG_CHUNK + xx;
+                touches = (cd->owner[j] == keeper);
+                if (touches && (cd->kind[j] != SlbT_CLAIMED) && (slab_corresponding_room(cd->kind[j]) <= 0))
+                    door = j; /* its wall: the new room's way in */
+            }
+        if (!ok || !touches)
+            continue;
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                cd->kind[(y + dy) * WG_CHUNK + x + dx] = kind;
+                cd->owner[(y + dy) * WG_CHUNK + x + dx] = keeper;
+            }
+        if (door >= 0)
+        {
+            cd->kind[door] = SlbT_CLAIMED;
+            cd->wall[door] = 0;
+        }
+        SYNCLOG("World: a computer keeper's base in chunk (%d,%d) built a %s (3x3) while it was away", (int)cd->cx, (int)cd->cy,
+            room_code_name(slab_corresponding_room(kind)));
+        age_keeper_built[keeper] = game.play_gameturn + 1;
+        return 1;
+    }
+    return 0;
+}
+
 static void fill_chunks(struct FillChunk *list, int count)
 {
+    /* ground that ages: the time each chunk was away, taken now (its slabs may change by it) */
+    static GameTurnDelta *away_of = NULL;
+    static int away_cap = 0;
+    if (count > away_cap)
+    {
+        GameTurnDelta *n = (GameTurnDelta *)realloc(away_of, sizeof(GameTurnDelta) * (size_t)count);
+        if (n != NULL)
+        {
+            away_of = n;
+            away_cap = count;
+        }
+    }
+    for (int c = 0; c < count; c++)
+    {
+        const GameTurnDelta a = list[c].cd->fresh ? 0 : age_take(list[c].cd->cx, list[c].cd->cy);
+        if (c < away_cap)
+            away_of[c] = a;
+        if (a > 0)
+            age_keeper_room(list[c].cd, a);
+    }
     /* 1. slab kinds and owners, raw */
     for (int c = 0; c < count; c++)
     {
@@ -3245,8 +3483,22 @@ static void fill_chunks(struct FillChunk *list, int count)
         for (int e = 0; e < cd->ext_count; e++)
             if (cd->ext[e].ordinal < cd->thing_count)
                 ext_of[cd->ext[e].ordinal] = (int16_t)e;
+        /* ground that ages: the time this chunk was away (none for a keeper's own land) */
+        const GameTurnDelta away = (c < away_cap) ? away_of[c] : 0;
+        age_elapsed = (away > 0) && !age_own_land(cd) ? away : 0;
+        int aged_bodies = 0;
         for (int t = 0; t < cd->thing_count; t++)
+        {
             place_world_thing(&cd->things[t], (ext_of[t] >= 0) ? &cd->ext[ext_of[t]] : NULL, stl_x0, stl_y0);
+            aged_bodies += ((age_elapsed > 0) && (cd->things[t].oclass == TCls_DeadCreature) &&
+                !(cd->things[t].flags & WTF_LaidToRest)) ? 1 : 0;
+        }
+        if (away > 0)
+            SYNCLOG("World: chunk (%d,%d) comes back after %ld turns away%s; %d bodies aged by it, %d of them rotted away",
+                (int)cd->cx, (int)cd->cy, (long)away, (age_elapsed > 0) ? "" : " (a keeper's own land: it does not age)",
+                aged_bodies, age_rotted);
+        age_rotted = 0;
+        age_elapsed = 0;
         /* test hook: KFX_WORLD_REVEAL=1 shows every chunk that comes in (only read in world levels) */
         static int reveal_all = -1;
         if (reveal_all < 0)
@@ -9659,6 +9911,8 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_AGES, world_ages_save_size, world_ages_save, world_ages_load, world_ages_reset},
+    {WORLD_EXTRA_OPAGES, world_outpost_ages_save_size, world_outpost_ages_save, world_outpost_ages_load, world_outpost_ages_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 

@@ -70,6 +70,11 @@ void world_outpost_heart_destroyed(const struct Thing *heartng);
 /** A new world, a load, the end: outposts on (a world made before them turns them off while it loads). */
 void world_outposts_reset(void);
 void world_outposts_set_enabled(TbBool on);
+/** When each outpost was cleared (ground that ages; XTR2 record "OPA1", read after the outposts' own record). */
+size_t world_outpost_ages_save_size(void);
+void world_outpost_ages_save(uint8_t *buf);
+TbBool world_outpost_ages_load(const uint8_t *buf, size_t len);
+void world_outpost_ages_reset(void);
 size_t world_outposts_save_size(void);
 void world_outposts_save(uint8_t *buf);
 TbBool world_outposts_load(const uint8_t *buf, size_t len);

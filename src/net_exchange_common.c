@@ -15,6 +15,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include <stdlib.h>
 #include "net_exchange_common.h"
 #include "chat_box.h"
 
@@ -198,8 +199,12 @@ static TbError handle_chat_message(NetUserId source, char *read_pos, size_t mess
         } else if (world_circles_net_notice(message)) {
             /* endless worlds: this player breached a circle (world_circles.c); not chat */
         } else if (chat_box_active()) {
+            if (getenv("KFX_WORLD_LOGNOTICES") != NULL) /* (test switch: notices can name what logs must not) */
+                SYNCLOG("Server notice: %s", message);
             chat_box_add(-1, message); /* the chat box (chat_box.c) */
         } else {
+            if (getenv("KFX_WORLD_LOGNOTICES") != NULL) /* (test switch: notices can name what logs must not) */
+                SYNCLOG("Server notice: %s", message);
             message_add(MsgType_Blank, 0, message);
         }
         return Lb_OK;
