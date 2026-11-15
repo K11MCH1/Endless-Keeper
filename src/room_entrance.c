@@ -37,6 +37,7 @@
 #include "game_legacy.h"
 #include "world_misdeeds.h"
 #include "world_pools.h"
+#include "world_heresy.h"
 #include "post_inc.h"
 #include <stdint.h>
 
@@ -71,6 +72,7 @@ struct Thing *create_creature_at_entrance(struct Room * room, ThingModel crkind)
     }
     mark_creature_joined_dungeon(creatng);
     world_misdeeds_attracted(creatng); /* endless: Bad Blood */
+    world_heresy_portal_arrived(creatng); /* endless: One Kind, five levels up */
     if (room->owner != game.neutral_player_num)
     {
         dungeon->lvstats.creatures_attracted++;
@@ -341,6 +343,8 @@ void generate_creature_for_dungeon(struct Dungeon * dungeon)
 {
     SYNCDBG(9,"Starting");
     ThingModel crmodel = calculate_creature_to_generate_for_dungeon(dungeon);
+    const ThingModel pool_model = crmodel;
+    crmodel = world_heresy_portal_kind(dungeon->owner, crmodel); /* endless: the One Kind heresy */
 
     if (crmodel > 0)
     {
@@ -361,7 +365,12 @@ void generate_creature_for_dungeon(struct Dungeon * dungeon)
             } else {
                 SYNCDBG(8,"The %s will come to player %d even though lair is full",creature_code_name(crmodel),(int)dungeon->owner);
             }
-            generate_creature_at_random_entrance(dungeon, crmodel);
+            if (generate_creature_at_random_entrance(dungeon, crmodel) && (crmodel != pool_model))
+            {
+                /* endless, One Kind: the pool gives up the creature it drew, not the kind that came instead */
+                add_creature_to_pool_of(dungeon->owner, crmodel, 1);
+                remove_creature_from_generate_pool(pool_model, dungeon->owner);
+            }
         }
         else
         {

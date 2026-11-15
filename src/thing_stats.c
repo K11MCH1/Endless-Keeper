@@ -45,6 +45,7 @@
 
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_heresy.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -679,6 +680,7 @@ long compute_creature_work_value_for_room_role(const struct Thing *creatng, Room
     {
         i = compute_creature_work_value(crconf->scavenge_value* game.conf.rules[creatng->owner].rooms.scavenge_efficiency, efficiency, cctrl->exp_level);
     }
+    i = world_heresy_work(creatng, i); /* endless: Night Court */
     return process_work_speed_on_work_value(creatng, i);
 }
 
@@ -861,7 +863,7 @@ GoldAmount calculate_correct_creature_pay(const struct Thing *thing)
             pay = (pay * game.conf.rules[dungeon->owner].gameplay.torture_payday) / 100;
         pay = pay * (100 - world_room_bonus(thing->owner, WRB_TreasuryPay)) / 100; /* endless: the Treasury's level */
     }
-    return pay;
+    return world_heresy_pay(thing, pay); /* endless: Company Scrip */
 }
 
 GoldAmount calculate_correct_creature_training_cost(const struct Thing *thing)
