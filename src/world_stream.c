@@ -93,6 +93,8 @@
 #include "net_state.h"
 #include "world_progress.h"
 #include "world_outpost.h"
+#include "world_setpiece.h"
+#include "world_dominion.h"
 #include "power_specials.h"
 #include "net_spectator.h"
 #include "roomspace_input.h"
@@ -163,6 +165,8 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_SETPIECES 0x31435053u /* "SPC1": the set pieces decided (world_setpiece.c) */
+#define WORLD_EXTRA_DOMINIONS 0x314D4444u /* "DDM1": the dead dominions decided (world_dominion.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -1201,19 +1205,21 @@ TbBool world_chunk_made(int32_t cx, int32_t cy)
 
 /** The heroes outposts and fortresses in a freshly generated chunk: their slabs, doors, traps, portals, loot, guards
  *  and books; whatever the generator put on their cells goes. */
+static struct OutpostOverlay outposts_ov; /* the last chunk's (the set pieces keep off its cells) */
+
 static void apply_outposts(int32_t cx, int32_t cy, struct WorldChunkData *cd)
 {
-    static struct OutpostOverlay ov;
-    if (world_outpost_overlay(cx, cy, &ov) <= 0)
+    struct OutpostOverlay *const ovp = &outposts_ov;
+    if (world_outpost_overlay(cx, cy, ovp) <= 0)
         return;
     for (int i = 0; i < WG_CHUNK_CELLS; i++)
     {
-        if (!ov.set[i])
+        if (!ovp->set[i])
             continue;
-        cd->kind[i] = ov.kind[i];
-        cd->owner[i] = ov.heroes[i] ? WOwn_Heroes : WOwn_Neutral;
-        cd->wall[i] = ov.wall[i];
-        cd->door[i] = ov.door[i];
+        cd->kind[i] = ovp->kind[i];
+        cd->owner[i] = ovp->heroes[i] ? WOwn_Heroes : WOwn_Neutral;
+        cd->wall[i] = ovp->wall[i];
+        cd->door[i] = ovp->door[i];
         if (slab_kind_has_no_ownership(cd->kind[i]))
             cd->owner[i] = WOwn_Neutral;
     }
@@ -1222,7 +1228,62 @@ static void apply_outposts(int32_t cx, int32_t cy, struct WorldChunkData *cd)
     {
         const struct WorldThing *th = &cd->things[t];
         const int sx = th->x / (COORD_PER_STL * STL_PER_SLB), sy = th->y / (COORD_PER_STL * STL_PER_SLB);
-        if ((sx >= 0) && (sx < WG_CHUNK) && (sy >= 0) && (sy < WG_CHUNK) && ov.set[sy * WG_CHUNK + sx])
+        if ((sx >= 0) && (sx < WG_CHUNK) && (sy >= 0) && (sy < WG_CHUNK) && ovp->set[sy * WG_CHUNK + sx])
+            continue;
+        if (kept != t)
+            cd->things[kept] = *th;
+        kept++;
+    }
+    cd->thing_count = kept;
+    for (int t = 0; (t < ovp->thing_count) && (cd->thing_count < WORLD_MAX_THINGS_PER_CHUNK); t++)
+    {
+        struct WorldThing *th = &cd->things[cd->thing_count++];
+        memset(th, 0, sizeof(*th));
+        th->oclass = ovp->things[t].oclass;
+        th->model = ovp->things[t].model;
+        th->owner = ovp->things[t].heroes ? WOwn_Heroes : WOwn_Neutral;
+        th->level = (th->oclass == TCls_Creature) ? (uint8_t)max(1, (int)ovp->things[t].level) : 0;
+        th->x = ovp->things[t].x;
+        th->y = ovp->things[t].y;
+        th->z = -1;
+        th->health = -1;
+        th->extra = ovp->things[t].extra;
+    }
+}
+
+/** The dead dominions in a freshly generated chunk (world_dominion.c): their rooms, walls, halls, pedestal, traps and
+ *  things (whatever the generator put on those cells goes); round them, and on their ways out, rock becomes earth.
+ *  Never over a cell a heroes outpost or fortress decided. */
+static void apply_dominions(int32_t cx, int32_t cy, struct WorldChunkData *cd, const struct OutpostOverlay *taken)
+{
+    static struct OutpostOverlay ov;
+    if (world_dominion_overlay(cx, cy, &ov) <= 0)
+        return;
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+    {
+        if (!ov.set[i] || taken->set[i])
+            continue;
+        if (ov.set[i] == 2)
+        {
+            if (cd->kind[i] == SlbT_ROCK)
+            {
+                cd->kind[i] = SlbT_EARTH;
+                cd->owner[i] = WOwn_Neutral;
+            }
+            continue;
+        }
+        cd->kind[i] = ov.kind[i];
+        cd->owner[i] = WOwn_Neutral;
+        cd->wall[i] = ov.wall[i];
+        cd->door[i] = 0;
+    }
+    int kept = 0;
+    for (int t = 0; t < cd->thing_count; t++)
+    {
+        const struct WorldThing *th = &cd->things[t];
+        const int sx = th->x / (COORD_PER_STL * STL_PER_SLB), sy = th->y / (COORD_PER_STL * STL_PER_SLB);
+        if ((sx >= 0) && (sx < WG_CHUNK) && (sy >= 0) && (sy < WG_CHUNK) && (ov.set[sy * WG_CHUNK + sx] == 1) &&
+            !taken->set[sy * WG_CHUNK + sx])
             continue;
         if (kept != t)
             cd->things[kept] = *th;
@@ -1231,6 +1292,66 @@ static void apply_outposts(int32_t cx, int32_t cy, struct WorldChunkData *cd)
     cd->thing_count = kept;
     for (int t = 0; (t < ov.thing_count) && (cd->thing_count < WORLD_MAX_THINGS_PER_CHUNK); t++)
     {
+        const int sx = ov.things[t].x / (COORD_PER_STL * STL_PER_SLB), sy = ov.things[t].y / (COORD_PER_STL * STL_PER_SLB);
+        if ((sx >= 0) && (sx < WG_CHUNK) && (sy >= 0) && (sy < WG_CHUNK) && taken->set[sy * WG_CHUNK + sx])
+            continue;
+        struct WorldThing *th = &cd->things[cd->thing_count++];
+        memset(th, 0, sizeof(*th));
+        th->oclass = ov.things[t].oclass;
+        th->model = ov.things[t].model;
+        th->owner = WOwn_Neutral;
+        th->x = ov.things[t].x;
+        th->y = ov.things[t].y;
+        th->z = -1;
+        th->health = -1;
+        th->extra = ov.things[t].extra;
+    }
+}
+
+/** The set pieces in a freshly generated chunk (world_setpiece.c): their slabs, doors, traps, things and creatures
+ *  (whatever the generator put on those cells goes); round them, and on their ways out, rock becomes earth. Never over
+ *  a cell a heroes outpost or fortress decided. */
+static void apply_setpieces(int32_t cx, int32_t cy, struct WorldChunkData *cd, const struct OutpostOverlay *taken)
+{
+    static struct OutpostOverlay ov;
+    if (world_setpiece_overlay(cx, cy, &ov) <= 0)
+        return;
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+    {
+        if (!ov.set[i] || taken->set[i])
+            continue;
+        if (ov.set[i] == 2)
+        {
+            if (cd->kind[i] == SlbT_ROCK)
+            {
+                cd->kind[i] = SlbT_EARTH;
+                cd->owner[i] = WOwn_Neutral;
+            }
+            continue;
+        }
+        cd->kind[i] = ov.kind[i];
+        cd->owner[i] = WOwn_Neutral;
+        cd->wall[i] = ov.wall[i];
+        cd->door[i] = ov.door[i];
+    }
+    int kept = 0;
+    for (int t = 0; t < cd->thing_count; t++)
+    {
+        const struct WorldThing *th = &cd->things[t];
+        const int sx = th->x / (COORD_PER_STL * STL_PER_SLB), sy = th->y / (COORD_PER_STL * STL_PER_SLB);
+        if ((sx >= 0) && (sx < WG_CHUNK) && (sy >= 0) && (sy < WG_CHUNK) && (ov.set[sy * WG_CHUNK + sx] == 1) &&
+            !taken->set[sy * WG_CHUNK + sx])
+            continue;
+        if (kept != t)
+            cd->things[kept] = *th;
+        kept++;
+    }
+    cd->thing_count = kept;
+    for (int t = 0; (t < ov.thing_count) && (cd->thing_count < WORLD_MAX_THINGS_PER_CHUNK); t++)
+    {
+        const int sx = ov.things[t].x / (COORD_PER_STL * STL_PER_SLB), sy = ov.things[t].y / (COORD_PER_STL * STL_PER_SLB);
+        if ((sx >= 0) && (sx < WG_CHUNK) && (sy >= 0) && (sy < WG_CHUNK) && taken->set[sy * WG_CHUNK + sx])
+            continue;
         struct WorldThing *th = &cd->things[cd->thing_count++];
         memset(th, 0, sizeof(*th));
         th->oclass = ov.things[t].oclass;
@@ -1952,6 +2073,8 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
     place_books(&ch, cx, cy, cd);
     decorate_rewards(&ch, cx, cy, cd);
     apply_outposts(cx, cy, cd);
+    apply_dominions(cx, cy, cd, &outposts_ov); /* dead dominions (world_dominion.c) */
+    apply_setpieces(cx, cy, cd, &outposts_ov); /* set pieces (world_setpiece.c) */
     if (!world_attract_active())
         circles_grade_chunk(cd); /* circles (world_circles.c): enemies as strong as the circle they stand in */
     {
@@ -5183,6 +5306,10 @@ static TbBool stamp_place_free(const struct WorldStamp *st)
         return false;
     if (world_outpost_in_box(x1 - 8, y1 - 8, x2 + 8, y2 + 8))
         return false; /* nor a heroes outpost */
+    if (world_setpiece_in_box(x1 - 8, y1 - 8, x2 + 8, y2 + 8))
+        return false; /* nor a set piece */
+    if (world_dominion_in_box(x1 - 8, y1 - 8, x2 + 8, y2 + 8))
+        return false; /* nor a dead dominion */
     /* nor ground already made (stored or loaded): the copy goes only into freshly generated chunks */
     for (int64_t cy = floor_div(y1 - 8, WG_CHUNK); cy <= floor_div(y2 + 8, WG_CHUNK); cy++)
         for (int64_t cx = floor_div(x1 - 8, WG_CHUNK); cx <= floor_div(x2 + 8, WG_CHUNK); cx++)
@@ -5489,6 +5616,10 @@ static void world_start_test(void)
 {
     if ((getenv("KFX_WORLD_OPSURVEY") != NULL) && (atoi(getenv("KFX_WORLD_OPSURVEY")) > 0))
         world_outpost_survey(atoi(getenv("KFX_WORLD_OPSURVEY")));
+    if ((getenv("KFX_WORLD_SPSURVEY") != NULL) && (atoi(getenv("KFX_WORLD_SPSURVEY")) > 0))
+        world_setpiece_survey(atoi(getenv("KFX_WORLD_SPSURVEY")));
+    if ((getenv("KFX_WORLD_DDSURVEY") != NULL) && (atoi(getenv("KFX_WORLD_DDSURVEY")) > 0))
+        world_dominion_survey(atoi(getenv("KFX_WORLD_DDSURVEY")));
     const char *v = getenv("KFX_WORLD_STARTTEST");
     if ((v == NULL) || (atoi(v) <= 0))
         return;
@@ -9191,10 +9322,68 @@ static void client_follow_new_heart(void)
     last_y = y;
 }
 
+/** Test hook KFX_WORLD_CLIENTSCAN="T,wx,wy,r" (any machine, meant for a joined thin client): from turn T, every 100
+ *  turns to T+600, what this machine has in the box of world slabs r round (wx, wy): slabs by sort (and whose) and
+ *  things by class, so a joined player's view of a place can be set beside the server's. */
+static void world_clientscan_hook(void)
+{
+    static int read = 0;
+    static long t0 = -1;
+    static long long cwx, cwy;
+    static int cr;
+    if (!read)
+    {
+        read = 1;
+        const char *v = getenv("KFX_WORLD_CLIENTSCAN");
+        if ((v == NULL) || (sscanf(v, "%ld,%lld,%lld,%d", &t0, &cwx, &cwy, &cr) != 4))
+            t0 = -1;
+    }
+    const long t = (long)game.play_gameturn - t0;
+    if ((t0 < 0) || (t < 0) || (t > 600) || ((t % 100) != 0))
+        return;
+    int loaded = 0, claimed = 0, rooms = 0, mine = 0, walls = 0, liquid = 0, hard = 0, doors_slab = 0;
+    for (long long y = cwy - cr; y <= cwy + cr; y++)
+        for (long long x = cwx - cr; x <= cwx + cr; x++)
+        {
+            MapSlabCoord ex, ey;
+            if (!world_engine_slab(x, y, &ex, &ey))
+                continue;
+            const struct SlabMap *slb = get_slabmap_block(ex, ey);
+            if (slabmap_block_invalid(slb))
+                continue;
+            loaded++;
+            if (slb->kind == SlbT_CLAIMED) claimed++;
+            else if ((slb->kind == SlbT_LAVA) || (slb->kind == SlbT_WATER)) liquid++;
+            else if (slb->kind == SlbT_ROCK_FLOOR) hard++;
+            else if (slab_kind_is_door(slb->kind)) doors_slab++;
+            else if (slab_kind_is_room(slb->kind)) { rooms++; mine += (slabmap_owner(slb) == my_player_number); }
+            else if (slab_kind_is_room_wall(slb->kind) || ((slb->kind >= SlbT_WALLDRAPE) && (slb->kind <= SlbT_DAMAGEDWALL))) walls++;
+        }
+    int traps = 0, objects = 0, creatures = 0, doors = 0;
+    for (long i = 1; i < THINGS_COUNT; i++)
+    {
+        const struct Thing *th = thing_get(i);
+        if (!thing_exists(th))
+            continue;
+        int64_t wx, wy;
+        world_slab_to_world(subtile_slab(th->mappos.x.stl.num), subtile_slab(th->mappos.y.stl.num), &wx, &wy);
+        if ((wx < cwx - cr) || (wx > cwx + cr) || (wy < cwy - cr) || (wy > cwy + cr))
+            continue;
+        if (th->class_id == TCls_Trap) traps++;
+        else if (th->class_id == TCls_Object) objects++;
+        else if (th->class_id == TCls_Creature) creatures++;
+        else if (th->class_id == TCls_Door) doors++;
+    }
+    SYNCLOG("World test: client scan round (%lld,%lld) r %d: %d slabs here: claimed %d, rooms %d (%d mine), walls %d, "
+        "liquid %d, hard %d, door slabs %d; traps %d, doors %d, objects %d, creatures %d", cwx, cwy, cr, loaded, claimed, rooms,
+        mine, walls, liquid, hard, doors_slab, traps, doors, objects, creatures);
+}
+
 void world_client_turn(void)
 {
     if (!W.active)
         return;
+    world_clientscan_hook();
     world_coop_refresh(); /* who is whose ally of a party (they see what each other sees) */
     client_follow_new_heart();
     world_colours_turn();
@@ -9274,6 +9463,9 @@ void world_process_turn(void)
     world_testheart_hook();
     world_testportal_hook();
     world_testoutpost_hook();
+    world_clientscan_hook(); /* (the same on the simulating machine, to set beside a client's) */
+    world_setpiece_test_turn(); /* test hook KFX_WORLD_TESTSETPIECE */
+    world_dominion_test_turn(); /* test hook KFX_WORLD_TESTDOMINION */
     world_teststrong_hook();
     world_testbox_hook();
     world_treasurytest_hook();
@@ -9659,6 +9851,8 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_SETPIECES, world_setpieces_save_size, world_setpieces_save, world_setpieces_load, world_setpieces_reset},
+    {WORLD_EXTRA_DOMINIONS, world_dominions_save_size, world_dominions_save, world_dominions_load, world_dominions_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 
