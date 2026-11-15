@@ -44,7 +44,7 @@ const char *world_next_seed_text(void);
 /** Generator versions: a world keeps the one it was made with (saved with it; older saves are version 6). */
 #define WORLD_GEN_OLDEST 6
 /** The version this build gives a new world (test hook KFX_WORLD_GENVERSION=6 or 7). */
-#define WORLD_NEW_GEN_VERSION 7 /* since 2026-11-12 (6 before) */
+#define WORLD_NEW_GEN_VERSION 8 /* since 2026-11-13 (7 from 2026-11-12, 6 before) */
 int world_new_gen_version(void);
 /** A replay or a network game's host says which version the next new world has (0: this build's). */
 void world_set_next_gen_version(int version);
@@ -271,6 +271,9 @@ enum WorldBlobCheck {
 enum WorldBlobCheck world_blob_check(const unsigned char *data, uint32_t len, char *why, size_t why_len);
 /** Called after a save without a world blob was loaded: no world. */
 void world_load_none(void);
+
+/** Steam Country (version 8's borderlands): is the map blotted out now (this machine's view is in it)? */
+TbBool world_steam_blots_map(void);
 
 #ifdef __cplusplus
 }

@@ -62,6 +62,7 @@
 #include "thing_list.h"
 #include "thing_navigate.h"
 #include "thing_stats.h"
+#include "world_temperament.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1537,7 +1538,7 @@ static TbBool op_region_rng(int64_t rx, int64_t ry, struct OpRng *rng)
     if (gen == NULL)
         return false;
     rng->s = wg_world_seed(gen) ^ op_mix((uint64_t)rx * 0x51ED27F1ULL) ^ op_mix((uint64_t)ry * 0x2545F491ULL + 0x4F555450ULL);
-    return op_rand(rng, 100) < OP_CHANCE;
+    return op_rand(rng, 100) < world_temper_outpost_chance(OP_CHANCE); /* (the world's temperament) */
 }
 
 /** The box an outpost takes with its way in (world slabs). */
@@ -2367,6 +2368,10 @@ static int op_spawn_model(MapSlabCoord sx, MapSlabCoord sy, long model, int leve
 {
     if ((model <= 0) || !creature_count_below_map_limit(0))
         return 0;
+    /* the Overgrowth (generator version 8): its heroes are Druids (a portal's Knight stays a Knight) */
+    if ((world_gen_version() >= 8) && (world_biome_at_engine_slab(sx, sy) == WgB_Overgrowth) &&
+        (model != get_id(creature_desc, "KNIGHT")) && (get_id(creature_desc, "DRUID") > 0))
+        model = get_id(creature_desc, "DRUID");
     struct Coord3d pos;
     pos.x.val = subtile_coord_center(slab_subtile_center(sx)) + (MapCoord)(op_rand(rng, 161) - 80);
     pos.y.val = subtile_coord_center(slab_subtile_center(sy)) + (MapCoord)(op_rand(rng, 161) - 80);

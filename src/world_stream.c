@@ -93,6 +93,7 @@
 #include "net_state.h"
 #include "world_progress.h"
 #include "world_outpost.h"
+#include "world_overgrowth.h"
 #include "power_specials.h"
 #include "net_spectator.h"
 #include "roomspace_input.h"
@@ -108,6 +109,7 @@
 #include "net_exchange_common.h"
 #include "world_caretaker.h"
 #include "world_attract.h"
+#include "world_temperament.h"
 #include "kfx_deflate.h"
 #include "net_secure.h"
 #define XXH_INLINE_ALL
@@ -163,6 +165,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_TEMPER 0x31504D54u   /* "TMP1": the world's temperament (world_temperament.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -1245,6 +1248,263 @@ static void apply_outposts(int32_t cx, int32_t cy, struct WorldChunkData *cd)
     }
 }
 
+/** Version 8's mother lodes (world_gen8.inc): "something has made its home there". A lode whose middle is in this
+ *  freshly generated chunk gets a cave of 3x3 dug into its middle, and in it one of the heroes' beasts (hostile to
+ *  every keeper, as the wild packs are), by the lode's distance from the start: a Spider, a Hell Hound out past 300
+ *  slabs, a Dragon past 700; the circles then grade its level as they grade every enemy of the chunk. */
+static void apply_lodes(int32_t cx, int32_t cy, struct WorldChunkData *cd)
+{
+    if ((W.gen_version < 8) || (W.gen == NULL) || world_attract_active())
+        return;
+    int64_t lx[4], ly[4];
+    int lr[4];
+    const int n = wg_mother_lodes_in(W.gen, (int64_t)cx * WG_CHUNK, (int64_t)cy * WG_CHUNK, (int64_t)cx * WG_CHUNK + WG_CHUNK - 1,
+        (int64_t)cy * WG_CHUNK + WG_CHUNK - 1, lx, ly, lr, 4);
+    for (int k = 0; k < n; k++)
+    {
+        const int x = (int)(lx[k] - (int64_t)cx * WG_CHUNK), y = (int)(ly[k] - (int64_t)cy * WG_CHUNK);
+        int dug = 0;
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                if ((x + dx < 0) || (y + dy < 0) || (x + dx >= WG_CHUNK) || (y + dy >= WG_CHUNK))
+                    continue;
+                const int i = (y + dy) * WG_CHUNK + x + dx;
+                if ((cd->kind[i] == SlbT_GOLD) || (cd->kind[i] == SlbT_DENSEGOLD))
+                {
+                    cd->kind[i] = SlbT_PATH;
+                    cd->owner[i] = WOwn_Neutral;
+                    dug++;
+                }
+            }
+        if ((dug == 0) || (cd->thing_count >= WORLD_MAX_THINGS_PER_CHUNK))
+            continue;
+        const double d = sqrt((double)(lx[k] - 8) * (double)(lx[k] - 8) + (double)(ly[k] - 8) * (double)(ly[k] - 8));
+        const char *name = (d > 700.0) ? "DRAGON" : ((d > 300.0) ? "HELL_HOUND" : "SPIDER");
+        const long model = get_id(creature_desc, name);
+        if (model <= 0)
+            continue;
+        struct WorldThing *th = &cd->things[cd->thing_count++];
+        memset(th, 0, sizeof(*th));
+        th->oclass = TCls_Creature;
+        th->model = (uint16_t)model;
+        th->owner = WOwn_Heroes;
+        th->level = 1;
+        th->x = (int32_t)((x * STL_PER_SLB + 1) * COORD_PER_STL + COORD_PER_STL / 2);
+        th->y = (int32_t)((y * STL_PER_SLB + 1) * COORD_PER_STL + COORD_PER_STL / 2);
+        th->z = -1;
+        th->health = -1;
+        th->extra = CHeroTsk_DefendSpawn; /* stays home, as the wild packs and the fortresses' guards */
+        SYNCLOG("World: a mother lode at world slab (%lld,%lld) (radius %d): a %s lives in it", (long long)lx[k], (long long)ly[k],
+            lr[k], name);
+    }
+}
+
+/** The borderlands (roadmap "Borderlands", generator version 8): what each named border does to a chunk made in it.
+ *    Obsidian (Rocky Depths | Volcanic Rifts)  its rock can be dug, ten times as slowly as earth (earth of ten times
+ *                                              earth's health)
+ *    Frostmarsh (Flooded Grottos | Frozen)     its water is frozen over: walkable ground (dirt path)
+ *    Ashlands (Sandstone | Volcanic Rifts)     its gold is all dense gold
+ *    Vault Country (Earthen | Ancient Ruins)   twice the caves: one chunk in two of it has a sealed vault (4x4, a ring of
+ *                                              rock with one plug of gold) with gold and, one in three, a special box
+ *    Oasis (Earthen | Sandstone Wastes)        the best Hatchery ground, and it belongs to somebody already: one chunk
+ *                                              in three of it has a heroes' Hatchery (5x5, walled, a braced door)
+ *    Steam Country (Flooded | Volcanic Rifts)  its vents blot out the map: world_steam_blots_map
+ *  Seeded by the world and the chunk: a chunk is the same whenever it is made. */
+static void apply_borders(const struct WgChunk *ch, int32_t cx, int32_t cy, struct WorldChunkData *cd)
+{
+    if ((W.gen_version < 8) || world_attract_active())
+        return;
+    int count[WgB_COUNT];
+    memset(count, 0, sizeof(count));
+    const struct SlabConfigStats *earth = get_slab_kind_stats(SlbT_EARTH);
+    const uint16_t obsidian_health = (uint16_t)min(65535L, 10L * (long)game.block_health[earth->block_health_index]);
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+    {
+        const int b = ch->biomes[i];
+        if ((b < 0) || (b >= WgB_COUNT))
+            continue;
+        count[b]++;
+        if ((cd->owner[i] != WOwn_Neutral) || cd->wall[i] || (cd->door[i] != 0))
+            continue;
+        if ((b == WgB_Obsidian) && (cd->kind[i] == SlbT_ROCK))
+        {
+            cd->kind[i] = SlbT_EARTH;
+            cd->health[i] = obsidian_health;
+        } else if ((b == WgB_Frostmarsh) && (cd->kind[i] == SlbT_WATER))
+            cd->kind[i] = SlbT_PATH;
+        else if ((b == WgB_Ashlands) && (cd->kind[i] == SlbT_GOLD))
+            cd->kind[i] = SlbT_DENSEGOLD;
+    }
+    uint64_t h = W.seed ^ ((uint64_t)(int64_t)cx * 0x9E3779B97F4A7C15ULL) ^ ((uint64_t)(int64_t)cy * 0xC2B2AE3D27D4EB4FULL) ^ 0x424F5244ULL;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    const int x0 = 3 + (int)((h >> 8) % 6), y0 = 3 + (int)((h >> 16) % 6);
+    TbBool clear = true;
+    for (int y = y0 - 1; (y <= y0 + 5) && clear; y++)
+        for (int x = x0 - 1; (x <= x0 + 5) && clear; x++)
+        {
+            const int i = y * WG_CHUNK + x;
+            clear = (cd->owner[i] == WOwn_Neutral) && !cd->wall[i] && (cd->door[i] == 0) &&
+                ((cd->kind[i] == SlbT_EARTH) || (cd->kind[i] == SlbT_ROCK) || (cd->kind[i] == SlbT_PATH) || (cd->kind[i] == SlbT_GOLD));
+        }
+    for (int t = 0; (t < cd->thing_count) && clear; t++)
+    {
+        const int sx = cd->things[t].x / (COORD_PER_STL * STL_PER_SLB), sy = cd->things[t].y / (COORD_PER_STL * STL_PER_SLB);
+        clear = !((sx >= x0 - 1) && (sx <= x0 + 5) && (sy >= y0 - 1) && (sy <= y0 + 5));
+    }
+    if (clear && (count[WgB_VaultCountry] >= WG_CHUNK_CELLS / 2) && (((h >> 24) % 2) == 0))
+    {
+        /* a sealed vault: 4x4 inside a ring of rock, one plug of gold */
+        for (int y = y0 - 1; y <= y0 + 4; y++)
+            for (int x = x0 - 1; x <= x0 + 4; x++)
+            {
+                const TbBool in = (x >= x0) && (y >= y0) && (x < x0 + 4) && (y < y0 + 4);
+                cd->kind[y * WG_CHUNK + x] = in ? SlbT_PATH : SlbT_ROCK;
+            }
+        static const int pdx[4] = {1, -1, 0, 0}, pdy[4] = {0, 0, 1, -1};
+        const int d = (int)((h >> 32) % 4);
+        const int px = (pdx[d] > 0) ? x0 + 4 : ((pdx[d] < 0) ? x0 - 1 : x0 + 1), py = (pdy[d] > 0) ? y0 + 4 : ((pdy[d] < 0) ? y0 - 1 : y0 + 1);
+        cd->kind[py * WG_CHUNK + px] = SlbT_GOLD;
+        static const char *const loot[] = {"GOLD_CHEST", "GOLD_CHEST", "GOLDL"};
+        for (int k = 0; (k < 3) && (cd->thing_count < WORLD_MAX_THINGS_PER_CHUNK); k++)
+        {
+            const long m = get_id(object_desc, loot[k]);
+            if (m <= 0)
+                continue;
+            struct WorldThing *th = &cd->things[cd->thing_count++];
+            memset(th, 0, sizeof(*th));
+            th->oclass = TCls_Object;
+            th->model = (uint16_t)m;
+            th->owner = WOwn_Neutral;
+            th->x = (int32_t)(((x0 + 1 + k % 2) * STL_PER_SLB + 1) * COORD_PER_STL + COORD_PER_STL / 2);
+            th->y = (int32_t)(((y0 + 1 + k / 2) * STL_PER_SLB + 1) * COORD_PER_STL + COORD_PER_STL / 2);
+            th->z = -1;
+            th->health = -1;
+        }
+        if ((((h >> 40) % 3) == 0) && (cd->thing_count < WORLD_MAX_THINGS_PER_CHUNK))
+        {
+            static const char *const boxes[] = {"SPECBOX_INCLEV", "SPECBOX_MKSAFE", "SPECBOX_HEALALL", "SPECBOX_REVMAP"};
+            const long m = get_id(object_desc, boxes[(h >> 44) % 4]);
+            if (m > 0)
+            {
+                struct WorldThing *th = &cd->things[cd->thing_count++];
+                memset(th, 0, sizeof(*th));
+                th->oclass = TCls_Object;
+                th->model = (uint16_t)m;
+                th->owner = WOwn_Neutral;
+                th->x = (int32_t)(((x0 + 2) * STL_PER_SLB + 1) * COORD_PER_STL + COORD_PER_STL / 2);
+                th->y = (int32_t)(((y0 + 2) * STL_PER_SLB + 1) * COORD_PER_STL + COORD_PER_STL / 2);
+                th->z = -1;
+                th->health = -1;
+            }
+        }
+        SYNCLOG("World: borderlands: chunk (%d,%d): a sealed vault in Vault Country", (int)cx, (int)cy);
+    } else if (clear && (count[WgB_Oasis] >= WG_CHUNK_CELLS / 2) && (((h >> 24) % 3) == 0))
+    {
+        /* a heroes' Hatchery: 5x5 of Hatchery (x0-1 .. x0+3 with walls round), a braced door on one side */
+        for (int y = y0 - 1; y <= y0 + 5; y++)
+            for (int x = x0 - 1; x <= x0 + 5; x++)
+            {
+                const int i = y * WG_CHUNK + x;
+                const TbBool wall = (x == x0 - 1) || (y == y0 - 1) || (x == x0 + 5) || (y == y0 + 5);
+                cd->kind[i] = wall ? SlbT_WALLDRAPE : SlbT_GARDEN;
+                cd->wall[i] = wall;
+                cd->owner[i] = WOwn_Heroes;
+            }
+        const int di = (y0 + 2) * WG_CHUNK + (x0 - 1);
+        cd->kind[di] = SlbT_CLAIMED;
+        cd->wall[di] = 0;
+        const long braced = get_id(door_desc, "BRACED");
+        cd->door[di] = (uint8_t)((braced > 0) ? braced : 2);
+        SYNCLOG("World: borderlands: chunk (%d,%d): a heroes' Hatchery in the Oasis", (int)cx, (int)cy);
+    }
+}
+
+/** Steam Country (the borderlands): while this machine's view is in it, the map is blotted out for 4 seconds in every
+ *  30 (the minimap is not drawn). */
+TbBool world_steam_blots_map(void)
+{
+    static long checked = -1000;
+    static TbBool in_steam = false;
+    if (!W.active || (W.gen == NULL) || (W.gen_version < 8))
+        return false;
+    if ((long)game.play_gameturn - checked >= 40)
+    {
+        checked = (long)game.play_gameturn;
+        MapSlabCoord sx, sy;
+        in_steam = world_view_slab(&sx, &sy) &&
+            (wg_biome_at(W.gen, world_slab_x_of(sx), world_slab_y_of(sy)) == WgB_SteamCountry);
+    }
+    return in_steam && ((game.play_gameturn % 600) < 80);
+}
+
+/** World temperaments (world_temperament.c): new ground's gold (poor: a third of it earth; rich: a quarter of it
+ *  dense) and the wonder's hall (the Well of Gold: a 3x3 Temple nobody owns in a 5x5 hall). Seeded by the world slab. */
+static void apply_temperament(int32_t cx, int32_t cy, struct WorldChunkData *cd)
+{
+    if (world_attract_active())
+        return;
+    const int gold = world_temper_gold();
+    if (gold != 0)
+    {
+        int changed = 0;
+        for (int i = 0; i < WG_CHUNK_CELLS; i++)
+        {
+            if ((cd->kind[i] != SlbT_GOLD) || (cd->owner[i] != WOwn_Neutral) || cd->wall[i])
+                continue;
+            uint64_t h = W.seed ^ ((uint64_t)((int64_t)cx * WG_CHUNK + i % WG_CHUNK) * 0x9E3779B97F4A7C15ULL) ^
+                ((uint64_t)((int64_t)cy * WG_CHUNK + i / WG_CHUNK) * 0xC2B2AE3D27D4EB4FULL) ^ 0x474F4C44ULL;
+            h ^= h >> 33;
+            h *= 0xff51afd7ed558ccdULL;
+            h ^= h >> 33;
+            if ((gold < 0) && ((h % 3) == 0))
+            {
+                cd->kind[i] = SlbT_EARTH;
+                cd->health[i] = 0;
+                changed++;
+            } else if ((gold > 0) && ((h % 4) == 0))
+            {
+                cd->kind[i] = SlbT_DENSEGOLD;
+                cd->health[i] = 0;
+                changed++;
+            }
+        }
+        (void)changed;
+    }
+    int64_t wx, wy;
+    if (!world_temper_wonder(&wx, &wy))
+        return;
+    const int64_t x0 = (int64_t)cx * WG_CHUNK, y0 = (int64_t)cy * WG_CHUNK;
+    if ((wx < x0) || (wy < y0) || (wx >= x0 + WG_CHUNK) || (wy >= y0 + WG_CHUNK))
+        return;
+    const int mx = (int)(wx - x0), my = (int)(wy - y0);
+    for (int y = my - 2; y <= my + 2; y++)
+        for (int x = mx - 2; x <= mx + 2; x++)
+        {
+            const int i = y * WG_CHUNK + x;
+            const TbBool temple = (abs(x - mx) <= 1) && (abs(y - my) <= 1);
+            cd->kind[i] = temple ? SlbT_TEMPLE : SlbT_PATH;
+            cd->owner[i] = WOwn_Neutral;
+            cd->wall[i] = 0;
+            cd->door[i] = 0;
+            cd->health[i] = 0;
+        }
+    /* nothing of the ground's stands in the hall */
+    int kept = 0;
+    for (int t = 0; t < cd->thing_count; t++)
+    {
+        const int sx = cd->things[t].x / (COORD_PER_STL * STL_PER_SLB), sy = cd->things[t].y / (COORD_PER_STL * STL_PER_SLB);
+        if ((abs(sx - mx) <= 2) && (abs(sy - my) <= 2))
+            continue;
+        cd->things[kept++] = cd->things[t];
+    }
+    cd->thing_count = kept;
+    SYNCLOG("World: chunk (%d,%d): the Well of Gold (a Temple nobody owns) at world slab (%lld,%lld)", (int)cx, (int)cy,
+        (long long)wx, (long long)wy);
+}
+
 /** Reward caves get a few decorations along their edges (2026-11-08): candles and lanterns round a box's shrine,
  *  barrels and lanterns in a hoard's treasury, the biome's rocks, ferns and mushrooms where creatures wait. Seeded by
  *  the world slab, so a cave across chunks gets the same either way. */
@@ -1758,6 +2018,10 @@ int world_biome_parent(int biome)
     case WgB_LavaOcean: case WgB_LavaRivers: return WgB_Volcanic;
     case WgB_FloodedOcean: case WgB_FloodedRivers: return WgB_Flooded;
     case WgB_DeadMans: return WgB_Earthen;
+    /* version 8: the Overgrowth is Earthen Caverns; a border counts as one of its two lands (the fiercer, for its packs) */
+    case WgB_Overgrowth: case WgB_Oasis: case WgB_VaultCountry: return WgB_Earthen;
+    case WgB_SteamCountry: case WgB_Obsidian: case WgB_Ashlands: return WgB_Volcanic;
+    case WgB_Frostmarsh: return WgB_Frozen;
     default: return ((biome >= 0) && (biome < WG_V6_BIOMES)) ? biome : WgB_Earthen;
     }
 }
@@ -1952,6 +2216,27 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
     place_books(&ch, cx, cy, cd);
     decorate_rewards(&ch, cx, cy, cd);
     apply_outposts(cx, cy, cd);
+    if (W.gen_version >= 8)
+    {
+        /* the Overgrowth's heroes are Druids */
+        const long druid = get_id(creature_desc, "DRUID");
+        int made = 0;
+        for (int t = 0; (t < cd->thing_count) && (druid > 0); t++)
+        {
+            struct WorldThing *th = &cd->things[t];
+            const int sx = th->x / (COORD_PER_STL * STL_PER_SLB), sy = th->y / (COORD_PER_STL * STL_PER_SLB);
+            if ((th->oclass != TCls_Creature) || (th->owner != WOwn_Heroes) || (sx < 0) || (sy < 0) || (sx >= WG_CHUNK) ||
+                (sy >= WG_CHUNK) || (ch.biomes[sy * WG_CHUNK + sx] != WgB_Overgrowth) || (th->model == druid))
+                continue;
+            th->model = (uint16_t)druid;
+            made++;
+        }
+        if (made > 0)
+            SYNCLOG("World: chunk (%d,%d): %d heroes of the Overgrowth are Druids", (int)cx, (int)cy, made);
+    }
+    apply_lodes(cx, cy, cd); /* version 8: what lives in the mother lodes */
+    apply_borders(&ch, cx, cy, cd); /* version 8: the borderlands' rules */
+    apply_temperament(cx, cy, cd); /* the world's temperament: gold, the wonder */
     if (!world_attract_active())
         circles_grade_chunk(cd); /* circles (world_circles.c): enemies as strong as the circle they stand in */
     {
@@ -5055,6 +5340,8 @@ void world_level_start(void)
     }
     if (!world_init_state())
         return;
+    if (!world_attract_active())
+        world_temper_new_world(W.home_x, W.home_y); /* (a temperament is dealt to a new world only) */
     netstate_take_all_users();
     /* a network game: the other seats get their start dungeon at the first world turn; until their heart is bound
        they must not lose for having none */
@@ -5148,7 +5435,7 @@ void world_level_start(void)
             if (counts[b] > 0)
                 snprintf(text + strlen(text), sizeof(text) - strlen(text), "%s%s %d", text[0] ? ", " : "", wg_biome_name(b),
                     counts[b]);
-        SYNCLOG("World: generator version 7 start in %s; within 48 slabs: %s; %ld%% lava or water",
+        SYNCLOG("World: generator version %d start in %s; within 48 slabs: %s; %ld%% lava or water", W.gen_version,
             wg_biome_name(wg_biome_at(W.gen, W.home_x, W.home_y)), text, (samples > 0) ? liquid * 100 / samples : 0);
     }
     world_start_test();
@@ -5732,6 +6019,7 @@ static void world_first_turn(void)
         }
     }
     world_progress_first_turn();
+    world_temper_first_turn();
     /* a new seat starts with the gold the level gives PLAYER0 (the script's START_MONEY names PLAYER0 only) */
     const struct Dungeon *first = get_players_num_dungeon(PLAYER0);
     if (!dungeon_invalid(first))
@@ -9000,6 +9288,248 @@ static void world_testbox_hook(void)
     }
 }
 
+/** Test hook KFX_WORLD_TESTGEN8="T" (version 8 worlds): at T the mother lode nearest the start (within 1,200 slabs) loads,
+ *  and its gold and what lives in it are logged; the nearest Overgrowth (chunk middles out to 60 chunks) loads, and a
+ *  tunnel of 7 slabs of nobody's dirt path is dug into its earth. Every 200 turns to T+3000: how much of that tunnel is
+ *  earth again (with KFX_WORLD_DAYNIGHT short days, several dawns pass). */
+static void world_testgen8_hook(void)
+{
+    static long base = -2;
+    static int64_t tx[7], ty[7];
+    static int ntun;
+    if (base == -2)
+    {
+        const char *v = getenv("KFX_WORLD_TESTGEN8");
+        base = (v != NULL) ? atol(v) : -1;
+    }
+    if ((base < 0) || (W.gen == NULL) || (W.gen_version < 8))
+        return;
+    const long t = (long)game.play_gameturn - base;
+    if (t == 0)
+    {
+        struct WgStructRef start;
+        wg_start_ref(W.gen, &start);
+        int64_t lx[16], ly[16];
+        int lr[16];
+        const int n = wg_mother_lodes_in(W.gen, start.heart_x - 1200, start.heart_y - 1200, start.heart_x + 1200, start.heart_y + 1200,
+            lx, ly, lr, 16);
+        int best = -1;
+        int64_t bd = -1;
+        for (int k = 0; k < n; k++)
+        {
+            const int64_t d = (lx[k] - start.heart_x) * (lx[k] - start.heart_x) + (ly[k] - start.heart_y) * (ly[k] - start.heart_y);
+            if ((bd < 0) || (d < bd))
+            {
+                bd = d;
+                best = k;
+            }
+        }
+        SYNCLOG("World test: gen8: %d mother lodes within 1200 slabs", n);
+        if (best >= 0)
+        {
+            world_load_chunks_round_world(lx[best], ly[best], 1);
+            int gold = 0, dense = 0, path = 0;
+            for (int64_t y = ly[best] - lr[best]; y <= ly[best] + lr[best]; y++)
+                for (int64_t x = lx[best] - lr[best]; x <= lx[best] + lr[best]; x++)
+                {
+                    MapSlabCoord ex, ey;
+                    if (!world_engine_slab(x, y, &ex, &ey))
+                        continue;
+                    const SlabKind k = get_slabmap_block(ex, ey)->kind;
+                    gold += (k == SlbT_GOLD);
+                    dense += (k == SlbT_DENSEGOLD);
+                    path += (k == SlbT_PATH);
+                }
+            const char *who = "nothing";
+            MapSlabCoord ex, ey;
+            if (world_engine_slab(lx[best], ly[best], &ex, &ey))
+            {
+                const struct StructureList *slist = get_list_for_thing_class(TCls_Creature);
+                long guard = 0;
+                for (long i = slist->index; (i > 0) && (guard++ <= (long)slist->count);)
+                {
+                    struct Thing *thing = thing_get(i);
+                    if (thing_is_invalid(thing))
+                        break;
+                    i = thing->next_of_class;
+                    if ((labs((long)subtile_slab(thing->mappos.x.stl.num) - ex) <= 2) && (labs((long)subtile_slab(thing->mappos.y.stl.num) - ey) <= 2))
+                        who = thing_model_name(thing);
+                }
+            }
+            SYNCLOG("World test: gen8: the nearest mother lode at world slab (%lld,%lld), radius %d: %d gold, %d dense gold, %d dug; "
+                "in it: %s", (long long)lx[best], (long long)ly[best], lr[best], gold, dense, path, who);
+        }
+        /* the Overgrowth */
+        ntun = 0;
+        for (int r = 1; (r <= 60) && (ntun == 0); r++)
+            for (int oy = -r; (oy <= r) && (ntun == 0); oy++)
+                for (int ox = -r; (ox <= r) && (ntun == 0); ox++)
+                {
+                    if ((abs(ox) != r) && (abs(oy) != r))
+                        continue;
+                    const int64_t fx = start.heart_x + (int64_t)ox * WG_CHUNK, fy = start.heart_y + (int64_t)oy * WG_CHUNK;
+                    if (wg_biome_at(W.gen, fx, fy) != WgB_Overgrowth)
+                        continue;
+                    world_load_chunks_round_world(fx, fy, 1);
+                    /* an earth slab there, and 7 slabs east of it dug */
+                    for (int64_t y = fy - 6; (y <= fy + 6) && (ntun == 0); y++)
+                        for (int64_t x = fx - 6; (x <= fx + 6) && (ntun == 0); x++)
+                        {
+                            TbBool all = true;
+                            for (int k = 0; (k < 7) && all; k++)
+                            {
+                                MapSlabCoord ex, ey;
+                                all = world_engine_slab(x + k, y, &ex, &ey) && (get_slabmap_block(ex, ey)->kind == SlbT_EARTH) &&
+                                    (wg_biome_at(W.gen, x + k, y) == WgB_Overgrowth);
+                            }
+                            if (!all)
+                                continue;
+                            for (int k = 0; k < 7; k++)
+                            {
+                                MapSlabCoord ex, ey;
+                                world_engine_slab(x + k, y, &ex, &ey);
+                                place_slab_type_on_map(SlbT_PATH, slab_subtile_center(ex), slab_subtile_center(ey), game.neutral_player_num, 0);
+                                tx[ntun] = x + k;
+                                ty[ntun] = y;
+                                ntun++;
+                            }
+                            {
+                                /* a slab of player 0's 3 slabs off keeps the ground loaded (its territory) */
+                                MapSlabCoord kx, ky;
+                                if (world_engine_slab(x - 3, y, &kx, &ky))
+                                    place_slab_type_on_map(SlbT_CLAIMED, slab_subtile_center(kx), slab_subtile_center(ky), PLAYER0, 0);
+                            }
+                            SYNCLOG("World test: gen8: a tunnel of 7 slabs dug in the Overgrowth at world slab (%lld,%lld)", (long long)x,
+                                (long long)y);
+                        }
+                }
+        if (ntun == 0)
+            SYNCLOG("World test: gen8: no Overgrowth earth near the start");
+        return;
+    }
+    if ((t > 0) && (t <= 3000) && ((t % 200) == 0) && (ntun > 0))
+    {
+        int earth = 0, loaded = 0;
+        for (int k = 0; k < ntun; k++)
+        {
+            MapSlabCoord ex, ey;
+            if (!world_engine_slab(tx[k], ty[k], &ex, &ey))
+                continue;
+            loaded++;
+            earth += (get_slabmap_block(ex, ey)->kind == SlbT_EARTH);
+        }
+        SYNCLOG("World test: gen8: the tunnel: %d of its %d slabs earth again (%d loaded), day %ld, %s", earth, ntun, loaded,
+            world_day_number(), world_is_day() ? "day" : "night");
+    }
+}
+
+/** Test hook KFX_WORLD_TESTBORDERS="T" (version 8 worlds): at T, for each of the six borderlands, the nearest (chunk
+ *  middles out to 80 chunks) loads with the chunks round it, and on its own slabs there the border's mark is counted:
+ *  Obsidian's earth (and how much of it is ten times as hard), Frostmarsh's water and dirt path, Ashlands' gold and dense
+ *  gold; vaults and Hatcheries are logged as they are made. */
+static void world_testborders_hook(void)
+{
+    static long base = -2;
+    if (base == -2)
+    {
+        const char *v = getenv("KFX_WORLD_TESTBORDERS");
+        base = (v != NULL) ? atol(v) : -1;
+    }
+    if ((base < 0) || (W.gen == NULL) || (W.gen_version < 8) || ((long)game.play_gameturn != base))
+        return;
+    struct WgStructRef start;
+    wg_start_ref(W.gen, &start);
+    static const int borders[6] = {WgB_SteamCountry, WgB_Oasis, WgB_VaultCountry, WgB_Obsidian, WgB_Frostmarsh, WgB_Ashlands};
+    const struct SlabConfigStats *earth = get_slab_kind_stats(SlbT_EARTH);
+    const long earth_health = (long)game.block_health[earth->block_health_index];
+    for (int k = 0; k < 6; k++)
+    {
+        TbBool found = false;
+        int64_t fx = 0, fy = 0;
+        for (int r = 1; (r <= 80) && !found; r++)
+            for (int oy = -r; (oy <= r) && !found; oy++)
+                for (int ox = -r; (ox <= r) && !found; ox++)
+                {
+                    if ((abs(ox) != r) && (abs(oy) != r))
+                        continue;
+                    fx = start.heart_x + (int64_t)ox * WG_CHUNK;
+                    fy = start.heart_y + (int64_t)oy * WG_CHUNK;
+                    found = (wg_biome_at(W.gen, fx, fy) == borders[k]);
+                }
+        if (!found)
+        {
+            SYNCLOG("World test: borders: no %s within 80 chunks", wg_biome_name(borders[k]));
+            continue;
+        }
+        world_load_chunks_round_world(fx, fy, 1);
+        int cells = 0, hard = 0, earthc = 0, water = 0, path = 0, gold = 0, dense = 0, rock = 0;
+        for (int64_t y = fy - 24; y <= fy + 24; y++)
+            for (int64_t x = fx - 24; x <= fx + 24; x++)
+            {
+                MapSlabCoord ex, ey;
+                if (!world_engine_slab(x, y, &ex, &ey) || (wg_biome_at(W.gen, x, y) != borders[k]))
+                    continue;
+                const struct SlabMap *slb = get_slabmap_block(ex, ey);
+                cells++;
+                switch (slb->kind)
+                {
+                case SlbT_EARTH: earthc++; hard += ((long)slb->health > earth_health) ? 1 : 0; break;
+                case SlbT_WATER: water++; break;
+                case SlbT_PATH: path++; break;
+                case SlbT_GOLD: gold++; break;
+                case SlbT_DENSEGOLD: dense++; break;
+                case SlbT_ROCK: rock++; break;
+                default: break;
+                }
+            }
+        SYNCLOG("World test: borders: %s at world slab (%lld,%lld): %d of its slabs loaded: rock %d, earth %d (%d harder than earth), "
+            "water %d, dirt path %d, gold %d, dense gold %d", wg_biome_name(borders[k]), (long long)fx, (long long)fy, cells, rock,
+            earthc, hard, water, path, gold, dense);
+    }
+}
+
+/** Test hook KFX_WORLD_TESTWONDER="T" (a world with a temperament): at T the wonder's chunks load and its Temple is
+ *  logged, then given to player 0 (as if its imps had claimed it); its gold is logged at T+1 and at T+1201. */
+static void world_testwonder_hook(void)
+{
+    static long base = -2;
+    if (base == -2)
+    {
+        const char *v = getenv("KFX_WORLD_TESTWONDER");
+        base = (v != NULL) ? atol(v) : -1;
+    }
+    int64_t wx, wy;
+    if ((base < 0) || !world_temper_wonder(&wx, &wy))
+        return;
+    const long t = (long)game.play_gameturn - base;
+    struct Dungeon *dungeon = get_players_num_dungeon(PLAYER0);
+    if ((t == 1) || (t == 1201))
+        SYNCLOG("World test: wonder: player 0 has %ld gold at T+%ld", dungeon_invalid(dungeon) ? -1L : (long)dungeon->total_money_owned, t);
+    if (t != 0)
+        return;
+    world_load_chunks_round_world(wx, wy, 1);
+    MapSlabCoord sx, sy;
+    if (!world_engine_slab(wx, wy, &sx, &sy))
+    {
+        SYNCLOG("World test: wonder: its slab (%lld,%lld) did not load", (long long)wx, (long long)wy);
+        return;
+    }
+    int temple = 0;
+    for (int dy = -2; dy <= 2; dy++)
+        for (int dx = -2; dx <= 2; dx++)
+            temple += (get_slabmap_block(sx + dx, sy + dy)->kind == SlbT_TEMPLE);
+    struct SlabMap *slb = get_slabmap_block(sx, sy);
+    struct Room *room = (slb->room_index > 0) ? room_get(slb->room_index) : NULL;
+    SYNCLOG("World test: wonder: at world slab (%lld,%lld): %d Temple slabs in its hall, room %d (owner %d, %d slabs)",
+        (long long)wx, (long long)wy, temple, (int)slb->room_index, (room != NULL) ? (int)room->owner : -1,
+        (room != NULL) ? (int)room->slabs_count : -1);
+    if ((room != NULL) && !room_is_invalid(room))
+    {
+        take_over_room(room, PLAYER0);
+        SYNCLOG("World test: wonder: its Temple is player 0's now (owner %d)", (int)room_get(slb->room_index)->owner);
+    }
+}
+
 /** Test hook KFX_WORLD_TESTFREEZE="T": at T, 7 chunks east of the start, a heroes' Knight with a set mood (hunger 1234,
  *  annoyance 777, 5 kills, 2 paydays owed), a dead Archer, and a heroes' prison holding a neutral Fly; the chunk
  *  freezes when nothing keeps it; at T+700 it loads again and what came back is logged. */
@@ -9223,6 +9753,7 @@ void world_process_turn(void)
         world_first_turn();
     if (world_paged)
         world_autopan(); /* after the first turn has put the camera on the heart */
+    world_temper_turn();
     if (W.rebind_hearts)
     {
         W.rebind_hearts = false;
@@ -9278,11 +9809,15 @@ void world_process_turn(void)
     world_testbox_hook();
     world_treasurytest_hook();
     world_testfreeze_hook();
+    world_testborders_hook();
+    world_testwonder_hook();
+    world_testgen8_hook();
     world_daynight_turn();
     world_wild_turn();
     world_circles_turn();
     world_misdeeds_turn();
     world_outposts_turn();
+    world_overgrowth_turn(); /* version 8: the Overgrowth's earth closes at dawn */
     world_testgold();
     world_tagdig();
     world_explore_hook();
@@ -9370,6 +9905,7 @@ void world_level_end(void)
     world_perks_reset();
     world_caretaker_reset();
     world_outposts_reset();
+    world_overgrowth_reset();
     world_daynight_level_end();
     world_colours_reset();
     peek_cache_drop();
@@ -9659,6 +10195,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_TEMPER, world_temper_save_size, world_temper_save, world_temper_load, world_temper_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 

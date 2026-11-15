@@ -2706,9 +2706,12 @@ void draw_whole_status_panel(void)
         mmzoom = basic_zoom / scale_value_for_resolution_with_upp(2,mm_units_per_px);
     else
         mmzoom = basic_zoom;
-    panel_map_draw_slabs(local_state.minimap_pos_x, local_state.minimap_pos_y, mm_units_per_px, mmzoom);
-    panel_map_draw_overlay_things(mm_units_per_px, mmzoom, basic_zoom);
-    panel_map_submit_to_renderer();
+    if (!world_steam_blots_map()) /* endless: Steam Country's vents blot out the map now and then */
+    {
+        panel_map_draw_slabs(local_state.minimap_pos_x, local_state.minimap_pos_y, mm_units_per_px, mmzoom);
+        panel_map_draw_overlay_things(mm_units_per_px, mmzoom, basic_zoom);
+        panel_map_submit_to_renderer();
+    }
     unsigned char placefill_threshold = (RendererPhysicalHeight() >= 400) ? 80 : 40;
     if (RendererPhysicalHeight() - gmnu->height >= placefill_threshold)
     {

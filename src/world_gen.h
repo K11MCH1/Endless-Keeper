@@ -31,7 +31,7 @@ extern "C" {
  * to their biomes, landmarks (great rivers, mountain ranges, giant caverns), open and solid stretches, gold by
  * biome, and five new biomes: lava and flooded oceans (islands), lava and flooded rivers (braided, with fords)
  * and Dead Man's Land (plain earth). A world keeps the version it was made with. */
-#define WG_GENERATOR_LATEST 7
+#define WG_GENERATOR_LATEST 8
 #define WG_V6_BIOMES 8 /* the biomes of versions 2-6: points of the climate */
 #define WG_CHUNK 16
 #define WG_CHUNK_CELLS (WG_CHUNK * WG_CHUNK)
@@ -79,6 +79,15 @@ enum WgBiome {
     WgB_LavaRivers,
     WgB_FloodedRivers,
     WgB_DeadMans,
+    /* generator version 8: Earthen Caverns where its own noise is high (world_gen8.inc) */
+    WgB_Overgrowth,
+    /* the borderlands (version 8): the strips where two named biomes meet */
+    WgB_SteamCountry,
+    WgB_Oasis,
+    WgB_VaultCountry,
+    WgB_Obsidian,
+    WgB_Frostmarsh,
+    WgB_Ashlands,
     WgB_COUNT
 };
 
@@ -203,6 +212,9 @@ void wg_start_ref(struct WgWorld *world, struct WgStructRef *out);
 const char *wg_slab_name(int slab);
 const char *wg_struct_type_name(int type);
 const char *wg_biome_name(int biome);
+/** Version 8: the mother lodes whose middle is in a box of world slabs (at most max): centre and radius. */
+int wg_mother_lodes_in(struct WgWorld *w, int64_t x1, int64_t y1, int64_t x2, int64_t y2, int64_t *lx, int64_t *ly, int *lr,
+    int max);
 /** The KeeperFX texture pack of a biome (texture_pack_desc id: STANDARD 1, ANCIENT 2, WINTER 3, ...). */
 int wg_biome_texture(int biome);
 /** Biome at world slab (x, y): worldgen.World.biome_at. */

@@ -70,6 +70,8 @@
 
 static GameTurnDelta dn_day_turns = DN_DAY_TURNS_DEFAULT;
 static GameTurnDelta dn_night_turns = DN_NIGHT_TURNS_DEFAULT;
+static GameTurnDelta dn_night_base = DN_NIGHT_TURNS_DEFAULT; /* the night before the world's temperament */
+static int dn_night_pct = 100;                              /* the world's temperament: long or short nights */
 /* each possible raid of a day happens with this chance, in percent (KFX_WORLD_RAIDCHANCE changes it for tests) */
 #define DN_RAID_CHANCE 50
 static int dn_raid_chance = DN_RAID_CHANCE;
@@ -88,7 +90,8 @@ static void dn_read_lengths(void)
     if ((e != NULL) && (sscanf(e, "%ld,%ld", &d, &n) == 2) && (d > 0) && (n > 0))
     {
         dn_day_turns = d;
-        dn_night_turns = n;
+        dn_night_base = n;
+        dn_night_turns = n * dn_night_pct / 100;
         SYNCLOG("World: test day/night lengths %ld and %ld turns", d, n);
     }
     const char *c = getenv("KFX_WORLD_RAIDCHANCE");
@@ -104,6 +107,18 @@ static void dn_time(GameTurn turn, long *day, GameTurnDelta *t)
     const GameTurnDelta cycle = dn_day_turns + dn_night_turns;
     *day = (long)(turn / cycle) + 1;
     *t = (GameTurnDelta)(turn % cycle);
+}
+
+/** World temperaments: the night is pct percent of its usual length (100: as usual). */
+void world_daynight_night_percent(int pct)
+{
+    dn_read_lengths();
+    dn_night_pct = (pct > 0) ? pct : 100;
+    dn_night_turns = dn_night_base * dn_night_pct / 100;
+    if (dn_night_turns < 1)
+        dn_night_turns = 1;
+    if (dn_night_pct != 100)
+        SYNCLOG("World: the world's nights last %ld turns (%d%% of %ld)", (long)dn_night_turns, dn_night_pct, (long)dn_night_base);
 }
 
 long world_day_number(void)
@@ -526,6 +541,8 @@ static void dn_pool_add(struct DnPool *pool, const char *name, int weight)
 static void dn_make_pool(int tier, int biome, struct DnPool *pool)
 {
     memset(pool, 0, sizeof(*pool));
+    if (biome >= WgB_Overgrowth)
+        biome = world_biome_parent(biome); /* version 8: the Overgrowth and the borderlands raid as their lands do */
     dn_pool_add(pool, dn_tunneller_follower.name, dn_tunneller_follower.weight);
     for (int t = 0; t <= tier; t++)
         dn_pool_add(pool, dn_tiers[t].add.name, dn_tiers[t].add.weight);

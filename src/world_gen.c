@@ -134,7 +134,8 @@ static const char *const noise_names[N_COUNT] = {
 /* worldgen.BIOMES: name, climate point (heat, moisture, hardness, weirdness), texture pack id */
 static const char *const biome_names[WgB_COUNT] = {
     "earthen", "rocky", "volcanic", "flooded", "frozen", "sandstone", "crystal", "ruins",
-    "lava_ocean", "flooded_ocean", "lava_rivers", "flooded_rivers", "deadmans_land"};
+    "lava_ocean", "flooded_ocean", "lava_rivers", "flooded_rivers", "deadmans_land", "overgrowth",
+    "steam_country", "oasis", "vault_country", "obsidian", "frostmarsh", "ashlands"};
 static const double biome_point[WG_V6_BIOMES][4] = {
     {0.00, 0.00, 0.00, 0.00},   /* earthen */
     {0.00, 0.00, 0.34, 0.00},   /* rocky */
@@ -145,7 +146,7 @@ static const double biome_point[WG_V6_BIOMES][4] = {
     {0.00, 0.00, 0.14, 0.62},   /* crystal */
     {0.00, 0.00, -0.14, -0.62}, /* ruins */
 };
-static const int biome_texture[WgB_COUNT] = {1, 7, 13, 12, 3, 9, 10, 2, 13, 12, 13, 12, 1};
+static const int biome_texture[WgB_COUNT] = {1, 7, 13, 12, 3, 9, 10, 2, 13, 12, 13, 12, 1, 1, 13, 9, 2, 7, 3, 9};
 
 /** worldgen.BIOME_CREATURES: weight multipliers (1 when not listed) */
 struct BiomeMult {
@@ -206,8 +207,9 @@ static const struct BiomeExtra biome_extra_creatures[] = {
 
 /** worldgen.BIOME_GEMS / GEMS_DEFAULT: gem cluster chance per chunk and max extra cells (default 0.01, 1):
  *  gems are very rare and come as 1-2 slabs */
-static const double biome_gem_chance[WgB_COUNT] = {0.01, 0.01, 0.015, 0.01, 0.01, 0.01, 0.04, 0.01, 0.01, 0.01, 0.01, 0.01, 0.0};
-static const int biome_gem_extra[WgB_COUNT] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0};
+static const double biome_gem_chance[WgB_COUNT] = {0.01, 0.01, 0.015, 0.01, 0.01, 0.01, 0.04, 0.01, 0.01, 0.01, 0.01, 0.01, 0.0, 0.01,
+    0.01, 0.01, 0.01, 0.01, 0.01, 0.01};
+static const int biome_gem_extra[WgB_COUNT] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1};
 #define MAX_GEM_CELLS 2 /* 1 + the largest biome_gem_extra */
 
 /* version 7's noises (salted "v7:<name>") */
@@ -278,11 +280,20 @@ struct Layout {
  *  WgS_DenseGold); w = 0 when the square has none. */
 struct SeamEntry {
     uint8_t valid;
+    uint8_t stage;     /* version 7 (seam_gold): 0 when the seam is finished, else SEAM_BOX or SEAM_RAW */
     int64_t cx, cy;
     int64_t x0, y0;
     int w, h;
     uint8_t *cells;
 };
+
+/* Version 7 works a square's deposit out in three steps, each only when a slab asked for lies inside what the step
+ * before left (the same slabs of gold in the end as doing it all at once, which is how it was until 2026-11-13: a
+ * deposit that is drawn, cut and tested never has gold outside the box of what was drawn, and that never outside the
+ * box of what the drawing visits): SEAM_BOX: measured only: the box of every slab its drawing would visit, no cells;
+ * SEAM_RAW: drawn: the gold as drawn, before caves, lava and water cut it and the pieces out of reach go; 0: finished. */
+#define SEAM_BOX 1
+#define SEAM_RAW 2
 
 /** The reachability flood's scratch: an open-addressing set of slabs (0 empty, 1 rock, 2 open, 3 open and seen). */
 struct ReachSet {
@@ -304,7 +315,9 @@ struct WgWorld {
     uint64_t s_noise[N_COUNT];
     uint64_t s_gems;
     uint64_t s_seam;
-    int version;                     /* the generator version (6 or 7) */
+    uint64_t s_trail, s_thin, s_og;  /* version 8's seeds (world_gen8.inc) */
+    struct Trail8Cache *t8;          /* version 8's trails, built when asked for */
+    int version;                     /* the generator version (6, 7 or 8) */
     uint64_t s7[V7_COUNT];           /* version 7's noises */
     int dml_start;                   /* version 7: Dead Man's Land round the start (1 seed in 100) */
     double dml_cx, dml_cy, dml_r;
@@ -1415,8 +1428,12 @@ static int biome7_of(const struct Clim7 *c)
 #define GMEMO_BITS 16
 #define GMEMO_CAP (1 << GMEMO_BITS)
 struct GroundMemo {
-    int64_t x[GMEMO_CAP], y[GMEMO_CAP];
-    uint8_t g[GMEMO_CAP]; /* 0: empty; else 1 + the WgSlab */
+    struct {
+        int64_t x, y;
+        uint8_t g; /* 0: empty; else 1 + the WgSlab */
+        uint8_t b; /* the slab's biome (biome7_of its climate): a chunk's own slabs need no climate when they are here */
+        uint8_t r; /* open ground: 1 when a flood has shown it reachable, 2 not reachable (reachable); 0 not known */
+    } e[GMEMO_CAP];
 };
 
 static uint32_t gmemo_slot(int64_t x, int64_t y)
@@ -1439,17 +1456,34 @@ static uint8_t ground7_memo(const struct WgWorld *w, int64_t x, int64_t y, const
         return ground7(w, x, y, c);
     }
     i = gmemo_slot(x, y);
-    if (m->g[i] != 0 && m->x[i] == x && m->y[i] == y)
-        return (uint8_t)(m->g[i] - 1);
+    if (m->e[i].g != 0 && m->e[i].x == x && m->e[i].y == y)
+        return (uint8_t)(m->e[i].g - 1);
     if (c == NULL) {
         climate7(w, x, y, &own);
         c = &own;
     }
     g = ground7(w, x, y, c);
-    m->x[i] = x;
-    m->y[i] = y;
-    m->g[i] = (uint8_t)(g + 1);
+    m->e[i].x = x;
+    m->e[i].y = y;
+    m->e[i].g = (uint8_t)(g + 1);
+    m->e[i].b = (uint8_t)biome7_of(c);
+    m->e[i].r = 0;
     return g;
+}
+
+/** The memo's ground and biome of a slab, if it has them (1). */
+static int ground7_known(const struct WgWorld *w, int64_t x, int64_t y, uint8_t *ground, uint8_t *biome)
+{
+    const struct GroundMemo *m = w->gmemo;
+    uint32_t i;
+    if (m == NULL)
+        return 0;
+    i = gmemo_slot(x, y);
+    if (m->e[i].g == 0 || m->e[i].x != x || m->e[i].y != y)
+        return 0;
+    *ground = (uint8_t)(m->e[i].g - 1);
+    *biome = m->e[i].b;
+    return 1;
 }
 
 static int is_rock7(const struct WgWorld *w, int64_t x, int64_t y)
@@ -1497,10 +1531,20 @@ static int is_rock_v(const struct WgWorld *w, int64_t x, int64_t y)
     return w->version >= 7 ? is_rock7(w, x, y) : is_rock(w, x, y);
 }
 
+static int biome8_of(const struct WgWorld *w, int64_t x, int64_t y, const struct Clim7 *c); /* (world_gen8.inc) */
+
 static int biome_at_v(const struct WgWorld *w, int64_t x, int64_t y)
 {
+    if (w->version >= 8) {
+        struct Clim7 c;
+        climate7(w, x, y, &c);
+        return biome8_of(w, x, y, &c);
+    }
     if (w->version >= 7) {
         struct Clim7 c;
+        uint8_t g7, b7;
+        if (ground7_known(w, x, y, &g7, &b7))
+            return b7;
         climate7(w, x, y, &c);
         return biome7_of(&c);
     }
@@ -1520,15 +1564,48 @@ static uint8_t *reach_slot(struct ReachSet *r, int64_t x, int64_t y)
     return &r->st[i];
 }
 
+/** Version 7: what an earlier flood found for an open slab: 1 reachable, 2 not, 0 not known (or forgotten). A slab is
+ *  reachable when the open ground it is joined to has REACH_CELLS slabs or more, so every slab a flood went through
+ *  shares its answer, and a later flood that comes to one of them has its own. */
+static int reach_known7(const struct WgWorld *w, int64_t x, int64_t y)
+{
+    const struct GroundMemo *m = w->gmemo;
+    uint32_t i;
+    if (m == NULL)
+        return 0;
+    i = gmemo_slot(x, y);
+    return (m->e[i].g != 0 && m->e[i].x == x && m->e[i].y == y) ? m->e[i].r : 0;
+}
+
+/** Version 7: the flood's answer (1 reachable, 2 not) for every slab it went through, into the memo. */
+static void reach_note7(const struct WgWorld *w, const struct ReachSet *r, int answer)
+{
+    struct GroundMemo *m = w->gmemo;
+    int k;
+    if (m == NULL)
+        return;
+    for (k = 0; k < REACH_SET_CAP; k++)
+        if (r->st[k] == 3) {
+            const uint32_t i = gmemo_slot(r->x[k], r->y[k]);
+            if (m->e[i].g != 0 && m->e[i].x == r->x[k] && m->e[i].y == r->y[k])
+                m->e[i].r = (uint8_t)answer;
+        }
+}
+
 /** worldgen.World.reachable: open ground (not rock) that rock doesn't seal off: a flood through open ground from
  *  it reaches REACH_CELLS slabs. */
 static int reachable(const struct WgWorld *w, int64_t x, int64_t y)
 {
     static const int nx4[4] = {1, -1, 0, 0}, ny4[4] = {0, 0, 1, -1};
     struct ReachSet *r = w->reach;
-    int sp = 0, seen = 1, d;
+    int sp = 0, seen = 1, d, known = 0;
     if (is_rock_v(w, x, y))
         return 0;
+    if (w->version >= 7) {
+        known = reach_known7(w, x, y);
+        if (known != 0)
+            return known == 1;
+    }
     memset(r->st, 0, sizeof r->st);
     *reach_slot(r, x, y) = 3;
     r->stack[sp][0] = x;
@@ -1549,12 +1626,22 @@ static int reachable(const struct WgWorld *w, int64_t x, int64_t y)
             if (*st == 1)
                 continue;
             *st = 3;
+            if (w->version >= 7) {
+                /* joined to ground an earlier flood went through: its answer is this flood's */
+                known = reach_known7(w, qx, qy);
+                if (known != 0) {
+                    reach_note7(w, r, known);
+                    return known == 1;
+                }
+            }
             seen++;
             r->stack[sp][0] = qx;
             r->stack[sp][1] = qy;
             sp++;
         }
     }
+    if (w->version >= 7)
+        reach_note7(w, r, seen >= REACH_CELLS ? 1 : 2);
     return seen >= REACH_CELLS;
 }
 
@@ -1736,9 +1823,29 @@ static const double star7[10][2] = {{0x1.1a62633145c07p-54, -0x1.0000000000000p+
 struct Grid7 {
     int64_t x0, y0;
     int W, H;
-    uint8_t *c;
+    uint8_t *c;  /* NULL: measuring (SEAM_BOX): nothing is drawn, the box of the slabs the drawing would visit is kept */
     uint64_t ws; /* the lumps */
+    int64_t bx1, by1, bx2, by2; /* measuring: that box, inside the grid (bx2 < bx1: nothing yet) */
 };
+
+/** Measuring: the drawing would visit the slabs x1..x2, y1..y2 (those outside the grid are never set). */
+static void g7_box(struct Grid7 *g, int64_t x1, int64_t y1, int64_t x2, int64_t y2)
+{
+    x1 = max64(x1, g->x0);
+    y1 = max64(y1, g->y0);
+    x2 = min64(x2, g->x0 + g->W - 1);
+    y2 = min64(y2, g->y0 + g->H - 1);
+    if (x2 < x1 || y2 < y1)
+        return;
+    if (g->bx2 < g->bx1) {
+        g->bx1 = x1; g->by1 = y1; g->bx2 = x2; g->by2 = y2;
+        return;
+    }
+    g->bx1 = min64(g->bx1, x1);
+    g->by1 = min64(g->by1, y1);
+    g->bx2 = max64(g->bx2, x2);
+    g->by2 = max64(g->by2, y2);
+}
 
 static void g7_set(struct Grid7 *g, int64_t x, int64_t y, int dense)
 {
@@ -1772,9 +1879,15 @@ static void g7_dir(struct Rng *rng, double *ux, double *uy)
 /** A lumpy disc. */
 static void g7_disc(struct Grid7 *g, double cx, double cy, double r, int dense)
 {
+    const int64_t x1 = (int64_t)floor(cx - r - 2.0), x2 = (int64_t)floor(cx + r + 2.0);
+    const int64_t y1 = (int64_t)floor(cy - r - 2.0), y2 = (int64_t)floor(cy + r + 2.0);
     int64_t x, y;
-    for (y = (int64_t)floor(cy - r - 2.0); y <= (int64_t)floor(cy + r + 2.0); y++)
-        for (x = (int64_t)floor(cx - r - 2.0); x <= (int64_t)floor(cx + r + 2.0); x++) {
+    if (g->c == NULL) {
+        g7_box(g, x1, y1, x2, y2);
+        return;
+    }
+    for (y = max64(y1, g->y0); y <= min64(y2, g->y0 + g->H - 1); y++)
+        for (x = max64(x1, g->x0); x <= min64(x2, g->x0 + g->W - 1); x++) {
             const double dx = (double)x + 0.5 - cx, dy = (double)y + 0.5 - cy;
             const double rr = r + 0.6 * fbm(g->ws, (double)x / 4.5, (double)y / 4.5, 2);
             if (rr > 0.0 && dx * dx + dy * dy <= rr * rr)
@@ -1788,9 +1901,15 @@ static void g7_stroke(struct Grid7 *g, double ax, double ay, double bx, double b
     const double vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
     const double rm = (ra > rb ? ra : rb) + 1.5;
     const double lo_x = ax < bx ? ax : bx, hi_x = ax < bx ? bx : ax, lo_y = ay < by ? ay : by, hi_y = ay < by ? by : ay;
+    const int64_t x1 = (int64_t)floor(lo_x - rm), x2 = (int64_t)floor(hi_x + rm);
+    const int64_t y1 = (int64_t)floor(lo_y - rm), y2 = (int64_t)floor(hi_y + rm);
     int64_t x, y;
-    for (y = (int64_t)floor(lo_y - rm); y <= (int64_t)floor(hi_y + rm); y++)
-        for (x = (int64_t)floor(lo_x - rm); x <= (int64_t)floor(hi_x + rm); x++) {
+    if (g->c == NULL) {
+        g7_box(g, x1, y1, x2, y2);
+        return;
+    }
+    for (y = max64(y1, g->y0); y <= min64(y2, g->y0 + g->H - 1); y++)
+        for (x = max64(x1, g->x0); x <= min64(x2, g->x0 + g->W - 1); x++) {
             const double px = (double)x + 0.5 - ax, py = (double)y + 0.5 - ay;
             double t = l2 > 0.0 ? (px * vx + py * vy) / l2 : 0.0, dx, dy, r;
             if (t < 0.0)
@@ -1837,15 +1956,20 @@ static void g7_path(struct Grid7 *g, struct Rng *rng, double x, double y, double
 }
 
 /** Version 7's post-processing of a seam's shape (as version 6's seam_cells): caves, lava and water cut it, only the
- *  pieces you can reach stay; into e, cropped to its cells. */
-static void seam_finish7(const struct WgWorld *w, struct Grid7 *g, struct SeamEntry *e)
+ *  pieces you can reach stay. e holds the gold as drawn (SEAM_RAW: its cells over the box of what was drawn; the slabs
+ *  outside that box are no gold, as they were in the whole grid) and gets the finished seam, cropped to its cells. */
+static void seam_finish7(const struct WgWorld *w, struct SeamEntry *e)
 {
     static const int nx4[4] = {1, -1, 0, 0}, ny4[4] = {0, 0, 1, -1};
-    const int W = g->W, H = g->H;
-    uint8_t *shape = g->c, *base = (uint8_t *)calloc((size_t)W * H, 1);
+    const int W = e->w, H = e->h;
+    const int64_t gx0 = e->x0, gy0 = e->y0;
+    uint8_t *shape = e->cells, *base = (uint8_t *)calloc((size_t)W * H, 1);
     int32_t *stack = (int32_t *)malloc(sizeof(int32_t) * (size_t)W * H);
     int32_t *piece = (int32_t *)malloc(sizeof(int32_t) * (size_t)W * H);
     int i, sp, minx = W, miny = H, maxx = -1, maxy = -1, x, y;
+    e->cells = NULL; /* (it is finished whatever happens: no gold, until the cells are set below) */
+    e->w = e->h = 0;
+    e->stage = 0;
     if (base == NULL || stack == NULL || piece == NULL) {
         free(base);
         free(stack);
@@ -1855,7 +1979,7 @@ static void seam_finish7(const struct WgWorld *w, struct Grid7 *g, struct SeamEn
     }
     for (i = 0; i < W * H; i++)
         if (shape[i]) {
-            base[i] = ground_base_v(w, g->x0 + i % W, g->y0 + i / W);
+            base[i] = ground_base_v(w, gx0 + i % W, gy0 + i / W);
             if (base[i] == WgS_Path || base[i] == WgS_Lava || base[i] == WgS_Water)
                 shape[i] = 0;
         }
@@ -1881,14 +2005,14 @@ static void seam_finish7(const struct WgWorld *w, struct Grid7 *g, struct SeamEn
             }
         }
         for (j = 0; j < n && !ok; j++)
-            if (base[piece[j]] != WgS_Rock && reachable(w, g->x0 + piece[j] % W, g->y0 + piece[j] / W))
+            if (base[piece[j]] != WgS_Rock && reachable(w, gx0 + piece[j] % W, gy0 + piece[j] / W))
                 ok = 1;
         for (j = 0; j < n && !ok; j++)
             for (d = 0; d < 4 && !ok; d++) {
                 int qx = piece[j] % W + nx4[d], qy = piece[j] / W + ny4[d];
                 if (qx >= 0 && qy >= 0 && qx < W && qy < H && shape[qy * W + qx] != 0)
                     continue;
-                if (!is_rock_v(w, g->x0 + qx, g->y0 + qy) && reachable(w, g->x0 + qx, g->y0 + qy))
+                if (!is_rock_v(w, gx0 + qx, gy0 + qy) && reachable(w, gx0 + qx, gy0 + qy))
                     ok = 1;
             }
         for (j = 0; j < n; j++)
@@ -1914,8 +2038,8 @@ static void seam_finish7(const struct WgWorld *w, struct Grid7 *g, struct SeamEn
     }
     e->w = maxx - minx + 1;
     e->h = maxy - miny + 1;
-    e->x0 = g->x0 + minx;
-    e->y0 = g->y0 + miny;
+    e->x0 = gx0 + minx;
+    e->y0 = gy0 + miny;
     e->cells = (uint8_t *)malloc((size_t)e->w * e->h);
     if (e->cells == NULL) {
         e->w = 0;
@@ -2052,7 +2176,14 @@ struct Form7 {
     int kind;
     double cx, cy, r, aspect, ux, uy, shear, bend, taper, wbig, wmid, wlb, wlm;
     uint64_t s1, s2, s3, s4;
+    double lim; /* a slab whose u or v before the lumps is beyond this can't be in the shape (form7_local) */
 };
+
+/* Every shape of the library (shape_in7) lies within |u| <= 1.2 and |v| <= 1.2 (the widest are the tick, 1.124, and
+ * the diamond and the equal triangle, 1.112), and a Perlin value is within +-1.01: at most 1.4142 times the weighted
+ * mean of the four corners' distances, which peaks at 0.7071 in the middle of a square (unit gradients). */
+#define FORM7_SHAPE_MAX 1.2
+#define FORM7_NOISE_MAX 1.01
 
 static void form7_make(struct Rng *rng, struct Form7 *f, int kind, double cx, double cy, double r, uint64_t ws)
 {
@@ -2076,9 +2207,14 @@ static void form7_make(struct Rng *rng, struct Form7 *f, int kind, double cx, do
     f->s2 = mix64(ws + 2);
     f->s3 = mix64(ws + 3);
     f->s4 = mix64(ws + 4);
+    /* the lumps move u and v by at most wbig + wmid + 0.16 Perlin values each */
+    f->lim = FORM7_SHAPE_MAX + (f->wbig + f->wmid + 0.16) * FORM7_NOISE_MAX + 1e-6;
 }
 
-static void form7_local(const struct Form7 *f, int64_t xi, int64_t yi, double *uo, double *vo)
+/** The slab's place in the form's own coordinates, lumps and all; 0 (and no u, v) when the slab is so far out that no
+ *  lumps could bring it into any shape: the six noises are then not worked out (most of a deposit's square is such
+ *  slabs). The same u and v as ever for every slab that can be in the shape. */
+static int form7_local(const struct Form7 *f, int64_t xi, int64_t yi, double *uo, double *vo)
 {
     const double x = (double)xi, y = (double)yi, dx = x + 0.5 - f->cx, dy = y + 0.5 - f->cy;
     double p = dx * f->ux + dy * f->uy, q = dy * f->ux - dx * f->uy, u, v, k;
@@ -2090,15 +2226,21 @@ static void form7_local(const struct Form7 *f, int64_t xi, int64_t yi, double *u
     if (k < 0.25)
         k = 0.25;
     v /= k;
+    if (!(u <= f->lim && u >= -f->lim && v <= f->lim && v >= -f->lim))
+        return 0;
     u += f->wbig * fbm(f->s1, x / f->wlb, y / f->wlb, 2) + f->wmid * fbm(f->s3, x / f->wlm, y / f->wlm, 2) +
         0.16 * fbm(f->s2, x / 4.5, y / 4.5, 2);
     v += f->wbig * fbm(f->s2, x / f->wlb, y / f->wlb, 2) + f->wmid * fbm(f->s4, x / f->wlm, y / f->wlm, 2) +
         0.16 * fbm(f->s3, x / 4.5, y / 4.5, 2);
     *uo = u;
     *vo = v;
+    return 1;
 }
 
-static void seam_build7(const struct WgWorld *w, int64_t cx, int64_t cy, struct SeamEntry *e)
+/** Version 7's deposit of square (cx, cy) into e. measure: only the box of the slabs its drawing would visit
+ *  (SEAM_BOX; the same random numbers are drawn, nothing is shaped); else drawn, not yet cut (SEAM_RAW: seam_finish7
+ *  does that). e stays empty (w 0, finished) when the square has none. */
+static void seam_build7(const struct WgWorld *w, int64_t cx, int64_t cy, struct SeamEntry *e, int measure)
 {
     struct Rng rng;
     struct Clim7 c;
@@ -2137,9 +2279,14 @@ static void seam_build7(const struct WgWorld *w, int64_t cx, int64_t cy, struct 
     g.y0 = cy * SEAM_CELL - SEAM7_REACH;
     g.W = g.H = SEAM_CELL + 2 * SEAM7_REACH;
     g.ws = rng_next(&rng);
-    g.c = (uint8_t *)calloc((size_t)g.W * g.H, 1);
-    if (g.c == NULL)
-        return;
+    g.bx1 = g.by1 = 0;
+    g.bx2 = g.by2 = -1;
+    g.c = NULL;
+    if (!measure) {
+        g.c = (uint8_t *)calloc((size_t)g.W * g.H, 1);
+        if (g.c == NULL)
+            return;
+    }
     g7_dir(&rng, &ux, &uy);
     if (kind == SK_VEIN) {
         /* a river-like vein: meanders both ways from its middle, thin, pointy ends, a branch now and then */
@@ -2177,8 +2324,12 @@ static void seam_build7(const struct WgWorld *w, int64_t cx, int64_t cy, struct 
             const double a = l->a * rich, bb = l->b * rich;
             const int64_t rr = (int64_t)a + 5;
             int64_t x, y;
-            for (y = l->sy - rr; y <= l->sy + rr; y++)
-                for (x = l->sx - rr; x <= l->sx + rr; x++) {
+            if (measure) {
+                g7_box(&g, l->sx - rr, l->sy - rr, l->sx + rr, l->sy + rr);
+                continue;
+            }
+            for (y = max64(l->sy - rr, g.y0); y <= min64(l->sy + rr, g.y0 + g.H - 1); y++)
+                for (x = max64(l->sx - rr, g.x0); x <= min64(l->sx + rr, g.x0 + g.W - 1); x++) {
                     const double rx = (double)(x - l->sx), ry = (double)(y - l->sy);
                     const double u = (rx * l->ux + ry * l->uy) / a, v = (ry * l->ux - rx * l->uy) / bb - l->bend * u * u;
                     const double f = u * u + v * v;
@@ -2215,19 +2366,20 @@ static void seam_build7(const struct WgWorld *w, int64_t cx, int64_t cy, struct 
             bites[bi][1] = fm.cy + oy * d;
             bites[bi][2] = r * (0.25 + rng_random(&rng) * 0.3);
         }
-        for (y = sy - reach; y <= sy + reach; y++)
-            for (x = sx - reach; x <= sx + reach; x++) {
+        if (measure)
+            g7_box(&g, sx - reach, sy - reach, sx + reach, sy + reach);
+        /* (only the slabs of the grid: g7_set takes no others) */
+        for (y = max64(sy - reach, g.y0); !measure && y <= min64(sy + reach, g.y0 + g.H - 1); y++)
+            for (x = max64(sx - reach, g.x0); x <= min64(sx + reach, g.x0 + g.W - 1); x++) {
                 double u, v;
                 int in = 0, core = 0, rim = 0;
-                form7_local(&fm, x, y, &u, &v);
-                if (shape_in7(fm.kind, u, v)) {
+                if (form7_local(&fm, x, y, &u, &v) && shape_in7(fm.kind, u, v)) {
                     in = 1;
                     core = shape_in7(fm.kind, u * 2.0, v * 2.0);
                     rim = !shape_in7(fm.kind, u * 1.35, v * 1.35);
                 } else if (has2) {
                     double u2, v2;
-                    form7_local(&f2, x, y, &u2, &v2);
-                    if (shape_in7(f2.kind, u2, v2)) {
+                    if (form7_local(&f2, x, y, &u2, &v2) && shape_in7(f2.kind, u2, v2)) {
                         in = 1;
                         rim = !shape_in7(f2.kind, u2 * 1.35, v2 * 1.35);
                     }
@@ -2257,7 +2409,56 @@ static void seam_build7(const struct WgWorld *w, int64_t cx, int64_t cy, struct 
             }
         }
     }
-    seam_finish7(w, &g, e);
+    if (measure) {
+        if (g.bx2 < g.bx1)
+            return; /* nothing of it inside its grid */
+        e->x0 = g.bx1;
+        e->y0 = g.by1;
+        e->w = (int)(g.bx2 - g.bx1 + 1);
+        e->h = (int)(g.by2 - g.by1 + 1);
+        e->stage = SEAM_BOX;
+        return;
+    }
+    /* the box of what was drawn */
+    {
+        int minx = g.W, miny = g.H, maxx = -1, maxy = -1, gx, gy;
+        for (gy = 0; gy < g.H; gy++)
+            for (gx = 0; gx < g.W; gx++)
+                if (g.c[gy * g.W + gx] != 0) {
+                    if (gx < minx) minx = gx;
+                    if (gx > maxx) maxx = gx;
+                    if (gy < miny) miny = gy;
+                    if (gy > maxy) maxy = gy;
+                }
+        if (maxx >= 0) {
+            const int rw = maxx - minx + 1, rh = maxy - miny + 1;
+            uint8_t *raw = (uint8_t *)malloc((size_t)rw * rh);
+            if (raw != NULL) {
+                for (gy = 0; gy < rh; gy++)
+                    memcpy(raw + (size_t)gy * rw, g.c + (size_t)(miny + gy) * g.W + minx, (size_t)rw);
+                e->x0 = g.x0 + minx;
+                e->y0 = g.y0 + miny;
+                e->w = rw;
+                e->h = rh;
+                e->cells = raw;
+                e->stage = SEAM_RAW;
+            }
+        }
+        free(g.c);
+    }
+}
+
+/** Version 7: the next steps of a deposit that is not finished, for a slab inside its box: drawn if it was only
+ *  measured, and cut and tested if the slab is inside what was drawn. */
+static void seam_settle7(const struct WgWorld *w, struct SeamEntry *e, int64_t x, int64_t y)
+{
+    if (e->stage == SEAM_BOX) {
+        e->w = e->h = 0;
+        e->stage = 0;
+        seam_build7(w, e->cx, e->cy, e, 0);
+    }
+    if (e->stage == SEAM_RAW && x >= e->x0 && y >= e->y0 && x < e->x0 + e->w && y < e->y0 + e->h)
+        seam_finish7(w, e);
 }
 
 /** worldgen.World.seam: builds the seam of square (cx, cy) into e. */
@@ -2270,7 +2471,7 @@ static void seam_build(const struct WgWorld *w, int64_t cx, int64_t cy, struct S
     uint64_t ws;
     double clim[4], crys;
     if (w->version >= 7) {
-        seam_build7(w, cx, cy, e);
+        seam_build7(w, cx, cy, e, 1);
         return;
     }
     rng.s = hash3(w->s_seam, (uint64_t)cx, (uint64_t)cy);
@@ -2305,7 +2506,7 @@ static void seam_build(const struct WgWorld *w, int64_t cx, int64_t cy, struct S
 static uint32_t key_hash(int type, int64_t a, int64_t b);
 
 /** The seam of square (cx, cy), from the cache (open addressing, emptied once half full) or built now. */
-static const struct SeamEntry *seam_get(struct WgWorld *w, int64_t cx, int64_t cy)
+static struct SeamEntry *seam_get(struct WgWorld *w, int64_t cx, int64_t cy)
 {
     uint32_t i = key_hash(WgT_COUNT, cx, cy) & (SEAM_CAP - 1);
     struct SeamEntry *e;
@@ -2340,10 +2541,16 @@ static int seam_gold(struct WgWorld *w, int64_t x, int64_t y)
     int found = 0;
     for (cy = gy - reach; cy <= gy + reach; cy++)
         for (cx = gx - reach; cx <= gx + reach; cx++) {
-            const struct SeamEntry *e = seam_get(w, cx, cy);
+            struct SeamEntry *e = seam_get(w, cx, cy);
             int k;
             if (e->w == 0 || x < e->x0 || y < e->y0 || x >= e->x0 + e->w || y >= e->y0 + e->h)
                 continue;
+            if (e->stage != 0) {
+                /* version 7: the slab is inside what the deposit could cover: now it is worked out as far as needed */
+                seam_settle7(w, e, x, y);
+                if (e->stage != 0 || e->w == 0 || x < e->x0 || y < e->y0 || x >= e->x0 + e->w || y >= e->y0 + e->h)
+                    continue;
+            }
             k = e->cells[(y - e->y0) * e->w + (x - e->x0)];
             if (k == WgS_DenseGold)
                 return WgS_DenseGold;
@@ -2373,6 +2580,9 @@ static uint8_t terrain7(struct WgWorld *w, int64_t xi, int64_t yi, const struct 
         return (uint8_t)g;
     return ground7_memo(w, xi, yi, c);
 }
+
+struct Trail8Cache;
+#include "world_gen8.inc" /* generator version 8 */
 
 /** Python's list[i] = v for a list of 256: a negative index counts from the end; past the end Python raises
  *  IndexError (only possible for the gem cells of a Crystal chunk), so it is skipped here. */
@@ -3389,7 +3599,12 @@ struct WgWorld *wg_world_create_version(uint64_t seed, int version)
     w->s_seam = hash2(seed, salt2("feature:", "goldseam", 8));
     for (i = 0; i < WgT_COUNT; i++)
         w->spec_salt[i] = salt2("structure:", type_names[i], strlen(type_names[i]));
-    w->version = version >= 7 ? 7 : 6;
+    w->version = version >= 8 ? 8 : (version >= 7 ? 7 : 6);
+    if (w->version >= 8) {
+        w->s_trail = hash2(seed, salt2("feature:", "trails", 6));
+        w->s_thin = hash2(seed, salt2("feature:", "goldthin", 8));
+        w->s_og = hash2(seed, salt2("feature:", "overgrowth", 10));
+    }
     if (w->version >= 7)
         w->gmemo = (struct GroundMemo *)calloc(1, sizeof(struct GroundMemo)); /* NULL: it works without */
     if (w->version >= 7) {
@@ -3422,6 +3637,7 @@ void wg_world_destroy(struct WgWorld *w)
     int i;
     if (w == NULL)
         return;
+    trail8_free(w);
     if (w->lay != NULL)
         for (i = 0; i < LAY_CAP; i++)
             free(w->lay[i]);
@@ -3463,8 +3679,34 @@ int wg_generate_chunk(struct WgWorld *w, int32_t cx, int32_t cy, struct WgChunk 
         for (x = 0; x < WG_CHUNK; x++) {
             double clim[4];
             int biome;
+            if (w->version >= 8) {
+                /* version 8 (world_gen8.inc): version 7's biome and ground (known already, or from the climate), its own
+                   biome and slab */
+                struct Clim7 c8;
+                uint8_t g8, b8;
+                climate7(w, cx0 + x, cy0 + y, &c8); /* (the borders need the climate: second and margin) */
+                if (ground7_known(w, cx0 + x, cy0 + y, &g8, &b8)) {
+                    out->biomes[y * WG_CHUNK + x] = (uint8_t)biome8_of(w, cx0 + x, cy0 + y, &c8);
+                    out->slabs[y * WG_CHUNK + x] = terrain8_of(w, cx0 + x, cy0 + y, b8, g8);
+                    continue;
+                }
+                out->biomes[y * WG_CHUNK + x] = (uint8_t)biome8_of(w, cx0 + x, cy0 + y, &c8);
+                out->slabs[y * WG_CHUNK + x] = terrain8(w, cx0 + x, cy0 + y, &c8);
+                continue;
+            }
             if (w->version >= 7) {
                 struct Clim7 c7;
+                uint8_t g7, b7;
+                if (ground7_known(w, cx0 + x, cy0 + y, &g7, &b7)) {
+                    /* a slab the deposits' floods (or an earlier chunk) worked out: its biome and ground as they
+                       are, and terrain7 with them (no gold in Dead Man's Land, else the seams over the ground) */
+                    int gold = 0;
+                    out->biomes[y * WG_CHUNK + x] = b7;
+                    if (b7 != WgB_DeadMans)
+                        gold = seam_gold(w, cx0 + x, cy0 + y);
+                    out->slabs[y * WG_CHUNK + x] = b7 == WgB_DeadMans ? (uint8_t)WgS_Earth : (gold != 0 ? (uint8_t)gold : g7);
+                    continue;
+                }
                 climate7(w, cx0 + x, cy0 + y, &c7);
                 out->biomes[y * WG_CHUNK + x] = (uint8_t)biome7_of(&c7);
                 out->slabs[y * WG_CHUNK + x] = terrain7(w, cx0 + x, cy0 + y, &c7);
@@ -3476,6 +3718,8 @@ int wg_generate_chunk(struct WgWorld *w, int32_t cx, int32_t cy, struct WgChunk 
             out->slabs[y * WG_CHUNK + x] = terrain(w, cx0 + x, cy0 + y, clim);
         }
     place_gems(w, out, cx0, cy0);
+    if (w->version >= 8)
+        prize8_gems(w, out, cx0, cy0); /* (world_gen8.inc) */
     /* stage 4: World.structures_touching, sorted by (priority, id) */
     n = structs_in(w, cx0, cy0, cx0 + WG_CHUNK - 1, cy0 + WG_CHUNK - 1, PLACED_MASK, found, MAX_FOUND - 1, 0);
     if (n > MAX_FOUND - 1)
@@ -3629,8 +3873,21 @@ int wg_structures_in(struct WgWorld *w, int64_t x1, int64_t y1, int64_t x2, int6
 int wg_terrain_at(struct WgWorld *w, int64_t x, int64_t y)
 {
     maintain_caches(w);
+    if (w->version >= 8) {
+        struct Clim7 c8;
+        climate7(w, x, y, &c8);
+        return terrain8(w, x, y, &c8); /* (world_gen8.inc) */
+    }
     if (w->version >= 7) {
         struct Clim7 c7;
+        uint8_t g7, b7;
+        if (ground7_known(w, x, y, &g7, &b7)) {
+            int gold;
+            if (b7 == WgB_DeadMans)
+                return WgS_Earth;
+            gold = seam_gold(w, x, y);
+            return gold != 0 ? gold : g7;
+        }
         climate7(w, x, y, &c7);
         return terrain7(w, x, y, &c7);
     } else {

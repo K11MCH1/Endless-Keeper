@@ -70,6 +70,7 @@
 #include "gui_parchment.h"
 #include "world_colours.h"
 #include "net_anticheat.h"
+#include "world_temperament.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1525,6 +1526,7 @@ static void rec_begin(uint32_t flags)
 {
     rec_len = 0;
     rec_failed = false;
+    flags |= (uint32_t)world_temper_nights_wire() << 24; /* the world temperament's nights (0: as usual) */
     struct NsHeader h = {NS_MAGIC, (uint32_t)game.play_gameturn, flags};
     rec_put(&h, sizeof(h));
 }
@@ -3907,6 +3909,7 @@ static void client_apply(const uint8_t *data, size_t len)
     struct NsHeader h;
     rd_get(&r, &h, sizeof(h));
     const TbBool keyframe = (h.flags & NsF_Keyframe) != 0;
+    world_temper_client_nights((int)(h.flags >> 24)); /* the server world's nights, if its temperament changes them */
     if (keyframe)
         keyframe_pass++;
     touched_count = 0;

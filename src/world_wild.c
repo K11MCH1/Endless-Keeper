@@ -59,6 +59,7 @@
 #include "slab_data.h"
 #include "thing_stats.h"
 #include <limits.h>
+#include "world_temperament.h"
 #include "post_inc.h"
 
 #define WILD_CYCLE_TURNS 20     /* one spawn cycle a second */
@@ -115,6 +116,15 @@ static const struct WildBiome wild_biomes[WG_V6_BIOMES] = { /* version 7's provi
     {{{WILD_BASE, {NULL, 0, 0, 0}, WILD_ZOMBIES}, {WILD_FLIES}}},                                        /* Crystal Caverns */
     {{{WILD_BASE, {"GHOST", 10, 1, 1}, WILD_ZOMBIES_MANY}, {WILD_FLIES}}},                                    /* Ancient Ruins */
 };
+/* the Overgrowth (generator version 8): the Maiden of the Nest with her Spiderlings, and Spiders */
+static const struct WildBiome wild_overgrowth = {{{{"SPIDERLING", 200, 3, 4}, {"MAIDEN", 40, 1, 1}, {"SPIDER", 80, 2, 3},
+    {NULL, 0, 0, 0}, {NULL, 0, 0, 0}}, {WILD_FLIES}}};
+
+/** A biome's wild packs (version 7's provinces: their land's; the Overgrowth: its own). */
+static const struct WildBiome *wild_biome_of(int biome)
+{
+    return (biome == WgB_Overgrowth) ? &wild_overgrowth : &wild_biomes[world_biome_parent(biome)];
+}
 
 /** The weight of a list entry: none for an empty entry or a creature kind that is not loaded. */
 static int wild_weight(const struct WildSpawn *spawn)
@@ -283,8 +293,7 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
     int biome = world_biome_at_engine_slab(x, y);
     if (biome == WgB_DeadMans) /* Dead Man's Land: nothing lives there (version 7) */
         return 0;
-    biome = world_biome_parent(biome); /* the other provinces: their parent biome's packs */
-    const struct WildSpawn *list = wild_biomes[biome].on[ground];
+    const struct WildSpawn *list = wild_biome_of(biome)->on[ground]; /* the other provinces: their parent biome's packs */
     int total = 0;
     for (int k = 0; k < WILD_KINDS; k++)
         total += wild_weight(&list[k]);
@@ -851,8 +860,7 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     int biome = world_biome_at_engine_slab(x, y);
     if (biome == WgB_DeadMans) /* Dead Man's Land: no burrows either (version 7) */
         return 0;
-    biome = world_biome_parent(biome);
-    const struct WildSpawn *list = wild_biomes[biome].on[WiG_Path];
+    const struct WildSpawn *list = wild_biome_of(biome)->on[WiG_Path];
     int total = 0;
     for (int k = 0; k < WILD_KINDS; k++)
         total += wild_weight(&list[k]);
@@ -1040,7 +1048,7 @@ void world_wild_turn(void)
     const int chunks = world_is_chunked() ? wp_count() : WORLD_WINDOW_CHUNKS * WORLD_WINDOW_CHUNKS;
     int wild_caps[WiG_COUNT];
     for (int g = 0; g < WiG_COUNT; g++)
-        wild_caps[g] = wild_caps_289[g] * chunks / WILD_CAP_CHUNKS;
+        wild_caps[g] = world_temper_wild_cap(wild_caps_289[g] * chunks / WILD_CAP_CHUNKS); /* (the world's temperament) */
     if (day)
         return; /* they come out at night */
     for (int t = 0; t < WILD_CHUNK_TRIES; t++)

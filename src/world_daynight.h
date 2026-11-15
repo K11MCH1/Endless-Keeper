@@ -37,6 +37,8 @@ void world_daynight_turn(void);
 void world_daynight_after_turn(void);
 /** Clears what must not carry over into the next run. */
 void world_daynight_level_end(void);
+void world_daynight_night_percent(int pct);
+void world_daynight_night_percent(int pct);
 
 /** Is this one of the heroes of a day raid? (They show on the maps like tunnelling hero parties.) */
 TbBool world_raid_hero(const struct Thing *thing);
