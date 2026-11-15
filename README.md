@@ -11,7 +11,7 @@
 [![Built on KeeperFX](https://img.shields.io/badge/built%20on-KeeperFX%201.4-8b0000)](https://github.com/dkfans/keeperfx)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078d6)](#-requirements)
 [![License: GPL v2](https://img.shields.io/badge/license-GPL--2.0-blue)](LICENSE)
-[![Discord: Keeper Klan](https://img.shields.io/badge/Discord-Endless%20Keeper-5865F2?logo=discord&logoColor=white)](https://discord.com/invite/hE4p7vy2Hb)
+[![Discord: Keeper Klan](https://img.shields.io/badge/Discord-Endless%20Keeper-5865F2?logo=discord&logoColor=white)](https://discord.com/invite/7DuRS9kFaR)
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/V7V5FV1VE)
 
