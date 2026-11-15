@@ -42,6 +42,7 @@
 #include "frontmenu_ingame_map.h"
 #include "player_instances.h"
 #include "world_pages.h"
+#include "world_rigging.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -409,6 +410,8 @@ TbBool check_door_should_open(struct Thing *thing)
         return false;
     }
     struct Thing* openertng = get_creature_in_range_and_owned_by_or_allied_with(thing->mappos.x.val, thing->mappos.y.val, 5, thing->owner);
+    if (thing_is_invalid(openertng) && world_rigging_counting_door(thing)) /* endless: a counting door opens for heroes */
+        openertng = get_creature_in_range_and_owned_by_or_allied_with(thing->mappos.x.val, thing->mappos.y.val, 5, PLAYER_GOOD);
     if (thing_is_invalid(openertng))
     {
         return false;
@@ -423,6 +426,10 @@ TbBool door_will_open_for_thing(const struct Thing *doortng, const struct Thing 
     if ( players_are_mutual_allies(doortng->owner,creatng->owner) )
     {
       return true;
+    }
+    if ((creatng->owner == PLAYER_GOOD) && world_rigging_counting_door(doortng))
+    {
+      return true; /* endless: a counting door lets heroes through until it locks */
     }
   }
   return false;
