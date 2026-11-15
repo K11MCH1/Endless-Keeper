@@ -101,6 +101,7 @@
 #include "server_admin.h"
 #include "world_stream.h"
 #include "world_caretaker.h"
+#include "world_attune.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -225,6 +226,7 @@ struct GuiMenu *menu_list[] = {
     &world_party_menu,
     &chat_box_menu, //55
     &world_delete_menu, //56
+    &world_attune_menu, //57
     NULL,
 };
 

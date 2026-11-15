@@ -50,6 +50,7 @@
 #include "room_workshop.h"
 #include "world_circles.h"
 #include "creature_senses.h"
+#include "world_attune.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2178,6 +2179,7 @@ void world_progress_turn(void)
         ban_powers();
     wp_poison_turn();
     test_traps();
+    world_attune_turn();
     if (!world_progress_active())
         return;
     test_books();
@@ -2465,6 +2467,7 @@ void world_progress_seat_reset(PlayerNumber plyr_idx)
     game.world_room_researching[plyr_idx] = 0;
     /* and the mastery bars: the next keeper of the seat began with the last one's (audit 2026-11-11) */
     memset(game.world_room_xp[plyr_idx], 0, sizeof(game.world_room_xp[plyr_idx]));
+    world_attune_seat_reset(plyr_idx); /* and Attunement */
     wpr_offer_circle[plyr_idx] = 0;
     pmask_del(&wpr_kit_players, plyr_idx); /* the kit is given again when it starts */
     SYNCLOG("World: player %d's level, XP, records and research progress start again from zero", (int)plyr_idx);

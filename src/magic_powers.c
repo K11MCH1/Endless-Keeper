@@ -64,6 +64,7 @@
 #include "lua_triggers.h"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_attune.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -873,7 +874,7 @@ GoldAmount compute_power_price(PlayerNumber plyr_idx, PowerKind pwkind, KeepPwrL
         price = powerst->cost[power_level];
         break;
     }
-    return price;
+    return world_attune_price(plyr_idx, pwkind, price); /* endless: Attunement */
 }
 
 /**
