@@ -47,6 +47,7 @@
 #include "local_camera.h"
 #include "keeperfx.hpp"
 #include "world_progress.h"
+#include "world_rooms.h"
 #include "post_inc.h"
 #include <math.h>
 
@@ -338,7 +339,11 @@ short setup_room_tooltips(struct Coord3d *pos)
           return true;
       }
   }
-  set_gui_tooltip_box_fmt(1,"%s",get_string(stridx));
+  {
+      /* endless worlds: the room names its shape (The Shape of a Room) */
+      const enum WorldRoomShape shape = world_room_shape(room);
+      set_gui_tooltip_box_fmt(1, "%s%s%s", get_string(stridx), (shape != WRS_None) ? ", " : "", world_room_shape_name(shape));
+  }
   return true;
 }
 

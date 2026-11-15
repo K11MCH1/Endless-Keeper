@@ -28,6 +28,7 @@
 #include "thing_physics.h"
 #include "game_legacy.h"
 
+#include "world_rooms.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -77,8 +78,11 @@ short room_grow_food(struct Room *room)
         ERRORLOG("Room %s index %d has too much used capacity: %d/%d", room_code_name(room->kind), (int)room->index, room->used_capacity, room->total_capacity);
         count_food_in_room(room);
     }
+    /* endless: Lie of the Land, a Hatchery by the water in the Flooded Grottos hatches sooner */
+    const long hatch_every = (game.conf.rules[room->owner].rooms.food_generation_speed / room->total_capacity) * 100
+        / (100 + max(world_room_mod(room, WRM_Hatch, NULL), -50));
     if ((room->used_capacity >= room->total_capacity)
-      || get_gameturn() % ((game.conf.rules[room->owner].rooms.food_generation_speed / room->total_capacity) + 1))
+      || get_gameturn() % (hatch_every + 1))
     {
         return 0;
     }
