@@ -218,6 +218,15 @@ struct LogDetailedSnapshot {
     unsigned short dig_task_counts[DUNGEONS_MAX];
 };
 
+/** Rivals with Ambitions (world_rivals.c): a rival keeper's ambition, in the game state for every machine's map. */
+struct WorldRival {
+    uint8_t kind;                /* 0: free; 1 Hoarder, 2 Portal-grabber, 3 Warlord */
+    int8_t slot, target;         /* the player it plays as; the human keeper it is aimed at */
+    int16_t keeper;              /* its index in the world's keeper list */
+    int32_t hx, hy;              /* its heart, engine slabs (the marker) */
+    uint32_t next;               /* the turn of its next move (the Warlord's countdown) */
+};
+
 struct Game {
     LevelNumber continue_level_number;
     TbBool run_after_victory;
@@ -397,6 +406,7 @@ struct Game {
        (0: none), copied here by the server so that a thin client's Rap Sheet has it. */
     uint16_t world_misdeed_view_thing[PLAYERS_MAX];
     uint8_t world_misdeed_view[PLAYERS_MAX][128];
+    struct WorldRival world_rivals[8]; /* Rivals with Ambitions (world_rivals.c: WORLD_RIVALS_MAX) */
     /** The wind shots' lists of the creatures they pushed (thing_data.h; they were in every thing). wind_nodes_used:
      *  the highest node ever handed out; wind_free_head: the chain of nodes given back (0: none). All zero is empty. */
     struct WindNode wind_nodes[WIND_NODES_COUNT];

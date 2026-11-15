@@ -112,6 +112,7 @@
 #include "net_secure.h"
 #define XXH_INLINE_ALL
 #include "../deps/xxhash/xxhash.h"
+#include "world_rivals.h"
 #include "world_pools.h"
 #include "room_entrance.h"
 #include "world_progress.h"
@@ -163,6 +164,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_RIVALS 0x31564952u   /* "RIV1": Rivals with Ambitions */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -3504,6 +3506,34 @@ static TbBool player_near_keeper(const struct WorldKeeper *wk)
     return false;
 }
 
+/** Which human woke a keeper: the first whose creatures are near it, else the one whose ground is nearest its heart. */
+static PlayerNumber keeper_waker(const struct WorldKeeper *wk)
+{
+    const PlayerBitFlags humans = world_human_mask();
+    PlayerNumber best = PLAYER_NONE;
+    int64_t best_d = -1;
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+    {
+        if (!pmask_has(humans, p))
+            continue;
+        PlayerBitFlags one = pmask_none();
+        pmask_add(&one, p);
+        if (player_creature_near_keeper(wk, one))
+            return p;
+        struct Thing *heart = find_players_dungeon_heart(p);
+        if (!thing_exists(heart))
+            continue;
+        const int64_t dx = world_slab_x_of(subtile_slab(heart->mappos.x.stl.num)) - wk->heart_x;
+        const int64_t dy = world_slab_y_of(subtile_slab(heart->mappos.y.stl.num)) - wk->heart_y;
+        if ((best_d < 0) || (dx * dx + dy * dy < best_d))
+        {
+            best_d = dx * dx + dy * dy;
+            best = p;
+        }
+    }
+    return best;
+}
+
 static int32_t engine_chunk_of(int64_t wc);
 
 /* An awake keeper with no human near for this long goes back to sleep (10 minutes). */
@@ -3611,6 +3641,7 @@ static void update_keepers(void)
         {
             wk->state = WKSt_Destroyed;
             SYNCLOG("World: keeper@%d,%d (player %d) is destroyed", (int)wk->id.start_cx, (int)wk->id.start_cy, (int)wk->slot);
+            world_rivals_keeper_gone(k);
             {
                 /* its grimoires: 3 research books a grade above where it lived, at its heart */
                 const int grade = min(5, world_progress_grade_at(dist_to_nearest_start(wk->heart_x, wk->heart_y)) + 1);
@@ -3628,13 +3659,14 @@ static void update_keepers(void)
             wk->state = WKSt_Active;
             W.keeper_last_near[k] = game.play_gameturn;
             SYNCLOG("World: keeper@%d,%d (player %d) wakes up", (int)wk->id.start_cx, (int)wk->id.start_cy, (int)wk->slot);
+            world_rivals_keeper_woke(k, wk->slot, keeper_waker(wk), wk->heart_x, wk->heart_y); /* Rivals with Ambitions */
         } else
         if ((wk->state == WKSt_Active) && world_paged && !wake_all)
         {
             /* no human near for a long time: back to sleep, so its ground can freeze and its slot be reused */
             if ((W.keeper_last_near[k] == 0) || player_near_keeper(wk))
                 W.keeper_last_near[k] = game.play_gameturn;
-            else if (game.play_gameturn - W.keeper_last_near[k] > WORLD_KEEPER_SLEEP_TURNS)
+            else if ((game.play_gameturn - W.keeper_last_near[k] > WORLD_KEEPER_SLEEP_TURNS) && !world_rivals_holds(k))
             {
                 wk->state = WKSt_Passive;
                 SYNCLOG("World: keeper@%d,%d (player %d) goes back to sleep", (int)wk->id.start_cx, (int)wk->id.start_cy,
@@ -3642,7 +3674,10 @@ static void update_keepers(void)
             }
         }
         if (((wk->state == WKSt_Passive) || (wk->state == WKSt_Destroyed)) && keeper_slot_unused(wk))
+        {
+            world_rivals_keeper_gone(k);
             keeper_release_slot(k);
+        }
     }
 }
 
@@ -9659,6 +9694,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_RIVALS, world_rivals_save_size, world_rivals_save, world_rivals_load, world_rivals_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 

@@ -72,6 +72,7 @@
 #include "front_input.h"
 #include "creature_battle.h"
 #include "world_circles.h"
+#include "world_rivals.h"
 #include "post_inc.h"
 
 /** The full-screen map's view in slabs: the map, or in paged mode (chunked endless world, no fixed map size) a
@@ -935,6 +936,25 @@ static void draw_overhead_world_map(const struct TbRect *map_area, long block_si
             const int tw = LbTextStringWidth(name) * name_units_per_px / 16;
             const int x = max(0, min(label_x[l] - tw / 2, map_w - tw));
             LbTextDrawResized(x, max(0, label_y[l] + 4 * units_per_pixel / 16), name_units_per_px, name);
+        }
+    }
+    /* Rivals with Ambitions: the rivals aimed at this keeper, labelled at their hearts */
+    {
+        LbTextSetFont(winfont);
+        const int rv_units_per_px = (13 * units_per_pixel) / max(1, (int)LbTextLineHeight());
+        LbTextSetWindow(map_area->left, map_area->top, map_w, map_h);
+        for (int i = 0; i < WORLD_RIVALS_MAX; i++)
+        {
+            MapSlabCoord ex, ey;
+            char text[32];
+            if (!world_rivals_map_label(i, &ex, &ey, text, sizeof(text)))
+                continue;
+            const int px = (int)((ex - view_x) * block_size - off_x + block_size / 2);
+            const int py = (int)((ey - view_y) * block_size - off_y);
+            if ((px < 0) || (py < 0) || (px >= map_w) || (py >= map_h))
+                continue;
+            const int tw = LbTextStringWidth(text) * rv_units_per_px / 16;
+            LbTextDrawResized(max(0, min(px - tw / 2, map_w - tw)), max(0, py - 10 * units_per_pixel / 16), rv_units_per_px, text);
         }
     }
     pmap_draw_ns += get_time_tick_ns() - draw_start;
