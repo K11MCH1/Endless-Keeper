@@ -46,6 +46,7 @@
 #endif
 #include "net_secure.h"
 #include "server_roles.h"
+#include "world_auction.h"
 #include "post_inc.h"
 
 #define ADMIN_IN_MAX      8192
@@ -1070,6 +1071,8 @@ static void player_help(int user)
     server_admin_notice(user, msg);
     if (world_mode_active())
         server_admin_notice(user, "Everyone: !delete dungeon deletes the dungeon you play (it asks first).");
+    if (world_mode_active())
+        server_admin_notice(user, "Everyone: !market, !sell creature|hero <kind> <price>, !buy <number>: the Auction House.");
     if (server_roles_user_can(user, RolP_Cheats))
         server_admin_notice(user, "Cheats are allowed for you: the game's ! cheat commands work (Tab completes them).");
     if (!server_roles_user_can(user, RolP_Chat))
@@ -1114,6 +1117,14 @@ TbBool server_admin_player_command_as(int user, const char *text, char prefix)
            request as a packet; a line that comes here was typed in a game without that box */
         if ((user > SERVER_ID) && (user < MAX_NET_USERS))
             server_admin_notice(user, "Type !delete dungeon in an up-to-date game: it asks you first, then deletes the dungeon you play.");
+        return true;
+    }
+    if (((strcasecmp(word, "sell") == 0) || (strcasecmp(word, "buy") == 0) || (strcasecmp(word, "market") == 0) ||
+        (strcasecmp(word, "unsell") == 0)) && world_mode_active())
+    {
+        /* The Auction House (world_auction.c): every seated keeper may */
+        if ((user > SERVER_ID) && (user < MAX_NET_USERS))
+            world_auction_command(user, get_user_state(user)->player_id, word, s + wl);
         return true;
     }
     const int perm = role_permission_by_name(word);
