@@ -115,6 +115,7 @@
 #include "world_pools.h"
 #include "room_entrance.h"
 #include "world_progress.h"
+#include "world_loyalist.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -163,6 +164,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_LOYALIST 0x31594F4Cu /* "LOY1": the last loyalists not yet fought (world_loyalist.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -2571,6 +2573,12 @@ static void remove_thing_quietly(struct Thing *thing)
         }
     }
     delete_thing_structure(thing, 0);
+}
+
+void world_remove_creature_quietly(struct Thing *thing)
+{
+    if (thing_exists(thing) && thing_is_creature(thing))
+        remove_thing_quietly(thing);
 }
 
 /* Re-placing a slab deletes the dungeon heart attached to it (sets its health to 0) and places a new one. The slabs
@@ -6179,6 +6187,7 @@ TbBool world_seat_respawn(PlayerNumber p)
             "a party for a new co-op dungeon.", "defeated", why, sizeof(why));
     }
     SYNCLOG("World: player %d (%s) starts again: its seat is freed and taken again with a new start", (int)p, player->player_name);
+    world_loyalist_depart(p); /* the last loyalist leaves the old dungeon first, with its record */
     /* 1. the seat is freed: its leftovers are nobody's, its records from zero */
     int creatures = 0;
     const int slabs = free_seat_loaded(p, &creatures);
@@ -6211,6 +6220,7 @@ TbBool world_seat_respawn(PlayerNumber p)
     respawn_seat = p;
     world_seat_joined(p);
     respawn_seat = PLAYER_NONE;
+    world_loyalist_arrive(p); /* and walks in at the new Heart */
     if (netstate_is_server())
     {
         /* its thin clients get the whole state again, as a joiner does: the new ground, what it sees, the camera */
@@ -9659,6 +9669,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_LOYALIST, world_loyalist_save_size, world_loyalist_save, world_loyalist_load, world_loyalist_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 

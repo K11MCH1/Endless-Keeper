@@ -114,6 +114,7 @@
 #include "world_misdeeds.h"
 #include "world_pages.h"
 #include "net_state.h"
+#include "world_loyalist.h"
 #include "post_inc.h"
 
 /* the double-click arrays (frontend.h) are indexed by user: one for every packet */
@@ -868,7 +869,10 @@ TbBool process_user_global_packet_action(NetUserId user)
   case PckA_WorldRespawn:
       /* "Start again": game state, so the thin-client server (or every machine of a lockstep game) does it */
       if (!netstate_thin_mode() || network_is_host())
+      {
+          world_loyalist_choose(plyr_idx, pckt->actn_par1, pckt->actn_par2); /* the last loyalist */
           world_seat_respawn(plyr_idx);
+      }
       return 1;
   case PckA_WorldDelete:
       /* !delete dungeon (the player said Yes): a thin-client server deletes the dungeon and sends the player back */

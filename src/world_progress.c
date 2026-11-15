@@ -50,6 +50,7 @@
 #include "room_workshop.h"
 #include "world_circles.h"
 #include "creature_senses.h"
+#include "world_loyalist.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2178,6 +2179,7 @@ void world_progress_turn(void)
         ban_powers();
     wp_poison_turn();
     test_traps();
+    world_loyalist_turn();
     if (!world_progress_active())
         return;
     test_books();
@@ -2457,6 +2459,7 @@ void world_progress_seat_reset(PlayerNumber plyr_idx)
 {
     if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
         return;
+    world_loyalist_seat_freed(plyr_idx); /* (Start again has used them already: its depart came first) */
     wpl_xp[plyr_idx] = 0;
     memset(&wps[plyr_idx], 0, sizeof(wps[plyr_idx]));
     memset(&wpr_players[plyr_idx], 0, sizeof(wpr_players[plyr_idx]));

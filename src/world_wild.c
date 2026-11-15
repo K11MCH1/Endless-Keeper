@@ -59,6 +59,7 @@
 #include "slab_data.h"
 #include "thing_stats.h"
 #include <limits.h>
+#include "world_loyalist.h"
 #include "post_inc.h"
 
 #define WILD_CYCLE_TURNS 20     /* one spawn cycle a second */
@@ -224,7 +225,7 @@ int world_keeper_top_level(PlayerNumber plyr_idx)
         struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
         if (thing_is_invalid(thing) || creature_control_invalid(cctrl))
             break;
-        if ((int)cctrl->exp_level + 1 > top)
+        if (((int)cctrl->exp_level + 1 > top) && !world_loyalist_resting(thing)) /* the last loyalist counts once it fought */
             top = (int)cctrl->exp_level + 1;
         i = cctrl->players_next_creature_idx;
     }

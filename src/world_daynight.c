@@ -60,6 +60,7 @@
 #include "net_game.h"
 #include "world_progress.h"
 #include "server_admin.h"
+#include "world_loyalist.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -483,6 +484,8 @@ static int dn_keeper_best_level(PlayerNumber plyr_idx)
             if (creature_control_invalid(cctrl))
                 break;
             i = cctrl->players_next_creature_idx;
+            if (world_loyalist_resting(thing))
+                continue; /* the last loyalist counts once it has fought */
             if (cctrl->exp_level + 1 > best)
                 best = cctrl->exp_level + 1;
         }

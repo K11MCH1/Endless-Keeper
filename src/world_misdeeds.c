@@ -687,6 +687,13 @@ void world_misdeeds_thaw(struct Thing *thing, uint16_t id)
     cctrl->misdeed_id = id;
 }
 
+void world_misdeeds_release(uint16_t id)
+{
+    struct MdRec *rec = md_rec(id);
+    if ((rec != NULL) && flag_is_set(rec->flags, MdF_Frozen))
+        rec->used = 0;
+}
+
 void world_misdeeds_reset(void)
 {
     free(md_recs);

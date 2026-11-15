@@ -68,6 +68,7 @@
 #include "local_camera.h"
 #include "world_attract.h"
 #include "chat_box.h"
+#include "world_loyalist.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1788,7 +1789,9 @@ static void wr_start_again(struct GuiButton *gbtn)
     struct PlayerInfo *player = get_my_player();
     SYNCLOG("World: this keeper asks to start again");
     wr_asked_at = SDL_GetTicks();
-    set_players_packet_action(player, PckA_WorldRespawn, 0, 0, 0, 0);
+    unsigned long par1, par2;
+    world_loyalist_choice(&par1, &par2); /* the last loyalist walks along */
+    set_players_packet_action(player, PckA_WorldRespawn, par1, par2, 0, 0);
 }
 
 static void wr_quit(struct GuiButton *gbtn)
@@ -1799,13 +1802,14 @@ static void wr_quit(struct GuiButton *gbtn)
 
 static struct GuiButtonInit world_respawn_buttons[] = {
   {LbBtnT_NormalBtn, BID_DEFAULT, 0, 0, NULL,           NULL, NULL, 0, 999, 12, 999, 12, 260, 32, gui_area_text, 2, GUIStr_Empty, 0, {.str = wr_title},     0, NULL },
-  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 1, wr_start_again, NULL, NULL, 0,  18, 58,  18, 58, 140, 32, gui_area_text, 1, GUIStr_Empty, 0, {.str = wr_again},     0, NULL },
-  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 1, wr_quit,        NULL, NULL, 0, 172, 58, 172, 58, 110, 32, gui_area_text, 1, GUIStr_Empty, 0, {.str = wr_quit_text}, 0, NULL },
+  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 1, world_loyalist_button_click, NULL, NULL, 0, 999, 50, 999, 50, 300, 28, gui_area_text, 1, GUIStr_Empty, 0, {.str = world_loyalist_label}, 0, NULL },
+  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 1, wr_start_again, NULL, NULL, 0,  38, 92,  38, 92, 140, 32, gui_area_text, 1, GUIStr_Empty, 0, {.str = wr_again},     0, NULL },
+  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 1, wr_quit,        NULL, NULL, 0, 192, 92, 192, 92, 110, 32, gui_area_text, 1, GUIStr_Empty, 0, {.str = wr_quit_text}, 0, NULL },
   {              -1, BID_DEFAULT, 0, 0, NULL,           NULL, NULL, 0,   0,  0,   0,  0,   0,  0, NULL,          0, 0,            0, {0},                 0, NULL },
 };
 
 struct GuiMenu world_respawn_menu =
- { GMnu_WORLD_RESPAWN, 0, 1, world_respawn_buttons, POS_GAMECTR, POS_GAMECTR, 300, 104, gui_pretty_background, 0, NULL, NULL, 0, 1, 0,};
+ { GMnu_WORLD_RESPAWN, 0, 1, world_respawn_buttons, POS_GAMECTR, POS_GAMECTR, 340, 138, gui_pretty_background, 0, NULL, NULL, 0, 1, 0,};
 
 /* !delete dungeon (party dungeons, the user, 2026-11-10): typed in the chat of an online endless world, it opens this
    box here (the line isn't sent); Yes sends the request to the server as a packet, which deletes the dungeon this
@@ -1987,6 +1991,7 @@ void world_respawn_prompt_turn(void)
     /* on the full-screen map the box's buttons get no clicks (a click there zooms): back to the dungeon first */
     if (get_local_view_type() == PVT_MapScreen)
         zoom_from_parchment_map();
+    world_loyalist_box_shown(); /* the survivors to choose from */
     turn_on_menu(GMnu_WORLD_RESPAWN);
 }
 /******************************************************************************/

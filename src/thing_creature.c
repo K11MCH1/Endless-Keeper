@@ -112,6 +112,7 @@
 #include "world_daynight.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
+#include "world_loyalist.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -3372,6 +3373,8 @@ struct Thing* cause_creature_death(struct Thing *thing, CrDeathFlags flags)
     }
 
     creature_throw_out_gold(thing);
+    if (!flag_is_set(flags, CrDed_NotReallyDying))
+        world_loyalist_dying(thing); /* endless: a defeated keeper's noted creature keeps its record */
     if (!flag_is_set(flags, CrDed_NotReallyDying))
         world_misdeeds_dying(thing); /* endless: Unfinished Business, Bad Blood */
     if (!flag_is_set(flags, CrDed_NotReallyDying))
