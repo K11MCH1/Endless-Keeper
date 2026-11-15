@@ -59,6 +59,7 @@
 #include "slab_data.h"
 #include "thing_stats.h"
 #include <limits.h>
+#include "world_watchfire.h"
 #include "post_inc.h"
 
 #define WILD_CYCLE_TURNS 20     /* one spawn cycle a second */
@@ -277,6 +278,7 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
         x = 1 + lcx * WORLD_CHUNK_SLABS + wild_rand(rng, WORLD_CHUNK_SLABS);
         y = 1 + lcy * WORLD_CHUNK_SLABS + wild_rand(rng, WORLD_CHUNK_SLABS);
     }
+    const TbBool fire_pushed = world_watchfire_push(&x, &y); /* a watchfire's light: the pack comes at its edge, bigger */
     const int ground = wild_ground_at(x, y);
     if ((ground < 0) || (counts[ground] >= wild_caps[ground]))
         return 0;
@@ -301,7 +303,7 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
     const long model = get_id(creature_desc, list[k].name);
     if (model <= 0)
         return 0;
-    const int group = list[k].min_group + wild_rand(rng, list[k].max_group - list[k].min_group + 1);
+    const int group = list[k].min_group + wild_rand(rng, list[k].max_group - list[k].min_group + 1) + (fire_pushed ? 1 : 0);
     const MapSlabCoord px = x, py = y;
     /* circles (world_circles.c): a pack is as strong as the circle it appears in */
     const int top = world_circles_level_at_slab(x, y, 1, "a wild pack");
@@ -827,7 +829,8 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     int dy = (int)floor(sqrt((double)(r * r - dx * dx)) + 0.5);
     if (wild_rand(rng, 2) == 0)
         dy = -dy;
-    const MapSlabCoord x = pl->ax[a] + dx, y = pl->ay[a] + dy;
+    MapSlabCoord x = pl->ax[a] + dx, y = pl->ay[a] + dy;
+    const TbBool fire_pushed = world_watchfire_push(&x, &y); /* a watchfire's light: the burrow opens at its edge, bigger */
     if (!wild_earth_at(x, y) || wild_near_player(pl, x, y, WILD_MIN_DIST))
         return 0;
     /* the burrow: this slab and the earth beside it, three to five slabs */
@@ -877,7 +880,7 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     const uint32_t pack = ++wild_pack_serial;
     struct Thing *leader = INVALID_THING;
     int made = 0;
-    for (int m = 0; m < size; m++)
+    for (int m = 0; m < size + (fire_pushed ? 1 : 0); m++)
     {
         struct Thing *thing = wild_spawn(rng, (ThingModel)((m < beetles) ? beetle : model), sx[m % ns], sy[m % ns],
             low + wild_rand(rng, top - low + 1));

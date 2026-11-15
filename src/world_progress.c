@@ -50,6 +50,19 @@
 #include "room_workshop.h"
 #include "world_circles.h"
 #include "creature_senses.h"
+#include "world_feats.h"
+#include "world_watchfire.h"
+#include "world_dark.h"
+#include "world_masonry.h"
+#include "world_falseheart.h"
+#include "world_champion.h"
+#include "world_attune.h"
+#include "world_rigging.h"
+#include "world_cookbook.h"
+#include "world_heresy.h"
+#include "world_unions.h"
+#include "world_exodus.h"
+#include "world_dressing.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -747,6 +760,16 @@ static int wrl_level(PlayerNumber p, int r)
 {
     const int v = game.world_room_level[p][r];
     return (v < 1) ? 1 : v;
+}
+
+TbBool world_amenity_mastered(PlayerNumber plyr_idx, const char *entry)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX) || (entry == NULL))
+        return false;
+    for (int r = 0; r < WRL_ROOMS; r++)
+        if (strcmp(wrl_names[r], entry) == 0)
+            return (wrl_level(plyr_idx, r) >= wrl_top[r]);
+    return false;
 }
 
 static int wrl_allowed(PlayerNumber p, int r)
@@ -2178,6 +2201,19 @@ void world_progress_turn(void)
         ban_powers();
     wp_poison_turn();
     test_traps();
+    world_feats_turn();
+    world_watchfire_turn();
+    world_dark_turn();
+    world_masonry_turn();
+    world_falseheart_turn();
+    world_champion_turn();
+    world_attune_turn();
+    world_rigging_turn();
+    world_cookbook_turn();
+    world_heresy_turn();
+    world_unions_turn();
+    world_exodus_turn();
+    world_dressing_turn();
     if (!world_progress_active())
         return;
     test_books();
@@ -2448,6 +2484,7 @@ void world_player_portal_captured(PlayerNumber plyr_idx, int biome)
     if (network_is_active() && (get_player_primary_user(get_player(plyr_idx)) < 0))
         return;
     wps[plyr_idx].portals++;
+    world_feats_add(plyr_idx, WFt_PortalHunter, 1);
     SYNCLOG("World: player %d captured a portal (%d so far)", (int)plyr_idx, (int)wps[plyr_idx].portals);
     server_admin_player_event(plyr_idx, "%s captured a portal (%s)", server_admin_player_name(plyr_idx),
         ((biome >= 0) && (biome < WgB_COUNT)) ? wg_biome_name(biome) : "?");
@@ -2465,8 +2502,18 @@ void world_progress_seat_reset(PlayerNumber plyr_idx)
     game.world_room_researching[plyr_idx] = 0;
     /* and the mastery bars: the next keeper of the seat began with the last one's (audit 2026-11-11) */
     memset(game.world_room_xp[plyr_idx], 0, sizeof(game.world_room_xp[plyr_idx]));
+    world_feats_seat_reset(plyr_idx); /* the Rap Sheet too */
+    world_attune_seat_reset(plyr_idx); /* and Attunement */
     wpr_offer_circle[plyr_idx] = 0;
     pmask_del(&wpr_kit_players, plyr_idx); /* the kit is given again when it starts */
+    world_champion_seat_reset(plyr_idx); /* and the Champion */
+    world_watchfire_seat_reset(plyr_idx); /* and the watchfires */
+    world_falseheart_seat_reset(plyr_idx); /* and the false Heart */
+    world_heresy_seat_reset(plyr_idx); /* and the heresies */
+    world_unions_seat_reset(plyr_idx); /* and the unions */
+    world_exodus_seat_reset(plyr_idx); /* and the Exodus */
+    world_dressing_seat_reset(plyr_idx); /* and the dungeon's looks */
+    world_cookbook_seat_reset(plyr_idx); /* and the cookbook */
     SYNCLOG("World: player %d's level, XP, records and research progress start again from zero", (int)plyr_idx);
 }
 
@@ -2610,10 +2657,16 @@ void world_heart_destroyed(const struct Thing *heartng)
     if (victim == PLAYER_GOOD)
     {
         wps[by].outposts++;
+        if (!world_is_day())
+            world_feats_add(by, WFt_NightShift, 1);
+        world_heresy_stronghold_destroyed(by, &heartng->mappos); /* far from home: a heretical tome */
+        world_dressing_stronghold_destroyed(by, heartng->mappos.x.stl.num, heartng->mappos.y.stl.num); /* a look earned */
+        world_cookbook_stronghold_destroyed(by, &heartng->mappos); /* in the ruins: a lore page */
         server_admin_player_event(by, "%s defeated a heroes outpost", server_admin_player_name(by));
     } else
     {
         wps[by].hearts++;
+        world_feats_add(by, WFt_Heartbreaker, 1);
         if (world_player_is_human(victim))
             server_admin_player_event(by, "%s defeated %s", server_admin_player_name(by), server_admin_player_name(victim));
         else
@@ -2706,6 +2759,7 @@ void world_progress_present(void)
         }
         wpl_seen[p] = (uint8_t)level;
     }
+    world_feats_present();
 }
 
 #ifdef __cplusplus

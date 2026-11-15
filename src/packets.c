@@ -114,6 +114,16 @@
 #include "world_misdeeds.h"
 #include "world_pages.h"
 #include "net_state.h"
+#include "world_watchfire.h"
+#include "world_masonry.h"
+#include "world_falseheart.h"
+#include "world_champion.h"
+#include "world_attune.h"
+#include "world_rigging.h"
+#include "world_heresy.h"
+#include "world_unions.h"
+#include "world_exodus.h"
+#include "world_dressing.h"
 #include "post_inc.h"
 
 /* the double-click arrays (frontend.h) are indexed by user: one for every packet */
@@ -879,6 +889,49 @@ TbBool process_user_global_packet_action(NetUserId user)
       /* game state: the thin-client server (or every machine of a lockstep game) does it */
       if (!netstate_thin_mode() || network_is_host())
           world_misdeeds_packet_rename(plyr_idx, (uint32_t)pckt->actn_par1, (uint32_t)pckt->actn_par2);
+      return 1;
+  case PckA_WorldWatchfire:
+      if (!netstate_thin_mode() || network_is_host())
+          world_watchfire_place(plyr_idx, (MapSubtlCoord)pckt->actn_par1, (MapSubtlCoord)pckt->actn_par2);
+      return 1;
+  case PckA_WorldMasonry:
+      if (!netstate_thin_mode() || network_is_host())
+          world_masonry_order(plyr_idx, (MapSubtlCoord)((uint32_t)pckt->actn_par1 & 0x0FFFFFFFu), (MapSubtlCoord)pckt->actn_par2,
+              (int)((uint32_t)pckt->actn_par1 >> 28));
+      return 1;
+  case PckA_WorldFalseHeart:
+      if (!netstate_thin_mode() || network_is_host())
+          world_falseheart_place(plyr_idx, (MapSubtlCoord)pckt->actn_par1, (MapSubtlCoord)pckt->actn_par2);
+      return 1;
+  case PckA_WorldChampion:
+      if (!netstate_thin_mode() || network_is_host())
+          world_champion_packet(plyr_idx, (int)((uint32_t)pckt->actn_par1 >> 28), (MapSubtlCoord)((uint32_t)pckt->actn_par1 & 0x0FFFFFFFu),
+              (MapSubtlCoord)pckt->actn_par2);
+      return 1;
+  case PckA_WorldAttune:
+      if (!netstate_thin_mode() || network_is_host())
+          world_attune_spend(plyr_idx, (int)pckt->actn_par1);
+      return 1;
+  case PckA_WorldRig:
+      if (!netstate_thin_mode() || network_is_host())
+          world_rigging_packet(plyr_idx, (MapSubtlCoord)pckt->actn_par1, (MapSubtlCoord)pckt->actn_par2);
+      return 1;
+  case PckA_WorldHeresy:
+      if (!netstate_thin_mode() || network_is_host())
+          world_heresy_packet(plyr_idx, (int)pckt->actn_par1, (int)pckt->actn_par2);
+      return 1;
+  case PckA_WorldUnion:
+      if (!netstate_thin_mode() || network_is_host())
+          world_union_packet(plyr_idx, (int)pckt->actn_par1);
+      return 1;
+  case PckA_WorldExodus:
+      if (!netstate_thin_mode() || network_is_host())
+          world_exodus_packet(plyr_idx, (int)((uint32_t)pckt->actn_par1 >> 28), (MapSubtlCoord)((uint32_t)pckt->actn_par1 & 0x0FFFFFFFu),
+              (MapSubtlCoord)pckt->actn_par2);
+      return 1;
+  case PckA_WorldLook:
+      if (!netstate_thin_mode() || network_is_host())
+          world_dressing_packet(plyr_idx, (int)pckt->actn_par1);
       return 1;
   case PckA_WorldMisdeedPick:
       if (!netstate_thin_mode() || network_is_host())

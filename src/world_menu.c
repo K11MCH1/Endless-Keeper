@@ -68,6 +68,8 @@
 #include "local_camera.h"
 #include "world_attract.h"
 #include "chat_box.h"
+#include "world_feats.h"
+#include "world_tools.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1891,6 +1893,8 @@ static void wd_yes_click(struct GuiButton *gbtn);
 
 void world_respawn_prompt_turn(void)
 {
+    world_feats_menu_turn();
+    world_tools_frame();
     if (!world_mode_active() || netstate_dedicated() || replay.load_enable || observer_is_active())
         return;
     {

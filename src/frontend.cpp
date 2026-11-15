@@ -101,6 +101,9 @@
 #include "server_admin.h"
 #include "world_stream.h"
 #include "world_caretaker.h"
+#include "world_feats.h"
+#include "world_attune.h"
+#include "world_tools.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -225,6 +228,9 @@ struct GuiMenu *menu_list[] = {
     &world_party_menu,
     &chat_box_menu, //55
     &world_delete_menu, //56
+    &world_feats_menu, //57
+    &world_attune_menu, //58
+    &world_tools_menu, //59
     NULL,
 };
 
@@ -4002,12 +4008,15 @@ FrontendMenuState get_startup_menu_state(void)
   }
   else if ((game.mode_flags & MFlg_DemoMode) != 0)
   { // If starting up the game after intro
-    if (is_full_moon)
+    /* (a menu test, KFX_WORLD_MENU, goes straight to the main menu: the full-moon and birthday screens wait for a
+       click that an unattended test never gives) */
+    const TbBool menu_test = (getenv("KFX_WORLD_MENU") != NULL);
+    if (is_full_moon && !menu_test)
     {
         SYNCLOG("Full moon state selected");
         return FeSt_STORY_POEM;
     } else
-    if (get_team_birthday() != NULL)
+    if ((get_team_birthday() != NULL) && !menu_test)
     {
         SYNCLOG("Birthday state selected");
         return FeSt_STORY_BIRTHDAY;

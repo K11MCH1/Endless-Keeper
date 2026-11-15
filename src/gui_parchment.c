@@ -18,6 +18,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include <math.h>
 #include "kfx_memory.h"
 #include "kfx/renderer/RendererManager.h"
 #include "gui_parchment.h"
@@ -72,6 +73,7 @@
 #include "front_input.h"
 #include "creature_battle.h"
 #include "world_circles.h"
+#include "world_dark.h"
 #include "post_inc.h"
 
 /** The full-screen map's view in slabs: the map, or in paged mode (chunked endless world, no fixed map size) a
@@ -907,6 +909,27 @@ static void draw_overhead_world_map(const struct TbRect *map_area, long block_si
         }
         KfxFree(dist);
         KfxFree(above);
+    }
+    {
+        /* The Dark Takes It Back: the reach of each of this keeper's anchors, as a dotted ring (watchfires not drawn) */
+        enum { ANCHORS_DRAWN = 64 };
+        MapSlabCoord ax[ANCHORS_DRAWN], ay[ANCHORS_DRAWN];
+        int ar[ANCHORS_DRAWN];
+        const int na = world_dark_anchor_list(plyr_idx, ax, ay, ar, ANCHORS_DRAWN);
+        const TbPixel ring_col = LbPaletteFindColour(engine_palette, 44, 36, 20);
+        for (int k = 0; k < na; k++)
+        {
+            const int steps = max(24, ar[k] * 6);
+            for (int st = 0; st < steps; st += 2)
+            {
+                const double ang = 6.283185307 * st / steps;
+                const long px = (long)((ax[k] - view_x) * block_size + block_size / 2 + cos(ang) * ar[k] * block_size);
+                const long py = (long)((ay[k] - view_y) * block_size + block_size / 2 + sin(ang) * ar[k] * block_size);
+                if ((px < 0) || (py < 0) || (px >= buf_w) || (py >= buf_h))
+                    continue;
+                omap_scratch[(size_t)py * buf_w + (size_t)px] = ring_col;
+            }
+        }
     }
     struct RendererPresentImageDesc d = {0};
     d.format = PRESENT_FORMAT_INDEXED8;

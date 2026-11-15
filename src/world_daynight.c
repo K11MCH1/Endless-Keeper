@@ -60,6 +60,8 @@
 #include "net_game.h"
 #include "world_progress.h"
 #include "server_admin.h"
+#include "world_feats.h"
+#include "world_falseheart.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -821,6 +823,7 @@ static void dn_invasions_turn(long day, GameTurnDelta t)
         if (dn_inv[p].active && (count[p] == 0))
         {
             SYNCLOG("World: the raid on player %d (day %d) is over", p, (int)dn_inv[p].day);
+            world_feats_raid_over(p, !dn_inv[p].retreating || (dn_inv[p].flee_turn != 0), dn_inv[p].day);
             memset(&dn_inv[p], 0, sizeof(dn_inv[p]));
             world_progress_raid_over(p);
         }
@@ -1036,7 +1039,8 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
             {
                 /* the Tunneller leads, digging its way to the heart, like ADD_TUNNELLER_PARTY_TO_LEVEL */
                 leader = thing;
-                if (!script_support_send_tunneller_to_dungeon_heart(thing, plyr_idx))
+                if (!world_falseheart_lure(thing, plyr_idx, sx, sy, (uint32_t)thing->index) /* a false Heart nearer? */
+                    && !script_support_send_tunneller_to_dungeon_heart(thing, plyr_idx))
                     cctrl->party.objective = CHeroTsk_AttackEnemies;
                 cctrl->party.target_plyr_idx = plyr_idx;
             } else
@@ -1067,6 +1071,7 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
     inv.active = 1;
     inv.day = (int32_t)day;
     dn_inv[plyr_idx] = inv;
+    world_feats_raid_landed(plyr_idx); /* the Rap Sheet's Clean hands counts spells from now */
     /* no message and no event: a raid is meant to be a surprise */
 }
 

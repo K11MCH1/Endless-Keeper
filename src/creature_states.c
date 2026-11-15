@@ -88,6 +88,7 @@
 #include "world_stream.h"
 #include "world_colours.h"
 #include "world_progress.h"
+#include "world_heresy.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -4340,7 +4341,7 @@ TbBool process_creature_hunger(struct Thing *thing)
     if ((crconf->hunger_rate == 0) || creature_under_spell_effect(thing, CSAfF_Freeze) || is_neutral_thing(thing))
         return false;
     SYNCDBG(19,"Hungering %s index %d",thing_model_name(thing), (int)thing->index);
-    cctrl->hunger_level++;
+    cctrl->hunger_level += world_heresy_hunger_step(thing); /* endless: Company Scrip */
     if (!hunger_is_creature_hungry(thing))
         return false;
     // HungerHealthLoss is disabled if set to 0 on rules.cfg.
@@ -5228,7 +5229,8 @@ long process_creature_needs_to_heal_critical(struct Thing *creatng)
             else
             {
                 struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
-                anger_apply_anger_to_creature(creatng, crconf->annoy_no_lair, AngR_NoLair, 1);
+                if (!world_heresy_no_lair(creatng->owner)) /* endless: Open Graves */
+                    anger_apply_anger_to_creature(creatng, crconf->annoy_no_lair, AngR_NoLair, 1);
             }
             cctrl->healing_sleep_check_turn = get_gameturn();
         }
@@ -5549,7 +5551,7 @@ long process_creature_needs_to_heal(struct Thing *creatng, const struct Creature
                     return 1;
                 }
             }
-            else
+            else if (!world_heresy_no_lair(creatng->owner)) /* endless: Open Graves */
             {
                 anger_apply_anger_to_creature(creatng, crconf->annoy_no_lair, AngR_NoLair, 1);
             }

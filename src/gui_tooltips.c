@@ -47,6 +47,7 @@
 #include "local_camera.h"
 #include "keeperfx.hpp"
 #include "world_progress.h"
+#include "world_feats.h"
 #include "post_inc.h"
 #include <math.h>
 
@@ -379,7 +380,7 @@ void setup_gui_tooltip(struct GuiButton* gbtn)
             k = -1;
         struct PlayerInfo* player = get_player(k);
         if (player->player_name[0] != '\0')
-            set_gui_tooltip_box_fmt(0, "%s: %s", text, player->player_name);
+            set_gui_tooltip_box_fmt(0, "%s: %s%s", text, player->player_name, world_feats_top3_text(k)); /* endless: the top three feats */
         else
             set_gui_tooltip_box_fmt(0, "%s", text);
     }

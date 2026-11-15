@@ -51,6 +51,7 @@
 #include "game_legacy.h"
 #include "engine_redraw.h"
 #include "kfx/profiling/KfxProfilingC.h"
+#include "world_watchfire.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -277,6 +278,8 @@ TbBool creature_is_actually_scared(const struct Thing *creatng, const struct Thi
     } else {
         fear = 0;
     }
+    if (world_watchfire_unnerved(creatng)) /* endless: far from home at night, with no watchfire: its nerve goes */
+        fear = max(fear, (long)crconf->fear_wounded * 15);
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     struct CreatureControl* enmctrl = creature_control_get_from_thing(enmtng);
     HitPoints crmaxhealth = cctrl->max_health;

@@ -115,6 +115,19 @@
 #include "world_pools.h"
 #include "room_entrance.h"
 #include "world_progress.h"
+#include "world_feats.h"
+#include "world_watchfire.h"
+#include "world_dark.h"
+#include "world_masonry.h"
+#include "world_falseheart.h"
+#include "world_champion.h"
+#include "world_attune.h"
+#include "world_rigging.h"
+#include "world_cookbook.h"
+#include "world_heresy.h"
+#include "world_unions.h"
+#include "world_exodus.h"
+#include "world_dressing.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -163,6 +176,20 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
+#define WORLD_EXTRA_FEATS 0x31535446u    /* "FTS1": the keepers' Rap Sheets (world_feats.c) */
+#define WORLD_EXTRA_FIRES 0x31524657u    /* "WFR1": the watchfires (world_watchfire.c) */
+#define WORLD_EXTRA_DARK 0x314B5244u     /* "DRK1": untended floor's neglect (world_dark.c) */
+#define WORLD_EXTRA_MASONRY 0x314E534Du  /* "MSN1": backfill and masonry orders (world_masonry.c) */
+#define WORLD_EXTRA_FALSEHEART 0x31544846u /* "FHT1": the false Hearts and the raids lured (world_falseheart.c) */
+#define WORLD_EXTRA_CHAMPION 0x314D4843u  /* "CHM1": the keepers' Champions (world_champion.c) */
+#define WORLD_EXTRA_ATTUNE 0x314E5441u    /* "ATN1": the keepers' Attunement (world_attune.c) */
+#define WORLD_EXTRA_COOKBOOK 0x31424B43u  /* "CKB1": the recipes each keeper knows (world_cookbook.c) */
+#define WORLD_EXTRA_HERESY 0x31535248u    /* "HRS1": heretical tomes (world_heresy.c) */
+#define WORLD_EXTRA_UNIONS 0x31494E55u    /* "UNI1": unholy unions (world_unions.c) */
+#define WORLD_EXTRA_EXODUS 0x314F5845u    /* "EXO1": an Exodus ordered (world_exodus.c) */
+#define WORLD_EXTRA_DRESSING 0x31535244u  /* "DRS1": the dungeons' looks (world_dressing.c) */
+#define WORLD_EXTRA_RIGGING 0x32474952u   /* "RIG2": rigging links, with their places (world_rigging.c; RIG1 had none) */
+#define WORLD_EXTRA_RIGCOUNT 0x31434752u  /* "RGC1": counting doors (world_rigging.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -3656,6 +3683,33 @@ TbBool world_keeper_is_passive(PlayerNumber plyr_idx)
     return false;
 }
 
+TbBool world_nearest_free_portal(PlayerNumber plyr_idx, int64_t *wx, int64_t *wy)
+{
+    const struct Thing *heart = get_player_soul_container(plyr_idx);
+    if (!thing_exists(heart))
+        return false;
+    int64_t hx, hy;
+    world_slab_to_world(subtile_slab(heart->mappos.x.stl.num), subtile_slab(heart->mappos.y.stl.num), &hx, &hy);
+    int best = -1;
+    int64_t best_d = 0;
+    for (int i = 0; i < W.portal_count; i++)
+    {
+        if (W.portals[i].owner >= 0)
+            continue;
+        const int64_t d = (W.portals[i].x - hx) * (W.portals[i].x - hx) + (W.portals[i].y - hy) * (W.portals[i].y - hy);
+        if ((best < 0) || (d < best_d))
+        {
+            best = i;
+            best_d = d;
+        }
+    }
+    if (best < 0)
+        return false;
+    *wx = W.portals[best].x;
+    *wy = W.portals[best].y;
+    return true;
+}
+
 uint64_t world_seed(void)
 {
     return W.seed;
@@ -4059,8 +4113,16 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
     /* the other human players' hearts (network games) */
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
-        if (((p == PLAYER0) && !seat_has_stamp(PLAYER0)) || !owner_in_mask(p, humans))
-            continue; /* player 0 at the level's start: the home above */
+        if (!owner_in_mask(p, humans))
+            continue;
+        if ((p == PLAYER0) && !seat_has_stamp(PLAYER0))
+        {
+            /* player 0 at the level's start: the home above, and its Heart wherever it stands now (an Exodus moves it) */
+            struct Thing *h0 = find_players_dungeon_heart(PLAYER0);
+            if (thing_exists(h0))
+                cm_want_subtile(h0->mappos.x.stl.num, h0->mappos.y.stl.num, CM_HEART_RADIUS);
+            continue;
+        }
         struct Thing *heartng = find_players_dungeon_heart(p);
         if (thing_exists(heartng))
             cm_want_subtile(heartng->mappos.x.stl.num, heartng->mappos.y.stl.num, CM_HEART_RADIUS);
@@ -9659,6 +9721,20 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MISDEEDS, world_misdeeds_save_size, world_misdeeds_save, world_misdeeds_load, world_misdeeds_reset},
     {WORLD_EXTRA_POOLS, world_pools_save_size, world_pools_save, world_pools_load, world_pools_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
+    {WORLD_EXTRA_FEATS, world_feats_save_size, world_feats_save, world_feats_load, world_feats_reset},
+    {WORLD_EXTRA_FIRES, world_watchfire_save_size, world_watchfire_save, world_watchfire_load, world_watchfire_reset},
+    {WORLD_EXTRA_DARK, world_dark_save_size, world_dark_save, world_dark_load, world_dark_reset},
+    {WORLD_EXTRA_MASONRY, world_masonry_save_size, world_masonry_save, world_masonry_load, world_masonry_reset},
+    {WORLD_EXTRA_FALSEHEART, world_falseheart_save_size, world_falseheart_save, world_falseheart_load, world_falseheart_reset},
+    {WORLD_EXTRA_CHAMPION, world_champion_save_size, world_champion_save, world_champion_load, world_champion_reset},
+    {WORLD_EXTRA_ATTUNE, world_attune_save_size, world_attune_save, world_attune_load, world_attune_reset},
+    {WORLD_EXTRA_RIGGING, world_rigging_save_size, world_rigging_save, world_rigging_load, world_rigging_reset},
+    {WORLD_EXTRA_COOKBOOK, world_cookbook_save_size, world_cookbook_save, world_cookbook_load, world_cookbook_reset},
+    {WORLD_EXTRA_HERESY, world_heresy_save_size, world_heresy_save, world_heresy_load, world_heresy_reset},
+    {WORLD_EXTRA_UNIONS, world_unions_save_size, world_unions_save, world_unions_load, world_unions_reset},
+    {WORLD_EXTRA_EXODUS, world_exodus_save_size, world_exodus_save, world_exodus_load, world_exodus_reset},
+    {WORLD_EXTRA_DRESSING, world_dressing_save_size, world_dressing_save, world_dressing_load, world_dressing_reset},
+    {WORLD_EXTRA_RIGCOUNT, world_rigging_counters_save_size, world_rigging_counters_save, world_rigging_counters_load, world_rigging_counters_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 

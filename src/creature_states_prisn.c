@@ -44,6 +44,7 @@
 #include "room_jobs.h"
 #include "room_list.h"
 
+#include "world_feats.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -351,6 +352,7 @@ TbBool prison_convert_creature_to_skeleton(struct Room *room, struct Thing *thin
         struct Dungeon* dungeon = get_dungeon(room->owner);
         if (!dungeon_invalid(dungeon)) {
             dungeon->lvstats.skeletons_raised++;
+            world_feats_add(room->owner, WFt_BoneIdle, 1);
         }
     }
     else

@@ -49,6 +49,7 @@
 #include "room_workshop.h"
 #include "world_pages.h"
 #include "world_progress.h"
+#include "world_rigging.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -638,6 +639,7 @@ void activate_trap(struct Thing *traptng, struct Thing *creatng)
         return;
     }
 
+    world_rigging_triggered(traptng, creatng); /* endless: rigging, its linked doors and traps */
     traptng->trap.revealed = 1;
     if (trapst->notify == true)
     {

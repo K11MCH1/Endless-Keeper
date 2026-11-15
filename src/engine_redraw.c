@@ -72,6 +72,7 @@
 #include "custom_sprites.h"
 #include "keeperfx.hpp"
 #include "world_misdeeds.h"
+#include "world_tools.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1030,6 +1031,7 @@ void redraw_display(void)
         LbTextSetWindow(0/pixel_size, 0/pixel_size, MyScreenWidth/pixel_size, MyScreenHeight/pixel_size);
     }
     world_misdeeds_draw_overlay(); /* endless worlds: the hovered creature's name above its flower */
+    world_tools_draw_overlay(); /* endless worlds: the Keeper's Tools button and an armed tool's hint */
     draw_eastegg();
     if (map_fade == PVT_None) {
         RendererBeginOverlayCapture(OVERLAY_CAPTURE_TOOLTIP);

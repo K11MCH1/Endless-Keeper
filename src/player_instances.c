@@ -68,6 +68,7 @@
 #include "net_game.h"
 
 #include "keeperfx.hpp"
+#include "world_feats.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -306,6 +307,7 @@ TbBool slap_thing(struct PlayerInfo *player, NetUserId user, struct Thing *thing
       } else
       {
           slap_creature(player, thing);
+          world_feats_slapped(thing, player->id_number);
           pos.x.val = thing->mappos.x.val;
           pos.y.val = thing->mappos.y.val;
           pos.z.val = thing->mappos.z.val + (thing->clipbox_size_z >> 1);

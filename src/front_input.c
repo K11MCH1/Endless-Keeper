@@ -92,6 +92,19 @@
 #include "net_state.h"
 #include "chat_box.h"
 #include "world_menu.h"
+#include "world_feats.h"
+#include "world_watchfire.h"
+#include "world_masonry.h"
+#include "world_falseheart.h"
+#include "world_champion.h"
+#include "world_attune.h"
+#include "world_rigging.h"
+#include "world_cookbook.h"
+#include "world_heresy.h"
+#include "world_unions.h"
+#include "world_exodus.h"
+#include "world_dressing.h"
+#include "world_tools.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -455,7 +468,33 @@ static short get_players_message_inputs(void)
         if (text[0] != '\0') {
             memcpy(local_state.mp_message_text_last, text, PLAYER_MP_MESSAGE_LEN);
         }
-        if (!replay.load_enable && world_delete_command(text)) {
+        if (!replay.load_enable && world_tools_command(text)) {
+            /* endless worlds: "!tools" opens the Keeper's Tools here; the line isn't sent */
+        } else if (!replay.load_enable && world_feats_command(text)) {
+            /* endless worlds: "!feats" opens the Keeper's Rap Sheet here; the line isn't sent */
+        } else if (!replay.load_enable && world_watchfire_command(text, cursor_x, cursor_y)) {
+            /* endless worlds: "!watchfire" sets a watchfire down at the cursor; the line isn't sent */
+        } else if (!replay.load_enable && world_masonry_command(text, cursor_x, cursor_y)) {
+            /* endless worlds: "!backfill" / "!masonry" order imps at the cursor; the line isn't sent */
+        } else if (!replay.load_enable && world_falseheart_command(text, cursor_x, cursor_y)) {
+            /* endless worlds: "!falseheart" sets the decoy at the cursor; the line isn't sent */
+        } else if (!replay.load_enable && world_champion_command(text, cursor_x, cursor_y)) {
+            /* endless worlds: "!champion" / "!possess"; the line isn't sent */
+        } else if (!replay.load_enable && world_attune_command(text)) {
+            /* endless worlds: "!attune" opens Attunement; the line isn't sent */
+        } else if (!replay.load_enable && world_rigging_command(text, cursor_x, cursor_y)) {
+            /* endless worlds: "!rig" links an Alarm to doors and traps; the line isn't sent */
+        } else if (!replay.load_enable && world_cookbook_command(text)) {
+            /* endless worlds: "!cookbook" shows this keeper's page; the line isn't sent */
+        } else if (!replay.load_enable && world_heresy_command(text)) {
+            /* endless worlds: "!heresy ..."; the line isn't sent */
+        } else if (!replay.load_enable && world_union_command(text)) {
+            /* endless worlds: "!union ..."; the line isn't sent */
+        } else if (!replay.load_enable && world_exodus_command(text, cursor_x, cursor_y)) {
+            /* endless worlds: "!exodus" / "!settle"; the line isn't sent */
+        } else if (!replay.load_enable && world_dressing_command(text)) {
+            /* endless worlds: "!look ..." dresses the dungeon; the line isn't sent */
+        } else if (!replay.load_enable && world_delete_command(text)) {
             /* party dungeons: "!delete dungeon" asks first, in a box here; the line isn't sent */
         } else if (observer_is_active() && text[0] == cmd_char) {
             cmd_exec(PLAYER_NEUTRAL, text + 1, cursor_x, cursor_y, true);
@@ -3207,6 +3246,10 @@ static short get_inputs(void)
     switch (view_type)
     {
     case PVT_DungeonTop:
+        if (!inp_handled)
+            inp_handled = world_tools_inputs(); /* endless worlds: the Keeper's Tools (K, its button, an armed tool) */
+        if (!inp_handled)
+            inp_handled = world_champion_inputs(); /* endless worlds: J possesses the Champion */
         get_dungeon_control_pausable_action_inputs();
         if (!inp_handled)
             inp_handled = get_dungeon_control_action_inputs();

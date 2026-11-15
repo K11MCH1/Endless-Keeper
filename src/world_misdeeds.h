@@ -39,6 +39,8 @@ void world_misdeeds_on_damage(struct Thing *victim, HitPoints dmg);
 HitPoints world_misdeeds_adjust_damage(struct Thing *victim, struct Thing *attacker, HitPoints dmg);
 /** A creature's top speed after its vices. */
 long world_misdeeds_speed(const struct Thing *thing, long speed);
+/** Afraid of Nothing in the Dark: it never loses its nerve at night (world_watchfire.c). */
+TbBool world_misdeeds_fearless_in_dark(const struct Thing *thing);
 /** Asbestos Hide: lava doesn't hurt it. */
 TbBool world_misdeeds_lava_proof(const struct Thing *thing);
 /** Bad Influence: the percentage added to a training creature's experience. */
@@ -51,6 +53,10 @@ void world_misdeeds_on_delete(struct CreatureControl *cctrl);
 uint16_t world_misdeeds_freeze(const struct Thing *thing);
 /** A creature is back from a chunk's record. */
 void world_misdeeds_thaw(struct Thing *thing, uint16_t id);
+/** A record frozen away from any creature (a fallen Champion's) that is no longer wanted. */
+void world_misdeeds_release(uint16_t id);
+/** Is this record's creature away in a frozen chunk? */
+TbBool world_misdeeds_frozen(uint16_t id);
 /** Unfinished Business. A creature is about to die for real (cause_creature_death); its thing becomes a corpse
  *  (begin: before the creature is deleted, gives the record to hand to made; made: the corpse, maybe invalid). */
 void world_misdeeds_dying(struct Thing *thing);

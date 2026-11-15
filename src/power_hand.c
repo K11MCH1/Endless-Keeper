@@ -70,6 +70,7 @@
 #include "world_colours.h"
 #include "world_stream.h"
 #include "world_attract.h"
+#include "world_feats.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1000,6 +1001,7 @@ void drop_held_thing_on_ground(struct Dungeon *dungeon, struct Thing *droptng, c
             play_creature_sound(droptng, CrSnd_Drop, 3, 0);
         }
         dungeon->last_creature_dropped_gameturn = get_gameturn();
+        world_feats_dropped(droptng, dungeon->owner); /* the Rap Sheet: dropped into battle */
         struct CreatureModelConfig* crconf = creature_stats_get(droptng->model);
         if ((crconf->illuminated) || (creature_under_spell_effect(droptng, CSAfF_Light)))
         {

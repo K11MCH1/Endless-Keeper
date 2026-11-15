@@ -45,6 +45,8 @@
 
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_champion.h"
+#include "world_heresy.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -679,6 +681,7 @@ long compute_creature_work_value_for_room_role(const struct Thing *creatng, Room
     {
         i = compute_creature_work_value(crconf->scavenge_value* game.conf.rules[creatng->owner].rooms.scavenge_efficiency, efficiency, cctrl->exp_level);
     }
+    i = world_heresy_work(creatng, i); /* endless: Night Court */
     return process_work_speed_on_work_value(creatng, i);
 }
 
@@ -717,7 +720,7 @@ HitPoints calculate_correct_creature_max_health(const struct Thing *thing)
     struct Dungeon* dungeon;
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-    HitPoints max_health = compute_creature_max_health(crconf->health, cctrl->exp_level);
+    HitPoints max_health = compute_creature_max_health(crconf->health, world_champion_level(thing, cctrl->exp_level)); /* endless: a Champion */
     // Apply modifier.
     if (!is_neutral_thing(thing))
     {
@@ -755,7 +758,7 @@ long calculate_correct_creature_armour(const struct Thing *thing)
     struct Dungeon* dungeon;
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-    long max_param = compute_creature_max_armour(crconf->armour, cctrl->exp_level);
+    long max_param = compute_creature_max_armour(crconf->armour, world_champion_level(thing, cctrl->exp_level)); /* endless: a Champion */
     long armour_cap = 204;
     if (creature_under_spell_effect(thing, CSAfF_Armour))
     {
@@ -786,7 +789,7 @@ long calculate_correct_creature_defense(const struct Thing *thing)
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-    long max_param = compute_creature_max_defense(crconf->defense, cctrl->exp_level);
+    long max_param = compute_creature_max_defense(crconf->defense, world_champion_level(thing, cctrl->exp_level)); /* endless: a Champion */
     // TODO: Add a dungeon modifier.
     return max_param;
 }
@@ -795,7 +798,7 @@ long calculate_correct_creature_dexterity(const struct Thing *thing)
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
-    long max_param = compute_creature_max_dexterity(crconf->dexterity, cctrl->exp_level);
+    long max_param = compute_creature_max_dexterity(crconf->dexterity, world_champion_level(thing, cctrl->exp_level)); /* endless: a Champion */
     // TODO: Add a dungeon modifier.
     return max_param;
 }
@@ -861,7 +864,7 @@ GoldAmount calculate_correct_creature_pay(const struct Thing *thing)
             pay = (pay * game.conf.rules[dungeon->owner].gameplay.torture_payday) / 100;
         pay = pay * (100 - world_room_bonus(thing->owner, WRB_TreasuryPay)) / 100; /* endless: the Treasury's level */
     }
-    return pay;
+    return world_heresy_pay(thing, pay); /* endless: Company Scrip */
 }
 
 GoldAmount calculate_correct_creature_training_cost(const struct Thing *thing)
