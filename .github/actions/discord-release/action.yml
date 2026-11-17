@@ -80,9 +80,20 @@ runs:
               footer: {text: "Endless Keeper releases"}
             }]}')
 
-        code=$(curl -sS -o "$RUNNER_TEMP/discord-answer" -w '%{http_code}' \
-          -H 'Content-Type: application/json' -d "$payload" "$WEBHOOK")
+        # wait=true answers with the message itself, so its id and its mentions can be checked
+        sep='?'
+        case "$WEBHOOK" in *\?*) sep='&' ;; esac
+        answer=$(curl -sS -w '\n%{http_code}' -H 'Content-Type: application/json' -d "$payload" \
+          "$WEBHOOK${sep}wait=true")
+        code=${answer##*$'\n'}
+        body=${answer%$'\n'*}
         case "$code" in
-          2??) echo "Announced $title on Discord." ;;
-          *) echo "::error::Discord answered $code: $(cat "$RUNNER_TEMP/discord-answer")"; exit 1 ;;
+          2??)
+            echo "Announced $title on Discord (message $(jq -r '.id // "?"' <<< "$body"))."
+            if [ -n "$ROLE" ]; then
+              jq -e --arg role "$ROLE" '(.mentions // []) | map(.id) | index($role) != null' <<< "$body" > /dev/null \
+                || echo "::warning::the Updates role $ROLE was not mentioned; is it still in the server, and may the webhook mention roles?"
+            fi
+            ;;
+          *) echo "::error::Discord answered $code: $body"; exit 1 ;;
         esac
