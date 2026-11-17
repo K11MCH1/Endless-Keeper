@@ -1,0 +1,75 @@
+name: Announce a release on Discord
+description: >
+  Posts a released Endless Keeper version to a Discord channel webhook: the release's title, its change list
+  and a link to the downloads, in a colour that says the stage. Does nothing when no webhook is given, so forks
+  and test runs work without one.
+inputs:
+  webhook:
+    description: The channel's webhook URL (the repository secret DISCORD_WEBHOOK_URL)
+    default: ''
+  tag:
+    description: The release to announce (empty = the latest release)
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Post
+      shell: bash
+      env:
+        WEBHOOK: ${{ inputs.webhook }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        if [ -z "$WEBHOOK" ]; then
+          echo "::notice::DISCORD_WEBHOOK_URL is not set, so the release is not announced on Discord."
+          exit 0
+        fi
+
+        if [ -n "$TAG" ]; then
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG")
+        else
+          # the latest release, pre-releases included (/releases/latest skips them, and nearly every one is a pre-release)
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq 'map(select(.draft | not)) | first // empty')
+        fi
+        [ -n "$release" ] || { echo "::error::there is no release to announce"; exit 1; }
+        title=$(jq -r '.name // .tag_name' <<< "$release")
+        url=$(jq -r '.html_url' <<< "$release")
+        tag=$(jq -r '.tag_name' <<< "$release")
+        body=$(jq -r '.body // ""' <<< "$release")
+
+        # the notes start with their "## Changes" heading: the embed's title is the release, so it goes
+        desc=$(sed -E '/^## Changes[[:space:]]*$/d' <<< "$body" | sed -E '1{/^[[:space:]]*$/d}')
+        [ ${#desc} -le 3800 ] || desc="${desc:0:3800}…"   # an embed's description stops at 4096
+        [ -n "$desc" ] || desc="No changes are listed for this release."
+
+        # the stage is the tag's last part: v1.4.0-11.1-alpha
+        stage=${tag##*-}
+        case "$stage" in
+          stable) color=3066993 ;;   # green
+          beta)   color=10181046 ;;  # purple
+          alpha)  color=15105570 ;;  # orange
+          *)      color=3447003 ;;   # blue
+        esac
+
+        payload=$(jq -n \
+          --arg title "$title" --arg url "$url" --arg desc "$desc" --arg tag "$tag" \
+          --arg stage "${stage^}" --argjson color "$color" \
+          '{username: "Endless Keeper",
+            embeds: [{
+              title: $title,
+              url: $url,
+              description: $desc,
+              color: $color,
+              fields: [
+                {name: "Stage", value: $stage, inline: true},
+                {name: "Tag", value: ("`" + $tag + "`"), inline: true}
+              ],
+              footer: {text: "Endless Keeper releases"}
+            }]}')
+
+        code=$(curl -sS -o "$RUNNER_TEMP/discord-answer" -w '%{http_code}' \
+          -H 'Content-Type: application/json' -d "$payload" "$WEBHOOK")
+        case "$code" in
+          2??) echo "Announced $title on Discord." ;;
+          *) echo "::error::Discord answered $code: $(cat "$RUNNER_TEMP/discord-answer")"; exit 1 ;;
+        esac

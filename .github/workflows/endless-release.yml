@@ -11,6 +11,9 @@
 #
 # Run it from the Actions tab (Release, Run workflow) to release Endless Keeper's own changes from main. The KeeperFX
 # update workflow runs it by itself after merging a new KeeperFX stable release.
+#
+# Every published release is announced in the Discord channel whose webhook is the repository secret
+# DISCORD_WEBHOOK_URL (a draft is announced when it is published; see endless-discord.yml).
 name: Release
 
 on:
@@ -273,6 +276,7 @@ jobs:
           cat notes.md
 
       - name: Publish
+        id: publish
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -291,6 +295,17 @@ jobs:
             done
             echo "Test run: the draft is deleted again."
           else
-            gh release create "$TAG" "${files[@]}" --target "$SHA" \
-              --title "$TITLE" --notes-file notes.md "${flags[@]}"
+            url=$(gh release create "$TAG" "${files[@]}" --target "$SHA" \
+              --title "$TITLE" --notes-file notes.md "${flags[@]}")
+            echo "Published $url"
           fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # a draft is announced in endless-discord.yml when someone publishes it; a Discord outage never fails a release
+      - name: Announce on Discord
+        if: ${{ !cancelled() && inputs.dry_run != true && inputs.draft != true }}
+        continue-on-error: true
+        uses: ./.github/actions/discord-release
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          tag: ${{ steps.publish.outputs.tag }}
