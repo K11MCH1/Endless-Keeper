@@ -1,7 +1,8 @@
 # Announces an Endless Keeper release in the Discord channel whose webhook is the repository secret
-# DISCORD_WEBHOOK_URL. Releases the Release workflow publishes are announced by it directly; this announces a draft
-# that someone publishes from the web interface (GitHub fires no release events for what the workflow's own token
-# makes), and can announce any release again from the Actions tab.
+# DISCORD_WEBHOOK_URL, mentioning the Updates role (the repository variable DISCORD_UPDATES_ROLE_ID). Releases the
+# Release workflow publishes are announced by it directly; this announces a draft that someone publishes from the
+# web interface (GitHub fires no release events for what the workflow's own token makes), and can announce any
+# release again from the Actions tab.
 name: Announce on Discord
 
 on:
@@ -31,5 +32,6 @@ jobs:
       - uses: ./.github/actions/discord-release
         with:
           webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          role: ${{ vars.DISCORD_UPDATES_ROLE_ID }}
           # a release event carries the tag; a manual run names one, or gets the latest
           tag: ${{ github.event.release.tag_name || inputs.tag }}

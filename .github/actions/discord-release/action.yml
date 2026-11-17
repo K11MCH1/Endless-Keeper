@@ -7,6 +7,9 @@ inputs:
   webhook:
     description: The channel's webhook URL (the repository secret DISCORD_WEBHOOK_URL)
     default: ''
+  role:
+    description: The Updates role's id, to mention (the repository variable DISCORD_UPDATES_ROLE_ID; empty = no mention)
+    default: ''
   tag:
     description: The release to announce (empty = the latest release)
     default: ''
@@ -17,6 +20,7 @@ runs:
       shell: bash
       env:
         WEBHOOK: ${{ inputs.webhook }}
+        ROLE: ${{ inputs.role }}
         TAG: ${{ inputs.tag }}
       run: |
         set -euo pipefail
@@ -52,10 +56,19 @@ runs:
         esac
 
         # no username or avatar: the webhook's own (Endless Imp) is what the channel shows
+        # the message over the embed: @Updates Version 1.4.0-11.1 Alpha Patch is released!
+        version=${title#Endless Keeper }
+        if [ -n "$ROLE" ]; then
+          content="<@&$ROLE> Version $version is released!"
+        else
+          content="Version $version is released!"
+        fi
         payload=$(jq -n \
-          --arg title "$title" --arg url "$url" --arg desc "$desc" --arg tag "$tag" \
+          --arg content "$content" --arg title "$title" --arg url "$url" --arg desc "$desc" --arg tag "$tag" \
           --arg stage "${stage^}" --argjson color "$color" \
-          '{embeds: [{
+          '{content: $content,
+            allowed_mentions: {parse: ["roles"]},
+            embeds: [{
               title: $title,
               url: $url,
               description: $desc,
