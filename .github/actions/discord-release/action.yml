@@ -1,8 +1,8 @@
 name: Announce a release on Discord
 description: >
-  Posts a released Endless Keeper version to a Discord channel webhook: the release's title, its change list
-  and a link to the downloads, in a colour that says the stage. Does nothing when no webhook is given, so forks
-  and test runs work without one.
+  Posts a released Endless Keeper version to a Discord channel webhook: a message that mentions the Updates role,
+  and the release's title, change list and a link to the downloads in a colour that says the stage. Does nothing
+  when no webhook is given, so forks and test runs work without one.
 inputs:
   webhook:
     description: The channel's webhook URL (the repository secret DISCORD_WEBHOOK_URL)
@@ -91,7 +91,7 @@ runs:
           2??)
             echo "Announced $title on Discord (message $(jq -r '.id // "?"' <<< "$body"))."
             if [ -n "$ROLE" ]; then
-              jq -e --arg role "$ROLE" '(.mentions // []) | map(.id) | index($role) != null' <<< "$body" > /dev/null \
+              jq -e --arg role "$ROLE" '(.mention_roles // []) | index($role) != null' <<< "$body" > /dev/null \
                 || echo "::warning::the Updates role $ROLE was not mentioned; is it still in the server, and may the webhook mention roles?"
             fi
             ;;
