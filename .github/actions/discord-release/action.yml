@@ -51,11 +51,11 @@ runs:
           *)      color=3447003 ;;   # blue
         esac
 
+        # no username or avatar: the webhook's own (Endless Imp) is what the channel shows
         payload=$(jq -n \
           --arg title "$title" --arg url "$url" --arg desc "$desc" --arg tag "$tag" \
           --arg stage "${stage^}" --argjson color "$color" \
-          '{username: "Endless Keeper",
-            embeds: [{
+          '{embeds: [{
               title: $title,
               url: $url,
               description: $desc,
