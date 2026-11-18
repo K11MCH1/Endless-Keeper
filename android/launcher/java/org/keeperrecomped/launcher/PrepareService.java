@@ -21,7 +21,7 @@ import org.json.JSONObject;
  * going with the screen off or the launcher in the background. One task at a time.
  */
 public final class PrepareService extends Service {
-    static final String EXTRA_TASK = "task";       // prepare | update | build | version | workshop
+    static final String EXTRA_TASK = "task";       // prepare | update | endless | build | version | workshop
     static final String EXTRA_TREE = "tree";       // prepare: picked folder (optional)
     static final String EXTRA_VERSION = "version"; // version: alpha version, empty = stable release
     static final String EXTRA_WS_ID = "ws_id";
@@ -92,6 +92,8 @@ public final class PrepareService extends Service {
         try {
             if ("update".equals(kind)) {
                 prepare.update();
+            } else if ("endless".equals(kind)) {
+                prepare.endless();
             } else if ("build".equals(kind)) {
                 prepare.buildEngine();
             } else if ("version".equals(kind)) {

@@ -143,8 +143,10 @@ final class Prepare {
         copyDkSubset(dk, kfx);
 
         if ("ALPHA".equals(settings.get("release_channel"))) {
-            applyAlpha(63, 74);
+            applyAlpha(63, 68);
         }
+
+        applyEndless(68, 74);
 
         step(74, 75, "Writing settings");
         fromTemplates(kfx);
@@ -509,7 +511,8 @@ final class Prepare {
             state.put("alpha_version", "").put("alpha_title", "").put("alpha_run_id", "").put("alpha_date", "").put("alpha_commit", "");
             State.save(ctx, state);
         }
-        step(92, 94, "Adding the original game files");
+        applyEndless(92, 93); // the KeeperFX files just installed overwrote some of Endless Keeper's
+        step(93, 94, "Adding the original game files");
         copyDkSubset(Paths.dk(ctx), kfx);
         step(94, 100, "Writing settings");
         fromTemplates(kfx);
@@ -531,12 +534,107 @@ final class Prepare {
             installStable(0, 60);
         copyDkSubset(Paths.dk(ctx), Paths.kfx(ctx));
         if ("ALPHA".equals(settings.get("release_channel")))
-            applyAlpha(60, 95);
+            applyAlpha(60, 85);
+        applyEndless(85, 95);
         step(95, 100, "Writing settings");
         fromTemplates(Paths.kfx(ctx));
         ConfigWriter.write(Paths.kfx(ctx), settings);
         syncClassic(ctx);
         base = 100; span = 0; label = "Up to date";
+        emit(1, null);
+    }
+
+    // ---- Endless Keeper's own files ----
+
+    static final String ENDLESS_RELEASES = "https://github.com/K11MCH1/Endless-Keeper/releases/download/";
+
+    /** This app's version name, e.g. "1.4.0-11.2 Alpha" (empty when unreadable). */
+    static String appVersion(Context c) {
+        try {
+            String v = c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;
+            return v == null ? "" : v;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
+     * This app's Endless Keeper release patch as {tag, file}: "1.4.0-11.2 Alpha" is v1.4.0-11.2-alpha /
+     * endless-keeper-1_4_0-11.2-Alpha-patch.7z. Null for a build that is no release (a dev build).
+     */
+    static String[] endlessPatch(Context c) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("^(\\d+)\\.(\\d+)\\.(\\d+)-(\\d+(?:\\.\\d+)?) ([A-Za-z]+)$").matcher(appVersion(c));
+        if (!m.matches())
+            return null;
+        String base = m.group(1) + "." + m.group(2) + "." + m.group(3);
+        return new String[]{"v" + base + "-" + m.group(4) + "-" + m.group(5).toLowerCase(Locale.ROOT),
+                "endless-keeper-" + base.replace('.', '_') + "-" + m.group(4) + "-" + m.group(5) + "-patch.7z"};
+    }
+
+    /** What the installed Endless Keeper files were put in for: this app's version over this KeeperFX data. */
+    static String endlessSignature(Context c, JSONObject state) {
+        return appVersion(c) + "|" + state.optString("kfx_version") + "|" + state.optString("alpha_version");
+    }
+
+    /** True when the game folder has this app version's Endless Keeper files (or the app is a dev build). */
+    static boolean endlessCurrent(Context c) {
+        if (endlessPatch(c) == null)
+            return true;
+        File kfx = Paths.kfx(c);
+        JSONObject state = State.load(c);
+        return endlessSignature(c, state).equals(state.optString("endless_files"))
+                && new File(kfx, "levels/endless.cfg").isFile() && new File(kfx, "levels/endless/map00001.lif").isFile();
+    }
+
+    /**
+     * Endless Keeper's own files (Endless Mode's map pack levels/endless*, its configs, mods and Lua) from the
+     * release patch of this app's version, over the KeeperFX data. KeeperFX's downloads have none of them:
+     * without them New Run said "the map pack has no level". Again after every KeeperFX install, which
+     * overwrites some of them.
+     */
+    void applyEndless(int from, int to) throws Exception {
+        if (endlessCurrent(ctx))
+            return;
+        String[] patch = endlessPatch(ctx);
+        File kfx = Paths.kfx(ctx);
+        boolean have = new File(kfx, "levels/endless.cfg").isFile();
+        File archive = new File(Paths.downloads(ctx), patch[1]);
+        int mid = from + (to - from) * 2 / 3;
+        step(from, mid, "Downloading Endless Keeper " + appVersion(ctx) + " files");
+        try {
+            Net.download(ENDLESS_RELEASES + patch[0] + "/" + patch[1], archive, -1, (done, total) -> {
+                emit(total > 0 ? (double) done / total : 0, mb(done) + " / " + (total > 0 ? mb(total) : "?"));
+                return !cancelled;
+            });
+        } catch (IOException e) {
+            check();
+            if (have) {
+                AppLog.w("Endless Keeper files not updated, keeping the installed ones: " + e);
+                return;
+            }
+            throw new IOException("Cannot download Endless Keeper's files (" + patch[1] + "): " + e.getMessage()
+                    + ". Endless Mode needs them: check the connection and tap Update.");
+        }
+        step(mid, to, "Installing Endless Keeper " + appVersion(ctx) + " files");
+        extract7z(archive, kfx, null);
+        State.put(ctx, "endless_files", endlessSignature(ctx, State.load(ctx)));
+        AppLog.i("Endless Keeper files installed: " + patch[1]);
+        discard(archive);
+    }
+
+    /** Endless task: this app version's Endless Keeper files after an app update (started by the launcher). */
+    void endless() throws Exception {
+        task = "endless";
+        File kfx = Paths.kfx(ctx);
+        if (!new File(kfx, "fxdata").isDirectory())
+            throw new IOException("Prepare the game first.");
+        applyEndless(0, 95);
+        step(95, 100, "Writing settings");
+        fromTemplates(kfx);
+        ConfigWriter.write(kfx, settings);
+        syncClassic(ctx);
+        base = 100; span = 0; label = "Ready";
         emit(1, null);
     }
 

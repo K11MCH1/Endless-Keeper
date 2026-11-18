@@ -527,10 +527,12 @@ TbBool world_menu_lobby_start(void)
 static void wm_new_run(struct GuiButton *gbtn)
 {
     wm_run_started = false;
-    if (!change_campaign(CampgnT_Mappack, ENDLESS_MAPPACK_FNAME))
+    /* (change_campaign falls back to the original campaign when levels/endless.cfg is missing or has no level, and
+       still says it loaded: an Android install without Endless Keeper's files said "the map pack has no level") */
+    if (!change_campaign(CampgnT_Mappack, ENDLESS_MAPPACK_FNAME) || !world_menu_endless_campaign_loaded())
     {
         ERRORLOG("Endless Mode: can't load the map pack levels/%s", ENDLESS_MAPPACK_FNAME);
-        create_frontend_error_box("Endless Mode needs levels/" ENDLESS_MAPPACK_FNAME);
+        create_frontend_error_box("Endless Mode needs levels/" ENDLESS_MAPPACK_FNAME " and levels/endless: update the game");
         return;
     }
     if ((campaign.freeplay_levels_count < 1) || (campaign.freeplay_levels[0] <= 0))
@@ -1684,7 +1686,8 @@ int world_menu_slot_for_seed(const char *seed)
 /** -loadseed with no save of the seed: a new world with it (the seed is set). Its frontend state. */
 int world_menu_new_world_state(void)
 {
-    if (!change_campaign(CampgnT_Mappack, ENDLESS_MAPPACK_FNAME) || (campaign.freeplay_levels_count < 1)
+    if (!change_campaign(CampgnT_Mappack, ENDLESS_MAPPACK_FNAME) || !world_menu_endless_campaign_loaded()
+        || (campaign.freeplay_levels_count < 1)
         || (campaign.freeplay_levels[0] <= 0))
     {
         ERRORLOG("Endless Mode: can't load the map pack levels/%s", ENDLESS_MAPPACK_FNAME);

@@ -99,6 +99,7 @@ public final class LauncherActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 pageReady = true;
                 send(PrepareService.lastProgress().length() > 0 ? PrepareService.lastProgress() : PrepareService.idle(), "progress");
+                checkEndlessFiles();
                 checkForUpdate();
                 debugAction(getIntent());
             }
@@ -199,6 +200,13 @@ public final class LauncherActivity extends Activity {
         } catch (Exception e) {
             AppLog.w("no browser for " + url);
         }
+    }
+
+    /** A prepared game without this app version's Endless Keeper files (an app update, or an older launcher): fetch them. */
+    private void checkEndlessFiles() {
+        if (!State.load(this).optBoolean("prepared") || PrepareService.isRunning() || Prepare.endlessCurrent(this))
+            return;
+        PrepareService.start(this, new Intent().putExtra(PrepareService.EXTRA_TASK, "endless"));
     }
 
     private void checkForUpdate() {
