@@ -34,6 +34,7 @@
 #include "bflib_enet.h"
 #include "server_admin.h"
 #include "thing_list.h"
+#include "chat_box.h"
 #include "post_inc.h"
 
 #define THIN_JOIN_LOAD_MS 120000
@@ -141,6 +142,10 @@ TbBool network_user_is_spectator(NetUserId user_id)
 
 static void spectator_message_add(int32_t icon, const char *text)
 {
+    if (chat_box_active()) {
+        chat_box_add(-1, text); /* Endless Keeper: the chat box, not the notification lines as well */
+        return;
+    }
     if (icon == 0) {
         message_add(MsgType_Blank, 0, text);
         return;
@@ -219,10 +224,20 @@ TbError process_network_spectator_chat(NetUserId source, const char *buffer, siz
         }
         icon = netstate.users[source].spectator_icon;
         netstate.msg_buffer[2] = icon;
+        /* Endless Keeper: the line goes out with its sender's name (the others had no way to tell who said it) */
+        {
+            static char named[PLAYER_MP_MESSAGE_LEN];
+            snprintf(named, sizeof(named), "%s: %s", netstate.users[source].name, message);
+            const size_t nl = strlen(named) + 1;
+            memcpy(netstate.msg_buffer + 3, named, nl);
+            size = 2 + nl;
+            message = named;
+        }
         NetUserMask recipients = numask_andnot(ALL_NET_CONNECTIONS_MASK, ALL_NET_USERS_MASK);
         if (net_config_info.spectator_chat) {
             recipients = numask_or(recipients, ALL_NET_USERS_MASK);
         }
+        numask_del(&recipients, source); /* (Endless Keeper: it showed its own line already; it came twice) */
         send_to_active_peers(1, NetSend_Reliable, netstate.msg_buffer, size + 1, recipients);
     } else if (source != SERVER_ID) {
         return Lb_OK;
@@ -453,6 +468,8 @@ static void thin_drop_stale(NetUserId u, const char *name, int quiet_ms)
    seated with a second seat made beside its own and held for the first. A new player whose partner has a dungeon
    starts near it. Two players who both have dungeons are allied where they are. */
 #define PARTY_WAIT_MS 60000 /* a new player waits this long for its partner */
+#define PARTY_GONE_MS 10000 /* a partner whose connection has been quiet this long has gone (its game stopped) */
+#define THIN_LIVE_QUIET_MS 1500 /* a seat's connection heard from within this is live (another window, not a reconnect) */
 static TbClockMSec party_wait_from[MAX_NET_CONNECTIONS]; /* when a new joiner began to wait for its partner (0: not) */
 
 /** The seated player (its user) who came with this party key, or INVALID_USER_ID. */
@@ -527,6 +544,10 @@ static PlayerNumber thin_own_seat(uint64_t token, const char *name, TbBool coop,
         struct PlayerInfo *player = get_player(p);
         if (world_seat_deleted(p) || (world_seat_is_coop(p) != coop) || (world_coop_held_key(p) != 0)) {
             continue; /* (a seat held for a party's second player is taken as that, not as its own yet) */
+        }
+        if (coop && (player->victory_state == VicS_LostLevel)) {
+            continue; /* a defeated co-op dungeon is gone (coop_upkeep deletes it): its player starts a new one, or plays
+                         solo; it came back into the dead dungeon (co-op audit 2026-11-15) */
         }
         const TbBool mine = ((token != 0) && (world_seat_token(p) == token))
             || (!coop && (world_seat_token(p) == 0) && (strcmp(player->player_name, name) == 0));
@@ -608,6 +629,11 @@ static void thin_seat_joiners(void)
                 if ((holder != SERVER_ID) && ((quiet_ms < 0) || (quiet_ms >= THIN_RECONNECT_QUIET_MS))) {
                     thin_drop_stale(holder, spectator->name, quiet_ms);
                     stale = true;
+                } else if ((holder != SERVER_ID) && (quiet_ms >= THIN_LIVE_QUIET_MS)) {
+                    /* its old connection, gone quiet (a crash, a restart): this is the same player, who waits for it to
+                       go (THIN_RECONNECT_QUIET_MS). It took the next variant and became a second player: a new seat,
+                       and its own listed twice (co-op audit 2026-11-15). Only a live one is another window */
+                    stale = true;
                 }
             }
         } else {
@@ -629,9 +655,11 @@ static void thin_seat_joiners(void)
         /* a name another live user has (another window on the same PC): one of its own, for everyone to tell apart */
         /* (not a dedicated server's own user: it plays no keeper, and has the name of the PC it runs on, often the
            player's own: they became "<name> (2)") */
+        TbBool renamed_here = false; /* "<name> (2)": not a name for its seats to keep */
         for (NetUserId u = netstate_dedicated() ? SERVER_ID + 1 : SERVER_ID; u < MAX_NET_CONNECTIONS; u++) {
             if ((u != spectator_id) && IsUserActive(u) && (strcmp(netstate.users[u].name, spectator->name) == 0)) {
                 thin_unique_name(spectator_id);
+                renamed_here = true;
                 break;
             }
         }
@@ -665,6 +693,10 @@ static void thin_seat_joiners(void)
                 }
             } else {
                 seat = world_coop_held_seat(party_key);
+                /* only the player it was made for (its token): by the party key alone a partner who reconnected with
+                   another token variant, or a third member, took it (co-op audit 2026-11-15) */
+                if ((seat != PLAYER_NONE) && (world_seat_token(seat) != base_token) && (world_seat_token(seat) != token))
+                    seat = PLAYER_NONE;
                 held = (seat != PLAYER_NONE);
             }
             if (seat == PLAYER_NONE) {
@@ -691,10 +723,16 @@ static void thin_seat_joiners(void)
                             pair_conn = pconn;
                         }
                     }
+                } else if ((pconn != INVALID_USER_ID) && (enet_user_ms_since_receive(pconn) >= PARTY_GONE_MS)) {
+                    /* the partner's game stopped answering (it crashed while it came in): no wait for its timeout */
+                    party_note = "Your party partner's game stopped answering: you play your own dungeon.";
+                    SYNCLOG("Server: %s's party partner stopped answering", spectator->name);
                 } else if ((party_wait_from[spectator_id] == 0) || (now - party_wait_from[spectator_id] < PARTY_WAIT_MS)) {
                     if (party_wait_from[spectator_id] == 0) {
                         party_wait_from[spectator_id] = (now != 0) ? now : 1;
                         SYNCLOG("Server: %s waits for its party partner", spectator->name);
+                        server_admin_notice(spectator_id, "Waiting for your party partner to come in (up to a minute); "
+                            "then you play your own dungeon.");
                     }
                     continue;
                 } else {
@@ -733,6 +771,7 @@ static void thin_seat_joiners(void)
             if (!numask_has(told, spectator_id)) {
                 SYNCLOG("Server: %s watches for now (no free seat)", spectator->name);
                 server_admin_log("warn", "%s waits: no free seat", spectator->name);
+                server_admin_notice(spectator_id, "This world has no free seat now: you watch until one frees up.");
                 send_spectator_notice(spectator_id, SpectatorNotice_Joined, ALL_NET_CONNECTIONS_MASK); /* as a spectator */
                 numask_add(&told, spectator_id);
             }
@@ -768,8 +807,9 @@ static void thin_seat_joiners(void)
                the partner's co-op dungeon if it goes before taking it */
             struct PlayerInfo *player = get_player(pair_seat);
             player->id_number = pair_seat;
-            player->allocflags |= PlaF_Allocated | PlaF_Seat;
-            player->allocflags &= ~(PlaF_CompCtrl | PlaF_Placeholder);
+            player->allocflags |= PlaF_Allocated | PlaF_Seat | PlaF_Placeholder; /* away until its player takes it (it
+                was an online keeper nobody played: raids could kill it, and it was deleted and given to someone else) */
+            player->allocflags &= ~PlaF_CompCtrl;
             player->victory_state = VicS_Undecided;
             snprintf(player->player_name, sizeof(player->player_name), "%s", netstate.users[pair_conn].name);
             world_set_seat_token(pair_seat, netstate.users[pair_conn].reconnect_token);
@@ -780,6 +820,16 @@ static void thin_seat_joiners(void)
         }
         world_set_seat_token(seat, token);
         seat_spectator(spectator_id, user);
+        if (!renamed_here)
+            world_seats_rename(token, netstate.users[user].name); /* its other seat takes the name it plays under now */
+        if (returning && (get_player(seat)->victory_state == VicS_LostLevel) && !world_seat_is_coop(seat)
+         && world_seat_can_respawn(seat)) {
+            /* its dungeon fell while it was away: it starts again at once ("people spawn dead", the user 2026-11-15) */
+            SYNCLOG("Server: %s's dungeon fell while it was away: it starts again", netstate.users[user].name);
+            if (world_seat_respawn(seat)) {
+                server_admin_notice(user, "Your dungeon fell while you were away: you start again with a new dungeon.");
+            }
+        }
         {
             char ip[64] = "";
             enet_user_address(user, ip, sizeof(ip));

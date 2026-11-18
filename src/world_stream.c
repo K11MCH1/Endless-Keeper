@@ -364,6 +364,8 @@ PlayerNumber world_coop_seat_of(uint64_t token)
 
 TbBool world_coop_seat_away(PlayerNumber plyr_idx)
 {
+    if ((world_coop_held_key(plyr_idx) != 0) && player_exists(get_player(plyr_idx)))
+        return true; /* held for a party's second player who hasn't taken it yet */
     return world_seat_is_coop(plyr_idx) && player_exists(get_player(plyr_idx)) &&
         player_is_placeholder(get_player(plyr_idx));
 }
@@ -7891,6 +7893,37 @@ static TbBool seat_delete(PlayerNumber p, const char *farewell, const char *how,
     return true;
 }
 
+TbBool world_seat_delete_by_server(PlayerNumber p, char *why, size_t why_len)
+{
+    /* the server program's Reset (the user, 2026-11-15: "when I reset a dungeon of a user from the server program, their
+       seat is also cleared"): the dungeon is deleted and the seat stops being theirs, as with !delete dungeon; online,
+       they go back to the World List, and come in again as a new player (a new start, level and research from zero) */
+    if (!W.active || !world_paged || !netstate_is_server())
+    {
+        snprintf(why, why_len, "only on a server's endless world");
+        return false;
+    }
+    return seat_delete(p, "The server reset your dungeon: join again for a new start", "by the server", why, why_len);
+}
+
+void world_seats_rename(uint64_t token, const char *name)
+{
+    /* a player who renamed itself (the user, 2026-11-15: "I was Hamas, now KIMCHI"): all its seats, solo and co-op,
+       take the name it plays under now (the seats are its by its token; the old name stayed on the seat it wasn't
+       playing, and the server program listed one player twice) */
+    if ((token == 0) || (name == NULL) || (name[0] == '\0'))
+        return;
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+    {
+        struct PlayerInfo *player = get_player(p);
+        if ((seat_tokens[p] != token) || !player_exists(player) || pmask_has(seats_to_free, p) ||
+            (strcmp(player->player_name, name) == 0))
+            continue;
+        SYNCLOG("World: seat %d's player %s is %s now", (int)p, player->player_name, name);
+        snprintf(player->player_name, sizeof(player->player_name), "%s", name);
+    }
+}
+
 /** A deleted seat whose player has gone: a seat nobody has had (player 0, the level's own, is retired instead: it stays
  *  a defeated seat nobody comes back to). */
 static void seat_free(PlayerNumber p)
@@ -7904,6 +7937,23 @@ static void seat_free(PlayerNumber p)
     world_progress_seat_reset(p);
     seat_dungeon_reset(p, false);
     memset(player->player_name, 0, sizeof(player->player_name));
+    /* nobody's ally any more, either way, and its own colour again (a party's seat had a borrowed one; the next player
+       here inherited both: co-op audit 2026-11-15) */
+    for (PlayerNumber q = 0; q < PLAYERS_COUNT; q++)
+    {
+        if ((q == p) || player_invalid(get_player(q)))
+            continue;
+        set_player_ally_locked(p, q, false);
+        set_player_ally_locked(q, p, false);
+        set_ally_with_player(p, q, false);
+        set_ally_with_player(q, p, false);
+    }
+    if (!dungeon_invalid(dungeon))
+    {
+        static const unsigned char extra_colours[] = {PLAYER_NEUTRAL, 1, 2, 3, 6, 7, 8};
+        dungeon->color_idx = (p < COLOURS_COUNT) ? (unsigned char)p : extra_colours[(p - COLOURS_COUNT) % (int)sizeof(extra_colours)];
+    }
+    world_coop_refresh();
     if (p == PLAYER0)
     {
         player->allocflags &= ~PlaF_CompCtrl;
@@ -7964,8 +8014,8 @@ static void coop_upkeep(void)
                 seat_free(p);
             continue;
         }
-        if (!world_seat_is_coop(p) || !player_exists(player))
-            continue;
+        if (!world_seat_is_coop(p) || !player_exists(player) || (coop_held[p] != 0))
+            continue; /* (a seat held for a party's second player is its: not deleted while it comes) */
         const TbBool online = (seat_online_user(p) != INVALID_USER_ID);
         {
             /* said once each time: an away co-op dungeon's heart freezes (unless another player's things keep it) */
@@ -11249,6 +11299,8 @@ static void world_tokens_to_key(void)
             seat_tokens[p] = netsec_world_token(seat_tokens[p]);
             n++;
         }
+        if ((seat_partner_tokens[p] != 0) && (seat_partner_tokens[p] != COOP_SEAT_ORPHAN))
+            seat_partner_tokens[p] = netsec_world_token(seat_partner_tokens[p]);
     }
     n += world_perks_tokens_to_key();
     SYNCLOG("World: the world had no key; it takes this machine's, %d owners' tokens made its own", n);

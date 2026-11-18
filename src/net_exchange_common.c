@@ -466,7 +466,11 @@ TbError process_network_message(NetUserId source, void *server_buf, size_t frame
     case NETMSG_UNPAUSE:
         return process_network_unpause_message(source, payload_size);
     case NETMSG_CHATMESSAGE:
-        if (network_user_is_spectator(netstate.my_id)) {
+        if (network_user_is_spectator(netstate.my_id)
+         && !((source == SERVER_ID) && (message_size > 1)
+          && (((unsigned char)read_pos[0] == SERVER_NOTICE_SENDER) || ((unsigned char)read_pos[0] == SERVER_FAREWELL_SENDER)))) {
+            /* (players' chat isn't a watcher's; the server's notices are: Endless Keeper 2026-11-15, a joiner waiting for
+               its party partner saw a black view and none of the server's reasons) */
             return Lb_OK;
         }
         return handle_chat_message(source, read_pos, message_size, expected_frame_type);

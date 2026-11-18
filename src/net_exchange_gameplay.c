@@ -240,6 +240,12 @@ void process_gameplay_chat_message(NetUserId user, const char *message, MapCoord
         }
         if (shown) {
             if ((message_type == MsgType_Player) && chat_box_active()) {
+                if ((plyr_idx < 0) && (user >= 0) && (user < MAX_NET_CONNECTIONS) && (netstate.users[user].name[0] != '\0')) {
+                    /* someone without a seat (still coming in): its name in the line, as a keeper's is put before it */
+                    char named[PLAYER_MP_MESSAGE_LEN + 40];
+                    snprintf(named, sizeof(named), "%s: %s", netstate.users[user].name, text);
+                    chat_box_add(-1, named);
+                } else
                 chat_box_add(plyr_idx, text); /* an endless server's chat box, not the top of the screen */
             } else {
                 message_add(message_type, plyr_idx, text);

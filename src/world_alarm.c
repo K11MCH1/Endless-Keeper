@@ -465,7 +465,13 @@ static void al_fire_stage(struct AlEntry *e)
     desc[0] = 0;
     for (int k = 0; k < n; k++)
     {
-        const char *name = (k == 0) ? "TUNNELLER" : (stage == 1) ? "THIEF" : kinds[(k * 7 + (int)e->fcx * 3 + (int)e->fcy) % max(nk, 1)];
+        /* the kind by the fortress's chunk: its coordinates go below zero west and north of the world's origin, and
+           a negative remainder picked a name from before the list (a 64-bit game read 0xffffffffffffffff as a name
+           and crashed in strcasecmp, 2026-11-18): the remainder is kept at 0 and up */
+        int pick = (k * 7 + (int)e->fcx * 3 + (int)e->fcy) % max(nk, 1);
+        if (pick < 0)
+            pick += max(nk, 1);
+        const char *name = (k == 0) ? "TUNNELLER" : (stage == 1) ? "THIEF" : kinds[pick];
         struct Thing *h = al_hero(name, lx, ly, (k == 0) ? base + 1 : base, k);
         if (thing_is_invalid(h))
             continue;

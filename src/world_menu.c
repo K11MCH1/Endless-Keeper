@@ -694,6 +694,9 @@ void world_menu_load_setup(void)
 #define WL_ROW_CONTENT 45  /* the rows' content values 45-49 (their hover ids) */
 #define WL_NAME_LINES  5
 #define WL_CHAT_LINES  5
+/** Co-op is off for now (the user, 2026-11-17): "Invite to party" is greyed and does nothing, and an invite that
+ *  still comes in (an older game) is refused, so no party is made and no co-op dungeon starts. 1 brings it back. */
+#define WL_COOP_ENABLED 0
 /* a thin client left its world: the menu after the game is the World List, with why (empty: it chose to leave) */
 static TbBool wl_return_pending = false;
 static char wl_return_message[320] = "";
@@ -759,7 +762,11 @@ static void wl_title_maintain(struct GuiButton *gbtn)
     wnet_menu_poll();
     /* an invite: "Join <name> to party?" over the list until it is answered (or ends) */
     const char *from = wnet_menu_invite_from();
-    if ((from[0] != '\0') && (menu_id_to_number(GMnu_FEPARTY_INVITE) < 0))
+    if (!WL_COOP_ENABLED && (from[0] != '\0'))
+    {
+        wnet_menu_party_answer(false); /* co-op is off for now: an older game's invite is refused, not asked about */
+    }
+    else if ((from[0] != '\0') && (menu_id_to_number(GMnu_FEPARTY_INVITE) < 0))
     {
         snprintf(wp_text, sizeof(wp_text), "Join %s to party?", from);
         if (game_is_busy_doing_gui_string_input())
@@ -1367,6 +1374,8 @@ static void wl_draw_leave(struct GuiButton *gbtn)
 
 static void wl_invite_click(struct GuiButton *gbtn)
 {
+    if (!WL_COOP_ENABLED)
+        return; /* co-op is off for now: the greyed button does nothing */
     wnet_menu_party_invite(wl_party_sel);
 }
 
@@ -1378,7 +1387,7 @@ static void wl_leave_click(struct GuiButton *gbtn)
 /** "Invite to party": a player is chosen, this one is in no party (only parties of two), and no invite is out. */
 static void wl_invite_maintain(struct GuiButton *gbtn)
 {
-    if (wnet_menu_connected() && (wl_party_sel[0] != '\0') && (wnet_menu_party()[0] == '\0') && (wnet_menu_invite_to()[0] == '\0'))
+    if (WL_COOP_ENABLED && wnet_menu_connected() && (wl_party_sel[0] != '\0') && (wnet_menu_party()[0] == '\0') && (wnet_menu_invite_to()[0] == '\0'))
         gbtn->flags |= LbBtnF_Enabled;
     else
         gbtn->flags &= ~LbBtnF_Enabled;

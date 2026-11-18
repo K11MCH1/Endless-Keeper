@@ -275,18 +275,59 @@ static NetUserId seat_user(PlayerNumber p)
     return player_invalid(player) ? -1 : get_player_primary_user(player);
 }
 
-/** The seat whose player has this name (any case), or -1. */
+/** The seat whose player has this name (any case), or -1: the one being played first (a player has a solo and a co-op
+ *  seat under the same name), then a solo one, then any. */
 static PlayerNumber seat_by_name(const char *name)
 {
     const PlayerNumber *seats = NULL;
     const int n = world_seat_players(&seats);
+    PlayerNumber solo = -1, any = -1;
     for (int i = 0; i < n; i++)
     {
         const char *pn = seat_name(seats[i]);
-        if ((pn[0] != '\0') && (strcasecmp(pn, name) == 0))
+        if ((pn[0] == '\0') || (strcasecmp(pn, name) != 0))
+            continue;
+        if (seat_user(seats[i]) > SERVER_ID)
             return seats[i];
+        if ((solo < 0) && !world_seat_is_coop(seats[i]))
+            solo = seats[i];
+        if (any < 0)
+            any = seats[i];
     }
-    return -1;
+    return (solo >= 0) ? solo : any;
+}
+
+/** Is another seat of the same player (its token) listed before this one in cmd_players? (one entry a player) */
+static TbBool seat_listed_twice(const PlayerNumber *seats, int n, int i)
+{
+    const PlayerNumber p = seats[i];
+    const uint64_t token = world_seat_token(p);
+    if (token == 0)
+        return false;
+    for (int k = 0; k < n; k++)
+    {
+        const PlayerNumber q = seats[k];
+        if ((q == p) || (world_seat_token(q) != token) || ((seat_name(q)[0] == '\0') && (seat_user(q) <= SERVER_ID)))
+            continue;
+        /* the one being played wins; then the solo seat; then the first */
+        const TbBool p_on = (seat_user(p) > SERVER_ID), q_on = (seat_user(q) > SERVER_ID);
+        if (q_on != p_on)
+        {
+            if (q_on)
+                return true;
+            continue;
+        }
+        const TbBool p_coop = world_seat_is_coop(p), q_coop = world_seat_is_coop(q);
+        if (p_coop != q_coop)
+        {
+            if (!q_coop)
+                return true;
+            continue;
+        }
+        if (k < i)
+            return true;
+    }
+    return false;
 }
 
 static void user_ip(NetUserId u, char *buf, size_t len)
@@ -697,8 +738,10 @@ static void cmd_players(void)
     for (int i = 0; i < n; i++)
     {
         const PlayerNumber p = seats[i];
-        /* the seats someone has played (a name), or plays now */
+        /* the seats someone has played (a name), or plays now; one entry a player (by its token) */
         if ((seat_name(p)[0] == '\0') && (seat_user(p) <= SERVER_ID))
+            continue;
+        if (seat_listed_twice(seats, n, i))
             continue;
         if (len + 860 >= cap)
             break;
@@ -884,16 +927,20 @@ static void cmd_reset(const char *name)
         return;
     }
     char why[96] = "";
+    char seatname[40];
+    snprintf(seatname, sizeof(seatname), "%s", seat_name(p));
     const PlayerNumber mate = world_coop_partner(p); /* co-op: a reset ends the alliance of a party */
-    if (!world_seat_reset(p, why, sizeof(why)))
-    {
-        server_admin_log("warn", "%s's dungeon was not reset: %s", seat_name(p), why);
-        return;
-    }
-    server_admin_log("admin", "%s's dungeon was reset: a new start dungeon elsewhere (level and upgrades kept)", seat_name(p));
     const NetUserId u = seat_user(p);
     if (u > SERVER_ID)
-        server_admin_notice(u, "The server reset your dungeon. You start again elsewhere.");
+        server_admin_notice(u, "The server reset your dungeon. Join again for a new start.");
+    /* the seat is cleared too (the user, 2026-11-15): the dungeon is deleted, and the player comes in again as a new
+       one (it was a new start in the same seat, which kept a party's or a defeated seat's state for the player) */
+    if (!world_seat_delete_by_server(p, why, sizeof(why)))
+    {
+        server_admin_log("warn", "%s's dungeon was not reset: %s", seatname, why);
+        return;
+    }
+    server_admin_log("admin", "%s's dungeon was reset: deleted, and the seat cleared (a new start when they join again)", seatname);
     if (mate != PLAYER_NONE)
     {
         char msg[160];
@@ -906,7 +953,7 @@ static void cmd_reset(const char *name)
         const NetUserId mu = seat_user(mate);
         if (mu > SERVER_ID)
         {
-            snprintf(msg, sizeof(msg), "%s's dungeon was reset: you are allied keepers no more.", seat_name(p));
+            snprintf(msg, sizeof(msg), "%s's dungeon was reset: you are allied keepers no more.", seatname);
             server_admin_notice(mu, msg);
         }
     }

@@ -116,6 +116,10 @@ TbBool world_seat_deleted(PlayerNumber plyr_idx);
 /** !delete dungeon: the player's dungeon is deleted (its ground made again), the player sent back to the World List. The
  *  server only. */
 TbBool world_seat_delete_by_player(PlayerNumber plyr_idx);
+/** The server program's Reset: the dungeon is deleted and the seat cleared (its player comes in again as a new one). */
+TbBool world_seat_delete_by_server(PlayerNumber plyr_idx, char *why, size_t why_len);
+/** A player plays under this name now: every seat with its token takes it. */
+void world_seats_rename(uint64_t token, const char *name);
 /** Start again (2026-11-08): may this defeated keeper's seat start again (an endless world's human seat)? */
 TbBool world_seat_can_respawn(PlayerNumber plyr_idx);
 /** Frees the defeated keeper's seat (its leftovers nobody's, its records from zero) and gives it to the same player
