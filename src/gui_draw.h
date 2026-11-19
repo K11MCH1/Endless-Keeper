@@ -92,6 +92,8 @@ void draw_gui_panel_sprite_rmleft_player(long x, long y, int units_per_px, long 
 void draw_gui_panel_sprite_centered(long x, long y, int units_per_px, long spridx, TbDrawFlagsMask draw_flags);
 void draw_gui_panel_sprite_occentered(long x, long y, int units_per_px, long spridx, TbPixel color, TbDrawFlagsMask draw_flags);
 void draw_button_sprite_left(long x, long y, int units_per_px, long spridx);
+/** A creature's level flower drawn as draw_button_sprite_left draws a sprite; past level 10 the level as a number. */
+void draw_level_flower_left(long x, long y, int units_per_px, int exp_level);
 void draw_button_sprite_rmleft(long x, long y, int units_per_px, long spridx, unsigned long remap);
 
 void draw_frontend_sprite_left(long x, long y, int units_per_px, long spridx);

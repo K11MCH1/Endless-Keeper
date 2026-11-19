@@ -75,6 +75,7 @@
 #include "creature_battle.h"
 #include "world_circles.h"
 #include "world_dark.h"
+#include "front_simple.h"
 #include "post_inc.h"
 
 /** The full-screen map's view in slabs: the map, or in paged mode (chunked endless world, no fixed map size) a
@@ -101,6 +102,17 @@ static long pmap_block_of(int level)
 {
     const long block = ((long)pmap_zoom_levels[level] * RendererPhysicalHeight() + 540) / 1080;
     return max(block, 1L);
+}
+#define PMAP_LEVELS ((int)(sizeof(pmap_zoom_levels) / sizeof(pmap_zoom_levels[0])))
+/* A touch pinch (2026-11-19, the user: the map's pinch zoom jittered, stepping between the levels): any whole number of
+   pixels per slab from the smallest level to the largest; 0: the level's own size. The pinch's size between whole
+   pixels is kept, so a slow pinch still gets there. */
+static long pmap_free_block = 0;
+static float pmap_pinch_block = 0.0f;
+
+static long pmap_block_now(void)
+{
+    return (pmap_free_block > 0) ? pmap_free_block : pmap_block_of(pmap_zoom);
 }
 
 /******************************************************************************/
@@ -192,7 +204,7 @@ long get_parchment_map_area_rect(struct TbRect *map_area)
         map_area->top = 0;
         map_area->right = RendererPhysicalWidth();
         map_area->bottom = RendererPhysicalHeight();
-        return pmap_block_of(pmap_zoom);
+        return pmap_block_now();
     }
     struct TbRect bkgnd_area;
     get_parchment_background_area_rect(&bkgnd_area);
@@ -331,11 +343,25 @@ void parchment_zoom(int dir, long screen_x, long screen_y)
     const long old_block = get_parchment_map_area_rect(&area);
     int level = pmap_zoom;
     long new_block;
+    if (pmap_free_block > 0)
+    {
+        /* after a pinch: the next level beyond its size */
+        level = (dir > 0) ? -1 : PMAP_LEVELS;
+        while (true)
+        {
+            level += (dir > 0) ? 1 : -1;
+            if ((level < 0) || (level >= PMAP_LEVELS))
+                return;
+            new_block = pmap_block_of(level);
+            if ((dir > 0) ? (new_block > old_block) : (new_block < old_block))
+                break;
+        }
+    } else
     do
     {
         /* the next level that changes the size (small screens round some of them to the same) */
         level += (dir > 0) ? 1 : -1;
-        if ((level < 0) || (level >= (int)(sizeof(pmap_zoom_levels) / sizeof(pmap_zoom_levels[0]))))
+        if ((level < 0) || (level >= PMAP_LEVELS))
             return;
         new_block = pmap_block_of(level);
     } while (new_block == old_block);
@@ -347,11 +373,46 @@ void parchment_zoom(int dir, long screen_x, long screen_y)
     if ((dx != 0) || (dy != 0))
         world_parchment_scroll_fine(dx, dy);
     pmap_zoom = level;
+    pmap_free_block = 0;
+}
+
+void parchment_pinch(float log_scale, long screen_x, long screen_y)
+{
+    if (!world_mode_active())
+        return;
+    struct TbRect area;
+    const long old_block = get_parchment_map_area_rect(&area);
+    const float lo = (float)pmap_block_of(0);
+    const float hi = (float)pmap_block_of(PMAP_LEVELS - 1);
+    if ((pmap_pinch_block <= 0.0f) || (lroundf(pmap_pinch_block) != old_block))
+        pmap_pinch_block = (float)old_block; /* something else zoomed meanwhile */
+    pmap_pinch_block *= expf(log_scale);
+    if (pmap_pinch_block < lo)
+        pmap_pinch_block = lo;
+    if (pmap_pinch_block > hi)
+        pmap_pinch_block = hi;
+    const long new_block = max(1L, (long)lroundf(pmap_pinch_block));
+    if (new_block == old_block)
+        return;
+    /* the world point under the fingers stays there */
+    const int64_t rx = screen_x - (area.left + area.right) / 2;
+    const int64_t ry = screen_y - (area.top + area.bottom) / 2;
+    const int64_t dx = rx * 256 / old_block - rx * 256 / new_block;
+    const int64_t dy = ry * 256 / old_block - ry * 256 / new_block;
+    if ((dx != 0) || (dy != 0))
+        world_parchment_scroll_fine(dx, dy);
+    pmap_free_block = new_block;
+    /* the nearest level: what the keys and the magnifier go by */
+    int best = 0;
+    for (int i = 1; i < PMAP_LEVELS; i++)
+        if (labs(pmap_block_of(i) - new_block) < labs(pmap_block_of(best) - new_block))
+            best = i;
+    pmap_zoom = best;
 }
 
 long parchment_zoom_block(void)
 {
-    return pmap_block_of(pmap_zoom);
+    return pmap_block_now();
 }
 
 /* Endless world: a short note over the full-screen map (which battle it shows) */
@@ -1331,6 +1392,52 @@ static void draw_map_bracket(int x, int top, int height, TbBool opening)
     }
 }
 
+
+#ifdef KFX_ANDROID
+/* Touch (2026-11-19, the user): the full-screen map's magnifier shows from the moment its icon is touched until that
+   finger lifts, and the finger moves it; the box shows up and left of the finger, where the hand does not cover it.
+   The icon is the panel's eye (the message window's Show button: lit while held), just under the hint line, about
+   twice the hint's height (the user's layout). */
+static TbBool pmap_magnifier_held = false;
+
+void world_parchment_magnifier(TbBool held)
+{
+    pmap_magnifier_held = held;
+}
+
+/** Where the icon is, and its size on screen */
+static void pmap_magnifier_icon_rect(long *x, long *y, long *w, long *h, int *ps_units_per_px)
+{
+    const struct TbSprite *spr = get_panel_sprite(GPS_message_message_btn_show_std);
+    const int spr_w = ((spr != NULL) && (spr->SWidth > 0)) ? spr->SWidth : 22;
+    const int spr_h = ((spr != NULL) && (spr->SHeight > 0)) ? spr->SHeight : 16;
+    *h = max(8L, (long)(20 * units_per_pixel / 16));
+    *ps_units_per_px = max(1, (int)(*h * 16 / spr_h));
+    *w = (long)spr_w * *ps_units_per_px / 16;
+    *x = (RendererPhysicalWidth() - *w) / 2;
+    *y = 27 * units_per_pixel / 16; /* the hint's line is 8..22 */
+}
+
+TbBool world_parchment_magnifier_icon_at(long x, long y)
+{
+    if (!world_mode_active())
+        return false;
+    long ix, iy, w, h;
+    int units;
+    pmap_magnifier_icon_rect(&ix, &iy, &w, &h, &units);
+    const long reach = max(w, h) / 3; /* a finger is bigger than the icon */
+    return (x >= ix - reach) && (x < ix + w + reach) && (y >= iy - reach) && (y < iy + h + reach);
+}
+
+static void draw_magnifier_icon(void)
+{
+    long ix, iy, w, h;
+    int units;
+    pmap_magnifier_icon_rect(&ix, &iy, &w, &h, &units);
+    draw_gui_panel_sprite_left(ix, iy, units, pmap_magnifier_held ? GPS_message_message_btn_show_act : GPS_message_message_btn_show_std);
+}
+#endif
+
 void draw_map_level_name(void)
 {
     if (world_mode_active())
@@ -1347,9 +1454,10 @@ void draw_map_level_name(void)
             LbTextDrawResized((w - LbTextStringWidth(hint) * hint_units_per_px / 16) / 2, 8 * units_per_pixel / 16, hint_units_per_px, hint);
             if ((pmap_note[0] != '\0') && (get_time_tick_ns() < pmap_note_until))
             {
-                LbTextDrawResized((w - LbTextStringWidth(pmap_note) * hint_units_per_px / 16) / 2, 30 * units_per_pixel / 16,
-                    hint_units_per_px, pmap_note);
+                LbTextDrawResized((w - LbTextStringWidth(pmap_note) * hint_units_per_px / 16) / 2, 52 * units_per_pixel / 16,
+                    hint_units_per_px, pmap_note); /* under the magnifier's icon */
             }
+            draw_magnifier_icon();
             return;
         }
 #endif
@@ -1599,6 +1707,10 @@ void draw_zoom_box_things(long scrtop_x, long scrtop_y, int stl_x, int stl_y, Pl
 void draw_zoom_box(void)
 {
     struct PlayerInfo* player = get_my_player();
+#ifdef KFX_ANDROID
+    if (world_mode_active() && !pmap_magnifier_held)
+        return; /* only while its icon is held */
+#endif
 
     long draw_tiles = 13;
     long subtile_unscaled = 8;
@@ -1645,6 +1757,14 @@ void draw_zoom_box(void)
     // Drawing coordinates
     long scrtop_x = mouse_x + scale_value_for_resolution(24);
     long scrtop_y = mouse_y + scale_value_for_resolution(24);
+#ifdef KFX_ANDROID
+    if (world_mode_active())
+    {
+        /* up and left of the finger */
+        scrtop_x = mouse_x - scale_value_for_resolution(24) - draw_tiles_x * subtile_size;
+        scrtop_y = mouse_y - scale_value_for_resolution(24) - draw_tiles_y * subtile_size;
+    }
+#endif
     if (scrtop_x > MyScreenWidth-draw_tiles_x*subtile_size)
       scrtop_x = MyScreenWidth-draw_tiles_x*subtile_size;
     if (scrtop_x < 0)
@@ -1656,11 +1776,17 @@ void draw_zoom_box(void)
     // Source map coordinates
     int stl_x = STL_PER_SLB * (mouse_x / pixel_size - map_area.left) / block_size - draw_tiles_x / 2;
     int stl_y = STL_PER_SLB * (mouse_y / pixel_size - map_area.top) / block_size - draw_tiles_y / 2;
+    /* Endless worlds (the user, 2026-11-19, on PC and Android): over a part of the world that is not loaded the
+       magnifier shows that part as the map does, unexplored, rather than vanishing (which looked like a bug) */
+    TbBool blank = false;
+    const TbBool show_anyway = world_mode_active();
     if (world_mode_active())
     {
         /* the full-screen map zoomed in past its default: the map shows enough, the box would only cover it */
+#ifndef KFX_ANDROID
         if (pmap_zoom > PMAP_ZOOM_DEFAULT + 1)
             return;
+#endif
         if ((mouse_x / pixel_size < map_area.left) || (mouse_x / pixel_size >= map_area.right)
          || (mouse_y / pixel_size < map_area.top) || (mouse_y / pixel_size >= map_area.bottom))
             return;
@@ -1669,20 +1795,38 @@ void draw_zoom_box(void)
         stl_x = cx - draw_tiles_x / 2;
         stl_y = cy - draw_tiles_y / 2;
         if ((cx < STL_PER_SLB) || (cy < STL_PER_SLB) || (cx >= game.map_subtiles_x - STL_PER_SLB) || (cy >= game.map_subtiles_y - STL_PER_SLB))
-            return;
+        {
+            if (!show_anyway)
+                return;
+            blank = true;
+        }
         /* paged: only where the world is loaded */
-        if (world_paged && (wp_page_of_subtile(cx, cy) == NULL))
-            return;
+        if (!blank && world_paged && (wp_page_of_subtile(cx, cy) == NULL))
+        {
+            if (!show_anyway)
+                return;
+            blank = true;
+        }
     }
     // Draw only on map area (do not allow zoom box to be empty)
     if ((stl_x < -draw_tiles_x/2) || (stl_x >= game.map_subtiles_x+1-draw_tiles_x/2)
      || (stl_y < -draw_tiles_y/2) || (stl_y >= game.map_subtiles_y+1-draw_tiles_y/2))
-      return;
+    {
+        if (!show_anyway)
+            return;
+        blank = true;
+    }
 
     RendererSetZoomBoxScreenRect(scrtop_x, scrtop_y, scrtop_x + draw_tiles_x*subtile_size, scrtop_y + draw_tiles_y*subtile_size);
-    draw_zoom_box_terrain(scrtop_x, scrtop_y, stl_x, stl_y, player->id_number, draw_tiles_x, draw_tiles_y, subtile_size);
-    // Draw thing sprites on the map
-    draw_zoom_box_things(scrtop_x, scrtop_y, stl_x, stl_y, player->id_number, draw_tiles_x, draw_tiles_y, subtile_size);
+    if (blank)
+    {
+        UIRenderer_SubmitSolidBox(scrtop_x, scrtop_y, draw_tiles_x * subtile_size, draw_tiles_y * subtile_size, PMAP_BACKGROUND);
+    } else
+    {
+        draw_zoom_box_terrain(scrtop_x, scrtop_y, stl_x, stl_y, player->id_number, draw_tiles_x, draw_tiles_y, subtile_size);
+        // Draw thing sprites on the map
+        draw_zoom_box_things(scrtop_x, scrtop_y, stl_x, stl_y, player->id_number, draw_tiles_x, draw_tiles_y, subtile_size);
+    }
     RendererClearZoomBoxScreenRect();
     // Draw sprites surrounding the box, dead-last so they're never covered
     // by the terrain/things content above.
@@ -1722,6 +1866,14 @@ void redraw_parchment_view(void)
   draw_gui();
   gui_draw_all_boxes();
   // Put zoom box and map name
+  if (world_mode_active())
+  {
+      /* Endless (the user, 2026-11-19): the magnifier goes over the hint line and its icon, not under them */
+      draw_map_level_name();
+      if (!a_menu_window_is_active())
+          draw_zoom_box();
+      return;
+  }
   if (!a_menu_window_is_active())
       draw_zoom_box();
   draw_map_level_name();

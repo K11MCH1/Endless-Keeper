@@ -7265,7 +7265,8 @@ void controlled_creature_drop_thing(struct Thing *creatng, struct Thing *droptng
                     if (add_item_to_room_capacity(room, true))
                     {
                         droptng->owner = creatng->owner;
-                        add_power_to_player(book_thing_to_power_kind(droptng), creatng->owner);
+                        if (world_progress_book_teaches(creatng->owner, book_thing_to_power_kind(droptng))) /* endless */
+                            add_power_to_player(book_thing_to_power_kind(droptng), creatng->owner);
                     }
                     else
                     {

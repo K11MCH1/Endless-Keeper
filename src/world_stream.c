@@ -173,6 +173,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_MISDEEDS 0x3144534Du /* "MSD1": the creatures' Misdeeds records */
 #define WORLD_EXTRA_WILD 0x31544257u   /* "WBT1": the wild packs' burrows and tunnels */
 #define WORLD_EXTRA_RAIDS 0x31584452u  /* "RDX1": the raids' owed first raid and fleeing clock */
+#define WORLD_EXTRA_THREAT 0x31524854u /* "THR1": the raids' threat budget per player (world_daynight.c, 2026-11-18) */
 #define WORLD_EXTRA_AMENITY 0x31584D41u /* "AMX1": Amenity Mastery's bars */
 #define WORLD_EXTRA_GROWTH 0x31474C53u  /* "SLG1": since when each computer keeper is left alone (slow growth) */
 #define WORLD_EXTRA_CIRCLES 0x31524943u /* "CIR1": the circles each keeper has breached (world_circles.c) */
@@ -6793,12 +6794,30 @@ static void world_spread_abilities(void)
     }
 }
 
-/** Endless worlds (2026-11-07): an imp learns from mining gold or dense gold. A turn of mining gives what a
- *  turn in a full training room gives it (its training work value at full efficiency) on the way to levels 2 and 3;
- *  from level 3 on that is divided by the level less one, so each level after 3 comes slower. */
+/** Endless worlds (2026-11-07): an imp learns from mining gold, dense gold or gems (all three are valuable slabs: the
+ *  same mining task). A turn of mining gives what a turn in a full training room gives it (its training work value at
+ *  full efficiency), twice that on the way to levels 2 and 3 (the user, 2026-11-18: "the 2 first levels should receive
+ *  double the XP ... to have Imps unlock their Speed spell at Level 3"); from level 3 on it is divided by the level less
+ *  one, so each level after 3 comes slower. */
 void world_imp_mined_gold(struct Thing *creatng)
 {
-    if (!world_mode_active() || !thing_is_creature(creatng))
+    world_imp_mined_gold_for(creatng, 1);
+}
+
+/** The same for a possessed imp's dig (a shot, one swing at a time: the user, 2026-11-18: "imps are not receiving the
+ *  XP while in possession"): the swing's turns at the same rate, so it learns as fast as when it mines by itself. */
+void world_imp_mined_gold_swing(struct Thing *creatng)
+{
+    if (!thing_is_creature(creatng))
+        return;
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
+    const int turns = (!creature_control_invalid(cctrl) && (cctrl->inst_total_turns > 0)) ? (int)cctrl->inst_total_turns : 8;
+    world_imp_mined_gold_for(creatng, turns);
+}
+
+void world_imp_mined_gold_for(struct Thing *creatng, int turns)
+{
+    if (!world_mode_active() || !thing_is_creature(creatng) || (turns < 1))
         return;
     struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
     if (creature_control_invalid(cctrl) || cctrl->exp_level_up)
@@ -6808,9 +6827,11 @@ void world_imp_mined_gold(struct Thing *creatng)
     long gain = compute_creature_work_value_for_room_role(creatng, RoRoF_CrTrainExp, ROOM_EFFICIENCY_MAX);
     if (gain < 1)
         gain = 1;
-    if (cctrl->exp_level >= 2)
+    if (cctrl->exp_level < 2)
+        gain *= 2; /* levels 1 and 2: double, so its Speed (level 3) comes sooner */
+    else
         gain /= (long)cctrl->exp_level; /* level 3 (exp_level 2): half; level 4: a third ... */
-    cctrl->exp_points += gain;
+    cctrl->exp_points += gain * turns;
     if (check_experience_upgrade(creatng) && cctrl->exp_level_up)
         SYNCLOG("World: %s %d of player %d reaches level %d mining gold", thing_model_name(creatng), (int)creatng->index,
             (int)creatng->owner, (int)cctrl->exp_level + 2);
@@ -8545,10 +8566,23 @@ static void world_train_test_log(const char *when)
     struct Dungeon *dungeon = get_players_num_dungeon(PLAYER0);
     if (dungeon_invalid(dungeon))
         return;
-    char line[600];
+    char line[900];
     int n = 0;
     line[0] = 0;
     long guard = 0;
+    for (ThingIndex i = dungeon->digger_list_start; (i > 0) && (guard++ < CREATURES_COUNT);)
+    {
+        /* the imps too (2026-11-18: their mining experience) */
+        struct Thing *t = thing_get(i);
+        struct CreatureControl *c = creature_control_get_from_thing(t);
+        if (thing_is_invalid(t) || creature_control_invalid(c))
+            break;
+        i = c->players_next_creature_idx;
+        if (n < (int)sizeof(line) - 60)
+            n += snprintf(line + n, sizeof(line) - n, "%s%s#%d L%d xp%ld st%d", (n > 0) ? ", " : "", thing_model_name(t),
+                (int)t->index, (int)c->exp_level + 1, (long)c->exp_points, (int)get_creature_state_besides_interruptions(t));
+    }
+    guard = 0;
     for (ThingIndex i = dungeon->creatr_list_start; (i > 0) && (guard++ < CREATURES_COUNT);)
     {
         struct Thing *t = thing_get(i);
@@ -8600,6 +8634,9 @@ static void world_train_test(void)
     player_add_offmap_gold(PLAYER0, 200000);
     static const char *const kinds[4] = {"TROLL", "ORC", "DEMONSPAWN", "DARK_MISTRESS"};
     int sent = 0;
+    /* "T,L": the four start at level L (2026-11-18: to see training go on past level 10 under MaxCreatureLevel) */
+    const char *spec = getenv("KFX_WORLD_TRAINTEST");
+    const int start_level = ((spec != NULL) && (strchr(spec, ',') != NULL)) ? max(1, atoi(strchr(spec, ',') + 1)) : 1;
     for (int k = 0; k < 4; k++)
     {
         struct Coord3d pos;
@@ -8610,6 +8647,8 @@ static void world_train_test(void)
         if (!thing_exists(c))
             continue;
         move_thing_in_map(c, &pos);
+        if (start_level > 1)
+            init_creature_level(c, (CrtrExpLevel)(start_level - 1));
         if (send_creature_to_job_for_player(c, PLAYER0, Job_TRAIN))
             sent++;
     }
@@ -9233,6 +9272,169 @@ static void world_shots_hook(void)
  *  the middle of the map, the mouse moves 80 pixels right and 50 down over 10 turns and the button comes up (a drag:
  *  the view moves, the map stays open); at T+30 a click that doesn't move (the camera goes there, the map closes).
  *  It sets the mouse state the game's input code reads each frame (lbDisplay), not the system's mouse. */
+/** Test hook KFX_WORLD_HOLDTEST=T (local, single player): at T player 0 takes over an Orc made beside its heart, with a
+ *  hero Knight to fight in front of it; from T+40 the left button is held (the mouse's state, as a held button sets it)
+ *  for 300 turns, then let go. Each attack the Orc starts is counted; the count is logged at T+360 (2026-11-18:
+ *  hold-to-attack while possessing). */
+static void world_holdtest_hook(void)
+{
+    static long at = -2;
+    static ThingIndex orc = 0;
+    static int attacks = 0;
+    static CrInstance last_inst = CrInst_NULL;
+    if (at == -2)
+    {
+        const char *v = getenv("KFX_WORLD_HOLDTEST");
+        at = (v != NULL) ? atol(v) : -1;
+    }
+    if (at < 0)
+        return;
+    const long t = (long)game.play_gameturn - at;
+    if ((t < 0) || (t > 360))
+        return;
+    static int imp_mode = -1; /* "T,imp": an imp beside gold instead, the button held to dig; its XP and gold logged */
+    if (imp_mode < 0)
+    {
+        const char *v = getenv("KFX_WORLD_HOLDTEST");
+        imp_mode = ((v != NULL) && (strstr(v, ",imp") != NULL)) ? 1 : 0;
+    }
+    if (imp_mode && (t == 0))
+    {
+        struct Thing *heart = find_players_dungeon_heart(PLAYER0);
+        if (!thing_exists(heart))
+        {
+            at = -1;
+            return;
+        }
+        const MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
+        /* a claimed slab 4 east of the heart with gold east and north of it, the imp in its north-east corner (its
+           facing comes from the player's view each turn: either way it faces gold) */
+        place_slab_type_on_map(SlbT_CLAIMED, slab_subtile_center(hx + 4), slab_subtile_center(hy), PLAYER0, 0);
+        place_slab_type_on_map(SlbT_GOLD, slab_subtile_center(hx + 5), slab_subtile_center(hy), game.neutral_player_num, 0);
+        place_slab_type_on_map(SlbT_GOLD, slab_subtile_center(hx + 4), slab_subtile_center(hy - 1), game.neutral_player_num, 0);
+        struct Coord3d pos;
+        pos.x.val = subtile_coord_center(slab_subtile(hx + 4, 2));
+        pos.y.val = subtile_coord_center(slab_subtile(hy, 0));
+        pos.z.val = 0;
+        struct Thing *imp = create_creature(&pos, (ThingModel)get_id(creature_desc, "IMP"), PLAYER0);
+        if (!thing_exists(imp))
+        {
+            at = -1;
+            return;
+        }
+        orc = imp->index;
+        SYNCLOG("Hold test (imp): taking over an imp beside gold: %d", (int)control_creature_as_controller(get_my_user(), imp));
+        return;
+    }
+    if (imp_mode)
+    {
+        struct Thing *imp = thing_get(orc);
+        struct CreatureControl *ic = creature_control_get_from_thing(imp);
+        if (!thing_exists(imp) || creature_control_invalid(ic))
+            return;
+        ic->active_instance_id = CrInst_FIRST_PERSON_DIG; /* its dig, as the player picks it */
+        if ((t >= 20) && (t < 340))
+        {
+            if (t == 20)
+                lbDisplay.LeftButton = 1; /* the press */
+            lbDisplay.MLeftButton = 1;     /* held: it digs on (hold-to-attack covers the dig) */
+        } else if (t == 340)
+            lbDisplay.MLeftButton = 0;
+        if ((t == 20) || (t == 360))
+            SYNCLOG("Hold test (imp): turn %ld: the imp at level %d with %ld experience, carrying %ld gold (active %s, facing %d,"
+                " at subtile %d,%d)", t, (int)ic->exp_level + 1, (long)ic->exp_points, (long)imp->creature.gold_carried,
+                creature_instance_code_name(ic->active_instance_id), (int)imp->move_angle_xy, (int)imp->mappos.x.stl.num,
+                (int)imp->mappos.y.stl.num);
+        return;
+    }
+    if (t == 0)
+    {
+        struct Thing *heart = find_players_dungeon_heart(PLAYER0);
+        if (!thing_exists(heart))
+        {
+            at = -1;
+            return;
+        }
+        struct Coord3d pos = heart->mappos;
+        pos.x.val += 3 * COORD_PER_STL;
+        struct Thing *o = create_creature(&pos, (ThingModel)get_id(creature_desc, "ORC"), PLAYER0);
+        pos.x.val += 2 * COORD_PER_STL;
+        struct Thing *k = create_creature(&pos, (ThingModel)get_id(creature_desc, "KNIGHT"), PLAYER_GOOD);
+        if (!thing_exists(o))
+        {
+            at = -1;
+            return;
+        }
+        orc = o->index;
+        SYNCLOG("Hold test: an Orc and %s; taking over the Orc: %d", thing_exists(k) ? "a Knight" : "no Knight",
+            (int)control_creature_as_controller(get_my_user(), o));
+        return;
+    }
+    struct Thing *o = thing_get(orc);
+    struct CreatureControl *oc = creature_control_get_from_thing(o);
+    if (!thing_exists(o) || creature_control_invalid(oc))
+        return;
+    if ((t >= 40) && (t < 340))
+    {
+        if (t == 40)
+            lbDisplay.LeftButton = 1; /* the press */
+        lbDisplay.MLeftButton = 1;     /* held */
+    } else if (t == 340)
+        lbDisplay.MLeftButton = 0;     /* let go */
+    if ((oc->instance_id != CrInst_NULL) && (oc->inst_turn <= 1) && ((oc->instance_id != last_inst) || (oc->inst_turn == 0)))
+        attacks++;
+    last_inst = oc->instance_id;
+    if (t == 360)
+        SYNCLOG("Hold test: %d attacks started while the button was held for 300 turns (active instance %s)", attacks,
+            creature_instance_code_name(oc->active_instance_id));
+}
+
+/** Test hook KFX_WORLD_HANDPICK="T,KIND[,LEVEL]" (local, single player, with KFX_WORLD_SHOTS for a picture): at T a
+ *  creature of that kind and level, an Orc of level 5 and a Fly of level 3 are put in player 0's Hand, and the mouse is kept in the middle of the screen
+ *  (2026-11-18: a picked-up Troll drawn huge). */
+static void world_handpick_hook(void)
+{
+    static long at = -2;
+    static char kind[32];
+    if (at == -2)
+    {
+        const char *v = getenv("KFX_WORLD_HANDPICK");
+        at = (v != NULL) ? atol(v) : -1;
+        const char *c = (v != NULL) ? strchr(v, ',') : NULL;
+        snprintf(kind, sizeof(kind), "%s", (c != NULL) ? c + 1 : "TROLL");
+    }
+    if ((at < 0) || ((long)game.play_gameturn < at))
+        return;
+    lbDisplay.MMouseX = lbDisplay.MouseX = (long)lbDisplay.PhysicalScreenWidth / 2;
+    lbDisplay.MMouseY = lbDisplay.MouseY = (long)lbDisplay.PhysicalScreenHeight / 2;
+    if ((long)game.play_gameturn != at)
+        return;
+    struct Thing *heart = find_players_dungeon_heart(PLAYER0);
+    if (!thing_exists(heart))
+        return;
+    struct Coord3d pos = heart->mappos;
+    pos.x.val += 3 * COORD_PER_STL;
+    if (!thing_exists(thing_get(get_user_state(get_my_user())->hand_thing_idx)))
+        create_power_hand(get_my_user()); /* (made the first time the hand is used: a test never moved it) */
+    /* the Hand is drawn from the user's predicted state: it has the hand too */
+    ((struct UserState *)get_user_state_prediction(get_my_user()))->hand_thing_idx = get_user_state(get_my_user())->hand_thing_idx;
+    /* "T,KIND,LEVEL": that one at that level, then an Orc of level 5 and a Fly of level 3 */
+    const char *lv = strchr(kind, ',');
+    const int level = (lv != NULL) ? max(1, atoi(lv + 1)) : 1;
+    if (lv != NULL)
+        *(char *)lv = 0;
+    const char *const kinds[3] = {kind, "ORC", "FLY"};
+    const int levels[3] = {level, 5, 3};
+    for (int k = 0; k < 3; k++)
+    {
+        struct Thing *c = create_creature(&pos, (ThingModel)get_id(creature_desc, kinds[k]), PLAYER0);
+        if (!thing_exists(c))
+            continue;
+        init_creature_level(c, (CrtrExpLevel)(levels[k] - 1));
+        SYNCLOG("Hand test: a %s of level %d in the Hand: %d", kinds[k], levels[k], (int)place_thing_in_power_hand(c, PLAYER0));
+    }
+}
+
 static void world_mapdrag_hook(void)
 {
     static long at = -2;
@@ -10733,6 +10935,8 @@ void world_process_turn(void)
     chat_box_turn();
     world_shots_hook();
     world_mapdrag_hook();
+    world_holdtest_hook();
+    world_handpick_hook();
     world_mapedge_hook();
     world_mapzoom_hook();
     world_progress_turn();
@@ -11141,6 +11345,7 @@ struct WorldExtra {
 static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_WILD, world_wild_save_size, world_wild_save, world_wild_load, world_wild_reset},
     {WORLD_EXTRA_RAIDS, world_raids_extra_save_size, world_raids_extra_save, world_raids_extra_load, world_raids_extra_reset},
+    {WORLD_EXTRA_THREAT, world_raids_threat_save_size, world_raids_threat_save, world_raids_threat_load, world_raids_threat_reset},
     {WORLD_EXTRA_AMENITY, world_amenity_save_size, world_amenity_save, world_amenity_load, world_amenity_reset},
     {WORLD_EXTRA_CIRCLES, world_circles_save_size, world_circles_save, world_circles_load, world_circles_reset},
     {WORLD_EXTRA_GROWTH, world_growth_save_size, world_growth_save, world_growth_load, world_growth_reset},

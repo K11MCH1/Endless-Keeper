@@ -37,6 +37,7 @@
 #include "config_spritecolors.h"
 #include "custom_sprites.h"
 #include "sprites.h"
+#include "world_stream.h"
 #include "post_inc.h"
 #include "frontmenu_ingame_tabs.h"
 
@@ -816,6 +817,44 @@ void draw_button_sprite_left(long x, long y, int units_per_px, long spridx)
 {
     const struct TbSprite* spr = get_button_sprite_for_player(spridx, my_player_number);
     LbSpriteDrawResized(x, y, units_per_px, spr);
+}
+
+void draw_level_flower_left(long x, long y, int units_per_px, int exp_level)
+{
+    /* the flowers are ten sprites; levels past 10 (endless worlds, to 100) took the sprites after them: other parts of
+       the interface (the user, 2026-11-19: the hand's creature list showed "the corners of a ui interface"). Past level
+       10: the level-10 flower with the level as a number in its middle, as the status flower over a creature shows */
+    const int shown = (exp_level < 0) ? 0 : (exp_level > 9) ? 9 : exp_level;
+    const struct TbSprite *spr = get_button_sprite(GBS_creature_flower_level_01 + shown);
+    if ((exp_level < 10) && !world_mode_active())
+    {
+        LbSpriteDrawResized(x, y, units_per_px, spr);
+        return;
+    }
+    /* endless worlds: every level in the digit font, so that 1 to 10 and the levels past them look alike (the stock
+       grey numbers are pictures of 1 to 10 only: the user, 2026-11-19: "Can't you just use either one of the font?") */
+    /* past level 10 the number alone (the level-10 sprite under it showed two numbers on top of each other: the user,
+       2026-11-19), as big as the level sprites' numbers (2/5 of their 17x17 canvas) and centred where they are */
+    const int w = spr->SWidth * units_per_px / 16, h = spr->SHeight * units_per_px / 16;
+    const struct TbSprite *dspr = get_button_sprite(GBS_fontchars_number_dig0);
+    const int level = exp_level + 1;
+    const int ndigits = (level >= 100) ? 3 : (level >= 10) ? 2 : 1;
+    int dh = h * 2 / 5;
+    int dw = (dspr->SHeight > 0) ? (dh * dspr->SWidth / dspr->SHeight) : dh;
+    if (dw * ndigits > w * 3 / 2)
+    {
+        dw = w * 3 / 2 / ndigits;
+        dh = (dspr->SWidth > 0) ? (dw * dspr->SHeight / dspr->SWidth) : dw;
+    }
+    if ((dw < 1) || (dh < 1))
+        return;
+    int dx = x + w / 2 + (dw * ndigits) / 2 - dw;
+    const int dy = y + (h - dh) / 2;
+    for (int rem = level; rem > 0; rem /= 10)
+    {
+        LbSpriteDrawScaled(dx, dy, get_button_sprite(GBS_fontchars_number_dig0 + (rem % 10)), dw, dh);
+        dx -= dw;
+    }
 }
 
 void draw_button_sprite_rmleft(long x, long y, int units_per_px, long spridx, unsigned long remap)

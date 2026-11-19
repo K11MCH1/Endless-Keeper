@@ -44,6 +44,10 @@ void world_daynight_level_end(void);
 TbBool world_raid_hero(const struct Thing *thing);
 /** Heroes are raiding this keeper now. */
 TbBool world_raid_on(PlayerNumber plyr_idx);
+/** Are any of a raid's heroes on the map for this player (going home after dawn too)? */
+TbBool world_raid_present(PlayerNumber plyr_idx);
+/** Is any of a raid's heroes for this player within this many slabs of its heart (the raid is at its dungeon)? */
+TbBool world_raid_at_dungeon(PlayerNumber plyr_idx, int slabs);
 /** A raid hero whose raid is over (after its third night) walks back to its landing and leaves; true when this one
  *  was seen to (the hero AI then leaves it alone). */
 TbBool world_raid_hero_goes_home(struct Thing *thing);
@@ -54,6 +58,11 @@ void world_raids_extra_reset(void);
 size_t world_raids_extra_save_size(void);
 void world_raids_extra_save(uint8_t *buf);
 TbBool world_raids_extra_load(const uint8_t *buf, size_t len);
+/** The THR1 extra of the world save: the threat budget's state per player (2026-11-18). */
+void world_raids_threat_reset(void);
+size_t world_raids_threat_save_size(void);
+void world_raids_threat_save(uint8_t *buf);
+TbBool world_raids_threat_load(const uint8_t *buf, size_t len);
 /** A raid's leader (a raiding Tunneller at the head of its party) is led slab by slab: straight for the heart, round
  *  what it cannot dig, round and round a dungeon closed by its walls until it finds a hole. From the tunnelling
  *  state, every turn: 0 it is not led (the stock code goes on), 1 its state changed (it walks in), 2 it is led

@@ -44,12 +44,17 @@
 #include "game_legacy.h"
 #include "cursor_tag.h"
 #include "gui_msgs.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 /******************************************************************************/
+/* Endless worlds: a computer keeper's quick attack (a Call To Arms on an opponent's room) only at a room this near its
+   heart (slabs), and only for a call that lasts (2026-11-18) */
+#define WORLD_QUICK_ATTACK_REACH 40
+#define WORLD_QUICK_ATTACK_MIN_TURNS 100
 long computer_checks_hates(struct Computer2 *comp, struct ComputerCheck * check);
 long computer_check_move_creatures_to_best_room(struct Computer2 *comp, struct ComputerCheck * check);
 long computer_check_move_creatures_to_room(struct Computer2 *comp, struct ComputerCheck * check);
@@ -623,6 +628,26 @@ long computer_check_for_quick_attack(struct Computer2 *comp, struct ComputerChec
     struct Room* room = get_hated_room_for_quick_attack(comp);
     if (room_is_invalid(room)) {
         return CTaskRet_Unk4;
+    }
+    if (world_mode_active())
+    {
+        /* Endless worlds (the user, 2026-11-18: "Enemy Keepers keep spamming Call To Arms when there is no conflict"):
+           the opponent's room was any of a player it had met, at any distance (a heroes' outpost, a sleeping keeper far
+           off), and five of the six quick attacks hold the call for 0 or 1 turn: the keeper called its creatures, cast
+           and cancelled, again and again, every 20 seconds. A quick attack now goes only at a room near its own heart,
+           and only for a real call. */
+        if (cta_duration < WORLD_QUICK_ATTACK_MIN_TURNS) {
+            return CTaskRet_Unk4;
+        }
+        struct Thing* heartng = get_player_soul_container(dungeon->owner);
+        if (!thing_exists(heartng)) {
+            return CTaskRet_Unk4;
+        }
+        const long dx = labs((long)subtile_slab(heartng->mappos.x.stl.num) - (long)subtile_slab(room->central_stl_x));
+        const long dy = labs((long)subtile_slab(heartng->mappos.y.stl.num) - (long)subtile_slab(room->central_stl_y));
+        if (max(dx, dy) > WORLD_QUICK_ATTACK_REACH) {
+            return CTaskRet_Unk4;
+        }
     }
     struct Coord3d pos;
     // TODO COMPUTER_PLAYER We should make sure the place of cast is accessible for creatures

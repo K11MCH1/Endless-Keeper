@@ -21,8 +21,9 @@
  * They belong to the heroes (hostile to every keeper), patrol where they are and fight what comes near. They are
  * marked by the DEFEND_LOCATION hero objective.
  * Burrows (2026-11-11): see below; packs also break out of the earth round a keeper and dig towards their imps.
- * Night (2026-11-07): they are the night. Each creature's level is H-2..H (at least 1), H the level of the strongest
- * creature of the nearest human keeper; at dawn the night's ones not fighting fade out over half a minute
+ * Night (2026-11-07): they are the night. Each creature's level is H-2..H (at least 1), H (since 2026-11-18) the level of
+ * the upper quarter of the nearest human keeper's army (world_threat.c; it was its strongest creature); no pack comes for a
+ * keeper while its raiders are there. At dawn the night's ones not fighting fade out over half a minute
  * (Minecraft's monsters burning in daylight).
  * Day (the user, 2026-11-15): roaming and burrowing packs come by day too, fewer: roaming packs a quarter as often
  * as at night, under half the cap, burrows a third as often. They don't fade at the dawn they came after.
@@ -60,6 +61,7 @@
 #include "thing_list.h"
 #include "world_pages.h"
 #include "world_daynight.h"
+#include "world_threat.h"
 #include "world_circles.h"
 #include "world_misdeeds.h"
 #include "net_game.h"
@@ -85,12 +87,15 @@
 #define WILD_KEEP_DIST 32       /* Minecraft: no random despawn within 32 blocks */
 #define WILD_MIN_AGE (30 * 20)  /* Minecraft: 30 seconds without a player near */
 #define WILD_DESPAWN_ONE_IN 40  /* per second: Minecraft's 1 in 800 per tick */
-#define WILD_LEVEL_SPREAD 2     /* levels H-2..H, H: the nearest human keeper's strongest creature */
+#define WILD_LEVEL_SPREAD 2     /* levels H-2..H, H: the nearest human keeper's army's upper quarter (world_threat.c) */
 #define WILD_DAWN_ONE_IN 10     /* per second after dawn: the ones not fighting fade out over about half a minute */
 #define WILD_DAY_PACK_ONE_IN 4  /* by day, one roaming pack try a second one time in four (at night: two a second) */
 #define WILD_DAY_CAP_PART 2     /* by day, roaming packs fill half the caps */
 #define WILD_DAY_BURROW_TIMES 3 /* by day, a burrow a third as often as at night */
 #define WILD_PACK_ROOM 15       /* slabs: no new pack within this of a wild creature already there */
+#define WILD_RING_PUSH 24           /* slabs a burrow may move out past the rings round a dungeon */
+#define WILD_BURROW_TURN (2 * 60 * 20) /* turns of a slot kept for a burrow after a roaming pack */
+#define WILD_RAID_CLEAR 30       /* no pack for a keeper while a raid's hero is within this many slabs of its heart */
 #define WILD_PACK_GAP (5 * 60 * 20) /* turns: one pack a keeper in this time at most (KFX_WORLD_PACKGAP for tests) */
 #define WILD_ROOM_MAX 4096      /* wild creatures remembered for that */
 #define WILD_DIG_KEEP 30        /* slabs: by day, a tunnel this near a digging Beetle doesn't fall in (it may be a day
@@ -307,6 +312,7 @@ static TbBool wild_pack_crowded(MapSlabCoord x, MapSlabCoord y)
 
 /* when each keeper last got a pack (0: not since the world's start or load: the gap counts from then) */
 static GameTurn wild_last_pack[PLAYERS_MAX];
+static uint8_t wild_last_was_burrow[PLAYERS_MAX]; /* the keeper's last pack came out of a burrow */
 
 static GameTurnDelta wild_pack_gap(void)
 {
@@ -321,8 +327,9 @@ static GameTurnDelta wild_pack_gap(void)
     return (GameTurnDelta)gap;
 }
 
-/** May a keeper get a pack now? (the first time asked after a start or load, the gap begins) */
-static TbBool wild_pack_due(PlayerNumber plyr_idx)
+/** May a keeper get a pack now (a roaming one, or out of a burrow)? (the first time asked after a start or load, the gap
+ *  begins) */
+static TbBool wild_pack_due(PlayerNumber plyr_idx, TbBool burrow)
 {
     if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
         return true;
@@ -330,7 +337,19 @@ static TbBool wild_pack_due(PlayerNumber plyr_idx)
         wild_last_pack[plyr_idx] = 0; /* another world since (its turns begin again) */
     if (wild_last_pack[plyr_idx] == 0)
         wild_last_pack[plyr_idx] = (game.play_gameturn > 0) ? game.play_gameturn : 1;
-    return (GameTurnDelta)(game.play_gameturn - wild_last_pack[plyr_idx]) >= wild_pack_gap();
+    if (world_raid_at_dungeon(plyr_idx, WILD_RAID_CLEAR))
+        return false; /* its raiders are at its dungeon: no pack on top of them (the threat budget, 2026-11-18). Only
+                         while they are there: raiders stay till dawn, and a raid nearly every day kept the night's packs
+                         and burrows away (the user, 2026-11-19: "Burrowing Wild Packs don't seem to spawn anymore") */
+    const GameTurnDelta since = (GameTurnDelta)(game.play_gameturn - wild_last_pack[plyr_idx]);
+    if (since < wild_pack_gap())
+        return false;
+    /* turn about: roaming packs try every second, burrows about once a minute and a half, and they share the gap: a
+       roaming pack took every slot and burrows stopped (the user, 2026-11-19). After a roaming pack the next slot is a
+       burrow's for its first WILD_BURROW_TURN; after that either may take it */
+    if (!burrow && !wild_last_was_burrow[plyr_idx] && (since < wild_pack_gap() + WILD_BURROW_TURN))
+        return false;
+    return true;
 }
 
 /** The keeper a roaming pack at this place counts for: the nearest heart's; -1 none. */
@@ -386,7 +405,7 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
     if (wild_pack_crowded(x, y))
         return 0; /* wild creatures are there already */
     const PlayerNumber keeper = wild_pack_keeper(pl, x, y);
-    if (!wild_pack_due(keeper))
+    if (!wild_pack_due(keeper, false))
         return 0; /* that keeper had a pack not long ago */
     int biome = world_biome_at_engine_slab(x, y);
     if (biome == WgB_DeadMans) /* Dead Man's Land: nothing lives there (version 7) */
@@ -415,7 +434,7 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
         (fire_pushed ? 1 : 0);
     const MapSlabCoord px = x, py = y;
     /* circles (world_circles.c): a pack is as strong as the circle it appears in */
-    const int top = world_circles_level_at_slab(x, y, 1, "a wild pack");
+    const int top = world_circles_wild_level_at_slab(x, y, 1, "a wild pack");
     const int low = (top - WILD_LEVEL_SPREAD > 1) ? top - WILD_LEVEL_SPREAD : 1;
     int made = 0;
     struct Thing *members[16];
@@ -441,7 +460,10 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
     if (made > 0)
     {
         if ((keeper >= 0) && (keeper < PLAYERS_MAX))
+        {
             wild_last_pack[keeper] = game.play_gameturn;
+            wild_last_was_burrow[keeper] = 0;
+        }
         for (int m = 0; m < min(made, 16); m++)
             wild_room_add(subtile_slab(members[m]->mappos.x.stl.num), subtile_slab(members[m]->mappos.y.stl.num));
         SYNCLOG("World: %d wild %s (levels %d-%d) round engine slab (%d,%d), %s%s", made, list[k].name, low, top, (int)px,
@@ -1327,6 +1349,22 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     if (wild_rand(rng, 2) == 0)
         dy = -dy;
     MapSlabCoord x = cx + dx, y = cy + dy;
+    if (wild_in_rings(x, y))
+    {
+        /* the rings round a dungeon (20 slabs from its Heart, and its portals', Treasuries' and Guard Posts') cover most
+           of the band round an imp working at home: no burrow could open, and they stopped (the user, 2026-11-19:
+           "Burrowing Wild Packs don't seem to spawn anymore"). Out along the same line, just past the rings */
+        const double len = sqrt((double)(dx * dx + dy * dy));
+        TbBool out = false;
+        for (int k = 1; (k <= WILD_RING_PUSH) && !out && (len > 0.0); k++)
+        {
+            x = cx + (MapSlabCoord)floor(dx * (r + k) / len + 0.5);
+            y = cy + (MapSlabCoord)floor(dy * (r + k) / len + 0.5);
+            out = !wild_in_rings(x, y);
+        }
+        if (!out)
+            return 0;
+    }
     const TbBool fire_pushed = world_watchfire_push(&x, &y); /* a watchfire's light: the burrow opens at its edge, bigger */
     if (!wild_earth_at(x, y) || wild_in_rings(x, y) || wild_pack_crowded(x, y))
         return 0;
@@ -1371,7 +1409,7 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     for (int s = 0; s < ns; s++)
         wild_open_slab(sx[s], sy[s]);
     /* circles (world_circles.c): a pack is as strong as the circle it appears in */
-    const int top = world_circles_level_at_slab(sx[0], sy[0], 1, "a burrowing wild pack");
+    const int top = world_circles_wild_level_at_slab(sx[0], sy[0], 1, "a burrowing wild pack");
     const int low = (top - WILD_LEVEL_SPREAD > 1) ? top - WILD_LEVEL_SPREAD : 1;
     const int beetles = (size >= 4) ? 2 : 1; /* the Beetles are part of the pack, not on top of it */
     const uint32_t pack = ++wild_pack_serial;
@@ -1413,7 +1451,10 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     if (made > 0)
     {
         if ((pl->plyr[a] >= 0) && (pl->plyr[a] < PLAYERS_MAX))
+        {
             wild_last_pack[pl->plyr[a]] = game.play_gameturn;
+            wild_last_was_burrow[pl->plyr[a]] = 1;
+        }
         wild_room_add(x, y);
         SYNCLOG("World: a pack of %d (%d Beetles, %s; levels %d-%d) breaks out of the earth at engine slab (%d,%d), %d slabs"
             " from player %d's %s, %s (%s %ld, a burrow of %d slabs)", made, min(beetles, made), list[k].name, low, top,
@@ -1465,7 +1506,8 @@ void world_wild_turn(void)
         }
     }
     for (int a = 0; a < pl.count; a++)
-        pl.top_level[a] = world_keeper_top_level(pl.plyr[a]);
+        pl.top_level[a] = world_threat_upper_level(pl.plyr[a]); /* the army's upper quarter, not its best creature
+                                                                    (the threat budget, 2026-11-18) */
     const TbBool day = world_is_day();
     const GameTurn dawn = world_daylight_began();
     /* despawning, and counting against the caps */
@@ -1661,7 +1703,7 @@ void world_wild_turn(void)
                 (day ? WILD_DAY_BURROW_TIMES : 1); /* by day a third as often */
             if (!pl.heart[a] || (hunting[pl.plyr[a]] >= WILD_HUNT_MAX) || (wild_rand(&rng, one_in_own) != 0))
                 continue;
-            if (!wild_pack_due(pl.plyr[a]))
+            if (!wild_pack_due(pl.plyr[a], true))
                 continue; /* this keeper had a pack not long ago */
             /* a few tries for a spot of earth in the band: anywhere in it first, then nearer in, since the far part
                of the band is often ground that isn't loaded (round a small dungeon, or just after a load), where no

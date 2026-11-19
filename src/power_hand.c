@@ -1272,7 +1272,6 @@ void draw_mini_things_in_hand(long x, long y)
             if (spr_idx > 0)
             {
                 struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
-                int expspr_idx = GBS_creature_flower_level_01 + cctrl->exp_level;
                 if (irow > 0)
                     shift_y = 40;
                 else
@@ -1285,7 +1284,7 @@ void draw_mini_things_in_hand(long x, long y)
                 if (MyScreenHeight < 400)
                 {
                     char expshift_y = (irow > 0) ? 32 : -6;
-                    draw_button_sprite_left(scrpos_x, scrpos_y + scale_ui_value(expshift_y), ps_units_per_px, expspr_idx);
+                    draw_level_flower_left(scrpos_x, scrpos_y + scale_ui_value(expshift_y), ps_units_per_px, cctrl->exp_level);
                     if (thing->owner != my_player_number)
                     {
                         ownshift_y = (irow == 0) ? 1 : 56;
@@ -1331,7 +1330,7 @@ void draw_mini_things_in_hand(long x, long y)
                         }
                     }
                     // Draw exp level
-                    draw_button_sprite_left(scrpos_x + expshift_x, scrpos_y + scale_ui_value(shift_y), ps_units_per_px, expspr_idx);
+                    draw_level_flower_left(scrpos_x + expshift_x, scrpos_y + scale_ui_value(shift_y), ps_units_per_px, cctrl->exp_level);
                 }
             }
         } else

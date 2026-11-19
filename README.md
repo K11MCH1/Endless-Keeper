@@ -300,7 +300,8 @@ Dungeon Keeper, there is a place for you.
 | 🎮 **Bullfrog Productions** | For creating *Dungeon Keeper* (1997), published by Electronic Arts. |
 | 🔥 **The KeeperFX team and contributors** | For [KeeperFX](https://github.com/dkfans/keeperfx), the open-source engine Endless Keeper is built on. None of this would exist without their years of work. |
 | 🔒 **Flip-FriendSpace** | For the Lua security fix, ported from [keeperfx-dx12](https://github.com/Flip-FriendSpace/keeperfx-dx12). |
-| 📦 **Open-source libraries** | SDL, SDL_mixer and SDL_image, LuaJIT, ENet, zlib, libspng, FFmpeg, OpenAL Soft, libcurl, miniupnpc, libnatpmp and the other libraries KeeperFX builds on; Dear ImGui and stb_image in the launcher. |
+| 📱 **M3RT1N99** | For the Android touch controls (picking up and dropping creatures, slapping, and the smooth two-finger camera), ported from their [KeeperFX Android port](https://github.com/M3RT1N99/keeperfx/releases/tag/android-v1.1). |
+| 📦 **Open-source libraries** | SDL, SDL_mixer and SDL_image, LuaJIT, ENet, zlib, libspng, FFmpeg, OpenAL Soft, libcurl, miniupnpc, libnatpmp and the other libraries KeeperFX builds on; Dear ImGui and stb_image in the launcher; stb_truetype for the big text in the game. |
 
 ---
 

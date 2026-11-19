@@ -1478,6 +1478,18 @@ CrInstance get_packet_triggered_instance(const struct Thing *thing, const struct
     if (((pckt->control_flags & PCtr_LBtnHeld) != 0) && ((inst_inf->instance_property_flags & InstPF_RepeatTrigger) != 0)) {
         return cctrl->active_instance_id;
     }
+    // Endless Keeper (the user, 2026-11-18: "allow Player to hold Left Mouse click to continuously attack instead having
+    // to click spam"): a held button repeats any attack (an instance that fires a shot: melee swings and missiles), as
+    // fast as its own reset allows; spells and other abilities still take a click each
+    if (((pckt->control_flags & PCtr_LBtnHeld) != 0) && (get_instance_shot_model(cctrl->active_instance_id) > 0)) {
+        return cctrl->active_instance_id;
+    }
+    // ... and an imp's dig (not a shot itself: its task picks what to do ahead), unless it carries something (each
+    // press would drop it and pick it up again)
+    if (((pckt->control_flags & PCtr_LBtnHeld) != 0) && (cctrl->active_instance_id == CrInst_FIRST_PERSON_DIG) &&
+        (cctrl->dragtng_idx == 0)) {
+        return cctrl->active_instance_id;
+    }
     return CrInst_NULL;
 }
 

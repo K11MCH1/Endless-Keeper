@@ -2372,9 +2372,100 @@ static void repair_trap_looks(void)
 }
 
 static void wimp_test_turn(void);
+TbBool world_progress_book_teaches(PlayerNumber plyr_idx, PowerKind pwkind)
+{
+    if (!world_progress_active() || !world_player_is_human(plyr_idx))
+        return true;
+    const struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
+    return dungeon_invalid(dungeon) || (dungeon->magic_level[pwkind] > 0);
+}
+
+/** Computer keepers know what the human keeper nearest them knows (the user, 2026-11-18: "Enemy Keepers are currently a
+ *  massive source for unlocking rooms, traps, spells. Make sure they work within the same rules as the Player. When
+ *  Enemy Keepers spawn, they just spawn with the same unlocked rooms, spells and traps as the Player and also
+ *  automatically unlock them as Player progresses"). The level script gave them everything: a keeper's Library held
+ *  the books of every spell and its Workshop made every trap, for the player to take. Each computer keeper's rooms,
+ *  spells, traps and doors are set to those of the human keeper whose heart is nearest its own, now and whenever that
+ *  keeper learns something; its creatures are its own (pools and biomes). */
+static void mirror_computer_keepers(void)
+{
+    for (PlayerNumber c = 0; c < PLAYERS_COUNT; c++)
+    {
+        if ((c == PLAYER_GOOD) || (c == game.neutral_player_num) || world_player_is_human(c) || !player_exists(get_player(c)))
+            continue;
+        struct Dungeon *cd = get_players_num_dungeon(c);
+        struct Thing *cheart = find_players_dungeon_heart(c);
+        if (dungeon_invalid(cd) || !thing_exists(cheart))
+            continue;
+        /* the human keeper nearest it */
+        PlayerNumber h = -1;
+        long best = LONG_MAX;
+        for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+        {
+            if (!world_player_is_human(p) || !player_exists(get_player(p)))
+                continue;
+            struct Thing *hh = find_players_dungeon_heart(p);
+            if (!thing_exists(hh))
+                continue;
+            const long dx = (long)hh->mappos.x.stl.num - cheart->mappos.x.stl.num, dy = (long)hh->mappos.y.stl.num - cheart->mappos.y.stl.num;
+            const long d = dx * dx + dy * dy;
+            if (d < best)
+            {
+                best = d;
+                h = p;
+            }
+        }
+        if (h < 0)
+            continue;
+        const struct Dungeon *hd = get_players_num_dungeon(h);
+        if (dungeon_invalid(hd))
+            continue;
+        int rooms = 0, powers = 0, traps = 0;
+        for (RoomKind r = 1; r < game.conf.slab_conf.room_types_count; r++)
+        {
+            const long want_res = hd->room_resrchable[r];
+            const long want_av = hd->room_buildable[r] & 1;
+            if ((cd->room_resrchable[r] != want_res) || ((cd->room_buildable[r] & 1) != want_av))
+            {
+                set_room_available(c, r, want_res, want_av);
+                rooms++;
+            }
+        }
+        for (PowerKind pw = 1; pw < game.conf.magic_conf.power_types_count; pw++)
+        {
+            const TbBool want_av = (hd->magic_level[pw] > 0), have_av = (cd->magic_level[pw] > 0);
+            if ((cd->magic_resrchable[pw] != hd->magic_resrchable[pw]) || (want_av != have_av))
+            {
+                set_power_available(c, pw, hd->magic_resrchable[pw], want_av ? 1 : 0);
+                powers++;
+            }
+        }
+        for (int k = 1; k < TRAPDOOR_TYPES_MAX; k++)
+        {
+            const unsigned char tw = hd->mnfct_info.trap_build_flags[k] & MnfBldF_Manufacturable;
+            if ((cd->mnfct_info.trap_build_flags[k] & MnfBldF_Manufacturable) != tw)
+            {
+                cd->mnfct_info.trap_build_flags[k] = (unsigned char)((cd->mnfct_info.trap_build_flags[k] & ~MnfBldF_Manufacturable) | tw);
+                traps++;
+            }
+            const unsigned char dw = hd->mnfct_info.door_build_flags[k] & MnfBldF_Manufacturable;
+            if ((cd->mnfct_info.door_build_flags[k] & MnfBldF_Manufacturable) != dw)
+            {
+                cd->mnfct_info.door_build_flags[k] = (unsigned char)((cd->mnfct_info.door_build_flags[k] & ~MnfBldF_Manufacturable) | dw);
+                traps++;
+            }
+        }
+        if (rooms + powers + traps > 0)
+            SYNCLOG("World progress: computer keeper %d knows what player %d knows: %d rooms, %d spells, %d traps and"
+                " doors changed", (int)c, (int)h, rooms, powers, traps);
+    }
+}
+
 void world_progress_turn(void)
 {
     wimp_test_turn();
+    if (world_progress_active() && ((game.play_gameturn % 40) == 11))
+        mirror_computer_keepers();
     if (world_mode_active() && ((game.play_gameturn % 64) == 2))
     {
         ban_powers();

@@ -38,6 +38,9 @@ void world_progress_request(int mode);
 void world_progress_level_start(void);
 void world_progress_level_end(void);
 TbBool world_progress_active(void);
+/** May a spell book teach this keeper its spell (taken from another keeper, or in a claimed Library)? Not a human keeper
+ *  with the progression on who hasn't learnt it by research books (2026-11-18). */
+TbBool world_progress_book_teaches(PlayerNumber plyr_idx, PowerKind pwkind);
 /** The first world turn of a new run: every human keeper gets the starting kit; book tooltips. */
 void world_progress_first_turn(void);
 /** A player joined the running world: the starting kit, unless that seat had it. */

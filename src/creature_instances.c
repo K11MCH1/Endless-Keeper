@@ -57,6 +57,7 @@
 #include "world_colours.h"
 #include "world_progress.h"
 #include "world_circles.h"
+#include "world_wallbreak.h"
 #include "world_misdeeds.h"
 #include "world_alarm.h"
 #include "post_inc.h"
@@ -1142,6 +1143,9 @@ long instf_tunnel(struct Thing *creatng, int32_t *param)
         return 0;
     }
     thing_play_sample(creatng, snd_tunnel_dig + SOUND_RANDOM(snd_tunnel_dig_count), NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+    if (world_wallbreak_strike_only(creatng, stl_x, stl_y)) {
+        return 1; /* endless worlds: a fortified wall it breaks on the timer (world_wallbreak.c): the swing and the sound only */
+    }
         if (slb->health > 1) {
         slb->health--;
         } else {

@@ -194,6 +194,7 @@ TbBool give_gold_to_creature_or_drop_on_map_when_digging(struct Thing *creatng, 
     if (!dungeon_invalid(dungeon)) {
         dungeon->lvstats.gold_mined += gold;
     }
+    world_imp_mined_gold_swing(creatng); /* endless worlds: a possessed imp learns from mining too (its dig is a shot) */
     if (crconf->gold_hold <= creatng->creature.gold_carried)
     {
         struct Thing* gldtng = drop_gold_pile(creatng->creature.gold_carried, &creatng->mappos);

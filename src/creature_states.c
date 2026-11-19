@@ -92,6 +92,7 @@
 #include "world_misdeeds.h"
 #include "world_caretaker.h"
 #include "world_defectors.h"
+#include "world_wallbreak.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2276,6 +2277,8 @@ short creature_follow_leader(struct Thing *creatng)
         set_start_state(creatng);
         return 1;
     }
+    if (world_wallbreak_follower_wanders(creatng, leadtng))
+        return 1; /* endless worlds: its leader breaks a fortified wall: it wanders near it meanwhile */
     struct Coord3d follwr_pos;
     if (!get_free_position_behind_leader(leadtng, &follwr_pos))
     {

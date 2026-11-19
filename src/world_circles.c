@@ -23,6 +23,7 @@
 #include "world_stream.h"
 #include "world_wild.h"
 #include "world_attract.h"
+#include "world_threat.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +47,7 @@
 #include "player_instances.h"
 #include "kfx/renderer/RendererManager.h"
 #include "server_admin.h"
+#include "gui_ttf.h"
 #include "thing_stats.h"
 #include "post_inc.h"
 
@@ -221,6 +223,24 @@ int world_circles_level_at_slab(MapSlabCoord slb_x, MapSlabCoord slb_y, int floo
     return level;
 }
 
+int world_circles_wild_level_at_slab(MapSlabCoord slb_x, MapSlabCoord slb_y, int floor_level, const char *what)
+{
+    int64_t wx, wy;
+    world_slab_to_world(slb_x, slb_y, &wx, &wy);
+    if (!world_mode_active() || world_attract_active() || (world_generator() == NULL))
+        return floor_level;
+    const int circle = world_circle_at_world(wx, wy);
+    const PlayerNumber near = world_nearest_start_player(wx, wy);
+    /* the army's upper quarter, not its best creature (the threat budget, 2026-11-18: one strong creature brought
+       packs and raids far above the rest of the army) */
+    const int top = (circle >= 5) ? 0 : world_threat_upper_level(near);
+    const int level = wc_level_for(circle, top, floor_level);
+    if (what != NULL)
+        SYNCLOG("World circles: %s at world slab (%ld,%ld), circle %d: level %d (nearest keeper %d's army's upper quarter %d,"
+            " floor %d)", what, (long)wx, (long)wy, circle, level, (int)near, top, floor_level);
+    return level;
+}
+
 int world_circles_hero_floor_at_slab(MapSlabCoord slb_x, MapSlabCoord slb_y)
 {
     if (!world_mode_active() || (world_generator() == NULL))
@@ -389,16 +409,17 @@ static struct TbSpriteSheet *wc_big_font(void)
     return wc_font;
 }
 
-/** The font's colours a fade step fainter (0 as is); tinted: in the red of the name. Kept: the renderer reads the
- *  remap when it draws the frame, later. */
-static const unsigned char *wc_remap(int step, TbBool tinted)
+/** The font's colours a fade step fainter (0 as is); kind 1: in the red of the name; 2: the game's own colours (the
+ *  TrueType text, made in them). Kept: the renderer reads the remap when it draws the frame, later. */
+static const unsigned char *wc_remap(int step, int kind)
 {
-    static unsigned char map[2][WC_FADE_STEPS][256];
-    static TbBool made[2][WC_FADE_STEPS];
-    if ((step < 0) || (step >= WC_FADE_STEPS) || (engine_palette == NULL))
+    static unsigned char map[3][WC_FADE_STEPS][256];
+    static TbBool made[3][WC_FADE_STEPS];
+    if ((step < 0) || (step >= WC_FADE_STEPS) || (engine_palette == NULL) || (kind < 0) || (kind > 2))
         return NULL;
-    const int t = tinted ? 1 : 0;
-    const unsigned char *font_pal = (wc_font != NULL) ? wc_font_pal : engine_palette;
+    const int t = kind;
+    const TbBool tinted = (kind == 1);
+    const unsigned char *font_pal = ((wc_font != NULL) && (kind != 2)) ? wc_font_pal : engine_palette;
     if (!made[t][step])
     {
         const int f = 64 - step * 54 / (WC_FADE_STEPS - 1); /* 64 (as is) down to 10 */
@@ -436,6 +457,43 @@ static void wc_draw_text(const char *text, int y, int units, int strength, TbBoo
     LbTextDrawResized((MyScreenWidth - w) / 2, y, units, text);
     LbTextSetRemap(old_remap);
     RendererSetDrawFlags(0);
+}
+
+/* The banner in a TrueType font (gui_ttf.c), made at the size it is shown: 0 the name, 1 the line. NULL: no such font
+   on this system, the bitmap font as before. Remade when the circle or the size changes. */
+static struct TtfText *wc_ttf[2];
+static int wc_ttf_circle[2], wc_ttf_px[2];
+
+static const struct TtfText *wc_ttf_get(int k, int circle, const char *text, int px)
+{
+    if ((wc_ttf_circle[k] != circle) || (wc_ttf_px[k] != px))
+    {
+        ttf_text_free(wc_ttf[k]);
+        const enum TtfStyle style = (k == 0) ? TtfS_Red : TtfS_Parchment;
+        const int tracking = (k == 0) ? 90 : 15;
+        wc_ttf[k] = ttf_text_make(text, px, style, tracking);
+        /* wider than the screen: smaller, to fit */
+        const int room = MyScreenWidth * 94 / 100;
+        if ((wc_ttf[k] != NULL) && (wc_ttf[k]->w > room))
+        {
+            const int fit = (int)((long long)px * room / wc_ttf[k]->w);
+            ttf_text_free(wc_ttf[k]);
+            wc_ttf[k] = ttf_text_make(text, fit, style, tracking);
+        }
+        wc_ttf_circle[k] = circle;
+        wc_ttf_px[k] = px;
+    }
+    return wc_ttf[k];
+}
+
+/** TrueType text centred at the top of the screen, its letters' top at y, at a strength (0..1000) */
+static void wc_draw_ttf(const struct TtfText *t, int y, int strength)
+{
+    const int step = (1000 - strength) * WC_FADE_STEPS / 1000;
+    if (step >= WC_FADE_STEPS)
+        return;
+    ttf_text_draw(t, (MyScreenWidth - t->w) / 2, y - t->pad, (step > 0) ? wc_remap(step, 2) : NULL,
+        (step >= WC_FADE_STEPS - 4));
 }
 
 void world_circles_draw(void)
@@ -477,6 +535,15 @@ void world_circles_draw(void)
     int line_units = units_per_pixel * 2;
     const int y = MyScreenHeight * 7 / 100;
     const int name_h = LbTextLineHeight() * name_units / 16;
+    const int line_h = LbTextLineHeight() * line_units / 16;
+    const struct TtfText *name_t = wc_ttf_get(0, wc_banner_circle, name, name_h * 11 / 10);
+    const struct TtfText *line_t = wc_ttf_get(1, wc_banner_circle, line, line_h * 11 / 10);
+    if ((name_t != NULL) && (line_t != NULL))
+    {
+        wc_draw_ttf(name_t, y, name_s);
+        wc_draw_ttf(line_t, y + (name_t->h - 2 * name_t->pad) + name_h / 10, line_s);
+        return;
+    }
     if (wc_big_font() != NULL)
     {
         const int small_h = max(LbTextLineHeight(), 1);

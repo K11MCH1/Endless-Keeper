@@ -45,7 +45,20 @@ unsigned ms_since_process_began()
     FILETIME made, ended, kernel, user, now;
     if (!GetProcessTimes(GetCurrentProcess(), &made, &ended, &kernel, &user))
         return 0;
-    GetSystemTimePreciseAsFileTime(&now);
+    /* looked up, not imported: Windows 7 has no GetSystemTimePreciseAsFileTime (Windows 8+), and a launcher that
+       imported it did not start there at all (2026-11-18); the plain clock is coarser (~16 ms), good enough there */
+    typedef void (WINAPI *PreciseTime)(LPFILETIME);
+    static PreciseTime precise = nullptr;
+    static bool looked = false;
+    if (!looked)
+    {
+        looked = true;
+        precise = (PreciseTime)(void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetSystemTimePreciseAsFileTime");
+    }
+    if (precise != nullptr)
+        precise(&now);
+    else
+        GetSystemTimeAsFileTime(&now);
     const unsigned long long a = ((unsigned long long)made.dwHighDateTime << 32) | made.dwLowDateTime;
     const unsigned long long b = ((unsigned long long)now.dwHighDateTime << 32) | now.dwLowDateTime;
     return (b > a) ? (unsigned)((b - a) / 10000ull) : 0;

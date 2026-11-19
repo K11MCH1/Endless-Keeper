@@ -39,6 +39,7 @@ import java.util.concurrent.Executors;
  */
 public final class LauncherActivity extends Activity {
     private static final int PICK_FOLDER = 1;
+    private static final int PICK_KFX = 2; // Advanced > Maintenance > Import KeeperFX data
     static final String TAG = Prepare.TAG;
 
     private WebView web;
@@ -253,6 +254,17 @@ public final class LauncherActivity extends Activity {
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == PICK_KFX && result == RESULT_OK && data != null && data.getData() != null) {
+            if (PrepareService.isRunning()) {
+                send(err("A task is already running."), "toast");
+                return;
+            }
+            askNotifications();
+            PrepareService.start(this, new Intent().putExtra(PrepareService.EXTRA_TASK, "kfx_import")
+                    .putExtra(PrepareService.EXTRA_TREE, data.getData().toString()));
+            send(PrepareService.idle(), "kfx_started");
+            return;
+        }
         if (request != PICK_FOLDER || result != RESULT_OK || data == null || data.getData() == null)
             return;
         Uri tree = data.getData();
@@ -356,6 +368,35 @@ public final class LauncherActivity extends Activity {
                     send(err("No folder picker is available on this device."), "toast");
                 }
             });
+        }
+
+        /** Advanced > Maintenance: pick a KeeperFX folder to copy over the game's own. */
+        @JavascriptInterface
+        public String importKfx() {
+            if (PrepareService.isRunning())
+                return "A task is already running.";
+            ui.post(() -> {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                try {
+                    startActivityForResult(i, PICK_KFX);
+                } catch (Exception e) {
+                    send(err("No folder picker is available on this device."), "toast");
+                }
+            });
+            return "";
+        }
+
+        /** Advanced > Maintenance: copy the game's KeeperFX folder to Download. */
+        @JavascriptInterface
+        public String exportKfx() {
+            if (PrepareService.isRunning())
+                return "A task is already running.";
+            if (!new File(Paths.kfx(LauncherActivity.this), "fxdata").isDirectory())
+                return "There is no KeeperFX game data to export yet.";
+            askNotifications();
+            PrepareService.start(LauncherActivity.this, new Intent().putExtra(PrepareService.EXTRA_TASK, "kfx_export"));
+            return "";
         }
 
         @JavascriptInterface

@@ -34,10 +34,13 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
+        <!-- singleTop, not singleTask (Endless Keeper, 2026-11-19): the game runs above the launcher in the same task,
+             and the home screen icon started a singleTask launcher again, which closed every activity above it: the
+             running game. Now the icon brings the task back as it was, the game on top. -->
         <activity
             android:name="org.keeperrecomped.launcher.LauncherActivity"
             android:exported="true"
-            android:launchMode="singleTask"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

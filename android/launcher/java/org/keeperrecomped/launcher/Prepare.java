@@ -1,7 +1,12 @@
 package org.keeperrecomped.launcher;
 
 import android.app.ActivityManager;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
+import android.os.Environment;
+import android.provider.MediaStore;
+import android.webkit.MimeTypeMap;
 import android.net.Uri;
 import android.util.Log;
 
@@ -100,6 +105,109 @@ final class Prepare {
 
     static String mb(long bytes) {
         return String.format(Locale.ROOT, "%.1f MB", bytes / 1048576.0);
+    }
+
+    // ---- Import and export of the KeeperFX game data (Advanced > Maintenance; Endless Keeper, 2026-11-19) ----
+
+    /**
+     * Copies a KeeperFX folder the player picked (from a PC, or an earlier export) over the game's own (files/kfx),
+     * as Prepare does with one: Windows binaries, symbol maps and logs stay out, and the app's own keeperfx.cfg stays
+     * (the launcher writes its settings into it at every start).
+     */
+    void importKfx(Uri tree) throws Exception {
+        task = "kfx_import";
+        step(0, 5, "Reading the chosen folder");
+        Importer importer = new Importer(ctx.getContentResolver(), tree);
+        Importer.Found found = importer.find();
+        if (!found.keeperfx)
+            throw new IOException("That is not a KeeperFX folder: pick the folder that holds fxdata, data and sound.");
+        emit(0, "Found KeeperFX in " + found.path + " (" + found.files + " files, " + mb(found.bytes) + ")");
+        File kfx = Paths.kfx(ctx);
+        File cfg = new File(kfx, "keeperfx.cfg");
+        byte[] keptCfg = cfg.isFile() ? Files.readAllBytes(cfg.toPath()) : null;
+        step(5, 100, "Importing KeeperFX data");
+        try {
+            importer.copy(found, kfx, (done, total, file) -> {
+                emit(total > 0 ? (double) done / total : 0, mb(done) + " / " + mb(total) + "  " + file);
+                return !cancelled;
+            });
+        } finally {
+            if (keptCfg != null)
+                Files.write(cfg.toPath(), keptCfg);
+        }
+        State.put(ctx, "kfx_imported_at", now());
+        step(100, 100, "KeeperFX data imported (" + found.files + " files)");
+    }
+
+    /**
+     * Copies the game's KeeperFX folder (files/kfx) to Download/"&lt;app&gt; KeeperFX data &lt;date&gt;" on the internal
+     * storage, through MediaStore (no storage permission needed), file by file.
+     */
+    void exportKfx() throws Exception {
+        task = "kfx_export";
+        File kfx = Paths.kfx(ctx);
+        if (!new File(kfx, "fxdata").isDirectory())
+            throw new IOException("There is no KeeperFX game data to export yet.");
+        step(0, 3, "Listing the game data");
+        List<File> files = new ArrayList<>();
+        long total = listFiles(kfx, files);
+        String label = ctx.getApplicationInfo().loadLabel(ctx.getPackageManager()).toString();
+        String folder = Environment.DIRECTORY_DOWNLOADS + "/" + label + " KeeperFX data "
+                + new SimpleDateFormat("yyyy-MM-dd HH-mm", Locale.ROOT).format(new Date());
+        step(3, 100, "Exporting to " + folder);
+        ContentResolver resolver = ctx.getContentResolver();
+        long done = 0;
+        byte[] buf = new byte[1 << 18];
+        for (File f : files) {
+            check();
+            String rel = kfx.toPath().relativize(f.getParentFile().toPath()).toString().replace('\\', '/');
+            String ext = MimeTypeMap.getFileExtensionFromUrl(f.getName().replace(' ', '_'));
+            String mime = ext == null || ext.isEmpty() ? null : MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.toLowerCase(Locale.ROOT));
+            ContentValues v = new ContentValues();
+            v.put(MediaStore.MediaColumns.DISPLAY_NAME, f.getName());
+            v.put(MediaStore.MediaColumns.RELATIVE_PATH, folder + (rel.isEmpty() ? "" : "/" + rel));
+            v.put(MediaStore.MediaColumns.MIME_TYPE, mime != null ? mime : "application/octet-stream");
+            v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+            Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+            if (uri == null)
+                throw new IOException("Cannot create " + (rel.isEmpty() ? "" : rel + "/") + f.getName() + " in Download");
+            try (InputStream in = new FileInputStream(f); OutputStream o = resolver.openOutputStream(uri)) {
+                if (o == null)
+                    throw new IOException("Cannot write " + f.getName() + " in Download");
+                int r;
+                while ((r = in.read(buf)) > 0) {
+                    o.write(buf, 0, r);
+                    done += r;
+                }
+            } catch (IOException e) {
+                resolver.delete(uri, null, null);
+                throw e;
+            }
+            ContentValues ready = new ContentValues();
+            ready.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            resolver.update(uri, ready, null, null);
+            emit(total > 0 ? (double) done / total : 0, mb(done) + " / " + mb(total) + "  " + f.getName());
+        }
+        step(100, 100, "Exported to Internal storage/" + folder);
+    }
+
+    /** Every file under dir (no links), largest first does not matter: the order of the listing. @return their bytes */
+    private static long listFiles(File dir, List<File> out) throws IOException {
+        long bytes = 0;
+        File[] list = dir.listFiles();
+        if (list == null)
+            return 0;
+        for (File f : list) {
+            if (Files.isSymbolicLink(f.toPath()))
+                continue;
+            if (f.isDirectory()) {
+                bytes += listFiles(f, out);
+            } else if (f.isFile() && !f.getName().endsWith(".part") && !f.getName().endsWith(".tmp")) {
+                out.add(f);
+                bytes += f.length();
+            }
+        }
+        return bytes;
     }
 
     // ---- Prepare & Build ----

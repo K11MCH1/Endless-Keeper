@@ -57,6 +57,7 @@
 #include "config_spritecolors.h"
 #include "lua_triggers.h"
 #include "lua_cfg_funcs.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -3503,8 +3504,8 @@ static void change_ownership_or_delete_object_thing_in_room(struct Room *room, s
         if (oldowner != game.neutral_player_num) {
             remove_power_from_player(book_thing_to_power_kind(thing), oldowner);
         }
-        if (newowner != game.neutral_player_num) {
-            add_power_to_player(book_thing_to_power_kind(thing), newowner);
+        if ((newowner != game.neutral_player_num) && world_progress_book_teaches(newowner, book_thing_to_power_kind(thing))) {
+            add_power_to_player(book_thing_to_power_kind(thing), newowner); /* (endless: not a spell unlearnt by research books) */
         }
         return;
 

@@ -2046,7 +2046,8 @@ short creature_drops_spell_object_in_library(struct Thing *creatng)
             return 1;
         }
         spelltng->owner = creatng->owner;
-        add_power_to_player(book_thing_to_power_kind(spelltng), creatng->owner);
+        if (world_progress_book_teaches(creatng->owner, book_thing_to_power_kind(spelltng))) /* endless: research books only */
+            add_power_to_player(book_thing_to_power_kind(spelltng), creatng->owner);
     } else
     if (thing_is_special_box(spelltng))
     {

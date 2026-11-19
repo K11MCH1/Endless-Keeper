@@ -30,6 +30,12 @@
 #include "thing_navigate.h"
 #include "creature_control.h"
 #include "creature_states.h"
+#include "creature_instances.h"
+#include "creature_groups.h"
+#include "config_crtrstates.h"
+#include "config_terrain.h"
+#include "thing_physics.h"
+#include "bflib_planar.h"
 #include "config_creature.h"
 #include "post_inc.h"
 
@@ -59,6 +65,10 @@ struct WbTunneller {
     int stall;              /* seconds without getting nearer */
     int64_t wx, wy;         /* the wall it breaks (has_wall) */
     uint8_t has_wall;
+    uint8_t stepping;       /* it walks into the hole it broke (bx, by), to go on from there (chain_through) */
+    int64_t bx, by;         /* the hole, world slab */
+    int64_t fx, fy;         /* where it stood to break it, world slab */
+    GameTurn step_from;
 };
 static struct WbTunneller wb_tun[WB_TRACKED];
 
@@ -87,6 +97,14 @@ TbBool world_wallbreak_can(MapSlabCoord x, MapSlabCoord y)
     if (rings_off < 0)
         rings_off = ((getenv("KFX_WORLD_WALLRINGS") != NULL) && (strcmp(getenv("KFX_WORLD_WALLRINGS"), "off") == 0)) ? 1 : 0;
     return rings_off || !world_dark_anchored(owner, x, y); /* inside the keeper's rings it holds */
+}
+
+static long wb_tunneller_model(void)
+{
+    static long tunneller = -2;
+    if (tunneller == -2)
+        tunneller = get_id(creature_desc, "TUNNELLER");
+    return tunneller;
 }
 
 static struct Thing *job_thing(const struct WbJob *j)
@@ -170,7 +188,158 @@ TbBool world_wallbreak_busy(const struct Thing *breaker)
         if ((wb_job[k].idx == breaker->index) && (wb_job[k].made == breaker->creation_turn) &&
             (game.play_gameturn <= wb_job[k].touched + 60))
             return true;
+    for (int k = 0; k < WB_TRACKED; k++)
+        if (wb_tun[k].stepping && (wb_tun[k].idx == breaker->index) && (wb_tun[k].made == breaker->creation_turn))
+            return true; /* stepping into the hole it broke, to go on through */
     return false;
+}
+
+/** Open ground a creature walks on (not earth, which a Tunneller digs; not a wall, door, rock, gold or liquid). */
+static TbBool wb_walkable(MapSlabCoord x, MapSlabCoord y)
+{
+    const struct SlabMap *slb = get_slabmap_block(x, y);
+    if (slabmap_block_invalid(slb))
+        return false;
+    const SlabKind k = slb->kind;
+    if ((k == SlbT_EARTH) || (k == SlbT_TORCHDIRT) || (k == SlbT_ROCK) || (k == SlbT_LAVA) || (k == SlbT_WATER))
+        return false;
+    const struct SlabConfigStats *st = get_slab_kind_stats(k);
+    return (st->block_flags & (SlbAtFlg_IsDoor | SlbAtFlg_Filled | SlbAtFlg_Valuable | SlbAtFlg_Digable)) == 0;
+}
+
+static struct WbTunneller *tun_record(const struct Thing *thing, TbBool make)
+{
+    struct WbTunneller *free_t = NULL;
+    for (int k = 0; k < WB_TRACKED; k++)
+    {
+        if ((wb_tun[k].idx == thing->index) && (wb_tun[k].made == thing->creation_turn))
+            return &wb_tun[k];
+        if ((free_t == NULL) && make)
+        {
+            const struct Thing *o = (wb_tun[k].idx != 0) ? thing_get(wb_tun[k].idx) : INVALID_THING;
+            if (!thing_exists(o) || (o->creation_turn != wb_tun[k].made))
+                free_t = &wb_tun[k];
+        }
+    }
+    if (free_t != NULL)
+    {
+        memset(free_t, 0, sizeof(*free_t));
+        free_t->idx = thing->index;
+        free_t->made = thing->creation_turn;
+        free_t->best = LONG_MAX;
+    }
+    return free_t;
+}
+
+/** A heroes' Tunneller that broke a wall goes on through it (the user, 2026-11-18: "When tunneller finds itself against
+ *  a diagonal dug out tunnel that is fortified, it will only destroy corners and move on to the next bottom corner
+ *  instead of destroying the wall adjacent of the corner wall, never breaching into the dungeon"). A corner of a
+ *  diagonal corridor touches the corridor only at a corner, where nobody can pass; sent back to its tunnelling the
+ *  Tunneller followed the walls along to the next corner. Now it steps into the hole and goes on from there
+ *  (steppers_turn): into the dungeon if the hole opens on its floor, else through the next breakable wall nearer the
+ *  heart. True: it steps in (not back to its task yet). */
+static TbBool chain_through(struct Thing *breaker, MapSlabCoord x, MapSlabCoord y)
+{
+    if (!thing_exists(breaker) || (breaker->model != wb_tunneller_model()) || (breaker->owner != PLAYER_GOOD) ||
+        world_wild_creature(breaker) || world_raid_hero_retreating(breaker))
+        return false;
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(breaker);
+    if (creature_control_invalid(cctrl) || (cctrl->party.target_plyr_idx < 0) || (cctrl->party.target_plyr_idx >= PLAYERS_COUNT))
+        return false;
+    struct WbTunneller *t = tun_record(breaker, true);
+    if (t == NULL)
+        return false;
+    world_slab_to_world(x, y, &t->bx, &t->by);
+    world_slab_to_world(subtile_slab(breaker->mappos.x.stl.num), subtile_slab(breaker->mappos.y.stl.num), &t->fx, &t->fy);
+    t->stepping = 1;
+    t->has_wall = 0;
+    t->step_from = game.play_gameturn;
+    stand_at(breaker, x, y);
+    return true;
+}
+
+/** Each turn: the Tunnellers stepping into the holes they broke. In the hole: into the dungeon when a slab beside it is
+ *  open floor, else on through the breakable wall beside it nearest the heart (nearer than where it stood); else back
+ *  to its task. */
+static void steppers_turn(void)
+{
+    for (int k = 0; k < WB_TRACKED; k++)
+    {
+        struct WbTunneller *t = &wb_tun[k];
+        if (!t->stepping)
+            continue;
+        struct Thing *thing = thing_get(t->idx);
+        if (!thing_exists(thing) || (thing->creation_turn != t->made) || creature_is_dying(thing) || thing_is_picked_up(thing))
+        {
+            t->stepping = 0;
+            continue;
+        }
+        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        if (creature_control_invalid(cctrl))
+        {
+            t->stepping = 0;
+            continue;
+        }
+        if (cctrl->combat_flags != 0)
+            continue; /* a fight first */
+        MapSlabCoord ex, ey, sx, sy;
+        if (world_raid_hero_retreating(thing) || !world_engine_slab(t->bx, t->by, &ex, &ey) ||
+            !world_engine_slab(t->fx, t->fy, &sx, &sy) || ((GameTurnDelta)(game.play_gameturn - t->step_from) > 200))
+        {
+            t->stepping = 0;
+            back_to_task(thing);
+            continue;
+        }
+        if ((subtile_slab(thing->mappos.x.stl.num) != ex) || (subtile_slab(thing->mappos.y.stl.num) != ey))
+        {
+            if (get_creature_state_besides_interruptions(thing) != CrSt_MoveToPosition)
+                stand_at(thing, ex, ey);
+            continue;
+        }
+        t->stepping = 0;
+        static const int8_t dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
+        int64_t wbx, wby;
+        world_slab_to_world(ex, ey, &wbx, &wby);
+        TbBool opens = false;
+        for (int d = 0; d < 4; d++)
+            if (!((ex + dx[d] == sx) && (ey + dy[d] == sy)) && wb_walkable(ex + dx[d], ey + dy[d]))
+                opens = true;
+        struct Thing *heart = find_players_dungeon_heart(cctrl->party.target_plyr_idx);
+        if (opens || !thing_exists(heart))
+        {
+            SYNCLOG("World: the %s (index %d) is through the wall at world slab (%ld,%ld)%s", thing_model_name(thing),
+                (int)thing->index, (long)wbx, (long)wby, opens ? ": it opens on the dungeon" : "");
+            back_to_task(thing);
+            continue;
+        }
+        const MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
+        long best = (long)(sx - hx) * (sx - hx) + (long)(sy - hy) * (sy - hy);
+        int best_d = -1;
+        for (int d = 0; d < 4; d++)
+        {
+            const MapSlabCoord nx = ex + dx[d], ny = ey + dy[d];
+            const long nd = (long)(nx - hx) * (nx - hx) + (long)(ny - hy) * (ny - hy);
+            if ((nd < best) && world_wallbreak_can(nx, ny))
+            {
+                best = nd;
+                best_d = d;
+            }
+        }
+        if (best_d < 0)
+        {
+            SYNCLOG("World: the %s (index %d) broke the wall at world slab (%ld,%ld) but no wall it can break lies beyond",
+                thing_model_name(thing), (int)thing->index, (long)wbx, (long)wby);
+            back_to_task(thing);
+            continue;
+        }
+        const MapSlabCoord nx = ex + dx[best_d], ny = ey + dy[best_d];
+        world_slab_to_world(nx, ny, &t->wx, &t->wy);
+        t->has_wall = (world_wallbreak_work(thing, nx, ny) == 1) ? 1 : 0;
+        SYNCLOG("World: the %s (index %d) goes on through the next fortified wall at world slab (%ld,%ld)%s",
+            thing_model_name(thing), (int)thing->index, (long)t->wx, (long)t->wy, t->has_wall ? "" : ": it can't");
+        if (!t->has_wall)
+            back_to_task(thing);
+    }
 }
 
 /** Must this breaker leave its wall: a raider whose raid goes home, or a wild creature after dawn? */
@@ -249,7 +418,8 @@ int world_wallbreak_work(struct Thing *breaker, MapSlabCoord x, MapSlabCoord y)
     {
         break_wall(x, y, breaker);
         j->idx = 0;
-        back_to_task(breaker);
+        if (!chain_through(breaker, x, y))
+            back_to_task(breaker);
         return 2;
     }
     return 1;
@@ -261,6 +431,60 @@ static struct WbJob *job_of(const struct Thing *thing)
         if ((wb_job[k].idx == thing->index) && (wb_job[k].made == thing->creation_turn))
             return &wb_job[k];
     return NULL;
+}
+
+TbBool world_wallbreak_strike_only(const struct Thing *thing, MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+{
+    if (!world_mode_active() || !thing_exists(thing))
+        return false;
+    const struct WbJob *j = job_of(thing);
+    if (j == NULL)
+        return false;
+    int64_t wx, wy;
+    world_slab_to_world(subtile_slab(stl_x), subtile_slab(stl_y), &wx, &wy);
+    return (wx == j->wx) && (wy == j->wy);
+}
+
+/** A Tunneller at its wall swings at it with the tunnelling instance (its dig animation and sound, as when heroes
+ *  tunnel; the user, 2026-11-18: "I want the Tunneller to attack the wall while the digging sound plays"). The wall
+ *  still breaks on the timer: instf_tunnel only plays the sound for a wall job (world_wallbreak_strike_only). Held in
+ *  the hero idle state with its idle clock kept at now, so the state does nothing while it works (re-sending it to its
+ *  spot each turn cleared the instance). */
+static void swing_at_wall(struct Thing *thing, struct CreatureControl *cctrl, MapSlabCoord wx, MapSlabCoord wy)
+{
+    if (get_creature_state_besides_interruptions(thing) != CrSt_GoodDoingNothing)
+        internal_set_thing_state(thing, CrSt_GoodDoingNothing);
+    cctrl->idle.start_gameturn = game.play_gameturn;
+    struct Coord3d wall;
+    wall.x.val = subtile_coord_center(slab_subtile_center(wx));
+    wall.y.val = subtile_coord_center(slab_subtile_center(wy));
+    wall.z.val = thing->mappos.z.val;
+    creature_set_speed(thing, 0);
+    creature_turn_to_face(thing, &wall);
+    if (cctrl->instance_id != CrInst_NULL)
+        return;
+    cctrl->navi.first_colliding_block = get_subtile_number(slab_subtile_center(wx), slab_subtile_center(wy));
+    set_creature_instance(thing, CrInst_TUNNEL, 0, 0);
+}
+
+TbBool world_wallbreak_follower_wanders(struct Thing *follower, const struct Thing *leader)
+{
+    if (!world_mode_active() || !thing_exists(leader) || !world_wallbreak_busy(leader))
+        return false;
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(follower);
+    if (creature_control_invalid(cctrl) || (cctrl->combat_flags != 0))
+        return false;
+    /* only near the leader: one farther off follows as usual (back to its place behind it) */
+    if (get_chessboard_distance(&follower->mappos, &leader->mappos) > subtile_coord(4 * STL_PER_SLB, 0))
+        return false;
+    /* (the user, 2026-11-18: "Let them wander while the Tunneller is working the fortified wall"): now and then a
+       step to a slab beside it, then back to following; stood at their places behind the leader, they never moved */
+    if (((game.play_gameturn + (GameTurn)follower->index * 13) % 50) == 0)
+    {
+        if (creature_choose_random_destination_on_valid_adjacent_slab(follower))
+            follower->continue_state = CrSt_CreatureFollowLeader;
+    }
+    return true;
 }
 
 /** Each turn: the breakers at work stay where they stand (a fight comes first); a job its breaker stopped asking about
@@ -301,7 +525,14 @@ static void hold_breakers(void)
         MapSlabCoord ex, ey;
         if (!world_engine_slab(j->sx, j->sy, &ex, &ey))
             continue;
-        if (get_creature_state_besides_interruptions(thing) != CrSt_MoveToPosition)
+        const CrtrStateId st = get_creature_state_besides_interruptions(thing);
+        if ((thing->model == wb_tunneller_model()) && (st != CrSt_MoveToPosition) &&
+            (subtile_slab(thing->mappos.x.stl.num) == ex) && (subtile_slab(thing->mappos.y.stl.num) == ey))
+        {
+            swing_at_wall(thing, cctrl, wx, wy); /* at its spot: it digs at the wall */
+            continue;
+        }
+        if (st != CrSt_MoveToPosition)
             stand_at(thing, ex, ey);
     }
 }
@@ -359,6 +590,8 @@ static void tunnellers_second(void)
             t->made = thing->creation_turn;
             t->best = LONG_MAX;
         }
+        if (t->stepping)
+            continue; /* walking into the hole it broke: steppers_turn has it */
         const MapSlabCoord x = subtile_slab(thing->mappos.x.stl.num), y = subtile_slab(thing->mappos.y.stl.num);
         const MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
         const long d = (long)(x - hx) * (x - hx) + (long)(y - hy) * (y - hy);
@@ -430,6 +663,9 @@ static void walltest_turn(void)
     static ThingIndex bug = 0, tun = 0;
     static GameTurn bug_made, tun_made;
     static TbBool bug_done, tun_done;
+    static ThingIndex fol[2];
+    static GameTurn fol_made[2];
+    static int swings;
     if (at == -2)
     {
         const char *v = getenv("KFX_WORLD_WALLTEST");
@@ -457,6 +693,10 @@ static void walltest_turn(void)
             SYNCLOG("World wall test: player 0's fortified wall at engine slab (%d,%d), %d slabs from the heart: breakable %d",
                 (int)walls[k][0], (int)walls[k][1], (int)(walls[k][0] - hx), (int)world_wallbreak_can(walls[k][0], walls[k][1]));
         }
+        /* open ground behind the Tunneller's wall, for its party to wander on */
+        for (int ox = 25; ox <= 27; ox++)
+            for (int oy = 2; oy <= 4; oy++)
+                place_slab_type_on_map(SlbT_PATH, slab_subtile_center(hx + ox), slab_subtile_center(hy + oy), game.neutral_player_num, 0);
         struct Coord3d pos;
         pos.x.val = subtile_coord_center(slab_subtile_center(hx + 23));
         pos.y.val = subtile_coord_center(slab_subtile_center(hy));
@@ -468,7 +708,44 @@ static void walltest_turn(void)
         if (thing_exists(b)) { bug = b->index; bug_made = b->creation_turn; }
         if (thing_exists(u)) { tun = u->index; tun_made = u->creation_turn; }
         bug_done = tun_done = false;
+        /* two followers in the Tunneller's party: they should wander while it works (world_wallbreak_follower_wanders) */
+        static const char *const fol_kinds[2] = {"ARCHER", "MONK"};
+        for (int k = 0; k < 2; k++)
+        {
+            pos.x.val = subtile_coord_center(slab_subtile_center(hx + 26 + k));
+            pos.y.val = subtile_coord_center(slab_subtile_center(hy + 3));
+            struct Thing *f = create_creature(&pos, (ThingModel)get_id(creature_desc, fol_kinds[k]), PLAYER_GOOD);
+            fol[k] = 0;
+            if (thing_exists(f) && thing_exists(u) && add_creature_to_group(f, u))
+            {
+                fol[k] = f->index;
+                fol_made[k] = f->creation_turn;
+            }
+        }
+        swings = 0;
         return;
+    }
+    {
+        /* the Tunneller's swings at its wall (a tunnelling instance begun) */
+        struct Thing *ut = thing_get(tun);
+        if (!tun_done && thing_exists(ut) && (ut->creation_turn == tun_made))
+        {
+            const struct CreatureControl *uc = creature_control_get_from_thing(ut);
+            if (!creature_control_invalid(uc) && (uc->instance_id == CrInst_TUNNEL) && (uc->inst_turn == 1))
+                swings++;
+        }
+    }
+    if ((t % 200) == 0)
+    {
+        for (int k = 0; k < 2; k++)
+        {
+            struct Thing *f = thing_get(fol[k]);
+            if ((fol[k] == 0) || !thing_exists(f) || (f->creation_turn != fol_made[k]))
+                continue;
+            SYNCLOG("World wall test: turn %ld: follower %s at subtile (%d,%d), state %s; the Tunneller has swung %d times", t,
+                thing_model_name(f), (int)f->mappos.x.stl.num, (int)f->mappos.y.stl.num,
+                creature_state_code_name(get_creature_state_besides_interruptions(f)), swings);
+        }
     }
     if ((t % 20) != 0)
         return;
@@ -499,12 +776,99 @@ static void walltest_turn(void)
             thing_exists(u) ? (int)subtile_slab(u->mappos.x.stl.num) : -1, thing_exists(u) ? (int)subtile_slab(u->mappos.y.stl.num) : -1);
 }
 
+/** Test hook KFX_WORLD_WALLDIAG=T: at T, 30 slabs east and 10 south of player 0's heart, a diagonal corridor of its
+ *  claimed floor with every slab round it fortified (the corners too, as imps fortify), and a heroes' Tunneller (its
+ *  target player 0) on the far side against a corner, which it starts breaking at T+20. It should break the corner and
+ *  then the wall behind it, and stand open on the corridor (the user's screenshot, 2026-11-18). Logged. */
+static void walldiag_turn(void)
+{
+    static long at = -2;
+    static ThingIndex tun = 0;
+    static GameTurn tun_made;
+    if (at == -2)
+    {
+        const char *v = getenv("KFX_WORLD_WALLDIAG");
+        at = (v != NULL) ? atol(v) : -1;
+    }
+    if (at < 0)
+        return;
+    const long t = (long)game.play_gameturn - at;
+    if ((t < 0) || (t > 3 * WALLBREAK_TURNS + 400))
+        return;
+    struct Thing *heart = find_players_dungeon_heart(PLAYER0);
+    if (!thing_exists(heart))
+        return;
+    const MapSlabCoord X = subtile_slab(heart->mappos.x.stl.num) + 30, Y = subtile_slab(heart->mappos.y.stl.num) + 10;
+    if (t == 0)
+    {
+        for (int ox = -6; ox <= 6; ox++)
+            for (int oy = -6; oy <= 6; oy++)
+                place_slab_type_on_map(SlbT_EARTH, slab_subtile_center(X + ox), slab_subtile_center(Y + oy), game.neutral_player_num, 0);
+        for (int i = -4; i <= 4; i++)
+            place_slab_type_on_map(SlbT_CLAIMED, slab_subtile_center(X + i), slab_subtile_center(Y - i), PLAYER0, 0);
+        for (int i = -4; i <= 4; i++)
+            for (int ox = -1; ox <= 1; ox++)
+                for (int oy = -1; oy <= 1; oy++)
+                {
+                    const int cx = i + ox, cy = -i + oy;
+                    if ((cx == -cy) && (cx >= -4) && (cx <= 4))
+                        continue; /* the corridor */
+                    if (get_slabmap_block(X + cx, Y + cy)->kind == SlbT_WALLDRAPE)
+                        continue;
+                    place_slab_type_on_map(SlbT_WALLDRAPE, slab_subtile_center(X + cx), slab_subtile_center(Y + cy), PLAYER0, 0);
+                }
+        place_slab_type_on_map(SlbT_PATH, slab_subtile_center(X + 1), slab_subtile_center(Y + 2), game.neutral_player_num, 0);
+        struct Coord3d pos;
+        pos.x.val = subtile_coord_center(slab_subtile_center(X + 1));
+        pos.y.val = subtile_coord_center(slab_subtile_center(Y + 2));
+        pos.z.val = 0;
+        struct Thing *u = create_creature(&pos, (ThingModel)get_id(creature_desc, "TUNNELLER"), PLAYER_GOOD);
+        if (thing_exists(u))
+        {
+            tun = u->index;
+            tun_made = u->creation_turn;
+            creature_control_get_from_thing(u)->party.target_plyr_idx = PLAYER0;
+        }
+        SYNCLOG("World diagonal wall test: corridor through engine slab (%d,%d); the corner (%d,%d) breakable %d, the wall behind it (%d,%d) breakable %d",
+            (int)X, (int)Y, (int)(X + 1), (int)(Y + 1), (int)world_wallbreak_can(X + 1, Y + 1), (int)X, (int)(Y + 1),
+            (int)world_wallbreak_can(X, Y + 1));
+        return;
+    }
+    struct Thing *u = thing_get(tun);
+    if (!thing_exists(u) || (u->creation_turn != tun_made))
+        return;
+    if (t == 20)
+        world_wallbreak_work(u, X + 1, Y + 1);
+    else if ((t % 20) == 0)
+    {
+        /* as tunnellers_second does for a raid's Tunneller: on with the wall it works at */
+        const struct WbJob *j = job_of(u);
+        MapSlabCoord ex, ey;
+        if ((j != NULL) && world_engine_slab(j->wx, j->wy, &ex, &ey))
+            world_wallbreak_work(u, ex, ey);
+    }
+    if (((t % 400) == 0) || (t == 3 * WALLBREAK_TURNS + 400))
+    {
+        const MapSlabCoord ux = subtile_slab(u->mappos.x.stl.num), uy = subtile_slab(u->mappos.y.stl.num);
+        int open_beside = 0;
+        static const int8_t dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
+        for (int d = 0; d < 4; d++)
+            if (get_slabmap_block(ux + dx[d], uy + dy[d])->kind == SlbT_CLAIMED)
+                open_beside++;
+        SYNCLOG("World diagonal wall test: turn %ld: the Tunneller at engine slab (%d,%d) (%+d,%+d from the corridor's middle), "
+            "beside %d corridor slabs; corner %s, wall behind %s", t, (int)ux, (int)uy, (int)(ux - X), (int)(uy - Y), open_beside,
+            slab_code_name(get_slabmap_block(X + 1, Y + 1)->kind), slab_code_name(get_slabmap_block(X, Y + 1)->kind));
+    }
+}
+
 void world_wallbreak_turn(void)
 {
     if (!world_mode_active())
         return;
     walltest_turn();
+    walldiag_turn();
     hold_breakers();
+    steppers_turn();
     if ((game.play_gameturn % 20) == 7)
         tunnellers_second();
 }

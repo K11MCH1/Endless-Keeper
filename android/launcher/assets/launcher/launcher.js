@@ -132,7 +132,9 @@ const kr = {
     } else if (p.result === 'cancelled') {
       setProgress(p.percent || 0, 'Cancelled', '');
     } else if (p.result === 'ok') {
-      setProgress(100, p.task === 'workshop' ? p.label : 'Ready to play', '');
+      const own = p.task === 'workshop' || p.task === 'kfx_import' || p.task === 'kfx_export';
+      setProgress(100, own ? p.label : 'Ready to play', '');
+      if (p.task === 'kfx_import' || p.task === 'kfx_export') toast(p.label);
       if (p.task === 'workshop') { toast(p.label || 'Installed'); this.loaded.workshop = false; if (this.activeTab === 'workshop') loadWorkshop(); }
       if (p.task === 'update') $('updateBanner').classList.add('hidden');
       if (p.task === 'version') { $('versionList').classList.add('hidden'); toast('Version installed. Rebuild the game for its engine.'); }
@@ -441,6 +443,8 @@ $('changeVersion').onclick = async () => {
   }
 };
 $('checkUpdate').onclick = () => { const err = bridge ? bridge.update() : ''; if (err) toast(err); else { toast('Checking for updates…'); showTab('play'); } };
+$('importKfx').onclick = () => { const err = bridge ? bridge.importKfx() : 'Preview'; if (err) toast(err); };
+$('exportKfx').onclick = () => { const err = bridge ? bridge.exportKfx() : 'Preview'; if (err) toast(err); else { startedTask(''); showTab('play'); } };
 $('resetSettings').onclick = () => { if (bridge) { bridge.resetSettings(); renderForms(); toast('Settings reset to defaults.'); } };
 $('modalClose').onclick = closeModal;
 $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });

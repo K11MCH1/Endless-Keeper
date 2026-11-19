@@ -65,6 +65,9 @@ void world_client_test_input(void);
 uint64_t world_seat_token(PlayerNumber plyr_idx);
 /** An imp's swing at gold (endless worlds): experience from mining. */
 void world_imp_mined_gold(struct Thing *creatng);
+/** A possessed imp's dig shot mined a valuable slab: the experience of the swing's turns (world_stream.c). */
+void world_imp_mined_gold_swing(struct Thing *creatng);
+void world_imp_mined_gold_for(struct Thing *creatng, int turns);
 void world_set_seat_token(PlayerNumber plyr_idx, uint64_t token);
 /** The box made in place of one of this model at a place (endless worlds: no Reveal Map box). */
 ThingModel world_box_kind(ThingModel model, MapCoord x, MapCoord y);

@@ -94,6 +94,9 @@
 #include "world_menu.h"
 #include "world_watchfire.h"
 #include "world_curtain.h"
+#ifdef KFX_ANDROID
+void KfxAndroidNotePacket(const struct Packet *pckt); /* android/native/TouchBridge.cpp */
+#endif
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2636,6 +2639,22 @@ static TbBool get_player_coords_and_context(struct Coord3d *pos, unsigned char *
   return true;
 }
 
+#ifdef KFX_ANDROID
+/**
+ * Android touch (the hand's rules, after M3RT1N99's KeeperFX Android port): the packet's answer to where the pointer is
+ * and what it is over, read ahead of the packet. The thing found on the way is handed over, not left behind.
+ */
+TbBool KfxAndroidPointerPlace(struct Coord3d *pos, unsigned char *context, ThingIndex *under)
+{
+    const ThingIndex kept = local_state.local_thing_under_hand;
+    local_state.local_thing_under_hand = 0;
+    const TbBool valid = get_player_coords_and_context(pos, context);
+    *under = local_state.local_thing_under_hand;
+    local_state.local_thing_under_hand = kept;
+    return valid;
+}
+#endif
+
 /**
  * Fill packet structure with non action user input in dungeon view.
  */
@@ -3217,6 +3236,9 @@ static short get_inputs(void)
         get_dungeon_control_nonaction_inputs();
         get_player_gui_clicks();
         get_packet_control_mouse_clicks();
+#ifdef KFX_ANDROID
+        KfxAndroidNotePacket(get_local_packet()); /* the touch hand counts the drops and slaps on their way */
+#endif
         return inp_handled;
     case PVT_CreatureContrl:
         if (!inp_handled)

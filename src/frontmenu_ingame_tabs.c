@@ -785,8 +785,15 @@ static void draw_mastery_bar(struct GuiButton *gbtn, int kind_class, int kind)
     int xp = 0, need = 0;
     if (!world_amenity_bar(my_player_number, kind_class, kind, &xp, &need) || (xp <= 0) || (need <= 0))
         return;
-    const int w = gbtn->width * 6 / 10, h = max(2, gbtn->height / 14);
-    const int x = gbtn->scr_pos_x + gbtn->width / 8, y = gbtn->scr_pos_y + gbtn->height - h - gbtn->height / 7;
+    /* placed on the icon as drawn: its frame is drawn at 128% of the button's height from its top left, so it is
+       wider and taller than the button (the bar was placed in the button: left of the icon's middle and above its
+       foot; the user, 2026-11-18: "needs to be centered and also placed at the bottom of the icon") */
+    const struct TbSprite *frame = get_panel_sprite(GPS_rpanel_frame_portrt_empty);
+    const int upp = simple_gui_panel_sprite_height_units_per_px(gbtn, GPS_rpanel_frame_portrt_empty, 128);
+    const int fw = (frame->SWidth > 0) ? frame->SWidth * upp / 16 : gbtn->width;
+    const int fh = (frame->SHeight > 0) ? frame->SHeight * upp / 16 : gbtn->height;
+    const int w = fw * 6 / 10, h = max(2, fh / 16);
+    const int x = gbtn->scr_pos_x + (fw - w) / 2, y = gbtn->scr_pos_y + fh - h - fh / 12; /* just inside the frame's foot */
     LbDrawBox(x - 1, y - 1, w + 2, h + 2, colours[0][0][0]);
     LbDrawBox(x, y, max(1, w * min(xp, need) / need), h, colours[15][11][2]);
 }

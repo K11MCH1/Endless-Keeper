@@ -33,6 +33,12 @@ TbBool world_wallbreak_can(MapSlabCoord x, MapSlabCoord y);
 int world_wallbreak_work(struct Thing *breaker, MapSlabCoord x, MapSlabCoord y);
 /** Is this creature breaking a wall now (held where it stands)? */
 TbBool world_wallbreak_busy(const struct Thing *breaker);
+/** instf_tunnel: is the subtile this creature strikes the wall it breaks on the timer? Then the strike is only its
+ *  animation and sound (the wall takes no damage). */
+TbBool world_wallbreak_strike_only(const struct Thing *thing, MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+/** creature_follow_leader: while the leader breaks a wall, a follower near it wanders now and then instead of standing
+ *  at its place behind the leader. True: handled (the follow state does nothing more this turn). */
+TbBool world_wallbreak_follower_wanders(struct Thing *follower, const struct Thing *leader);
 /** Once a turn (server or single player): raid Tunnellers that get no nearer and stand at a breakable wall on their
  *  way break it. */
 void world_wallbreak_turn(void);

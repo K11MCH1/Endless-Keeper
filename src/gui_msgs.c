@@ -140,6 +140,52 @@ void message_world_place(long *x, long *y, int *tx, int *upp)
     *upp = u;
 }
 
+/** Endless worlds: a notification drawn in lines no wider than max_w, broken between words (the user, 2026-11-19: a
+ *  long one ran off the screen). Returns how many lines it took past the first. */
+static int message_draw_wrapped(long x, long y, int units_per_px, const char *text, long max_w, int line_h)
+{
+    if (max_w < 40 * units_per_px / 16)
+    {
+        LbTextDrawResized(x, y, units_per_px, text);
+        return 0;
+    }
+    char line[sizeof(game.messages[0].text)];
+    int extra = 0;
+    const char *p = text;
+    while (*p != '\0')
+    {
+        /* as many words as fit (at least one) */
+        int len = 0, fit = 0;
+        while (p[len] != '\0')
+        {
+            int end = len;
+            while ((p[end] != '\0') && (p[end] != ' '))
+                end++;
+            if (end >= (int)sizeof(line))
+                break;
+            memcpy(line, p, end);
+            line[end] = '\0';
+            if ((fit > 0) && (LbTextStringWidthM(line, units_per_px) > max_w))
+                break;
+            fit = end;
+            len = (p[end] == ' ') ? end + 1 : end;
+            if (p[end] == '\0')
+                break;
+        }
+        if (fit == 0)
+            fit = (int)strnlen(p, sizeof(line) - 1);
+        memcpy(line, p, fit);
+        line[fit] = '\0';
+        LbTextDrawResized(x, y + extra * line_h, units_per_px, line);
+        p += fit;
+        while (*p == ' ')
+            p++;
+        if (*p != '\0')
+            extra++;
+    }
+    return extra;
+}
+
 void message_draw(void)
 {
     if (world_attract_active())
@@ -174,8 +220,12 @@ void message_draw(void)
             y += (h*upp/16) << (unsigned char)low_res;
         }
     }
-    for (int i = 0; i < game.active_messages_count; i++)
+    /* endless worlds (the user, 2026-11-19: "the notification messages need to go from Bottom to Top"): the newest at the
+       foot of the list, the older ones above it (the list keeps the newest first: drawn from its end) */
+    const TbBool newest_last = world_mode_active();
+    for (int n = 0; n < game.active_messages_count; n++)
     {
+        const int i = newest_last ? (game.active_messages_count - 1 - n) : n;
         if (game.messages[i].target_idx == my_player_number || game.messages[i].target_idx == -1
          || (observer_is_active() && game.messages[i].target_idx == PLAYER_NEUTRAL)) {
             long x = world_mode_active() ? x0 : 148 * upp / 16;
@@ -186,7 +236,15 @@ void message_draw(void)
                 text_offset = text_offset * icon_units_per_px / ps_units_per_px;
             }
             const int sender_w = (game.messages[i].type == MsgType_Player) ? draw_chat_sender(msg_sender[i], x + text_offset, y, tx_units_per_px) : 0;
-            LbTextDrawResized(x + text_offset + sender_w, y, tx_units_per_px, game.messages[i].text);
+            int extra_lines = 0;
+            if (world_mode_active())
+            {
+                /* up to the last eighth of the screen (the day/night dial's corner) */
+                const long tx = x + text_offset + sender_w;
+                extra_lines = message_draw_wrapped(tx, y, tx_units_per_px, game.messages[i].text,
+                    MyScreenWidth - MyScreenWidth / 8 - tx, tx_units_per_px * CHAT_LINE_SPACING_PERCENT / 100);
+            } else
+                LbTextDrawResized(x + text_offset + sender_w, y, tx_units_per_px, game.messages[i].text);
             unsigned long spr_idx = 0;
             PlayerNumber plyr_idx = game.messages[i].plyr_idx;
             switch (game.messages[i].type)
@@ -305,7 +363,7 @@ void message_draw(void)
                     break;
                 }
             }
-            y += tx_units_per_px * CHAT_LINE_SPACING_PERCENT / 100;
+            y += tx_units_per_px * CHAT_LINE_SPACING_PERCENT / 100 * (1 + extra_lines);
             switch (game.messages[i].type)
             {
                 case MsgType_Player:
@@ -390,7 +448,7 @@ void delete_message(unsigned char msg_idx)
     game.active_messages_count--;
 }
 
-void message_add(char type, short idx, const char *text)
+static void message_add_one(char type, short idx, const char *text)
 {
     SYNCDBG(2,"Player %d: %s",idx,text);
     msg_sender_insert();
@@ -406,6 +464,48 @@ void message_add(char type, short idx, const char *text)
     game.messages[0].icon_idx = 0;
     if (game.active_messages_count < GUI_MESSAGES_COUNT) {
         game.active_messages_count++;
+    }
+}
+
+/* Endless worlds (the user, 2026-11-19: a season's message was cut off): a message longer than one message holds (63
+   letters; the size is part of the save) goes in as several, cut between words, in reading order; the pieces after
+   the first are blank ones (no icon again). */
+void message_add(char type, short idx, const char *text)
+{
+    const size_t room = sizeof(game.messages[0].text) - 1;
+    if (!world_mode_active() || (text == NULL) || (strlen(text) <= room))
+    {
+        message_add_one(type, idx, (text != NULL) ? text : "");
+        return;
+    }
+    const char *p = text;
+    TbBool first = true;
+    for (int pieces = 0; (*p != '\0') && (pieces < GUI_MESSAGES_COUNT); pieces++)
+    {
+        size_t len = strlen(p);
+        if (len > room)
+        {
+            /* best after a sentence's end, else between words in the second half, else in the word */
+            len = room;
+            while ((len > room / 3) && !((p[len] == ' ') && (p[len - 1] == '.')))
+                len--;
+            if (p[len] != ' ')
+            {
+                len = room;
+                while ((len > room / 2) && (p[len] != ' '))
+                    len--;
+                if (p[len] != ' ')
+                    len = room;
+            }
+        }
+        char piece[sizeof(game.messages[0].text)];
+        memcpy(piece, p, len);
+        piece[len] = '\0';
+        message_add_one(first ? type : MsgType_Blank, first ? idx : 0, piece);
+        first = false;
+        p += len;
+        while (*p == ' ')
+            p++;
     }
 }
 

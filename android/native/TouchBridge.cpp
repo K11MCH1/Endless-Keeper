@@ -32,12 +32,21 @@
 #include "config_terrain.h"
 #include "front_input.h"
 #include "room_data.h"
+#include "power_hand.h"
+#include "map_data.h"
+#include "game_legacy.h"
+#include "player_instances.h"
+#include "gui_parchment.h"
+#include "gui_boxmenu.h"
+#include <cstring>
 #include <jni.h>
 // Endless Keeper (2026-11-09): the endless world's full-screen map scrolls with one finger and zooms with a pinch
 extern "C" TbBool world_mode_active(void);
-extern "C" void parchment_zoom(int dir, long screen_x, long screen_y);
+extern "C" void parchment_pinch(float log_scale, long screen_x, long screen_y);
+extern "C" void world_parchment_magnifier(TbBool held);
+extern "C" TbBool world_parchment_magnifier_icon_at(long x, long y);
+extern "C" TbBool KfxAndroidPointerPlace(struct Coord3d *pos, unsigned char *context, ThingIndex *under); // front_input.c
 static bool endlessMap() { return get_local_view_type() == PVT_MapScreen && world_mode_active(); }
-static float mapZoomAcc = 0;
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -190,17 +199,6 @@ static void repeatPickup(uint64_t now) {
     nextPickupAt = now + 110;
 }
 
-// The hand in the dungeon. Taps pick creatures up as clicks do, also with some in the hand.
-// To drop, a finger held where the creatures should go and a second finger: a tap of it
-// drops one (a right click, which drops on release), a hold keeps dropping, one per game
-// turn, until it lifts. A tap on a creature with an empty hand waits for the double-tap
-// window: a second tap on it slaps it, otherwise it is picked up. Both go by the creature's
-// thing index (the engine's own pick and slap actions), so one that walked off during the
-// wait is still the one taken. Two-finger taps and holds neither slap nor drop: they are
-// kept free for other uses.
-static bool dropHeld = false, rightIgnored = false;
-static uint64_t nextDropAt = 0;
-static GameTurn lastDropTurn = 0;
 static const UserState* handState() {
     auto* player = get_my_player();
     if (!player || player == &local_observer_player || !local_state.camera.ready || get_local_view_type() != PVT_DungeonTop || a_menu_window_is_active()) return nullptr;
@@ -216,37 +214,217 @@ static bool handOverThing() {
     const auto* ustate = handState();
     return ustate && ustate->primary_cursor_state == CSt_PowerHand && local_state.local_thing_under_hand > 0 && !handHoldsThings();
 }
-static bool dropContext(float x, float y) { return handHoldsThings() && inEngineWindow(gamePosition(x,y)); }
 static void dropOne() { releaseClick(); button(MActn_RBUTTONDOWN); button(MActn_RBUTTONUP); }
-static void repeatDrop(uint64_t now) {
-    if (!dropHeld || now < nextDropAt || get_gameturn() == lastDropTurn || !handHoldsThings()) return;
+// A two-finger press with something in the hand or a creature under it neither drops nor slaps.
+static bool rightIgnored = false;
+
+// ---- The hand's rules (2026-11-19), after M3RT1N99's KeeperFX Android port (touch_hand.c, touch_keeper.c;
+// github.com/M3RT1N99/keeperfx, android-v1.1, GPL-2). A tap stays a click: it picks up what is under it. With
+// something in the hand, a finger that rests a quarter second, or travels, on ground that takes a drop lets the hand's
+// things fall there one at a time for as long as it stays down. With an empty hand a quick stroke slaps the own
+// creatures it crosses; it never presses the left button, so the walls it crosses are not marked for digging (theirs
+// turned into a dig drag on a wall). The clicks are right clicks at the finger, a mouse's own, and every click on its
+// way through the input lag counts: a drop goes out only for something that will still be in the hand when it
+// arrives, a slap only when nothing will be.
+namespace hand {
+constexpr int MaxFlights = 32, SlapMemory = 8;
+constexpr long long SwipeMs = 250;
+constexpr float HoldMs = 250, RainMs = 100, SlapMs = 150;
+struct Sees { bool in_force = false, known = false; int hand = 0; bool droppable = false, wall = false, door = false, thing = false;
+              ThingIndex creature = 0; long long turn = 0; int lag = 0; float x = 0, y = 0; };
+enum class Verdict { Wait, Today, Hand };
+enum class Click { None, Drop, Slap };
+struct Flight { long long turn; bool pick; };
+struct Slapped { ThingIndex creature; long long ms; };
+enum class Phase { None, Deciding, Today, Armed };
+struct Stroke { Phase phase = Phase::None; bool readStart = false, open = false, moved = false, swipe = false, slappedOnce = false;
+                long long downMs = 0, movedMs = 0; double nextDropTurn = 0; float slapX = 0, slapY = 0; Slapped slapped[SlapMemory]{}; };
+static Flight flights[MaxFlights];
+static int flightCount = 0;
+static long long lastRightTurn = -1, lastPacketTurn = 0;
+static Stroke stroke;
+static void ageFlights(long long turn, int lag) {
+    int kept = 0;
+    for (int i = 0; i < flightCount; i++) {
+        long long age = turn - flights[i].turn;
+        if (age < 0 || age > lag) continue; // arrived, or lost to a lag change
+        flights[kept++] = flights[i];
+    }
+    flightCount = kept;
+}
+static void addFlight(long long turn, bool pick) {
+    if (flightCount >= MaxFlights) { std::memmove(&flights[0], &flights[1], sizeof(flights[0]) * (MaxFlights - 1)); flightCount = MaxFlights - 1; }
+    flights[flightCount++] = {turn, pick};
+}
+static int countFlights(bool pick) { int n = 0; for (int i = 0; i < flightCount; i++) if (flights[i].pick == pick) n++; return n; }
+static void notePacket(long long turn, int lag, bool rightReleased, bool picking) {
+    ageFlights(turn, lag);
+    lastPacketTurn = turn;
+    if (rightReleased) { addFlight(turn, false); lastRightTurn = turn; }
+    if (picking) addFlight(turn, true);
+}
+static void begin(long long ms) { stroke = {}; stroke.phase = Phase::Deciding; stroke.downMs = ms; }
+static void moved(long long ms) { if (!stroke.moved) { stroke.moved = true; stroke.movedMs = ms; } }
+static void end() { stroke = {}; }
+static long long packetTurn(const Sees& s) { return lastPacketTurn == s.turn ? s.turn + 1 : s.turn; }
+static Verdict arm(bool swipe, double firstDropTurn) { stroke.phase = Phase::Armed; stroke.swipe = swipe; stroke.nextDropTurn = firstDropTurn; return Verdict::Hand; }
+static Verdict decide(const Sees& s, long long now, float longPressMs) {
+    if (stroke.phase == Phase::Armed) return Verdict::Hand;
+    if (stroke.phase != Phase::Deciding) return Verdict::Today;
+    if (!s.in_force) { stroke.phase = Phase::Today; return Verdict::Today; }
+    if (!s.known) return Verdict::Wait;
+    ageFlights(s.turn, s.lag);
+    const int willHold = s.hand - countFlights(false) + countFlights(true);
+    if (!stroke.readStart) { stroke.readStart = true; stroke.open = willHold > 0 ? s.droppable : (!s.wall && !s.door); }
+    if (!stroke.open) { stroke.phase = Phase::Today; return Verdict::Today; }
+    if (stroke.moved) {
+        if (willHold > 0) return arm(false, static_cast<double>(packetTurn(s)));
+        if (stroke.movedMs - stroke.downMs < SwipeMs) return arm(true, static_cast<double>(packetTurn(s)));
+        stroke.phase = Phase::Today; return Verdict::Today;
+    }
+    const long long held = now - stroke.downMs;
+    if (willHold > 0 && s.droppable) return held >= HoldMs ? arm(false, static_cast<double>(packetTurn(s))) : Verdict::Wait;
+    if (held < longPressMs) return Verdict::Wait;
+    if (willHold > 0 || s.thing || s.wall || s.door) { stroke.phase = Phase::Today; return Verdict::Today; } // the ordinary long press
+    // Bare floor and an empty hand: held like this the finger waits for what another finger takes from the panel.
+    return arm(false, static_cast<double>(packetTurn(s)));
+}
+static bool slapDue(ThingIndex creature, long long now) {
+    int oldest = 0, slot = -1;
+    for (int i = 0; i < SlapMemory; i++) {
+        if (stroke.slapped[i].creature == creature) slot = i;
+        if (stroke.slapped[i].ms < stroke.slapped[oldest].ms) oldest = i;
+    }
+    if (slot >= 0 && now - stroke.slapped[slot].ms < SlapMs) return false;
+    if (slot < 0) slot = oldest;
+    stroke.slapped[slot] = {creature, now};
+    return true;
+}
+static Click clickDue(const Sees& s, long long now, int whipTurns, float turnMs, float restPx) {
+    if (stroke.phase != Phase::Armed || !s.in_force || !s.known) return Click::None;
+    ageFlights(s.turn, s.lag);
+    const long long turn = packetTurn(s);
+    if (s.hand - countFlights(false) > 0) {
+        if (!s.droppable || static_cast<double>(turn) < stroke.nextDropTurn) return Click::None;
+        // In turns, the game's own measure of clicks; what a rate between turns carries over stays.
+        const double period = RainMs / turnMs, soonest = static_cast<double>(turn) + std::floor(period);
+        stroke.nextDropTurn = std::max(stroke.nextDropTurn + period, soonest);
+        return Click::Drop;
+    }
+    if (!stroke.swipe || countFlights(true) > 0 || s.creature == 0) return Click::None;
+    const long long sinceRight = turn - lastRightTurn;
+    if (lastRightTurn >= 0 && sinceRight >= 0 && sinceRight < whipTurns) return Click::None;
+    // A finger that has come to rest on a creature has said what it wanted: slaps take health.
+    if (stroke.slappedOnce && std::hypot(s.x - stroke.slapX, s.y - stroke.slapY) < restPx) return Click::None;
+    if (!slapDue(s.creature, now)) return Click::None;
+    stroke.slappedOnce = true; stroke.slapX = s.x; stroke.slapY = s.y;
+    return Click::Slap;
+}
+}
+extern "C" void KfxAndroidNotePacket(const struct Packet *pckt) {
+    const bool gui = (pckt->control_flags & PCtr_Gui) != 0;
+    const bool rightReleased = !gui && (pckt->control_flags & PCtr_RBtnRelease) != 0;
+    const bool picking = pckt->action == PckA_UsePwrHandPick || (!gui && (pckt->control_flags & PCtr_LBtnRelease) != 0);
+    hand::notePacket(static_cast<long long>(get_gameturn()), game.input_lag_turns, rightReleased, picking);
+}
+// The finger the rules are asked about: the first one on the map. While they are deciding, a move past the tap
+// distance is held back from the recogniser (it would pan); once they say the finger drops or slaps it leaves the
+// recogniser altogether, and the pointer follows it.
+static void drain();
+struct GestFinger { float x, y; bool world; };
+static std::map<SDL_FingerID, GestFinger> gestFingers; // the fingers the recogniser has
+struct HandFinger { bool active = false, armed = false, movedFar = false; SDL_FingerID id = 0; float x = 0, y = 0, x0 = 0, y0 = 0; };
+static HandFinger handFinger;
+static uint64_t frameCount = 0;
+static bool gripping = false; // two fingers hold the map (below)
+static void endGrip() { gripping = false; }
+constexpr float handLongPressMs = 400; // before the recogniser's hold (450), which would press the left button
+static bool handInForce(float x, float y) {
+    auto* player = get_my_player();
+    if (!player || player == &local_observer_player || !local_state.camera.ready || observer_is_active()) return false;
+    if (get_local_view_type() != PVT_DungeonTop || get_local_map_fade() != PVT_None) return false;
+    if ((game.operation_flags & GOF_Paused) != 0 || player->victory_state == VicS_LostLevel) return false;
+    const auto* ustate = get_local_user_state_prediction();
+    if (user_state_invalid(ustate) || ustate->work_state != PSt_CtrlDungeon) return false;
+    if ((get_local_user_state()->init_flags & (UsrIF_KeyboardInputDisabled | UsrIF_MouseInputDisabled)) != 0) return false;
+    if (a_menu_window_is_active()) return false;
+    auto p = gamePosition(x,y);
+    return inEngineWindow(p) && !buttonAt(static_cast<int>(p.x), static_cast<int>(p.y))
+        && !point_is_over_gui_box(static_cast<ScreenCoord>(p.x), static_cast<ScreenCoord>(p.y));
+}
+static hand::Sees handSees(float x, float y) {
+    hand::Sees s;
+    s.turn = static_cast<long long>(get_gameturn()); s.lag = game.input_lag_turns;
+    auto p = gamePosition(x,y); s.x = p.x; s.y = p.y;
+    s.in_force = handInForce(x,y);
+    if (!s.in_force) return s;
+    struct Coord3d pos; unsigned char context = 0; ThingIndex under = 0;
+    if (!KfxAndroidPointerPlace(&pos, &context, &under)) return s;
+    const auto* dungeon = get_players_dungeon(get_my_player());
+    if (dungeon_invalid(dungeon)) return s;
+    s.known = true;
+    s.hand = dungeon->num_things_in_hand;
+    s.wall = context == CSt_PickAxe;
+    s.door = context == CSt_DoorKey;
+    const bool onPath = s.hand > 0 ? is_creature_droppable_on_path(thing_get(dungeon->things_in_hand[0])) : true;
+    s.droppable = can_drop_thing_here(coord_subtile(pos.x.val), coord_subtile(pos.y.val), my_player_number, onPath);
+    const auto* thing = thing_get(under);
+    s.thing = under != 0;
+    if (under != 0 && thing_is_creature(thing) && thing->owner == my_player_number && thing_slappable(thing, my_player_number)) s.creature = under;
+    return s;
+}
+static void startHandStroke(SDL_FingerID id, float x, float y) {
+    handFinger = {true, false, false, id, x, y, x, y};
+    hand::begin(static_cast<long long>(SDL_GetTicks()));
+    position(x,y);
+}
+static void endHandStroke() { handFinger = {}; hand::end(); }
+static void armHand() {
+    handFinger.armed = true;
+    gestures.cancel(); gestures.take(); // the finger leaves the recogniser: nothing it held is clicked
+    if (leftHeld) { button(MActn_LBUTTONUP); leftHeld = false; }
+    gestFingers.erase(handFinger.id);
+    position(handFinger.x, handFinger.y);
+    if (KfxAndroidInputDiagnostics()) LbSyncLog("AndroidHand armed swipe=%d turn=%lu\n", static_cast<int>(hand::stroke.swipe), static_cast<unsigned long>(get_gameturn()));
+}
+// True: the event was the hand's.
+static bool handFingerEvent(const SDL_Event* e, float x, float y) {
+    if (!handFinger.active || e->type == SDL_EVENT_FINGER_DOWN || e->tfinger.fingerID != handFinger.id) return false;
+    handFinger.x = x; handFinger.y = y;
+    if (!handFinger.movedFar && std::hypot(x-handFinger.x0, y-handFinger.y0) > gestures.slop()) {
+        handFinger.movedFar = true;
+        hand::moved(static_cast<long long>(SDL_GetTicks()));
+    }
+    if (handFinger.armed) {
+        if (e->type == SDL_EVENT_FINGER_UP) endHandStroke();
+        else position(x,y);
+        return true;
+    }
+    if (e->type == SDL_EVENT_FINGER_UP) { endHandStroke(); return false; } // a tap or a short press: the recogniser's
+    if (handFinger.movedFar) { position(x,y); return true; }              // held back until the rules have spoken
+    return false;
+}
+static void stepHand(uint64_t now) {
+    if (!handFinger.active) return;
+    if (!handFinger.armed) {
+        auto verdict = hand::decide(handSees(handFinger.x, handFinger.y), static_cast<long long>(now), handLongPressMs);
+        if (verdict == hand::Verdict::Hand) armHand();
+        else if (verdict == hand::Verdict::Today) {
+            const bool heldBack = handFinger.movedFar;
+            const SDL_FingerID id = handFinger.id; const float x = handFinger.x, y = handFinger.y;
+            endHandStroke();
+            if (heldBack) { gestures.move(static_cast<int64_t>(id), x, y, now); drain(); } // the move it was not given
+        }
+        return;
+    }
+    position(handFinger.x, handFinger.y);
+    const float turnMs = 1000.0f / static_cast<float>(std::max<int32_t>(turns_per_second, 1));
+    const float restPx = static_cast<float>(RendererPhysicalHeight()) * 6.0f / 720.0f;
+    auto click = hand::clickDue(handSees(handFinger.x, handFinger.y), static_cast<long long>(now),
+                                static_cast<int>(player_instance_info[PI_Whip].length_turns), turnMs, restPx);
+    if (click == hand::Click::None) return;
     dropOne();
-    lastDropTurn = get_gameturn();
-    nextDropAt = now + 110;
-}
-struct CreatureTap { bool active = false, second = false; ThingIndex thing = 0; float x = 0, y = 0; uint64_t at = 0; };
-static CreatureTap creatureTap;
-// Packet actions take one slot per game turn, so quick taps on several creatures queue.
-enum class ThingAct { Pick, Slap };
-struct QueuedAct { ThingAct act; ThingIndex thing; };
-static std::vector<QueuedAct> thingActs;
-static GameTurn thingActTurn = 0;
-static void queueThingAct(ThingAct act) {
-    if (thingActs.empty()) thingActTurn = get_gameturn();
-    thingActs.push_back({act, creatureTap.thing});
-    creatureTap = {};
-}
-static void stepThingAct() {
-    if (thingActs.empty()) return;
-    if (!handState() || get_gameturn() > thingActTurn + 3) { thingActs.clear(); return; }
-    if (get_local_packet()->action != PckA_None) return; // the slot frees with the next turn's packet
-    auto next = thingActs.front();
-    thingActs.erase(thingActs.begin());
-    thingActTurn = get_gameturn();
-    if (next.act == ThingAct::Pick) set_packet_action(get_local_packet(), PckA_UsePwrHandPick, next.thing, 0, 0, 0);
-    else set_packet_power_on_thing(get_local_packet(), PwrK_SLAP, next.thing);
-    if (KfxAndroidInputDiagnostics()) LbSyncLog("AndroidHand %s thing=%d turn=%lu\n", next.act == ThingAct::Pick ? "pick" : "slap",
-                                                static_cast<int>(next.thing), static_cast<unsigned long>(get_gameturn()));
+    if (KfxAndroidInputDiagnostics()) LbSyncLog("AndroidHand %s turn=%lu\n", click == hand::Click::Drop ? "drop" : "slap", static_cast<unsigned long>(get_gameturn()));
 }
 
 // Double tap and hold drags a dig rectangle: the second touch presses the left button
@@ -262,13 +440,10 @@ static SDL_FPoint digStart{}, digLatest{};
 static bool digReleased = false;
 static GameTurn digTurn = 0, digReleaseTurn = 0, restoreTurn = 0;
 static int restoreMode = -1, restoreTries = 0;
-// A hold on a wall, or in the dungeon with creatures in the hand, presses only once the
-// finger slides (marking walls along the way) or lifts (a click), so a second finger can
-// still turn it into the dig square before a wall under it is marked (which would make the
-// square unmark instead), or into dropping before it clicks anything. A drop hold keeps its
-// spot, cursor included, until the finger slides three times as far: a held finger rolls
-// when another one taps.
-static bool holdDeferred = false, holdDrop = false;
+// A hold on a wall presses only once the finger slides (marking walls along the way) or
+// lifts (a click), so a second finger can still turn it into the dig square before a wall
+// under it is marked (which would make the square unmark instead).
+static bool holdDeferred = false;
 static GameTurn holdPinTurn = 0;
 static bool digContext(float x, float y) {
     auto* player = get_my_player();
@@ -487,48 +662,6 @@ static void stepSquare() {
     releaseSquareHold(ustate);
 }
 
-// Dropping: the held finger (creatures in the hand) leaves the gesture recogniser and marks
-// where they go, the spot it was held at; each tap of a second finger drops one there,
-// holding it keeps dropping.
-static bool dropMode = false, dropFingerDown = false, dropFingerHeld = false;
-static SDL_FingerID dropHoldFinger = 0, dropFinger = 0;
-static uint64_t dropFingerAt = 0;
-static void dropFingerDownAt(SDL_FingerID id) {
-    dropFinger = id; dropFingerDown = true; dropFingerHeld = false; dropFingerAt = SDL_GetTicks();
-}
-static void startDropMode(SDL_FingerID id) {
-    dropMode = true; dropHoldFinger = lastFingerDown; holdDeferred = false; leftHeld = false;
-    gestures.cancel(); gestures.take(); // the hold has pressed nothing yet
-    dropFingerDownAt(id);
-}
-static void endDropMode(bool holdFingerUp) {
-    if (!dropMode) return;
-    dropMode = dropHeld = false;
-    if (!holdFingerUp) spentFingers.push_back(dropHoldFinger);
-    if (dropFingerDown) spentFingers.push_back(dropFinger);
-    dropFingerDown = false;
-}
-static void dropFingerEvent(const SDL_Event* e) {
-    SDL_FingerID id = e->tfinger.fingerID;
-    if (e->type == SDL_EVENT_FINGER_DOWN) {
-        if (dropFingerDown) spentFingers.push_back(id);
-        else dropFingerDownAt(id);
-        return;
-    }
-    if (id == dropHoldFinger) {
-        if (e->type == SDL_EVENT_FINGER_UP) endDropMode(true);
-    } else if (dropFingerDown && id == dropFinger && e->type == SDL_EVENT_FINGER_UP) {
-        if (dropFingerHeld) dropHeld = false;
-        else { position(holdAt.x, holdAt.y); dropOne(); }
-        dropFingerDown = dropFingerHeld = false;
-    }
-}
-static void stepDropMode(uint64_t now) {
-    if (!dropMode) return;
-    if (!handHoldsThings()) { endDropMode(false); return; } // the hand is empty (or the view changed)
-    position(holdAt.x, holdAt.y);
-    if (dropFingerDown && !dropFingerHeld && now-dropFingerAt >= squareTapMs) { dropFingerHeld = dropHeld = true; nextDropAt = 0; }
-}
 
 // The LAN lobby keeps text input on for its chat line, which on a phone kept the keyboard
 // over the lobby (and its Start Game button). The lobby starts text input without the
@@ -567,15 +700,12 @@ static void drain() {
             continue;
         }
         if (roomClick != RoomClick::None && (a.kind == Kind::Hover || a.kind == Kind::DragUp)) continue;
-        // A second touch after a creature tap that is no tap (a drag, a hold, two fingers):
-        // the first tap stays a pick-up.
-        if (creatureTap.second && a.kind != Kind::Hover && a.kind != Kind::LeftClick) queueThingAct(ThingAct::Pick);
         position(a.x,a.y);
         if (a.kind == Kind::LeftDown) holdAt = {a.x,a.y};
         else if (leftHeld && a.kind == Kind::Hover) {
             if (get_gameturn() <= holdPinTurn) position(holdAt.x, holdAt.y); // a slid dig hold starts on its wall
             else holdAt = {a.x,a.y};
-        } else if (holdDeferred && holdDrop) position(holdAt.x, holdAt.y);
+        }
         if (a.kind!=Kind::Hover && KfxAndroidInputDiagnostics()) {
             LbSyncLog("AndroidInput action=%d x=%.1f y=%.1f dx=%.4f dy=%.4f cursor=%ld,%ld target=%d\n",static_cast<int>(a.kind),a.x,a.y,a.dx,a.dy,static_cast<long>(lbDisplay.MMouseX),static_cast<long>(lbDisplay.MMouseY),local_state.local_thing_under_hand);
             inputSnapshotAt=SDL_GetTicks()+350;
@@ -583,18 +713,8 @@ static void drain() {
         }
         switch (a.kind) {
         case Kind::LeftClick:
-            if (creatureTap.second) {
-                // The same creature (or a near miss on bare floor) slaps; another one means the
-                // first tap was a pick-up and this tap goes on below.
-                int under = local_state.local_thing_under_hand;
-                if (under <= 0 || under == creatureTap.thing) { queueThingAct(ThingAct::Slap); break; }
-                queueThingAct(ThingAct::Pick);
-            }
-            if (handOverThing() && inEngineWindow(gamePosition(a.x,a.y))) {
-                if (creatureTap.active) queueThingAct(ThingAct::Pick); // an earlier tap still waiting
-                creatureTap = {true, false, static_cast<ThingIndex>(local_state.local_thing_under_hand), a.x, a.y, SDL_GetTicks()};
-                break;
-            }
+            // A tap on a creature picks it up at once (the hand's rules, below).
+            if (handOverThing() && inEngineWindow(gamePosition(a.x,a.y))) { tap(); break; }
             if (digContext(a.x,a.y)) { pendingTap = {true, a.x, a.y, SDL_GetTicks()}; break; }
             if (roomContext(a.x,a.y)) { pendingTap = {true, a.x, a.y, SDL_GetTicks(), true}; break; }
             textKeyboard(a.x,a.y);
@@ -603,14 +723,13 @@ static void drain() {
             if (handHoldsThings() || handOverThing()) break; // no drop, no slap
             releaseClick(); button(MActn_RBUTTONDOWN); button(MActn_RBUTTONUP); break;
         case Kind::LeftDown:
-            if (digContext(a.x,a.y)) { holdDeferred = true; holdDrop = false; break; }
-            if (dropContext(a.x,a.y)) { holdDeferred = holdDrop = true; break; }
+            if (digContext(a.x,a.y)) { holdDeferred = true; break; }
             releaseClick(); button(MActn_LBUTTONDOWN); leftHeld = true; nextPickupAt = 0; break;
         case Kind::LeftUp:
             if (holdDeferred) { holdDeferred = false; tap(); break; } // lifted in place: a click
             button(MActn_LBUTTONUP); leftHeld = false; break;
         case Kind::Hover:
-            if (holdDeferred && std::hypot(a.x-holdAt.x, a.y-holdAt.y) > gestures.slop()*(holdDrop ? 3 : 1)) {
+            if (holdDeferred && std::hypot(a.x-holdAt.x, a.y-holdAt.y) > gestures.slop()) {
                 holdDeferred = false;
                 position(holdAt.x, holdAt.y);
                 releaseClick(); button(MActn_LBUTTONDOWN); leftHeld = true; nextPickupAt = 0;
@@ -623,23 +742,11 @@ static void drain() {
         case Kind::RightUp:
             if (rightIgnored) { rightIgnored = false; break; }
             button(MActn_RBUTTONUP); break;
-        case Kind::Pan: panX -= a.dx; panY -= a.dy; break;
+        case Kind::Pan: if (gripping) break; panX -= a.dx; panY -= a.dy; break;
         case Kind::Zoom:
-            if (endlessMap()) {
-                // The map's zoom levels are a fifth to a third apart: one level for each such pinch, round
-                // the point between the fingers (that point stays under them).
-                constexpr float step = .22f;
-                mapZoomAcc += a.dx;
-                auto at = gamePosition(a.x, a.y);
-                while (std::fabs(mapZoomAcc) >= step) {
-                    int dir = mapZoomAcc > 0 ? 1 : -1;
-                    parchment_zoom(dir, static_cast<long>(at.x) / pixel_size, static_cast<long>(at.y) / pixel_size);
-                    mapZoomAcc -= dir*step;
-                }
-                break;
-            }
+            if (gripping || endlessMap()) break; // the map's pinch goes by the fingers themselves (mapFrame)
             zoomDelta += a.dx; break;
-        case Kind::Rotate: if (endlessMap()) break; rotationDelta += a.dx; break;
+        case Kind::Rotate: if (endlessMap() || gripping) break; rotationDelta += a.dx; break;
         default: break;
         }
     }
@@ -746,7 +853,7 @@ static void updatePossession() {
     possessing = active;
     if (active) {
         gestures.cancel(); drain(); panX=panY=zoomDelta=rotationDelta=0;
-        pendingTap.active = false; creatureTap = {}; holdDeferred = dropHeld = false;
+        pendingTap.active = false; holdDeferred = false; endHandStroke(); gestFingers.clear();
         centreCursor();
     } else endPossessionInput();
 }
@@ -825,6 +932,212 @@ extern "C" void KfxAndroidDrawTouchOverlay(SDL_Renderer* r) {
     SDL_SetRenderScale(r,sx,sy); SDL_SetRenderDrawBlendMode(r,blend);
 }
 
+// ---- Two fingers hold the map (2026-11-19), after M3RT1N99's KeeperFX Android port (touch_gesture.c, touch_camera.c,
+// GPL-2). The ground point under the fingers' midpoint stays under it: moving, zooming and turning are one transform
+// round it, worked out again every drawn frame and written to the camera the frame shows (its previous and its
+// destination pose alike, so the turn-to-turn smoothing has nothing left to chase). Small gates keep a drag from
+// zooming and a pinch from turning; a gate that opens hands over what it held back within a moment, so nothing
+// jumps. Before, a pinch and a twist were one or the other, went into the camera once a game turn and were chased
+// by the smoothing: the jitter. The zoom stays within the game's own limits (the user's nearest to CAMERA_ZOOM_MAX).
+namespace grip {
+struct Fingers { float ax, ay, bx, by; };
+struct View { float cx, cy, pxPerZoom, squash, lift, angleUnits, yawStep, limitX, limitY, zoomMin, zoomMax; };
+struct Pose { float x, y, zoom, yaw; };
+struct Tuning { float panSlop, zoomGate, rotateGate, catchUpMs, stepTwist; };
+struct Gesture {
+    Pose origin{}; float groundX = 0, groundY = 0, height = 0, mid0x = 0, mid0y = 0, dist0 = 1, prevAngle = 0, twist = 0;
+    bool panOpen = false, zoomOpen = false, rotateOpen = false;
+    float panLeftX = 0, panLeftY = 0, zoomLeft = 0, twistLeft = 0, stepRef = 0; int steps = 0;
+};
+constexpr float Pi = 3.14159265358979323846f;
+static float yawRadians(const View& v, float yaw) { return yaw * 2.0f * Pi / v.angleUnits; }
+static void screenToGround(const View& v, const Pose& c, float height, float sx, float sy, float& gx, float& gy) {
+    const float scale = c.zoom * v.pxPerZoom;
+    const float ux = (sx - v.cx) / scale, uy = ((sy - v.cy) / scale + v.lift * height) / v.squash;
+    const float yaw = yawRadians(v, c.yaw), cs = std::cos(yaw), sn = std::sin(yaw);
+    gx = c.x + ux * cs - uy * sn;
+    gy = c.y + ux * sn + uy * cs;
+}
+static void midpoint(const Fingers& f, float& x, float& y) { x = (f.ax + f.bx) * .5f; y = (f.ay + f.by) * .5f; }
+static float spread(const Fingers& f) { return std::max(1.0f, std::hypot(f.bx - f.ax, f.by - f.ay)); }
+static float angle(const Fingers& f) { return std::atan2(f.by - f.ay, f.bx - f.ax); }
+static void take(Gesture& g, const Fingers& f, const View& v, const Pose& c, float height) {
+    g = {};
+    g.origin = c; g.height = height;
+    midpoint(f, g.mid0x, g.mid0y);
+    g.dist0 = spread(f); g.prevAngle = angle(f);
+    screenToGround(v, c, height, g.mid0x, g.mid0y, g.groundX, g.groundY);
+}
+static float catchUp(float left, float keep, float negligible) { left *= keep; return std::fabs(left) < negligible ? 0.0f : left; }
+static void follow(Gesture& g, const Fingers& f, float dtMs, const View& v, const Tuning& t, float twistSign, Pose& c) {
+    float mx, my; midpoint(f, mx, my);
+    const float dist = spread(f), a = angle(f);
+    float turn = a - g.prevAngle;
+    if (turn > Pi) turn -= 2 * Pi; else if (turn < -Pi) turn += 2 * Pi;
+    g.prevAngle = a;
+    g.twist += turn * twistSign;
+    const float travelX = mx - g.mid0x, travelY = my - g.mid0y, logZoom = std::log(dist / g.dist0);
+    const float keep = std::exp(-dtMs / t.catchUpMs);
+    if (g.panOpen) { g.panLeftX = catchUp(g.panLeftX, keep, .25f); g.panLeftY = catchUp(g.panLeftY, keep, .25f); }
+    else { g.panOpen = std::hypot(travelX, travelY) >= t.panSlop; g.panLeftX = travelX; g.panLeftY = travelY; }
+    if (g.zoomOpen) g.zoomLeft = catchUp(g.zoomLeft, keep, .0005f);
+    else { g.zoomOpen = std::fabs(dist - g.dist0) >= t.zoomGate; g.zoomLeft = logZoom; }
+    if (g.rotateOpen) g.twistLeft = catchUp(g.twistLeft, keep, .0005f);
+    else { g.rotateOpen = std::fabs(g.twist) >= t.rotateGate; g.twistLeft = g.twist; }
+    const float zoom = g.origin.zoom * std::exp(logZoom - g.zoomLeft);
+    const float limited = std::clamp(zoom, v.zoomMin, v.zoomMax);
+    // Pulling past a limit moves the reference along: the way back starts at once.
+    if (g.zoomOpen && limited != zoom) g.dist0 = dist / std::exp(std::log(limited / g.origin.zoom) + g.zoomLeft);
+    c.zoom = std::round(limited);
+    float yaw = g.origin.yaw;
+    if (v.yawStep > 0) { // the front view turns in quarter steps
+        while (g.twist - g.stepRef >= t.stepTwist) { g.stepRef += t.stepTwist; g.steps++; }
+        while (g.twist - g.stepRef <= -t.stepTwist) { g.stepRef -= t.stepTwist; g.steps--; }
+        yaw = g.origin.yaw - static_cast<float>(g.steps) * v.yawStep;
+    } else yaw -= (g.twist - g.twistLeft) * v.angleUnits / (2 * Pi);
+    c.yaw = std::round(yaw);
+    const float heldX = mx - g.panLeftX, heldY = my - g.panLeftY;
+    Pose atOrigin = c; atOrigin.x = atOrigin.y = 0;
+    float ox, oy; screenToGround(v, atOrigin, g.height, heldX, heldY, ox, oy);
+    const float x = g.groundX - ox, y = g.groundY - oy;
+    c.x = std::clamp(x, 0.0f, v.limitX); c.y = std::clamp(y, 0.0f, v.limitY);
+    // The map's edge stops the map, not the fingers: they slide over the ground from here.
+    if (c.x != x || c.y != y) screenToGround(v, c, g.height, heldX, heldY, g.groundX, g.groundY);
+}
+}
+static grip::Gesture gripGesture;
+static grip::Pose gripLeft{}; // what the grip last left in the camera, to notice when something else moved it
+static int gripLeftIdx = -1;
+static uint64_t gripLastNs = 0;
+static grip::Pose poseOf(const struct Camera* cam) {
+    return {static_cast<float>(cam->mappos.x.val), static_cast<float>(cam->mappos.y.val), static_cast<float>(cam->zoom), static_cast<float>(cam->rotation_angle_x)};
+}
+static grip::View viewOf(const struct Camera* cam, int idx) {
+    grip::View v{};
+    const bool front = idx == CamIV_FrontView;
+    const float scale = static_cast<float>(units_per_pixel_best) / 16.0f / 65536.0f;
+    v.cx = static_cast<float>(local_state.engine_window_x) + static_cast<float>(local_state.engine_window_width / 2);
+    v.cy = static_cast<float>(local_state.engine_window_y) + static_cast<float>(local_state.engine_window_height / 2);
+    v.angleUnits = static_cast<float>(DEGREES_360);
+    v.limitX = static_cast<float>(game.map_subtiles_x * COORD_PER_STL - 1);
+    v.limitY = static_cast<float>(game.map_subtiles_y * COORD_PER_STL - 1);
+    const int32_t zoomMin = user_zoom_min(get_local_user_state(), front);
+    if (front) { // the front view scales by an eighth of the zoom, doesn't foreshorten, shows height at a half
+        v.pxPerZoom = scale / 8.0f; v.squash = 1.0f; v.lift = .5f; v.yawStep = static_cast<float>(DEGREES_90);
+        v.zoomMin = static_cast<float>(std::max<int32_t>(FRONTVIEW_CAMERA_ZOOM_MIN, zoomMin)); v.zoomMax = static_cast<float>(FRONTVIEW_CAMERA_ZOOM_MAX);
+    } else {
+        const float tilt = static_cast<float>(-cam->rotation_angle_y) * 2.0f * grip::Pi / static_cast<float>(DEGREES_360);
+        v.pxPerZoom = scale; v.squash = std::sin(tilt); v.lift = std::cos(tilt); v.yawStep = 0;
+        v.zoomMin = static_cast<float>(zoomMin); v.zoomMax = static_cast<float>(CAMERA_ZOOM_MAX);
+    }
+    if (std::fabs(v.squash) < .05f) v.squash = .05f;
+    return v;
+}
+// The height of what the player sees at a pixel: the first column a ray from the camera meets.
+static float surfaceHeightAt(const grip::View& v, const grip::Pose& p, float sx, float sy) {
+    for (int z = 8; z > 0; z--) {
+        const float height = static_cast<float>(z * COORD_PER_STL);
+        float gx, gy; grip::screenToGround(v, p, height, sx, sy, gx, gy);
+        if (gx < 0 || gy < 0 || gx > v.limitX || gy > v.limitY) continue;
+        const struct Map* mapblk = get_map_block_at(coord_subtile(static_cast<long>(gx)), coord_subtile(static_cast<long>(gy)));
+        if (!map_block_invalid(mapblk) && get_mapblk_filled_subtiles(mapblk) >= z) return height;
+    }
+    return 0;
+}
+static void showPose(int idx, const grip::Pose& p) {
+    gripLeft = {static_cast<float>(std::lround(p.x)), static_cast<float>(std::lround(p.y)), p.zoom, static_cast<float>(std::lround(p.yaw) & ANGLE_MASK)};
+    gripLeftIdx = idx;
+    struct Camera* cams[2] = {&local_state.camera.destination[idx], &local_state.camera.previous[idx]};
+    for (auto* cam : cams) {
+        cam->mappos.x.val = static_cast<MapCoord>(gripLeft.x);
+        cam->mappos.y.val = static_cast<MapCoord>(gripLeft.y);
+        cam->zoom = static_cast<int32_t>(gripLeft.zoom);
+        cam->rotation_angle_x = static_cast<int32_t>(gripLeft.yaw);
+        cam->velocity_x = cam->velocity_y = 0;
+        cam->velocity_rotation = 0;
+    }
+}
+static bool movedBySomethingElse(const struct Camera* cam, int idx) {
+    const auto p = poseOf(cam);
+    return idx != gripLeftIdx || p.x != gripLeft.x || p.y != gripLeft.y || p.zoom != gripLeft.zoom || p.yaw != gripLeft.yaw;
+}
+static void cameraFrame() {
+    const uint64_t nowNs = SDL_GetTicksNS();
+    const float dtMs = std::clamp(gripLastNs ? static_cast<float>(nowNs - gripLastNs) / 1e6f : 16.0f, 1.0f, 100.0f);
+    gripLastNs = nowNs;
+    bool two = gestFingers.size() == 2 && !possessing && !squareActive && digDrag == DigDrag::None && roomClick == RoomClick::None && !endlessMap();
+    for (const auto& f : gestFingers) two = two && f.second.world;
+    if (two && (!local_state.camera.ready || get_local_view_type() != PVT_DungeonTop || get_local_map_fade() != PVT_None || a_menu_window_is_active())) two = false;
+    const int idx = two ? static_cast<int>(get_local_active_camera() - local_state.camera.current) : -1;
+    if (two && ((idx != CamIV_Isometric && idx != CamIV_FrontView) || local_state.camera.move_cam != nullptr)) two = false;
+    if (two) {
+        const auto* ustate = get_local_user_state();
+        if (player_instance_controls_camera(ustate->instance_num) || (ustate->init_flags & (UsrIF_KeyboardInputDisabled | UsrIF_MouseInputDisabled)) != 0) two = false;
+    }
+    if (!two) { gripping = false; return; }
+    // A spectator's camera follows the watched player until the fingers detach it.
+    if (observer_is_following_user()) detach_observer_camera();
+    auto a = gestFingers.begin(), b = std::next(a);
+    const auto pa = gamePosition(a->second.x, a->second.y), pb = gamePosition(b->second.x, b->second.y);
+    const grip::Fingers fingers{pa.x, pa.y, pb.x, pb.y};
+    const struct Camera* cam = &local_state.camera.destination[idx];
+    const grip::View view = viewOf(cam, idx);
+    const float shortSide = static_cast<float>(std::max<long>(1, std::min(RendererPhysicalWidth(), RendererPhysicalHeight())));
+    const grip::Tuning tuning{shortSide * .014f, shortSide * .02f, .10f, 33.0f, .5f};
+    if (!gripping || movedBySomethingElse(cam, idx)) {
+        // From what is on screen, not from the destination the smoothing may still be on its way to.
+        const grip::Pose shown = poseOf(&local_state.camera.current[idx]);
+        float mx, my; grip::midpoint(fingers, mx, my);
+        grip::take(gripGesture, fingers, view, shown, surfaceHeightAt(view, shown, mx, my));
+        gripping = true;
+        // The finger midpoint's pan and the recogniser's pinch/twist from before the grip are dropped.
+        panX = panY = zoomDelta = rotationDelta = 0;
+    }
+    grip::Pose pose = gripGesture.origin;
+    grip::follow(gripGesture, fingers, dtMs, view, tuning, rotateWithFingers ? 1.0f : -1.0f, pose);
+    showPose(idx, pose);
+}
+
+// ---- The endless world's full-screen map (2026-11-19, the user: its pinch jittered, and wanted a magnifier to hold).
+// A pinch zooms every drawn frame by the fingers' own spread, round the point between them, to any whole number of
+// pixels per slab (it stepped between ten levels after a set amount of pinching, and a twist could take it over).
+// The magnifying glass icon under the hint line: held, the magnifier shows, up and left of the finger, and follows it.
+static bool mapPinchOpen = false, mapPinchTracking = false;
+static float mapPinchStart = 0, mapPinchLast = 0;
+static void mapFrame() {
+    if (!endlessMap() || gestFingers.size() != 2) { mapPinchTracking = mapPinchOpen = false; return; }
+    auto a = gestFingers.begin(), b = std::next(a);
+    const auto pa = gamePosition(a->second.x, a->second.y), pb = gamePosition(b->second.x, b->second.y);
+    const float spread = std::max(1.0f, std::hypot(pb.x - pa.x, pb.y - pa.y));
+    if (!mapPinchTracking) { mapPinchTracking = true; mapPinchOpen = false; mapPinchStart = mapPinchLast = spread; return; }
+    const float shortSide = static_cast<float>(std::max<long>(1, std::min(RendererPhysicalWidth(), RendererPhysicalHeight())));
+    if (!mapPinchOpen) {
+        if (std::fabs(spread - mapPinchStart) < shortSide * .02f) return; // a two-finger tap must not zoom
+        mapPinchOpen = true;
+    }
+    parchment_pinch(std::log(spread / mapPinchLast), static_cast<long>((pa.x + pb.x) * .5f) / pixel_size, static_cast<long>((pa.y + pb.y) * .5f) / pixel_size);
+    mapPinchLast = spread;
+}
+static bool magnifierHeld = false;
+static SDL_FingerID magnifierFinger = 0;
+static void endMagnifier() { if (magnifierHeld) world_parchment_magnifier(false); magnifierHeld = false; }
+// True: the event was the magnifier's.
+static bool magnifierEvent(const SDL_Event* e, float x, float y) {
+    if (e->type == SDL_EVENT_FINGER_DOWN) {
+        if (magnifierHeld || !endlessMap() || !gestFingers.empty() || a_menu_window_is_active()) return false;
+        auto p = gamePosition(x,y);
+        if (!world_parchment_magnifier_icon_at(static_cast<long>(p.x), static_cast<long>(p.y))) return false;
+        magnifierHeld = true; magnifierFinger = e->tfinger.fingerID;
+        world_parchment_magnifier(true);
+        position(x,y);
+        return true;
+    }
+    if (!magnifierHeld || e->tfinger.fingerID != magnifierFinger) return false;
+    if (e->type == SDL_EVENT_FINGER_UP || !endlessMap()) endMagnifier();
+    else position(x,y);
+    return true;
+}
+
 extern "C" int KfxAndroidTouchEvent(const SDL_Event* e) {
     if (e->type==SDL_EVENT_RENDER_DEVICE_RESET || e->type==SDL_EVENT_RENDER_TARGETS_RESET || e->type==SDL_EVENT_RENDER_DEVICE_LOST) {
         presentationGeneration++;
@@ -832,9 +1145,9 @@ extern "C" int KfxAndroidTouchEvent(const SDL_Event* e) {
     }
     if (e->type == SDL_EVENT_WINDOW_FOCUS_LOST || e->type == SDL_EVENT_WILL_ENTER_BACKGROUND || e->type == SDL_EVENT_FINGER_CANCELED) {
         gestures.cancel(); drain(); panX=panY=zoomDelta=rotationDelta=0;
-        pendingTap.active = false; releaseClick(); endSquare(false); releaseSquareHold(nullptr); stopRoomClick(); endDropMode(true);
+        pendingTap.active = false; releaseClick(); endSquare(false); releaseSquareHold(nullptr); stopRoomClick();
         spentFingers.clear(); endPossessionInput(); // cancelled fingers send no lift; their ids come back
-        creatureTap = {}; thingActs.clear(); holdDeferred = dropHeld = rightIgnored = false;
+        holdDeferred = rightIgnored = false; endHandStroke(); gestFingers.clear(); endGrip(); endMagnifier();
         return 0;
     }
     if ((e->type == SDL_EVENT_KEY_DOWN || e->type == SDL_EVENT_KEY_UP) && KfxAndroidInputDiagnostics())
@@ -854,11 +1167,11 @@ extern "C" int KfxAndroidTouchEvent(const SDL_Event* e) {
         if (e->type == SDL_EVENT_FINGER_UP) spentFingers.erase(spent);
         return 1;
     }
+    if (magnifierEvent(e, x, y)) return 1;
     if (squareActive) { squareFingerEvent(e,x,y); return 1; }
-    if (dropMode) { dropFingerEvent(e); return 1; }
+    if (handFingerEvent(e, x, y)) return 1;
     if (e->type == SDL_EVENT_FINGER_DOWN && leftHeld && roomContext(holdAt.x,holdAt.y)) { startSquare(e->tfinger.fingerID,x,y,false); return 1; }
     if (e->type == SDL_EVENT_FINGER_DOWN && holdDeferred && digContext(holdAt.x,holdAt.y)) { startSquare(e->tfinger.fingerID,x,y,true); return 1; }
-    if (e->type == SDL_EVENT_FINGER_DOWN && holdDeferred && dropContext(holdAt.x,holdAt.y)) { startDropMode(e->tfinger.fingerID); return 1; }
     if (e->type == SDL_EVENT_FINGER_DOWN) lastFingerDown = e->tfinger.fingerID;
     if (e->type == SDL_EVENT_FINGER_DOWN) {
         releaseClick(); // a tap still held must not turn into a drag under the next finger
@@ -867,19 +1180,26 @@ extern "C" int KfxAndroidTouchEvent(const SDL_Event* e) {
         // Menus and the sidebar retain normal mouse dragging; world drags pan. The endless world's map is
         // dragged like a mouse drags it (it follows the finger), so it gets the left button instead.
         const auto* player = get_my_player();
-        mapZoomAcc = 0;
         bool world = player && !endlessMap() && (get_local_view_type() == PVT_DungeonTop || get_local_view_type() == PVT_MapScreen);
         gestures.setPanEnabled(world && inEngineWindow(gamePosition(x,y)));
+        // The first finger on the map is asked about by the hand's rules (it may come to drop or slap).
+        if (gestFingers.empty() && handInForce(x,y)) startHandStroke(e->tfinger.fingerID, x, y);
+        else endHandStroke(); // a second finger: the first one's stroke is part of something else now
+        gestFingers[e->tfinger.fingerID] = {x, y, world && inEngineWindow(gamePosition(x,y))};
         gestures.down(static_cast<int64_t>(e->tfinger.fingerID),x,y,SDL_GetTicks());
         if (pendingTap.active && SDL_GetTicks()-pendingTap.at < doubleTapMs
          && std::hypot(x-pendingTap.x, y-pendingTap.y) <= std::max(48.0f, gestures.slop()*3) && gestures.captureAsDrag()) {
             pendingTap.active = false;
             if (pendingTap.room) startRoomClick(Gkey_BestRoomSpace,false,x,y); else startDigDrag(x,y);
         }
-        if (creatureTap.active && !creatureTap.second && SDL_GetTicks()-creatureTap.at < doubleTapMs
-         && std::hypot(x-creatureTap.x, y-creatureTap.y) <= std::max(48.0f, gestures.slop()*3)) creatureTap.second = true;
-    } else if (e->type == SDL_EVENT_FINGER_UP) gestures.up(static_cast<int64_t>(e->tfinger.fingerID),x,y,SDL_GetTicks());
-    else gestures.move(static_cast<int64_t>(e->tfinger.fingerID),x,y,SDL_GetTicks());
+    } else if (e->type == SDL_EVENT_FINGER_UP) {
+        gestFingers.erase(e->tfinger.fingerID);
+        gestures.up(static_cast<int64_t>(e->tfinger.fingerID),x,y,SDL_GetTicks());
+    } else {
+        auto it = gestFingers.find(e->tfinger.fingerID);
+        if (it != gestFingers.end()) { it->second.x = x; it->second.y = y; }
+        gestures.move(static_cast<int64_t>(e->tfinger.fingerID),x,y,SDL_GetTicks());
+    }
     drain(); return 1;
 }
 extern "C" void KfxAndroidTouchTick(void) {
@@ -891,15 +1211,16 @@ extern "C" void KfxAndroidTouchTick(void) {
         position(pendingTap.x, pendingTap.y);
         tap();
     }
-    if (creatureTap.active && now-creatureTap.at >= (creatureTap.second ? 2000 : doubleTapMs)) queueThingAct(ThingAct::Pick);
-    stepThingAct();
+    frameCount++;
+    stepHand(now);
+    cameraFrame();
+    mapFrame();
+    if (magnifierHeld && !endlessMap()) endMagnifier();
     stepClick(now);
     stepDigDrag();
     stepSquare();
     stepRoomClick();
     repeatPickup(now);
-    stepDropMode(now);
-    repeatDrop(now);
     for (auto it = keyReleases.begin(); it != keyReleases.end();) {
         if (now < it->at) { ++it; continue; }
         pushKey(it->scancode, it->key, false);

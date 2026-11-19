@@ -10,9 +10,13 @@
  *
  * By day, heroes break in through the ceiling (the FALL spawn of scripts) at open spots about 60 slabs from the
  * player's heart (2026-11-14, the player: it was 100; never nearer than 40): parties of a Tunneller that digs its way to the heart and its followers (2-6 in all). The first
- * raid of a day always comes, the day's others one time in two (2026-11-11), at least four minutes apart. The player's best creature sets their levels, how many parties land at once and who
- * follows (2026-11-08: 1 party up to level 3, 1-2 to level 5, 1-3 to level 8, 2-4 to level 12, then 3-5; Thieves
- * and Tunnellers, then Dwarves, Archers, Barbarians, Monks, and from level 9 the heroes of the landing's biome).
+ * raid of a day always comes, the day's others one time in two (2026-11-11), at least four minutes apart, and none in
+ * the last two minutes of a day. A raid is bought with a threat budget (2026-11-18; it was the player's best creature):
+ * the army's fighting power (world_threat.c) x a curve of the dungeon's days x an adjustment from how the last raids
+ * went, growing at most 25% a raid; each hero costs its fighting power. At most 2 parties before day 8, then 3, the
+ * third landing 45-90 seconds after the others. The army's upper quarter of levels sets the leader's level and who may
+ * follow (Thieves and Tunnellers, then Dwarves, Archers, Barbarians, Monks, and from level 9 the heroes of the landing's
+ * biome); the followers come between its middle and upper quarter.
  * A raid's heroes stay until the next dawn, then walk back to where they landed and leave, and a party whose leader
  * dies goes home at once (2026-11-11; it was the dawn after their third night); no new raid comes for a player while
  * the last one's heroes are still there (the invasions are saved: RDS1).
@@ -23,6 +27,10 @@
 #include "world_attract.h"
 #include "world_daynight_art.h"
 #include "world_stream.h"
+#include "world_threat.h"
+#include "gui_draw.h"
+#include "custom_sprites.h"
+#include "sprites.h"
 #include "world_gen.h"
 #include <math.h>
 #include <stdlib.h>
@@ -340,6 +348,20 @@ static int dn_draw_day(int x, int y, int size)
 
 void world_daynight_draw(void)
 {
+    {
+        /* test switch KFX_WORLD_FLOWERTEST=1: a row of the level marks the Hand's list draws (levels 1, 4, 10, 11, 12,
+           25, 100) under the dial, for a screenshot (2026-11-19) */
+        static int on = -1;
+        if (on < 0)
+            on = (getenv("KFX_WORLD_FLOWERTEST") != NULL) ? 1 : 0;
+        if (on)
+        {
+            static const int lv[7] = {1, 4, 10, 11, 12, 25, 100};
+            const int upp = max(16, units_per_pixel_ui);
+            for (int k = 0; k < 7; k++)
+                draw_level_flower_left(MyScreenWidth / 3 + k * 40 * upp / 16, MyScreenHeight / 5, upp, lv[k] - 1);
+        }
+    }
     if (world_attract_active())
         return; /* the launcher's background: the picture alone */
     if (!world_mode_active())
@@ -372,8 +394,6 @@ void world_daynight_draw(void)
 /******************************************************************************/
 /* Raids by day */
 
-/* party size 2..6: the bigger, the rarer */
-static const int dn_party_weights[5] = {30, 30, 22, 12, 6};
 
 struct DnHero {
     const char *name;
@@ -426,6 +446,7 @@ static const char *const dn_biome_heroes[WgB_COUNT][2] = {
 #define DN_PARTY_GAP 8               /* slabs at least between two parties' landings */
 #define DN_MAX_PARTIES 5
 #define DN_RETREAT_NIGHTS 1          /* raiders go home at the next dawn (2026-11-11; it was after their third night) */
+#define DN_NIGHT_CLEAR (2 * 60 * 20) /* no raid lands in the last two minutes of a day (the night's packs come then) */
 #define DN_RAID_GAP (4 * 60 * 20)    /* turns at least between two raids of a day on a player, where the day has room */
 /* A raider whose party's leader died: it goes home at once (the mark is saved and streamed with the creature) */
 #define DN_FLEEING_MARK CHeroTsk_DefendParty
@@ -472,10 +493,18 @@ static uint64_t dn_player_salt(PlayerNumber plyr_idx);
  *  loading its landing chunks there; audit 2026-11-09). Player 0 keeps the time it always had. */
 static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_idx);
 
+/** The end of a day no raid lands in: DN_NIGHT_CLEAR, or a twentieth of it in a short (test) day where that would not
+ *  leave half the day. */
+static GameTurnDelta dn_night_clear(long day)
+{
+    const GameTurnDelta edge = dn_light(day) / 20;
+    return (DN_NIGHT_CLEAR < dn_light(day) / 2) ? max((GameTurnDelta)DN_NIGHT_CLEAR, edge) : edge;
+}
+
 static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_idx)
 {
     const GameTurnDelta edge = dn_light(day) / 20;
-    GameTurnDelta start = edge, end = dn_light(day) - edge;
+    GameTurnDelta start = edge, end = dn_light(day) - dn_night_clear(day); /* (it was the last twentieth: 36 seconds) */
     int slots = n, j = i; /* raid i is in slot j of the part of the day it comes in */
     if (world_seat_day(plyr_idx) <= 1)
     {
@@ -518,7 +547,60 @@ struct DnArea {
     int w, h;
     uint8_t *kind;
     uint8_t *mine; /* the player's slab */
+    uint8_t *reach; /* a Tunneller can get from here to the heart (dn_reach); NULL: not worked out */
 };
+
+/** Slabs a raid's Tunneller gets through on its way to the heart: not rock, gold, gems or lava, which it can't dig. It
+ *  digs earth, walks floors and water, and breaks or goes round a keeper's walls and doors. */
+static TbBool dn_tunnel_passable(SlabKind k)
+{
+    return (k != SlbT_ROCK) && (k != SlbT_GOLD) && (k != SlbT_DENSEGOLD) && (k != SlbT_GEMS) && (k != SlbT_LAVA);
+}
+
+/** The area's slabs from which a Tunneller can get to the heart: a flood from the heart's slab over the passable ones
+ *  (the user, 2026-11-19: "heroes can spawn in a single empty slab surrounded by Gold ... If the location does not have
+ *  a way out towards the Player's heart, then it should not spawn there"). */
+static void dn_reach(struct DnArea *a, MapSlabCoord hx, MapSlabCoord hy)
+{
+    const size_t n = (size_t)a->w * a->h;
+    a->reach = (uint8_t *)calloc(n, 1);
+    int32_t *queue = (int32_t *)malloc(sizeof(int32_t) * n);
+    if ((a->reach == NULL) || (queue == NULL) || (hx < a->x1) || (hy < a->y1) || (hx >= a->x1 + a->w) || (hy >= a->y1 + a->h))
+    {
+        free(a->reach);
+        a->reach = NULL;
+        free(queue);
+        return;
+    }
+    size_t head = 0, tail = 0;
+    const int32_t start = (int32_t)((hy - a->y1) * a->w + (hx - a->x1));
+    a->reach[start] = 1;
+    queue[tail++] = start;
+    static const int dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
+    while (head < tail)
+    {
+        const int32_t c = queue[head++];
+        const int cx = c % a->w, cy = c / a->w;
+        for (int d = 0; d < 4; d++)
+        {
+            const int nx = cx + dx[d], ny = cy + dy[d];
+            if ((nx < 0) || (ny < 0) || (nx >= a->w) || (ny >= a->h))
+                continue;
+            const int32_t nc = ny * a->w + nx;
+            if (a->reach[nc] || !dn_tunnel_passable((SlabKind)a->kind[nc]))
+                continue;
+            a->reach[nc] = 1;
+            queue[tail++] = nc;
+        }
+    }
+    free(queue);
+}
+
+/** Can a raid's Tunneller get from this landing to the heart? */
+static TbBool dn_reachable(const struct DnArea *a, MapSlabCoord x, MapSlabCoord y)
+{
+    return (a->reach == NULL) || (a->reach[(size_t)(y - a->y1) * a->w + (size_t)(x - a->x1)] != 0);
+}
 
 static SlabKind dn_kind(const struct DnArea *a, MapSlabCoord x, MapSlabCoord y)
 {
@@ -553,33 +635,59 @@ static int dn_line_blockers(const struct DnArea *a, MapSlabCoord x0, MapSlabCoor
     return blockers;
 }
 
-/** A player's best creature level (1-based), imps not counted: mining imps and Create Imp's level 3 imps outgrew the
- *  army and brought raids far above it (audit 2026-11-09). */
-static int dn_keeper_best_level(PlayerNumber plyr_idx)
+/* The threat budget (the user, 2026-11-18: "Raiders are overperforming. Especially when 3 at a time start to spawn. We
+ * need to move away from the based-on-highest-creature-level rule"). A raid is bought with a budget: the army's
+ * fighting power (world_threat.c) times a curve of the dungeon's days times an adjustment from how the last raids went,
+ * growing at most DN_BUDGET_GROWTH a raid. Each hero costs its own fighting power. */
+#define DN_CURVE_DAY1 0.5            /* the budget against the army on a dungeon's first day ... */
+#define DN_CURVE_STEP 0.05           /* ... and each day after ... */
+#define DN_CURVE_TOP 1.2             /* ... up to this (day 15) */
+#define DN_BUDGET_GROWTH 1.25        /* a raid's budget is at most this times the last one's */
+#define DN_ADJUST_MIN 0.6            /* the adjustment from the last raids: between these */
+#define DN_ADJUST_MAX 1.3
+#define DN_ADJUST_UP 1.1             /* a raid crushed with almost no losses: the next one this much stronger */
+#define DN_ADJUST_DOWN 0.8           /* a raid that hurt: the next one this much weaker */
+#define DN_ADJUST_RESTART 0.7        /* a dungeon that fell starts again this low */
+#define DN_LOSS_SMALL 0.10           /* army lost: "almost none" up to this share ... */
+#define DN_LOSS_BIG 0.40             /* ... "it hurt" from this share */
+#define DN_KILLED_CRUSHED 0.6        /* "crushed": at least this share of the raiders killed */
+#define DN_PARTIES_EARLY 2           /* at most this many parties a raid before day DN_PARTIES_LATE_DAY ... */
+#define DN_PARTIES_LATE 3            /* ... and this many after */
+#define DN_PARTIES_LATE_DAY 8
+#define DN_LATE_TURNS (45 * 20)      /* a third party lands 45 to 90 seconds after the others, from another side */
+#define DN_LEADER_DAY_STEP 5         /* the leader: a level more for every this many days ... */
+#define DN_LEADER_DAY_MAX 3          /* ... at most this many */
+
+/** The threat state of each player (saved: THR1). */
+struct DnThreat {
+    float adjust;       /* 0: not set yet (1.0) */
+    float last_budget;  /* the last raid's budget; 0: none yet (no growth cap) */
+    float raid_army;    /* the keeper's army power when the raid on now landed; 0: not tracking one */
+    float raid_power;   /* that raid's power */
+    int32_t heart_hp;   /* the heart's health then */
+    int32_t heart_min;  /* its lowest health during the raid */
+    int32_t heart_idx;  /* its index (another heart now: it fell) */
+    int16_t made, killed; /* the raid's heroes, landed and killed */
+};
+static struct DnThreat dn_thr[PLAYERS_MAX];
+
+/** A raid's third party, landing later (dn_late_turn). Not saved: a load before it lands drops it. */
+struct DnLate {
+    uint8_t active;
+    GameTurn at;
+    int64_t wx, wy;             /* where, world slab */
+    int32_t day;
+    int idx, n;
+    ThingModel models[6];
+    int levels[6];
+    double cost;
+    uint64_t seed;
+};
+static struct DnLate dn_late[PLAYERS_MAX];
+
+static double dn_adjust(PlayerNumber p)
 {
-    struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
-    int best = 1;
-    if (dungeon_invalid(dungeon))
-        return best;
-    ThingIndex lists[1] = {dungeon->creatr_list_start};
-    for (int l = 0; l < 1; l++)
-    {
-        long i = lists[l];
-        long guard = 0;
-        while ((i > 0) && (guard++ < CREATURES_COUNT))
-        {
-            struct Thing *thing = thing_get(i);
-            if (!thing_exists(thing))
-                break;
-            struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
-            if (creature_control_invalid(cctrl))
-                break;
-            i = cctrl->players_next_creature_idx;
-            if (cctrl->exp_level + 1 > best)
-                best = cctrl->exp_level + 1;
-        }
-    }
-    return best;
+    return ((p >= 0) && (p < PLAYERS_MAX) && (dn_thr[p].adjust > 0.0f)) ? (double)dn_thr[p].adjust : 1.0;
 }
 
 static ThingModel dn_model(const char *name)
@@ -659,15 +767,17 @@ static TbBool dn_raid_happens(long day, int i, PlayerNumber plyr_idx)
 /* creature_states_hero.c, not in a header */
 TbBool script_support_send_tunneller_to_dungeon_heart(struct Thing *creatng, PlayerNumber plyr_idx);
 
-/** Levels for a party of n: the leader at best + 1 + 1 per 3 days survived, the others spread evenly from just
- *  under best down to half of it, each moved by -1, 0 or +1. */
-static void dn_party_levels(struct DnRng *rng, int n, int best, long day, int *levels)
+/** Levels for a party of n (2026-11-18, the threat budget): the leader a level above the army's upper quarter, and a
+ *  level more for every DN_LEADER_DAY_STEP days (at most DN_LEADER_DAY_MAX); the others spread evenly from the upper
+ *  quarter down to the army's middle level; each moved by -1, 0 or +1. (It was: the leader at the best creature + 1 +
+ *  1 per 3 days, the others from just under the best down to half of it.) */
+static void dn_party_levels(struct DnRng *rng, int n, int upper, int median, long day, int *levels)
 {
-    levels[0] = best + 1 + (int)((day - 1) / 3);
+    levels[0] = upper + 1 + min((int)((day - 1) / DN_LEADER_DAY_STEP), DN_LEADER_DAY_MAX);
     const int m = n - 1;
-    const double low = best / 2.0;
+    const double low = (median < upper) ? median : upper;
     for (int j = 1; j <= m; j++)
-        levels[j] = (int)floor(low + (best - low) * (double)(m - j) / (double)m + 0.5);
+        levels[j] = (int)floor(low + (upper - low) * (double)(m - j) / (double)((m > 1) ? m - 1 : 1) + 0.5);
     for (int j = 0; j < n; j++)
     {
         levels[j] += (int)dn_rand(rng, 3) - 1;
@@ -699,6 +809,38 @@ TbBool world_raid_hero(const struct Thing *thing);
 TbBool world_raid_on(PlayerNumber plyr_idx)
 {
     return (plyr_idx >= 0) && (plyr_idx < PLAYERS_MAX) && dn_inv[plyr_idx].active && !dn_inv[plyr_idx].retreating;
+}
+
+TbBool world_raid_present(PlayerNumber plyr_idx)
+{
+    return (plyr_idx >= 0) && (plyr_idx < PLAYERS_MAX) && (dn_inv[plyr_idx].active || dn_late[plyr_idx].active);
+}
+
+static int dn_raider_invasion(const struct Thing *thing);
+
+TbBool world_raid_at_dungeon(PlayerNumber plyr_idx, int slabs)
+{
+    if (!world_raid_present(plyr_idx))
+        return false;
+    struct Thing *heart = find_players_dungeon_heart(plyr_idx);
+    struct Dungeon *heroes = get_players_num_dungeon(PLAYER_GOOD);
+    if (!thing_exists(heart) || dungeon_invalid(heroes))
+        return false;
+    const long hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
+    long guard = 0;
+    for (ThingIndex i = heroes->creatr_list_start; (i > 0) && (guard++ < CREATURES_COUNT);)
+    {
+        struct Thing *thing = thing_get(i);
+        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        if (thing_is_invalid(thing) || creature_control_invalid(cctrl))
+            break;
+        i = cctrl->players_next_creature_idx;
+        if (!world_raid_hero(thing) || (dn_raider_invasion(thing) != plyr_idx) || creature_is_dying(thing))
+            continue;
+        if ((labs((long)subtile_slab(thing->mappos.x.stl.num) - hx) <= slabs) && (labs((long)subtile_slab(thing->mappos.y.stl.num) - hy) <= slabs))
+            return true;
+    }
+    return false;
 }
 
 /** The invasion a raider belongs to: its target's, else the one whose landing is nearest; -1 none. */
@@ -1557,8 +1699,8 @@ TbBool world_raid_leader_send(struct Thing *creatng)
     struct RaidGuide *g = rg_of(creatng);
     if (g == NULL)
         return false;
-    if (world_wallbreak_busy(creatng) || rg_break_wall(creatng, g, hx, hy))
-        return true; /* at a wall it breaks: it stays */
+    if (world_wallbreak_busy(creatng) || rg_break_wall(creatng, g, hx, hy) || world_wallbreak_busy(creatng))
+        return true; /* at a wall it breaks: it stays (the last: it broke one just now and steps into the hole) */
     struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
     cctrl->party.target_plyr_idx = target;
     if ((g->walk_turn == 0) || ((GameTurnDelta)(game.play_gameturn - g->walk_turn) >= RG_WALK_SOON) || rg_at_end(creatng, g, cctrl))
@@ -1602,6 +1744,13 @@ TbBool world_raid_leader_resume(struct Thing *creatng)
 
 void world_raid_creature_died(struct Thing *thing)
 {
+    if (world_raid_hero(thing))
+    {
+        /* the raid's toll (dn_threat_outcome: a raid crushed makes the next one stronger) */
+        const int tp = dn_raider_invasion(thing);
+        if ((tp >= 0) && (tp < PLAYERS_MAX) && (dn_thr[tp].made > 0))
+            dn_thr[tp].killed++;
+    }
     if (!world_raid_hero(thing) || !creature_is_group_leader(thing))
         return;
     /* the leader of a raiding party died: the rest of the party goes home at once (2026-11-11) */
@@ -1652,6 +1801,8 @@ TbBool world_raid_hero_goes_home(struct Thing *thing)
 
 /** Every 16 turns: invasions end when their raiders are gone, turn back at the next dawn; raiders of an older save
  *  (no invasion yet) start one. */
+static void dn_threat_outcome(PlayerNumber p);
+
 static void dn_invasions_turn(long day, GameTurnDelta t)
 {
     if ((game.play_gameturn % 16) != 5)
@@ -1716,13 +1867,177 @@ static void dn_invasions_turn(long day, GameTurnDelta t)
     }
     for (int p = 0; p < PLAYERS_COUNT; p++)
     {
-        if (dn_inv[p].active && (count[p] == 0))
+        if (dn_inv[p].active && (count[p] == 0) && !dn_late[p].active)
         {
             SYNCLOG("World: the raid on player %d (day %d) is over", p, (int)dn_inv[p].day);
             memset(&dn_inv[p], 0, sizeof(dn_inv[p]));
+            dn_threat_outcome(p);
             world_progress_raid_over(p);
+        } else if (dn_inv[p].active && (dn_thr[p].raid_army > 0.0f))
+        {
+            /* the heart's lowest health while the raid is on (it heals: at the end it could look untouched) */
+            struct Thing *heart = find_players_dungeon_heart(p);
+            if (thing_exists(heart) && ((int32_t)heart->index == dn_thr[p].heart_idx) && (heart->health < dn_thr[p].heart_min))
+                dn_thr[p].heart_min = (int32_t)heart->health;
         }
     }
+}
+
+/** A raid's party lands at engine slab (sx, sy) for a player: n heroes (the first a Tunneller, its leader) of those
+ *  models and levels, through the ceiling (the FALL spawn of scripts). Returns how many came; desc: "KIND level, ...". */
+static int dn_land_party(PlayerNumber plyr_idx, MapSlabCoord sx, MapSlabCoord sy, int n, const ThingModel *models,
+    const int *levels, struct DnRng *rng, char *desc, size_t desc_size)
+{
+    struct Thing *leader = INVALID_THING;
+    int made = 0, dlen = 0;
+    desc[0] = 0;
+    for (int k = 0; k < n; k++)
+    {
+        if (!creature_count_below_map_limit(0))
+        {
+            WARNLOG("World: raid stopped at the creature limit");
+            break;
+        }
+        const ThingModel model = thing_is_invalid(leader) ? dn_model("TUNNELLER") : models[k];
+        if (model <= 0)
+            continue;
+        struct Coord3d pos;
+        pos.x.val = subtile_coord_center(slab_subtile_center(sx)) + (MapCoord)((int)dn_rand(rng, 193) - 96);
+        pos.y.val = subtile_coord_center(slab_subtile_center(sy)) + (MapCoord)((int)dn_rand(rng, 193) - 96);
+        pos.z.val = 0;
+        struct Thing *thing = create_thing_at_position_then_move_to_valid_and_add_light(&pos, TCls_Creature, model,
+            PLAYER_GOOD);
+        if (thing_is_invalid(thing))
+            continue;
+        /* the FALL spawn of script commands: through the ceiling */
+        thing->mappos.z.val = get_ceiling_height(&thing->mappos);
+        create_effect(&thing->mappos, TngEff_CeilingBreach, thing->owner);
+        initialise_thing_state(thing, CrSt_CreatureHeroEntering);
+        set_flag(thing->rendering_flags, TRF_Invisible);
+        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        cctrl->countdown = 24 + 8 * k;
+        init_creature_level(thing, (CrtrExpLevel)(levels[k] - 1));
+        cctrl->party.original_objective = CHeroTsk_AttackEnemies; /* marks raid heroes (world_raid_hero) */
+        if (thing_is_invalid(leader))
+        {
+            /* the Tunneller leads, digging its way to the heart, like ADD_TUNNELLER_PARTY_TO_LEVEL */
+            leader = thing;
+            if (!script_support_send_tunneller_to_dungeon_heart(thing, plyr_idx))
+                cctrl->party.objective = CHeroTsk_AttackEnemies;
+            cctrl->party.target_plyr_idx = plyr_idx;
+        } else
+        {
+            cctrl->party.objective = CHeroTsk_AttackEnemies;
+            cctrl->party.target_plyr_idx = plyr_idx;
+            add_creature_to_group(thing, leader);
+        }
+        made++;
+        if (dlen < (int)desc_size - 24)
+            dlen += snprintf(desc + dlen, desc_size - dlen, "%s%s %d", (made > 1) ? ", " : "", creature_code_name(model),
+                (int)cctrl->exp_level + 1);
+    }
+    return made;
+}
+
+/** A party's price: each hero's fighting power (world_threat_power), as the army is measured. */
+static double dn_party_cost(int n, const ThingModel *models, const int *levels)
+{
+    double c = 0.0;
+    for (int k = 0; k < n; k++)
+        c += world_threat_power(models[k], levels[k]);
+    return c;
+}
+
+
+/** Each turn: the third parties whose time has come land (when their raid is still on). */
+static void dn_late_turn(void)
+{
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+    {
+        struct DnLate *late = &dn_late[p];
+        if (!late->active || (game.play_gameturn < late->at))
+            continue;
+        late->active = 0;
+        if (dn_thr[p].raid_power > (float)late->cost)
+            dn_thr[p].raid_power -= (float)late->cost; /* (planned with it: put back when it lands) */
+        MapSlabCoord sx, sy;
+        if (!dn_inv[p].active || dn_inv[p].retreating)
+        {
+            SYNCLOG("World: day %d raid %d's late party doesn't come for player %d: the raid is over", (int)late->day,
+                late->idx + 1, (int)p);
+            continue;
+        }
+        if (!world_engine_slab(late->wx, late->wy, &sx, &sy) && !world_engine_slab_unloaded(late->wx, late->wy, &sx, &sy))
+        {
+            SYNCLOG("World: day %d raid %d's late party doesn't come for player %d: its landing is out of the map",
+                (int)late->day, late->idx + 1, (int)p);
+            continue;
+        }
+        world_load_chunks_landing_world(late->wx, late->wy); /* (its chunk went out with nobody there meanwhile) */
+        struct DnRng rng = {late->seed};
+        char desc[200];
+        const int made = dn_land_party(p, sx, sy, late->n, late->models, late->levels, &rng, desc, sizeof(desc));
+        if (made == 0)
+            continue;
+        if (dn_inv[p].nspots < DN_MAX_PARTIES)
+        {
+            dn_inv[p].spot_x[dn_inv[p].nspots] = late->wx;
+            dn_inv[p].spot_y[dn_inv[p].nspots] = late->wy;
+            dn_inv[p].nspots++;
+        }
+        dn_thr[p].made = (int16_t)(dn_thr[p].made + made);
+        dn_thr[p].raid_power += (float)late->cost;
+        SYNCLOG("World: day %d raid %d's late party: %d heroes tunnel in at engine slab (%d,%d) for player %d: %s"
+            " (power %.0f)", (int)late->day, late->idx + 1, made, (int)sx, (int)sy, (int)p, desc, late->cost);
+    }
+}
+
+/** A raid on a player is over (its heroes all dead or gone): how it went sets the next raids' adjustment. */
+static void dn_threat_outcome(PlayerNumber p)
+{
+    struct DnThreat *th = &dn_thr[p];
+    if (th->raid_army <= 0.0f)
+        return;
+    struct WorldArmy army;
+    world_threat_army(p, &army);
+    double loss = ((double)th->raid_army - army.power) / (double)th->raid_army;
+    if (loss < 0.0)
+        loss = 0.0;
+    if (loss > 1.0)
+        loss = 1.0;
+    struct Thing *heart = find_players_dungeon_heart(p);
+    const TbBool fell = !thing_exists(heart) || ((int32_t)heart->index != th->heart_idx);
+    const TbBool hurt = !fell && (th->heart_hp > 0) && (th->heart_min < th->heart_hp * 9 / 10);
+    const double killed = (th->made > 0) ? (double)th->killed / (double)th->made : 0.0;
+    const double before = dn_adjust(p);
+    double a = before;
+    const char *how;
+    if (fell)
+    {
+        a = DN_ADJUST_RESTART;
+        how = "the heart fell";
+    } else if (hurt || (loss >= DN_LOSS_BIG))
+    {
+        a *= DN_ADJUST_DOWN;
+        how = hurt ? "the heart was hurt" : "the army lost much";
+    } else if ((loss <= DN_LOSS_SMALL) && (killed >= DN_KILLED_CRUSHED))
+    {
+        a *= DN_ADJUST_UP;
+        how = "crushed";
+    } else
+        how = "held";
+    if (a < DN_ADJUST_MIN)
+        a = DN_ADJUST_MIN;
+    if (a > DN_ADJUST_MAX)
+        a = DN_ADJUST_MAX;
+    SYNCLOG("World: the raid on player %d (power %.0f, %d heroes, %d killed) is over: army %.0f -> %.0f (%.0f%% lost), %s:"
+        " adjustment %.2f -> %.2f", (int)p, (double)th->raid_power, (int)th->made, (int)th->killed, (double)th->raid_army,
+        army.power, loss * 100.0, how, before, a);
+    th->adjust = (float)a;
+    th->raid_army = 0.0f;
+    th->raid_power = 0.0f;
+    th->heart_hp = th->heart_min = th->heart_idx = 0;
+    th->made = th->killed = 0;
 }
 
 static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
@@ -1758,7 +2073,7 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         by2 = hy + reach;
     }
     const int w = bx2 - bx1 + 1, h = by2 - by1 + 1;
-    struct DnArea area = {bx1, by1, w, h, (uint8_t *)malloc((size_t)w * h), (uint8_t *)malloc((size_t)w * h)};
+    struct DnArea area = {bx1, by1, w, h, (uint8_t *)malloc((size_t)w * h), (uint8_t *)malloc((size_t)w * h), NULL};
     /* where to land: open ground at least DN_SPAWN_MIN_DIST out whose straight line to the heart crosses the
      * fewest slabs a Tunneller can't dig (big rock masses leave Tunnellers stuck: they can only dig round them),
      * and of those the closest to DN_SPAWN_DIST slabs (all within DN_SPAWN_SLACK of it count as equal) */
@@ -1769,14 +2084,16 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         free(cand);
         free(area.kind);
         free(area.mine);
+        free(area.reach);
         return;
     }
+    dn_reach(&area, hx, hy); /* only where a Tunneller can get to the heart from */
     int ncand = 0, best_blockers = -1, best_off = 0;
     for (MapSlabCoord y = by1; y <= by2; y++)
     {
         for (MapSlabCoord x = bx1; x <= bx2; x++)
         {
-            if (!dn_landing(&area, x, y))
+            if (!dn_landing(&area, x, y) || !dn_reachable(&area, x, y))
                 continue;
             const double d = sqrt((double)(x - hx) * (x - hx) + (double)(y - hy) * (y - hy));
             if (d < DN_SPAWN_MIN_DIST)
@@ -1800,16 +2117,48 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         free(cand);
         free(area.kind);
         free(area.mine);
+        free(area.reach);
         SYNCLOG("World: day %ld raid %d skipped: no open ground at least %d slabs from the heart", day, idx + 1,
             DN_SPAWN_MIN_DIST);
         return;
     }
-    /* how many parties: by the player's best creature, each party landing on its own spot */
-    const int best = dn_keeper_best_level(plyr_idx);
-    const int coop_bonus = world_coop_level_bonus(plyr_idx);
-    const int tier = dn_tier_for(best);
-    const int want = dn_tiers[tier].parties_min +
-        (int)dn_rand(&rng, (uint32_t)(dn_tiers[tier].parties_max - dn_tiers[tier].parties_min + 1));
+    /* the threat budget (2026-11-18): the whole army, not its best creature */
+    struct WorldArmy army;
+    world_threat_army(plyr_idx, &army);
+    double power = army.power;
+    int upper = army.upper, median = army.median;
+    const PlayerNumber partner = world_coop_partner(plyr_idx);
+    TbBool pair = false;
+    if ((partner >= 0) && (partner < PLAYERS_COUNT) && (partner != plyr_idx) && world_coop_allies(plyr_idx, partner))
+    {
+        /* co-op: the party's two armies measured together and the budget shared between the two dungeons (it was: the
+           heroes a level higher) */
+        struct WorldArmy pa;
+        world_threat_army(partner, &pa);
+        power = (power + pa.power) / 2.0;
+        upper = (upper + pa.upper + 1) / 2;
+        median = (median + pa.median + 1) / 2;
+        pair = true;
+    }
+    const long sday = world_seat_day(plyr_idx); /* the dungeon's own days */
+    double curve = DN_CURVE_DAY1 + DN_CURVE_STEP * (double)(sday - 1);
+    if (curve > DN_CURVE_TOP)
+        curve = DN_CURVE_TOP;
+    const double adjust = dn_adjust(plyr_idx);
+    double budget = power * curve * adjust;
+    TbBool capped = false;
+    if ((dn_thr[plyr_idx].last_budget > 0.0f) && (budget > (double)dn_thr[plyr_idx].last_budget * DN_BUDGET_GROWTH))
+    {
+        budget = (double)dn_thr[plyr_idx].last_budget * DN_BUDGET_GROWTH;
+        capped = true;
+    }
+    const int tier = dn_tier_for(upper); /* which heroes may come: by the army's upper quarter */
+    int want = (sday < DN_PARTIES_LATE_DAY) ? DN_PARTIES_EARLY : DN_PARTIES_LATE; /* landing spots: the most */
+    {
+        const char *v = getenv("KFX_WORLD_RAIDPARTIES"); /* test switch: this many at most, whatever the day */
+        if ((v != NULL) && (atoi(v) >= 1) && (atoi(v) <= DN_PARTIES_LATE))
+            want = atoi(v);
+    }
     MapSlabCoord spot_x[DN_MAX_PARTIES], spot_y[DN_MAX_PARTIES];
     int nspots = 0;
     {
@@ -1829,7 +2178,7 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         for (MapSlabCoord y = by1; (all != NULL) && (y <= by2); y++)
             for (MapSlabCoord x = bx1; x <= bx2; x++)
             {
-                if (!dn_landing(&area, x, y))
+                if (!dn_landing(&area, x, y) || !dn_reachable(&area, x, y))
                     continue;
                 const double d = sqrt((double)(x - hx) * (x - hx) + (double)(y - hy) * (y - hy));
                 if (d < DN_SPAWN_MIN_DIST)
@@ -1866,103 +2215,111 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
     free(cand);
     free(area.kind);
     free(area.mine);
+    free(area.reach);
     struct DnInvasion inv;
     memset(&inv, 0, sizeof(inv));
-    int made_all = 0;
+    int made_all = 0, parties = 0;
+    double spent = 0.0;
+    dn_late[plyr_idx].active = 0;
     for (int s = 0; s < nspots; s++)
     {
         const MapSlabCoord sx = spot_x[s], sy = spot_y[s];
+        const int biome = world_biome_at_engine_slab(sx, sy);
+        struct DnPool pool;
+        dn_make_pool(tier, biome, &pool);
+        /* the party: as big as its share of what is left of the budget buys (2 to 6 heroes), a size smaller now and
+           then for variety; its heroes and levels as the army's (dn_party_levels) */
+        int levels[6];
+        ThingModel models[6];
+        dn_party_levels(&rng, 6, upper, median, sday, levels);
+        models[0] = dn_model("TUNNELLER");
+        for (int k = 1; k < 6; k++)
+            models[k] = dn_pick_follower(&rng, &pool);
+        const double left = budget - spent;
+        const double share = left / (double)(nspots - s);
+        int n = 6;
+        double cost = dn_party_cost(n, models, levels);
+        while ((n > 2) && (cost > share))
+            cost = dn_party_cost(--n, models, levels);
+        if ((n > 2) && (dn_rand(&rng, 4) == 0))
+            cost = dn_party_cost(--n, models, levels);
+        if ((cost > left) && (s == 0))
+        {
+            /* the first party always comes (a raid is never nothing): weaker until it fits, or all at level 1 */
+            TbBool lowered = true;
+            while ((cost > left) && lowered)
+            {
+                lowered = false;
+                for (int k = 0; k < n; k++)
+                    if (levels[k] > 1)
+                    {
+                        levels[k]--;
+                        lowered = true;
+                    }
+                cost = dn_party_cost(n, models, levels);
+            }
+        } else if (cost > left)
+            break; /* the budget is spent */
+        spent += cost;
+        parties++;
+        if (s >= 2)
+        {
+            /* a third party comes later, from another side (the user, 2026-11-18: "Especially when 3 at a time start
+               to spawn") */
+            struct DnLate *late = &dn_late[plyr_idx];
+            memset(late, 0, sizeof(*late));
+            late->active = 1;
+            late->at = game.play_gameturn + DN_LATE_TURNS + (GameTurn)dn_rand(&rng, DN_LATE_TURNS);
+            world_slab_to_world(sx, sy, &late->wx, &late->wy);
+            late->day = (int32_t)day;
+            late->idx = idx;
+            late->n = n;
+            late->cost = cost;
+            late->seed = rng.s ^ 0x1A7E1A7EULL;
+            memcpy(late->models, models, sizeof(models));
+            memcpy(late->levels, levels, sizeof(levels));
+            SYNCLOG("World: day %ld raid %d party %d: %d heroes (power %.0f) land in %ld seconds", day, idx + 1, s + 1, n,
+                cost, (long)((late->at - game.play_gameturn) / 20));
+            continue;
+        }
         /* the chunked world: the landing's own chunk comes in now and the eight round it in the next turns, first in
            the chunk manager's queue (all nine at once were a 30 to 70 ms turn; the heroes stand still for their first
            24 turns and more, and keep chunks loaded round them from then on) */
         const int landing_chunks = world_load_chunks_landing(sx, sy);
         if (landing_chunks > 0)
             SYNCLOG("World: day %ld raid %d: the chunk of landing %d loaded, the ones round it follow", day, idx + 1, s + 1);
-        const int biome = world_biome_at_engine_slab(sx, sy);
-        struct DnPool pool;
-        dn_make_pool(tier, biome, &pool);
-        /* the party */
-        int total = 0;
-        for (int i = 0; i < 5; i++)
-            total += dn_party_weights[i];
-        int r = (int)dn_rand(&rng, (uint32_t)total), n = 2;
-        for (int i = 0; i < 5; i++)
-        {
-            if (r < dn_party_weights[i])
-            {
-                n = 2 + i;
-                break;
-            }
-            r -= dn_party_weights[i];
-        }
-        int levels[6];
-        dn_party_levels(&rng, n, best, world_seat_day(plyr_idx), levels); /* the dungeon's own days */
-        /* co-op: the heroes that come for a keeper in a party are a level higher */
-        for (int j = 0; (j < n) && (coop_bonus > 0); j++)
-            levels[j] = min(levels[j] + coop_bonus, DN_LEVEL_CAP);
-        struct Thing *leader = INVALID_THING;
-        int made = 0;
         char desc[200];
-        int dlen = 0;
-        desc[0] = 0;
-        for (int k = 0; k < n; k++)
-        {
-            if (!creature_count_below_map_limit(0))
-            {
-                WARNLOG("World: raid stopped at the creature limit");
-                break;
-            }
-            const ThingModel model = thing_is_invalid(leader) ? dn_model("TUNNELLER") : dn_pick_follower(&rng, &pool);
-            if (model <= 0)
-                continue;
-            struct Coord3d pos;
-            pos.x.val = subtile_coord_center(slab_subtile_center(sx)) + (MapCoord)((int)dn_rand(&rng, 193) - 96);
-            pos.y.val = subtile_coord_center(slab_subtile_center(sy)) + (MapCoord)((int)dn_rand(&rng, 193) - 96);
-            pos.z.val = 0;
-            struct Thing *thing = create_thing_at_position_then_move_to_valid_and_add_light(&pos, TCls_Creature, model,
-                PLAYER_GOOD);
-            if (thing_is_invalid(thing))
-                continue;
-            /* the FALL spawn of script commands: through the ceiling */
-            thing->mappos.z.val = get_ceiling_height(&thing->mappos);
-            create_effect(&thing->mappos, TngEff_CeilingBreach, thing->owner);
-            initialise_thing_state(thing, CrSt_CreatureHeroEntering);
-            set_flag(thing->rendering_flags, TRF_Invisible);
-            struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
-            cctrl->countdown = 24 + 8 * k;
-            init_creature_level(thing, (CrtrExpLevel)(levels[k] - 1));
-            cctrl->party.original_objective = CHeroTsk_AttackEnemies; /* marks raid heroes (world_raid_hero) */
-            if (thing_is_invalid(leader))
-            {
-                /* the Tunneller leads, digging its way to the heart, like ADD_TUNNELLER_PARTY_TO_LEVEL */
-                leader = thing;
-                if (!script_support_send_tunneller_to_dungeon_heart(thing, plyr_idx))
-                    cctrl->party.objective = CHeroTsk_AttackEnemies;
-                cctrl->party.target_plyr_idx = plyr_idx;
-            } else
-            {
-                cctrl->party.objective = CHeroTsk_AttackEnemies;
-                cctrl->party.target_plyr_idx = plyr_idx;
-                add_creature_to_group(thing, leader);
-            }
-            made++;
-            if (dlen < (int)sizeof(desc) - 24)
-                dlen += snprintf(desc + dlen, sizeof(desc) - dlen, "%s%s %d", (made > 1) ? ", " : "",
-                    creature_code_name(model), (int)cctrl->exp_level + 1);
-        }
+        const int made = dn_land_party(plyr_idx, sx, sy, n, models, levels, &rng, desc, sizeof(desc));
         if (made == 0)
             continue;
         world_slab_to_world(sx, sy, &inv.spot_x[inv.nspots], &inv.spot_y[inv.nspots]);
         inv.nspots++;
         made_all += made;
         const long dist = (long)floor(sqrt((double)(sx - hx) * (sx - hx) + (double)(sy - hy) * (sy - hy)) + 0.5);
-        SYNCLOG("World: day %ld raid %d party %d of %d: %d heroes tunnel in at engine slab (%d,%d), %ld slabs from the"
-            " heart, %s: %s (player's best level %d, the dungeon's day %ld%s)", day, idx + 1, s + 1, nspots, made, (int)sx,
-            (int)sy, dist, wg_biome_name(biome), desc, best, world_seat_day(plyr_idx),
-            (coop_bonus > 0) ? "; a level higher: the keeper is in a party" : "");
+        SYNCLOG("World: day %ld raid %d party %d: %d heroes tunnel in at engine slab (%d,%d), %ld slabs from the heart,"
+            " %s: %s (power %.0f)", day, idx + 1, s + 1, made, (int)sx, (int)sy, dist, wg_biome_name(biome), desc, cost);
     }
+    SYNCLOG("World: day %ld raid %d on player %d: army %.0f (%d creatures; levels: middle %d, upper quarter %d, best %d)%s;"
+        " the dungeon's day %ld: curve %.2f x adjustment %.2f = budget %.0f%s; %d parties, power %.0f", day, idx + 1,
+        (int)plyr_idx, army.power, army.count, army.median, army.upper, army.best,
+        pair ? ", measured with its party partner's" : "", sday, curve, adjust, budget,
+        capped ? " (capped: at most 25% more than the last raid)" : "", parties, spent);
     if (made_all == 0)
+    {
+        dn_late[plyr_idx].active = 0;
         return;
+    }
+    {
+        struct DnThreat *th = &dn_thr[plyr_idx];
+        th->last_budget = (float)budget;
+        th->raid_army = (float)((army.power > 1.0) ? army.power : 1.0);
+        th->raid_power = (float)spent;
+        th->heart_hp = (int32_t)heartng->health;
+        th->heart_min = th->heart_hp;
+        th->heart_idx = (int32_t)heartng->index;
+        th->made = (int16_t)made_all;
+        th->killed = 0;
+    }
     world_progress_raid(plyr_idx, day, idx, world_seed()); /* its book: only for a raid that came (audit 2026-11-09) */
     inv.active = 1;
     inv.day = (int32_t)day;
@@ -2130,6 +2487,149 @@ TbBool world_raids_extra_load(const uint8_t *buf, size_t len)
             dn_inv[s.plyr].flee_turn = game.play_gameturn - s.flee_age;
     }
     return true;
+}
+
+/* The THR1 extra of the world save (2026-11-18): the threat budget's state per player (the adjustment from the last
+ * raids, the last raid's budget for the growth cap, and the raid on now as it landed). A late party isn't saved. */
+#pragma pack(1)
+struct DnThreatSaved {
+    uint32_t plyr;
+    float adjust, last_budget, raid_army, raid_power;
+    int32_t heart_hp, heart_min, heart_idx;
+    int16_t made, killed;
+};
+#pragma pack()
+
+static TbBool dn_threat_wanted(PlayerNumber p)
+{
+    return (dn_thr[p].adjust > 0.0f) || (dn_thr[p].last_budget > 0.0f) || (dn_thr[p].raid_army > 0.0f);
+}
+
+void world_raids_threat_reset(void)
+{
+    memset(dn_thr, 0, sizeof(dn_thr));
+    memset(dn_late, 0, sizeof(dn_late));
+}
+
+size_t world_raids_threat_save_size(void)
+{
+    size_t n = 0;
+    for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+        if (dn_threat_wanted(p))
+            n++;
+    return (n > 0) ? 4 + n * sizeof(struct DnThreatSaved) : 0;
+}
+
+void world_raids_threat_save(uint8_t *buf)
+{
+    uint32_t n = 0;
+    uint8_t *at = buf + 4;
+    for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+    {
+        if (!dn_threat_wanted(p))
+            continue;
+        const struct DnThreat *th = &dn_thr[p];
+        struct DnThreatSaved s;
+        memset(&s, 0, sizeof(s));
+        s.plyr = (uint32_t)p;
+        s.adjust = th->adjust;
+        s.last_budget = th->last_budget;
+        s.raid_army = th->raid_army;
+        s.raid_power = th->raid_power;
+        s.heart_hp = th->heart_hp;
+        s.heart_min = th->heart_min;
+        s.heart_idx = th->heart_idx;
+        s.made = th->made;
+        s.killed = th->killed;
+        memcpy(at, &s, sizeof(s));
+        at += sizeof(s);
+        n++;
+    }
+    memcpy(buf, &n, 4);
+}
+
+TbBool world_raids_threat_load(const uint8_t *buf, size_t len)
+{
+    world_raids_threat_reset();
+    uint32_t n = 0;
+    if (len < 4)
+        return false;
+    memcpy(&n, buf, 4);
+    if ((n > PLAYERS_MAX) || (len < 4 + (size_t)n * sizeof(struct DnThreatSaved)))
+        return false;
+    for (uint32_t k = 0; k < n; k++)
+    {
+        struct DnThreatSaved s;
+        memcpy(&s, buf + 4 + (size_t)k * sizeof(s), sizeof(s));
+        if (s.plyr >= PLAYERS_MAX)
+            continue;
+        struct DnThreat *th = &dn_thr[s.plyr];
+        th->adjust = s.adjust;
+        th->last_budget = s.last_budget;
+        th->raid_army = s.raid_army;
+        th->raid_power = s.raid_power;
+        th->heart_hp = s.heart_hp;
+        th->heart_min = s.heart_min;
+        th->heart_idx = s.heart_idx;
+        th->made = s.made;
+        th->killed = s.killed;
+    }
+    return true;
+}
+
+/** Test hook KFX_WORLD_THREATTEST=kill|hurt (the threat budget's adjustment): 200 turns after a raid on player 0 landed,
+ *  kill: all its heroes die (the raid is crushed: the next one is stronger); hurt: the heart loses a fifth of its
+ *  health (the next one is weaker). */
+static void dn_threattest_hook(void)
+{
+    static int mode = -1; /* 0 off, 1 kill, 2 hurt */
+    static int32_t seen_day = -1;
+    static GameTurn landed = 0;
+    if (mode < 0)
+    {
+        const char *v = getenv("KFX_WORLD_THREATTEST");
+        mode = (v == NULL) ? 0 : (strcmp(v, "kill") == 0) ? 1 : (strcmp(v, "hurt") == 0) ? 2 : 0;
+    }
+    if ((mode == 0) || !dn_inv[PLAYER0].active || (dn_thr[PLAYER0].raid_army <= 0.0f))
+        return;
+    if (dn_inv[PLAYER0].day != seen_day)
+    {
+        seen_day = dn_inv[PLAYER0].day; /* a new raid (one a day at most while the last one's heroes stay) */
+        landed = game.play_gameturn;
+    }
+    if (game.play_gameturn != landed + 200)
+        return;
+    if (mode == 2)
+    {
+        struct Thing *heart = find_players_dungeon_heart(PLAYER0);
+        if (thing_exists(heart))
+        {
+            heart->health -= heart->health / 5;
+            if (heart->health < dn_thr[PLAYER0].heart_min)
+                dn_thr[PLAYER0].heart_min = (int32_t)heart->health;
+            SYNCLOG("World threat test: player 0's heart hurt to %ld", (long)heart->health);
+        }
+        return;
+    }
+    struct Dungeon *heroes = get_players_num_dungeon(PLAYER_GOOD);
+    if (dungeon_invalid(heroes))
+        return;
+    int killed = 0;
+    long guard = 0;
+    for (ThingIndex i = heroes->creatr_list_start; (i > 0) && (guard++ < CREATURES_COUNT);)
+    {
+        struct Thing *thing = thing_get(i);
+        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        if (thing_is_invalid(thing) || creature_control_invalid(cctrl))
+            break;
+        i = cctrl->players_next_creature_idx;
+        if (world_raid_hero(thing) && (dn_raider_invasion(thing) == PLAYER0) && !creature_is_dying(thing))
+        {
+            kill_creature(thing, INVALID_THING, -1, CrDed_NoUnconscious);
+            killed++;
+        }
+    }
+    SYNCLOG("World threat test: %d of player 0's raiders killed", killed);
 }
 
 /** Test hook KFX_WORLD_KILLLEADER=<turns>: that long after it was made, the leader of a raiding party is killed (the
@@ -2466,6 +2966,13 @@ void world_daynight_seat_started(PlayerNumber plyr_idx)
         return;
     dn_seat_first_day[plyr_idx] = (int32_t)world_day_number();
     world_alarm_seat_started(plyr_idx);
+    /* the threat budget starts again: no cap from the last dungeon's raids, and a dungeon here before (it fell, or was
+       started again) begins gently */
+    const TbBool had_raids = (dn_thr[plyr_idx].last_budget > 0.0f) || (dn_thr[plyr_idx].adjust > 0.0f);
+    memset(&dn_thr[plyr_idx], 0, sizeof(dn_thr[plyr_idx]));
+    dn_late[plyr_idx].active = 0;
+    if (had_raids)
+        dn_thr[plyr_idx].adjust = (float)DN_ADJUST_RESTART;
     SYNCLOG("World: player %d's dungeon counts its days from the world's day %d", (int)plyr_idx, (int)dn_seat_first_day[plyr_idx]);
 }
 
@@ -2542,7 +3049,9 @@ void world_daynight_turn(void)
         server_admin_log("world", "Night %ld begins", day);
     }
     dn_invasions_turn(day, t);
+    dn_late_turn();
     dn_killleader_hook();
+    dn_threattest_hook();
     world_boss_turn();
     world_truce_turn();
     world_defectors_turn();
@@ -2559,6 +3068,14 @@ void world_daynight_turn(void)
                 continue;
             if (!world_player_is_human(p) || world_coop_seat_away(p))
             {
+                dn_owed_day[p] = 0;
+                continue;
+            }
+            if (t > dn_light(day) - dn_night_clear(day))
+            {
+                /* too near nightfall: the night's packs come then (the user, 2026-11-18: "Raiders can spawn on the last
+                   minute before night falls") */
+                SYNCLOG("World: day %ld's first raid doesn't come for player %d: too near nightfall", day, (int)p);
                 dn_owed_day[p] = 0;
                 continue;
             }
@@ -2613,6 +3130,9 @@ void world_daynight_want_chunks(void (*want)(int64_t wx, int64_t wy, int r))
     world_boss_want_chunks(want); /* a World Boss's arena while a fight is on */
     for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
     {
+        /* a late party's landing: in, ten seconds before it lands */
+        if (dn_late[p].active && ((GameTurnDelta)(dn_late[p].at - game.play_gameturn) <= 10 * 20))
+            want(dn_late[p].wx, dn_late[p].wy, 1);
         const struct DnInvasion *inv = &dn_inv[p];
         /* going home: the whole raid after dawn, or a party whose leader died not long ago */
         const TbBool fleeing = (inv->flee_turn != 0) && ((GameTurnDelta)(game.play_gameturn - inv->flee_turn) <= DN_RETREAT_TURNS);

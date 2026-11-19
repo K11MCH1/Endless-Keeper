@@ -62,6 +62,12 @@ TbBool parchment_drag(enum ParchmentDrag what, long screen_x, long screen_y);
 /** Endless world: zooms the full-screen map a level in (dir > 0) or out, keeping what is under the screen point
  *  where it is. */
 void parchment_zoom(int dir, long screen_x, long screen_y);
+/** Android pinch on the full-screen map: zoom by e^log_scale round a screen point, in whole pixels per slab. */
+void parchment_pinch(float log_scale, long screen_x, long screen_y);
+#ifdef KFX_ANDROID
+void world_parchment_magnifier(TbBool held);
+TbBool world_parchment_magnifier_icon_at(long x, long y);
+#endif
 /** The full-screen map's pixels per slab at its zoom. */
 long parchment_zoom_block(void);
 /** Takes the full-screen map to the next (dir > 0) or the previous battle of the player's creatures. */
