@@ -39,6 +39,7 @@
 #include "game_legacy.h"
 #include "config_players.h"
 #include "player_instances.h"
+#include "world_migrate.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -109,6 +110,11 @@ struct Event *get_event_of_type_for_player(EventKind evkind, PlayerNumber plyr_i
  */
 EventIndex event_create_event_or_update_nearby_existing_event(MapCoord map_x, MapCoord map_y, EventKind evkind, unsigned char dngn_id, int32_t target)
 {
+    /* endless worlds: no "cannot reach the room" while the keeper's Soul Container is carried, nor for rooms left out of
+       reach by its move (world_migrate.c; the target is the room kind) */
+    if (((evkind == EvKind_WorkRoomUnreachable) || (evkind == EvKind_StorageRoomUnreachable)) &&
+        world_migrate_quiet_room(dngn_id, (RoomKind)target))
+        return 0;
     short range = (evkind == EvKind_HeartAttacked) ? 35 : 5;
     struct Event* event = get_event_nearby_of_type_for_player(map_x, map_y, subtile_coord(range, 0), evkind, dngn_id);
     if (!event_is_invalid(event))

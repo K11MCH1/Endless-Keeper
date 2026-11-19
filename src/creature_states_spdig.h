@@ -46,6 +46,7 @@ short imp_improves_dungeon(struct Thing *thing);
 short imp_last_did_job(struct Thing *thing);
 short imp_picks_up_gold_pile(struct Thing *thing);
 short imp_reinforces(struct Thing *thing);
+long digger_work_experience(struct Thing *spdigtng);
 short imp_toking(struct Thing *thing);
 short creature_pick_up_unconscious_body(struct Thing *thing);
 short creature_picks_up_corpse(struct Thing *thing);

@@ -4,7 +4,7 @@
 /** @file world_wild.c
  *     Endless world: wild creatures, spawned and despawned the way Minecraft spawns monsters.
  *
- * Spiders, Skeletons and Beetles appear on unclaimed dirt paths and Flies over water, in packs whose kind and size
+ * Zombies, Skeletons and Beetles appear on unclaimed dirt paths and Flies over water, in packs whose kind and size
  * follow Minecraft's spawn weights and group sizes, with a few biome changes (Minecraft's desert husks become
  * more Beetles, snowy strays more Skeletons, ...).
  * - Every second, WILD_CHUNK_TRIES random loaded chunks (of the window, or of the chunked world) get one pack
@@ -29,9 +29,10 @@
  * as at night, under half the cap, burrows a third as often. They don't fade at the dawn they came after.
  * Room (the user, 2026-11-15): no roaming or burrowing pack comes within WILD_PACK_ROOM slabs of a wild creature that
  * is already there, so that packs don't pile up where one stands.
- * Gap (the user, 2026-11-15: "too spammy"): a keeper gets one pack, roaming or burrowing, every WILD_PACK_GAP (five
- * minutes) at most: a roaming pack counts for the keeper whose heart is nearest, a burrow for the keeper it hunts.
- * After a world's start or load the first pack waits as long.
+ * Gap (the user, 2026-11-15: "too spammy"): a keeper gets a roaming pack at most once a WILD_PACK_GAP (a minute), and
+ * a burrow at most once a WILD_PACK_GAP, each kind on its own clock (2026-11-19: it was five minutes for both
+ * together): a roaming pack counts for the keeper whose heart is nearest, a burrow for the keeper it hunts. After a
+ * world's start or load the first of each waits as long.
  */
 /******************************************************************************/
 #include "pre_inc.h"
@@ -94,9 +95,10 @@
 #define WILD_DAY_BURROW_TIMES 3 /* by day, a burrow a third as often as at night */
 #define WILD_PACK_ROOM 15       /* slabs: no new pack within this of a wild creature already there */
 #define WILD_RING_PUSH 24           /* slabs a burrow may move out past the rings round a dungeon */
-#define WILD_BURROW_TURN (2 * 60 * 20) /* turns of a slot kept for a burrow after a roaming pack */
 #define WILD_RAID_CLEAR 30       /* no pack for a keeper while a raid's hero is within this many slabs of its heart */
-#define WILD_PACK_GAP (5 * 60 * 20) /* turns: one pack a keeper in this time at most (KFX_WORLD_PACKGAP for tests) */
+#define WILD_PACK_GAP (60 * 20)     /* turns: one roaming pack a keeper in this time at most, and one burrow, each kind on
+                                       its own clock (the user, 2026-11-19: it was five minutes for both together, "too
+                                       much"; KFX_WORLD_PACKGAP for tests) */
 #define WILD_ROOM_MAX 4096      /* wild creatures remembered for that */
 #define WILD_DIG_KEEP 30        /* slabs: by day, a tunnel this near a digging Beetle doesn't fall in (it may be a day
                                    pack's, its pack still on the way along it) */
@@ -124,24 +126,24 @@ struct WildBiome {
 };
 
 /* Minecraft's monster list (spider 100, skeleton 100, zombie 95 in groups of 4; endermen and witches rare) with
- * Beetles for zombies; water: Flies. In WgBiome order. */
-#define WILD_BASE {"SPIDER", 100, 4, 4}, {"SKELETON", 100, 4, 4}, {"BUG", 95, 4, 4}
+ * Beetles for zombies; water: Flies. In WgBiome order.
+ * Zombies in the Spiders' place, at their weight (the user, 2026-11-19: "replace the Spiders from Wild packs with
+ * Zombies and give them the same weight"; before, Zombies were an extra entry of 65, 110 in Frozen Hollows and Ancient
+ * Ruins). Packs of 4 to 6. Zombies are a mod's creature: without the mod their entry is skipped. */
+#define WILD_ZOMBIES {"ZOMBIE", 100, 4, 6}
+#define WILD_BASE WILD_ZOMBIES, {"SKELETON", 100, 4, 4}, {"BUG", 95, 4, 4}
 #define WILD_FLIES {"FLY", 100, 2, 4}
-/* Zombies (a creature kind a mod adds; without it the entry is skipped): packs of 4 to 6 in every biome,
- * about two thirds as common as Spiders, and more common where the undead already are. */
-#define WILD_ZOMBIES {"ZOMBIE", 65, 4, 6}
-#define WILD_ZOMBIES_MANY {"ZOMBIE", 110, 4, 6}
 static const struct WildBiome wild_biomes[WG_V6_BIOMES] = { /* version 7's provinces: world_biome_parent */
-    {{{WILD_BASE, {NULL, 0, 0, 0}, WILD_ZOMBIES}, {WILD_FLIES}}},                                        /* Earthen Caverns */
-    {{{WILD_BASE, {NULL, 0, 0, 0}, WILD_ZOMBIES}, {WILD_FLIES}}},                                        /* Rocky Depths */
-    {{{WILD_BASE, {"HELL_HOUND", 10, 1, 2}, WILD_ZOMBIES}, {WILD_FLIES}}},                               /* Volcanic Rifts */
-    {{{WILD_BASE, {NULL, 0, 0, 0}, WILD_ZOMBIES}, {{"FLY", 150, 2, 4}, {"TENTACLE", 10, 1, 1}}}},        /* Flooded Grottos */
-    {{{{"SKELETON", 180, 4, 4}, {"SPIDER", 100, 4, 4}, {"BUG", 95, 4, 4}, {"GHOST", 10, 1, 1}, WILD_ZOMBIES_MANY},
+    {{{WILD_BASE}, {WILD_FLIES}}},                                                         /* Earthen Caverns */
+    {{{WILD_BASE}, {WILD_FLIES}}},                                                         /* Rocky Depths */
+    {{{WILD_BASE, {"HELL_HOUND", 10, 1, 2}}, {WILD_FLIES}}},                               /* Volcanic Rifts */
+    {{{WILD_BASE}, {{"FLY", 150, 2, 4}, {"TENTACLE", 10, 1, 1}}}},                         /* Flooded Grottos */
+    {{{{"SKELETON", 180, 4, 4}, WILD_ZOMBIES, {"BUG", 95, 4, 4}, {"GHOST", 10, 1, 1}},
       {WILD_FLIES}}},                                                                      /* Frozen Hollows */
-    {{{{"BUG", 175, 4, 4}, {"SPIDER", 100, 4, 4}, {"SKELETON", 100, 4, 4}, {NULL, 0, 0, 0}, WILD_ZOMBIES},
+    {{{{"BUG", 175, 4, 4}, WILD_ZOMBIES, {"SKELETON", 100, 4, 4}},
       {WILD_FLIES}}},                                                                      /* Sandstone Wastes */
-    {{{WILD_BASE, {NULL, 0, 0, 0}, WILD_ZOMBIES}, {WILD_FLIES}}},                                        /* Crystal Caverns */
-    {{{WILD_BASE, {"GHOST", 10, 1, 1}, WILD_ZOMBIES_MANY}, {WILD_FLIES}}},                                    /* Ancient Ruins */
+    {{{WILD_BASE}, {WILD_FLIES}}},                                                         /* Crystal Caverns */
+    {{{WILD_BASE, {"GHOST", 10, 1, 1}}, {WILD_FLIES}}},                                    /* Ancient Ruins */
 };
 
 /** The weight of a list entry: none for an empty entry or a creature kind that is not loaded. */
@@ -311,8 +313,7 @@ static TbBool wild_pack_crowded(MapSlabCoord x, MapSlabCoord y)
 }
 
 /* when each keeper last got a pack (0: not since the world's start or load: the gap counts from then) */
-static GameTurn wild_last_pack[PLAYERS_MAX];
-static uint8_t wild_last_was_burrow[PLAYERS_MAX]; /* the keeper's last pack came out of a burrow */
+static GameTurn wild_last_pack[PLAYERS_MAX][2]; /* [0] its last roaming pack, [1] its last burrow */
 
 static GameTurnDelta wild_pack_gap(void)
 {
@@ -331,25 +332,21 @@ static GameTurnDelta wild_pack_gap(void)
  *  begins) */
 static TbBool wild_pack_due(PlayerNumber plyr_idx, TbBool burrow)
 {
+    if (world_safe_day())
+        return false; /* a safe day and its night: no pack of either kind (world_daynight.c) */
     if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
         return true;
-    if (wild_last_pack[plyr_idx] > game.play_gameturn)
-        wild_last_pack[plyr_idx] = 0; /* another world since (its turns begin again) */
-    if (wild_last_pack[plyr_idx] == 0)
-        wild_last_pack[plyr_idx] = (game.play_gameturn > 0) ? game.play_gameturn : 1;
+    GameTurn *last = &wild_last_pack[plyr_idx][burrow ? 1 : 0];
+    if (*last > game.play_gameturn)
+        *last = 0; /* another world since (its turns begin again) */
+    if (*last == 0)
+        *last = (game.play_gameturn > 0) ? game.play_gameturn : 1;
     if (world_raid_at_dungeon(plyr_idx, WILD_RAID_CLEAR))
         return false; /* its raiders are at its dungeon: no pack on top of them (the threat budget, 2026-11-18). Only
                          while they are there: raiders stay till dawn, and a raid nearly every day kept the night's packs
                          and burrows away (the user, 2026-11-19: "Burrowing Wild Packs don't seem to spawn anymore") */
-    const GameTurnDelta since = (GameTurnDelta)(game.play_gameturn - wild_last_pack[plyr_idx]);
-    if (since < wild_pack_gap())
-        return false;
-    /* turn about: roaming packs try every second, burrows about once a minute and a half, and they share the gap: a
-       roaming pack took every slot and burrows stopped (the user, 2026-11-19). After a roaming pack the next slot is a
-       burrow's for its first WILD_BURROW_TURN; after that either may take it */
-    if (!burrow && !wild_last_was_burrow[plyr_idx] && (since < wild_pack_gap() + WILD_BURROW_TURN))
-        return false;
-    return true;
+    const GameTurnDelta since = (GameTurnDelta)(game.play_gameturn - *last);
+    return (since >= wild_pack_gap());
 }
 
 /** The keeper a roaming pack at this place counts for: the nearest heart's; -1 none. */
@@ -461,8 +458,7 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
     {
         if ((keeper >= 0) && (keeper < PLAYERS_MAX))
         {
-            wild_last_pack[keeper] = game.play_gameturn;
-            wild_last_was_burrow[keeper] = 0;
+            wild_last_pack[keeper][0] = game.play_gameturn;
         }
         for (int m = 0; m < min(made, 16); m++)
             wild_room_add(subtile_slab(members[m]->mappos.x.stl.num), subtile_slab(members[m]->mappos.y.stl.num));
@@ -1452,8 +1448,7 @@ static int wild_burrow(struct WildRng *rng, const struct WildPlayer *pl, int a, 
     {
         if ((pl->plyr[a] >= 0) && (pl->plyr[a] < PLAYERS_MAX))
         {
-            wild_last_pack[pl->plyr[a]] = game.play_gameturn;
-            wild_last_was_burrow[pl->plyr[a]] = 1;
+            wild_last_pack[pl->plyr[a]][1] = game.play_gameturn;
         }
         wild_room_add(x, y);
         SYNCLOG("World: a pack of %d (%d Beetles, %s; levels %d-%d) breaks out of the earth at engine slab (%d,%d), %d slabs"

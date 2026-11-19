@@ -74,6 +74,7 @@
 #include "front_input.h"
 #include "creature_battle.h"
 #include "world_circles.h"
+#include "world_migrate.h"
 #include "world_dark.h"
 #include "front_simple.h"
 #include "post_inc.h"
@@ -1363,6 +1364,14 @@ void draw_2d_map(void)
                 long radius = block_size * (3 + ((get_gameturn() / 4) & 1));
                 UIRenderer_SubmitCircleOutline(pos_x, pos_y, radius, col);
                 UIRenderer_SubmitCircleOutline(pos_x, pos_y, radius + 1, col);
+                if (world_migrate_state(player->id_number) != WMig_None)
+                {
+                    /* Move The Heart: the Soul Container on its way pings wider, a ring going out from it again and
+                       again (the user, 2026-11-19) */
+                    const long wave = block_size * 4 + block_size * (long)(get_gameturn() % 30) / 3;
+                    UIRenderer_SubmitCircleOutline(pos_x, pos_y, wave, col);
+                    UIRenderer_SubmitCircleOutline(pos_x, pos_y, wave + 1, col);
+                }
             }
         }
         parchment_clip_on = false;

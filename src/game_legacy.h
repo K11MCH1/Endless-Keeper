@@ -61,6 +61,7 @@
 #include "power_process.h"
 #include "net_game.h"
 #include "packets.h"
+#include "world_keeper_record.h"
 #include "replay.h"
 #include "sounds.h"
 #include "game_lghtshdw.h"
@@ -386,6 +387,14 @@ struct Game {
     /** Endless worlds: each player's XP (player levels; saved with the world). Here, not with the rewindable
      *  statics, so that a thin client on another platform gets it too (2026-11-08). */
     uint32_t world_player_xp[PLAYERS_MAX];
+    /** Endless worlds (2026-11-19): each player's lifetime record (the Keeper panel's Profile; world_progress.c) and
+     *  its Heart's migration (Move The Heart; world_migrate.c). Here for the same reason as the XP. */
+    struct WorldPlayerStats world_player_record[PLAYERS_MAX];
+    struct WorldMigration world_migration[PLAYERS_MAX];
+    /** Endless worlds (2026-11-19): the Fill room's marks (world_fill.c), and per keeper the fills done since its
+     *  marks were last all done (the panel's meter). Here so that a thin client draws the marks. */
+    struct WorldFillMark world_fill[WORLD_FILL_MAX];
+    uint16_t world_fill_done[PLAYERS_MAX];
     /** Endless worlds (2026-11-09): each player's rooms and spells with levels (Lair, Hatchery, Library, Training Room;
      *  Create Imp, Sight of Evil, Speed Monster, Conceal Monster, Heal, Lightning Strike, Protect Monster): the level
      *  researched and the level duplicate books allow (0 counts as 1; saved with the world's progress, PRG1). */

@@ -93,6 +93,7 @@
 #include "world_caretaker.h"
 #include "world_defectors.h"
 #include "world_wallbreak.h"
+#include "world_fill.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -312,6 +313,8 @@ const struct NamedCommand process_func_commands[] = {
     {"good_arrived_at_attack_dungeon_heart",       134},
     {"creature_drop_unconscious_in_lair",          135},
     {"creature_save_unconscious_creature",         136},
+    {"imp_arrives_at_fill",                        137}, /* endless worlds: the Fill room (world_fill.c) */
+    {"imp_fills",                                  138},
     {NULL,                                           0},
 };
 
@@ -453,6 +456,8 @@ const CreatureStateFunc1 process_func_list[] = {
     good_arrived_at_attack_dungeon_heart,
     creature_drop_unconscious_in_lair,
     creature_save_unconscious_creature,
+    imp_arrives_at_fill,
+    imp_fills,
 };
 
 const struct NamedCommand cleanup_func_commands[] = {

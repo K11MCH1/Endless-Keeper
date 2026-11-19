@@ -70,6 +70,7 @@
 #include "keeperfx.hpp"
 #include "world_sword.h"
 #include "world_hand.h"
+#include "world_fill.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1072,6 +1073,9 @@ struct Room *player_build_room_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, Play
     struct PlayerInfo* player = get_player(plyr_idx);
     struct Dungeon* dungeon = get_players_dungeon(player);
     struct RoomConfigStats* roomst = get_room_kind_stats(rkind);
+    if (world_fill_is_kind(rkind)) {
+        return INVALID_ROOM; /* endless worlds: the Fill room builds no room (keeper_build_room marks instead) */
+    }
     // Check if we are allowed to build the room
     if (!is_room_available(plyr_idx, rkind)) {
         // It shouldn't be possible to select unavailable room

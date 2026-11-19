@@ -1484,17 +1484,14 @@ void server_admin_turn(void)
     server_roles_turn(); /* the seats' names and role colours to the clients (also with no admin connected) */
     if ((A.port <= 0) || !network_is_active() || !netstate_is_server())
         return;
-    /* play time: the seats a user holds */
+    /* the seats a user holds */
     const PlayerNumber *seats = NULL;
     const int n = world_seat_players(&seats);
     int online = 0;
     for (int i = 0; i < n; i++)
     {
         if (seat_user(seats[i]) > SERVER_ID)
-        {
-            world_player_played_turn(seats[i]);
-            online++;
-        }
+            online++; /* (their play time is counted by world_record_turn, also with no console) */
     }
     const GameTurn tps = (GameTurn)max(turns_per_second, 1);
     /* the heroes each player's creatures defeated, a line a minute (one a kill would flood the console) */

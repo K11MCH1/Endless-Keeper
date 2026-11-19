@@ -21,6 +21,8 @@ struct Thing;
 long world_day_number(void);
 /** The days a keeper's dungeon has lived (1 = its first day): the world's clock, counted from the day it began. */
 long world_seat_day(PlayerNumber plyr_idx);
+/** A safe day (every third world day, and its night): no raids, no wild packs; the dial's text is green. */
+TbBool world_safe_day(void);
 /** A keeper's dungeon (re)starts: its days count from today. */
 void world_daynight_seat_started(PlayerNumber plyr_idx);
 void world_seatdays_reset(void);

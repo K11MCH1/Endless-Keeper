@@ -59,6 +59,7 @@ enum ObjectModelFlags {
     OMF_HoldInHand           = 0x0080, // Object can be picked up to hold
     OMF_IgnoredByImps        = 0x0100, // Specialdiggers don't dragging this object
     OMF_Slappable            = 0x0200, // Object can be slapped
+    OMF_Clickable            = 0x0400, // The Hand reacts to it as to a creature, and its owner can click it (object_clicked_by_player)
 };
 
 

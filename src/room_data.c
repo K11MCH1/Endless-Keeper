@@ -58,6 +58,7 @@
 #include "lua_triggers.h"
 #include "lua_cfg_funcs.h"
 #include "world_progress.h"
+#include "world_migrate.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1926,6 +1927,8 @@ TbBool find_first_valid_position_for_thing_anywhere_in_room(const struct Thing *
         pos->z.val = subtile_coord(1,0);
         return false;
     }
+    if (world_migrate_room_too_far(thing, room))
+        return false; /* endless worlds: a moved Heart's creatures take only rooms near it */
     long block_radius = subtile_coord(thing_nav_block_sizexy(thing), 0) / 2;
 
     unsigned long k = 0;

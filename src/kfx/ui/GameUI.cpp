@@ -24,6 +24,7 @@
 #include "world_circles.h"
 #include "chat_box.h"
 #include "world_creature_window.h"
+#include "world_keeper_panel.h"
 #include "gui_frontmenu.h"         /* menu_is_active */
 
 #include "post_inc.h"
@@ -60,7 +61,7 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
     /* endless: the creature window and the World Boss window are windows over the view - what the view draws over
        itself (the day's dial, the World Boss strip and bar, the messages) goes under them, not across their titles
        and their top rows */
-    const bool window_on_top = world_creature_window_open() || menu_is_active(GMnu_WORLD_BOSS_PICK);
+    const bool window_on_top = world_creature_window_open() || menu_is_active(GMnu_WORLD_BOSS_PICK) || world_keeper_panel_open();
     if (window_on_top) {
         world_daynight_draw();
         message_draw();
@@ -78,6 +79,7 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
     }
     world_circles_draw(); /* endless worlds: a breached circle's name */
     chat_box_draw_faded();
+    world_keeper_panel_draw_last(); /* endless: the Keeper panel over everything but the Hand */
     draw_power_hand();
     gui_draw_all_boxes();
 }

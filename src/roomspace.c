@@ -36,6 +36,7 @@
 
 #include "keeperfx.hpp"
 #include "world_pages.h"
+#include "world_fill.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -993,6 +994,8 @@ void apply_roomspace_packet_action(NetUserId user, const struct Packet *pckt)
 static void sell_at_point(struct RoomSpace *roomspace)
 {
     struct SlabMap *slb = get_slabmap_block(roomspace->buildx, roomspace->buildy);
+    if (world_fill_unmark(roomspace->plyr_idx, roomspace->buildx, roomspace->buildy))
+        return; /* endless worlds: a Fill room mark is taken away, no gold back (world_fill.c) */
     if (slabmap_owner(slb) == roomspace->plyr_idx)
     {
         if (player_sell_trap_at_subtile(roomspace->plyr_idx, slab_subtile_center(roomspace->buildx), slab_subtile_center(roomspace->buildy),
@@ -1282,7 +1285,8 @@ static TbBool roomspace_can_use_slab(const struct RoomSpace *roomspace, MapSlabC
     if (roomspace->rkind == RoK_SELL) {
         MapSubtlCoord stl_x = slab_subtile(slb_x, 0);
         MapSubtlCoord stl_y = slab_subtile(slb_y, 0);
-        return subtile_is_sellable_room(roomspace->plyr_idx, stl_x, stl_y) || subtile_is_sellable_door_or_trap(roomspace->plyr_idx, stl_x, stl_y);
+        return subtile_is_sellable_room(roomspace->plyr_idx, stl_x, stl_y) || subtile_is_sellable_door_or_trap(roomspace->plyr_idx, stl_x, stl_y) ||
+            world_fill_marked_by(roomspace->plyr_idx, slb_x, slb_y); /* endless worlds: a Fill room mark (taken away, no gold back) */
     }
     return roomspace_can_build_room_at_slab(roomspace, slb_x, slb_y);
 }

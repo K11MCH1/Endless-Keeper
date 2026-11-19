@@ -116,3 +116,11 @@ _SWE = """En Beholder har anslutit sig till dig. Dessa stora, klotformade varels
 De känner ett intensivt hat mot allt de kan se, särskilt mot dem som hånar deras avsaknad av öron."""
 _UKR = """Спостерігач приєднався до вас. Ці великі кулясті істоти мають кілька очних відростків і одне центральне око, кожне з яких містить потужну магію.  
 Вони відчувають сильну ненавист до всього, що можуть бачити, особливо до тих, хто насміхається з їх відсутності вух."""
+
+[ENDLESS_FILL_NAME]
+# Endless Keeper: name of a room (the Fill room)
+ENG = "Fill"
+
+[ENDLESS_FILL_TOOLTIP]
+# Endless Keeper: the Fill room's tooltip
+ENG = "Fill: your Imps fill the marked floor with earth walls. Costs 30 gold per tile. Sell Room takes marks away (no gold back)."

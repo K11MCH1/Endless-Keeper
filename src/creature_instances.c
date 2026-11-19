@@ -60,6 +60,7 @@
 #include "world_wallbreak.h"
 #include "world_misdeeds.h"
 #include "world_alarm.h"
+#include "world_fill.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -656,6 +657,8 @@ long instf_dig(struct Thing *creatng, int32_t *param)
     long gold;
     SYNCDBG(16,"Starting");
     TRACE_THING(creatng);
+    if (world_fill_dig_hit(creatng)) /* endless worlds: an Imp filling a Fill room mark (world_fill.c) */
+        return 0;
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     struct Dungeon* dungeon = get_dungeon(creatng->owner);
     long task_idx = find_dig_from_task_list(creatng->owner, cctrl->digger_task_stl);

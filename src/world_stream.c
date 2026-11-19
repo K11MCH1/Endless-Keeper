@@ -129,6 +129,9 @@
 #include "world_hand.h"
 #include "world_watchfire.h"
 #include "world_dark.h"
+#include "world_migrate.h"
+#include "world_fill.h"
+#include "world_keeper_panel.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -188,6 +191,9 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_ALARM 0x314D4C41u    /* "ALM1": Alarm Bells: each keeper's alarms, the razed fortresses */
 #define WORLD_EXTRA_FIRES 0x31524657u    /* "WFR1": the watchfires (world_watchfire.c) */
 #define WORLD_EXTRA_DARK 0x314B5244u     /* "DRK1": untended floor's neglect (world_dark.c) */
+#define WORLD_EXTRA_RECORD 0x32434552u   /* "REC2": the Keeper panel's statistics (world_progress.c) */
+#define WORLD_EXTRA_MIGRATE 0x3147494Du  /* "MIG1": Move The Heart (world_migrate.c) */
+#define WORLD_EXTRA_FILL 0x314C4946u     /* "FIL1": the Fill room's marks (world_fill.c) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -4854,8 +4860,17 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
     /* the other human players' hearts (network games) */
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
-        if (((p == PLAYER0) && !seat_has_stamp(PLAYER0)) || !owner_in_mask(p, humans))
-            continue; /* player 0 at the level's start: the home above */
+        if (!owner_in_mask(p, humans))
+            continue;
+        if ((p == PLAYER0) && !seat_has_stamp(PLAYER0))
+        {
+            /* player 0 at the level's start: the home above, and its Heart wherever it stands now (Move The Heart
+               carries it off: world_migrate.c) */
+            struct Thing *h0 = find_players_dungeon_heart(PLAYER0);
+            if (thing_exists(h0))
+                cm_want_subtile(h0->mappos.x.stl.num, h0->mappos.y.stl.num, CM_HEART_RADIUS);
+            continue;
+        }
         struct Thing *heartng = find_players_dungeon_heart(p);
         if (thing_exists(heartng))
             cm_want_subtile(heartng->mappos.x.stl.num, heartng->mappos.y.stl.num, CM_HEART_RADIUS);
@@ -7336,7 +7351,7 @@ TbBool world_seat_respawn(PlayerNumber p)
             retired++;
         }
     }
-    world_progress_seat_reset(p);
+    world_progress_seat_reset(p, true); /* (the same player: its lifetime record stays) */
     world_raids_player_retreat(p);
     seat_dungeon_reset(p, false);
     /* 2. taken again: undefeated, at the next point of the spiral, as a joiner */
@@ -7955,7 +7970,7 @@ static void seat_free(PlayerNumber p)
     struct Dungeon *dungeon = get_players_num_dungeon(p);
     if (!dungeon_invalid(dungeon) && ((dungeon->computer_enabled & 0x01) != 0))
         toggle_computer_player(p);
-    world_progress_seat_reset(p);
+    world_progress_seat_reset(p, false);
     seat_dungeon_reset(p, false);
     memset(player->player_name, 0, sizeof(player->player_name));
     /* nobody's ally any more, either way, and its own colour again (a party's seat had a borrowed one; the next player
@@ -10854,6 +10869,7 @@ void world_client_turn(void)
     world_colours_turn();
     world_progress_present();
     world_creature_window_turn();
+    world_keeper_panel_turn();
     world_respawn_prompt_turn();
     world_boss_local_turn();
     world_sword_local_turn();
@@ -10929,6 +10945,7 @@ void world_process_turn(void)
     world_colours_turn(); /* local presentation only */
     world_progress_present();
     world_creature_window_turn();
+    world_keeper_panel_turn();
     world_respawn_prompt_turn();
     world_boss_local_turn();
     world_sword_local_turn();
@@ -11192,9 +11209,11 @@ static void local_home_slab(int64_t *wx, int64_t *wy)
 {
     *wx = W.home_x;
     *wy = W.home_y;
-    if (((my_player_number == PLAYER0) && !seat_has_stamp(PLAYER0)) || (my_player_number >= PLAYERS_COUNT) ||
-        (my_player_number == PLAYER_GOOD) || (my_player_number == PLAYER_NEUTRAL))
-        return; /* player 0 at the level's start, or a spectator */
+    if ((my_player_number >= PLAYERS_COUNT) || (my_player_number == PLAYER_GOOD) || (my_player_number == PLAYER_NEUTRAL))
+        return; /* a spectator */
+    if ((my_player_number == PLAYER0) && !seat_has_stamp(PLAYER0) && (world_migrate_state(PLAYER0) == WMig_None) &&
+        !game.world_migration[PLAYER0].moved)
+        return; /* player 0 at the level's start (its Heart where it began; Move The Heart: where it is now) */
     const struct Thing *heartng = find_players_dungeon_heart(my_player_number);
     if (!thing_exists(heartng))
         return;
@@ -11361,6 +11380,9 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_ALARM, world_alarm_save_size, world_alarm_save, world_alarm_load, world_alarm_reset},
     {WORLD_EXTRA_FIRES, world_watchfire_save_size, world_watchfire_save, world_watchfire_load, world_watchfire_reset},
     {WORLD_EXTRA_DARK, world_dark_save_size, world_dark_save, world_dark_load, world_dark_reset},
+    {WORLD_EXTRA_RECORD, world_record_save_size, world_record_save, world_record_load, world_record_reset},
+    {WORLD_EXTRA_MIGRATE, world_migrate_save_size, world_migrate_save, world_migrate_load, world_migrate_reset},
+    {WORLD_EXTRA_FILL, world_fill_save_size, world_fill_save, world_fill_load, world_fill_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 
@@ -12233,7 +12255,12 @@ TbBool world_load_blob(const unsigned char *data, uint32_t len)
             rec_get(&r, v, sizeof(v));
             if (!r.bad && (v[0] < PLAYERS_MAX))
             {
-                const struct WorldPlayerStats st = {v[1], v[2], v[3], v[4]};
+                /* (the console's four; the Keeper panel's others come with the REC2 extra, read after this) */
+                struct WorldPlayerStats st = *world_player_stats((PlayerNumber)v[0]);
+                st.hearts = v[1];
+                st.outposts = v[2];
+                st.portals = v[3];
+                st.play_turns = v[4];
                 world_set_player_stats((PlayerNumber)v[0], &st);
             }
         }

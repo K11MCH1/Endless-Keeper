@@ -103,6 +103,7 @@
 #include "world_stream.h"
 #include "world_caretaker.h"
 #include "world_boss.h"
+#include "world_keeper_panel.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -253,6 +254,7 @@ struct GuiMenu *menu_list[] = {
     &world_boss_bar_menu, //60
     &world_boss_pick_menu, //61
     &world_creature_window_menu, //62
+    &world_keeper_panel_menu, //63
     NULL,
 };
 
@@ -3432,6 +3434,11 @@ void draw_active_menus_buttons(void)
     SYNCDBG(8,"Starting with %d active menus",no_of_active_menus);
     for (k=0; k < no_of_active_menus; k++)
     {
+        if (menu_stack[k] == GMnu_KEEPER_PANEL) continue; /* endless: drawn last, over everything (world_keeper_panel.c) */
+        /* (and the message boxes at the foot of the view are left out while it is up: their glass is put on the screen
+           after everything else, over the panel) */
+        if (((menu_stack[k] == GMnu_TEXT_INFO) || (menu_stack[k] == GMnu_BATTLE) || (menu_stack[k] == GMnu_DUNGEON_SPECIAL)) &&
+            world_keeper_panel_open()) continue;
         menu_num = menu_id_to_number(menu_stack[k]);
         if (menu_num < 0) continue;
         gmnu = &active_menus[menu_num];

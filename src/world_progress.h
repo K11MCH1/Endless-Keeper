@@ -19,6 +19,7 @@
 
 #include "bflib_basics.h"
 #include "globals.h"
+#include "world_keeper_record.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -184,22 +185,31 @@ void world_progress_present(void);
 void world_progress_portal_owned(PlayerNumber plyr_idx, int biome);
 /** A new world, a load, the end: no XP, nothing seen yet. */
 void world_levels_reset(void);
-/** A player's record kept with the world (save section PST1) for a dedicated server's console. */
-struct WorldPlayerStats {
-    uint32_t hearts;     /* keeper hearts destroyed */
-    uint32_t outposts;   /* heroes outposts destroyed */
-    uint32_t portals;    /* portals captured */
-    uint32_t play_turns; /* game turns played while connected */
-};
+/* A player's record kept with the world: struct WorldPlayerStats (world_keeper_record.h, in struct Game). */
 const struct WorldPlayerStats *world_player_stats(PlayerNumber plyr_idx);
 void world_set_player_stats(PlayerNumber plyr_idx, const struct WorldPlayerStats *st);
 void world_player_played_turn(PlayerNumber plyr_idx);
+/** The XP at which a player level begins (level 1: 0). */
+uint32_t world_player_level_xp(int level);
+/* The Keeper panel's statistics (struct WorldPlayerStats), counted on the simulating machine. */
+void world_record_heart_lost(const struct Thing *heartng);
+/** A creature died: a human keeper's kill counts as a hero or a creature killed. */
+void world_record_kill(const struct Thing *victim, PlayerNumber killer);
+/** A keeper's imps dug or mined out a slab: the farthest from its Heart is kept. */
+void world_record_dug(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y);
+/** The Profile's portrait (a creature kind; the panel's packet). */
+void world_record_portrait(PlayerNumber plyr_idx, ThingModel model);
+void world_record_turn(void);
+size_t world_record_save_size(void);
+void world_record_save(uint8_t *buf);
+TbBool world_record_load(const uint8_t *buf, size_t len);
+void world_record_reset(void);
 /** XP from the server's admin (give <name> XP <amount>): levels follow. */
 void world_add_player_xp(PlayerNumber plyr_idx, uint32_t xp);
 void world_player_portal_captured(PlayerNumber plyr_idx, int biome);
-/** Start again: the seat's XP (player level), records and research-book progression from zero; the kit is given
- *  again when the seat next starts. */
-void world_progress_seat_reset(PlayerNumber plyr_idx);
+/** Start again: the seat's research-book progression from zero, and with keep_record false (another player takes the
+ *  seat) its XP (player level) and records too; the kit is given again when the seat next starts. */
+void world_progress_seat_reset(PlayerNumber plyr_idx, TbBool keep_record);
 
 /* Passive upgrades from levelling up (the rogue-like part, to come): kept by player (the seat's owner, its reconnect
    token; 0 in a single-player run), not by seat, so a player keeps them through "Start again". None exist yet: the

@@ -84,6 +84,7 @@
 #include "world_colours.h"
 #include "world_stream.h"
 #include "world_progress.h"
+#include "world_fill.h"
 #include "post_inc.h"
 #include "room_workshop.h"
 
@@ -637,7 +638,8 @@ void gui_area_big_room_button(struct GuiButton *gbtn)
     }
     RendererClearDrawFlags(Lb_SPRITE_TRANSPAR4);
     RendererClearDrawFlags(Lb_SPRITE_OUTLINE);
-    int i = find_room_type_capacity_total_percentage(player->id_number, rkind);
+    /* endless worlds: the Fill room's meter is its marks filled (world_fill.c) */
+    int i = world_fill_is_kind(rkind) ? world_fill_meter(player->id_number) : find_room_type_capacity_total_percentage(player->id_number, rkind);
     if ((rkind == RoK_ENTRANCE) || (rkind == RoK_DUNGHEART) || (i < 0))
     {
         draw_gui_panel_sprite_left(gbtn->scr_pos_x, gbtn->scr_pos_y, ps_units_per_px, GPS_rpanel_frame_wide_empty);
@@ -680,10 +682,13 @@ void gui_area_big_room_button(struct GuiButton *gbtn)
     int tx_units_per_px = (24 * units_per_pixel_ui) / LbTextLineHeight();
     draw_string64k(gbtn->scr_pos_x + 44*units_per_px/16, gbtn->scr_pos_y + (8 - 6)*units_per_px/16, tx_units_per_px, gui_textbuf);
 
-    long amount = count_player_rooms_of_type(player->id_number, rkind);
-    // Note that "@" is "x" in that font
-    snprintf(gui_textbuf, sizeof(gui_textbuf), "@%ld", amount);
-    draw_string64k(gbtn->scr_pos_x + 40*units_per_px/16, gbtn->scr_pos_y - (14 + 6)*units_per_px/16, tx_units_per_px, gui_textbuf);
+    if (!world_fill_is_kind(rkind)) /* (the Fill room has no rooms to count) */
+    {
+        long amount = count_player_rooms_of_type(player->id_number, rkind);
+        // Note that "@" is "x" in that font
+        snprintf(gui_textbuf, sizeof(gui_textbuf), "@%ld", amount);
+        draw_string64k(gbtn->scr_pos_x + 40*units_per_px/16, gbtn->scr_pos_y - (14 + 6)*units_per_px/16, tx_units_per_px, gui_textbuf);
+    }
     LbTextUseByteCoding(true);
     RendererSetDrawFlags(flg_mem);
 }
@@ -792,7 +797,8 @@ static void draw_mastery_bar(struct GuiButton *gbtn, int kind_class, int kind)
     const int upp = simple_gui_panel_sprite_height_units_per_px(gbtn, GPS_rpanel_frame_portrt_empty, 128);
     const int fw = (frame->SWidth > 0) ? frame->SWidth * upp / 16 : gbtn->width;
     const int fh = (frame->SHeight > 0) ? frame->SHeight * upp / 16 : gbtn->height;
-    const int w = fw * 6 / 10, h = max(2, fh / 16);
+    /* (twice as thick as it was, the same foot and middle: the user, 2026-11-19, "barely visible") */
+    const int w = fw * 6 / 10, h = max(4, fh / 8);
     const int x = gbtn->scr_pos_x + (fw - w) / 2, y = gbtn->scr_pos_y + fh - h - fh / 12; /* just inside the frame's foot */
     LbDrawBox(x - 1, y - 1, w + 2, h + 2, colours[0][0][0]);
     LbDrawBox(x, y, max(1, w * min(xp, need) / need), h, colours[15][11][2]);

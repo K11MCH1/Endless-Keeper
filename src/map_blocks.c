@@ -45,6 +45,7 @@
 #include "lua_triggers.h"
 #include "world_pages.h"
 #include "world_colours.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1939,6 +1940,7 @@ void mine_out_block(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_
     // so sine we're destroying it - make it invisible
     // TODO MAP Maybe it should be cleared only if sibling non-gold and non-rock slabs are invisible
     set_slab_explored_flags(plyr_idx, slb_x, slb_y);
+    world_record_dug(plyr_idx, slb_x, slb_y); /* endless: the Keeper panel's Longest Distance Dug */
 }
 
 TbBool dig_has_revealed_area(MapSubtlCoord rev_stl_x, MapSubtlCoord rev_stl_y, PlayerNumber plyr_idx)
@@ -2014,6 +2016,7 @@ void dig_out_block(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_i
             dungeon->lvstats.rock_dug_out++;
         }
     }
+    world_record_dug(plyr_idx, slb_x, slb_y); /* endless: the Keeper panel's Longest Distance Dug */
 }
 
 

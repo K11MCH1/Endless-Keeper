@@ -37,6 +37,7 @@
 #include <map>
 #include "config.h"
 #include "net_state.h"
+#include "world_migrate.h"
 #include "post_inc.h"
 
 // Maximum number of messages that can be queued at once.
@@ -548,6 +549,11 @@ extern "C" TbBool output_room_message(
 	OutputMessageKind msg_kind
 )
 {
+	/* endless worlds: while the keeper's Soul Container is carried, its creatures are away from their rooms on purpose:
+	   no "cannot reach the room it needs" (text and voice) until it is home (the user, 2026-11-19) */
+	if ((msg_kind == OMsg_RoomNoRoute) && world_migrate_quiet_room(plyr_idx, rkind)) {
+		return false;
+	}
 	netstate_event_room_message(plyr_idx, rkind, msg_kind);
 	if (!is_my_player_number(plyr_idx)) {
 		return false;

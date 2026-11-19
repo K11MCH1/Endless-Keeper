@@ -76,6 +76,8 @@
 #include "world_colours.h"
 #include "world_misdeeds.h"
 #include "world_boss.h"
+#include "world_migrate.h"
+#include "world_fill.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -4834,7 +4836,8 @@ void draw_map_volume_box(long cor1_x, long cor1_y, long cor2_x, long cor2_y, lon
 {
     map_volume_box.visible = 1;
     map_volume_box.beg_x = cor1_x & 0xFFFFFF00;
-    map_volume_box.beg_y = cor1_y & 0xFFFF00;
+    map_volume_box.beg_y = cor1_y & 0xFFFFFF00; /* (was 0xFFFF00: on an endless map, whose coordinates are far past 24 bits, the
+                                                 box reached up from the map's edge - the trap cursor, 2026-11-19) */
     map_volume_box.end_x = cor2_x & 0xFFFFFF00;
     map_volume_box.end_y = cor2_y & 0xFFFFFF00;
     map_volume_box.floor_height_z = floor_height_z;
@@ -6839,6 +6842,7 @@ void draw_view(struct Camera *cam, unsigned char a2)
 
     getpoly = poly_pool;
     memset(buckets, 0, sizeof(buckets));
+    world_migrate_cursor_box(); /* endless worlds: the 5x5 highlight of Move The Heart's placing */
     if (map_volume_box.visible)
     {
         poly_pool_end_reserve(14);
@@ -6893,8 +6897,12 @@ void draw_view(struct Camera *cam, unsigned char a2)
 
     if (map_volume_box.visible && should_draw_cursor_box(get_displayed_user())) {
         poly_pool_end_reserve(0);
-        process_isometric_map_volume_box(x, y, z, my_player_number);
+        if (world_migrate_armed())
+            create_map_volume_box(x, y, z, map_volume_box.color); /* endless: Move The Heart's plain 5x5 box */
+        else
+            process_isometric_map_volume_box(x, y, z, my_player_number);
     }
+    world_fill_draw_marks(x, y, z, 0, NULL, 0); /* endless worlds: the Fill room's marks */
 
     WorldViewRenderer_DrawIsometricView();
     cam->zoom = zoom_mem;//TODO [zoom] remove when all cam->zoom will be changed to camera_zoom
@@ -9242,9 +9250,14 @@ void draw_frontview_engine(struct Camera *cam)
 
     update_frontview_pointed_block(zoom, qdrant, px, py, qx, qy);
     update_local_mouse_light();
+    world_migrate_cursor_box(); /* endless worlds: the 5x5 highlight of Move The Heart's placing */
     if (map_volume_box.visible && should_draw_cursor_box(get_displayed_user())) {
-        process_frontview_map_volume_box(cam, ((zoom >> 8) & 0xFF), player->id_number);
+        if (world_migrate_armed())
+            create_frontview_map_volume_box(cam, ((zoom >> 8) & 0xFF), map_volume_box.color); /* endless: Move The Heart */
+        else
+            process_frontview_map_volume_box(cam, ((zoom >> 8) & 0xFF), player->id_number);
     }
+    world_fill_draw_marks(0, 0, 0, 1, cam, ((zoom >> 8) & 0xFF)); /* endless worlds: the Fill room's marks */
 
 
     h = (8 * (zoom + 32 * ewnd.height) - qy) / zoom;

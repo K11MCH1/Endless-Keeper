@@ -185,6 +185,8 @@ enum CreatureStates {
     CrSt_GoodWanderToObjectCombat,
     CrSt_CreatureDropBodyInLair,
     CrSt_CreatureSaveUnconsciousCreature,
+    CrSt_ImpArrivesAtFill, /* endless worlds: the Fill room (world_fill.c) */
+    CrSt_ImpFills,
     CrSt_ListEnd,
 };
 

@@ -546,6 +546,11 @@ static void cw_frame(int pos_x, int pos_y, int width, int height, int upp)
 #undef F
 }
 
+void world_window_frame(int pos_x, int pos_y, int width, int height, int upp)
+{
+    cw_frame(pos_x, pos_y, width, height, upp);
+}
+
 /** The window's own drawing, under its buttons: the frame, the title, the portrait, the name with the health behind
  *  it, and the Rap Sheet's text. */
 static void cw_background(struct GuiMenu *gmnu)

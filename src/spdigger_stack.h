@@ -38,7 +38,8 @@ enum SpecialDiggerTask {
     DigTsk_PicksUpCrateForWorkshop,
     DigTsk_DigOrMine,
     DigTsk_PicksUpGoldPile, // 10
-    DigTsk_SaveUnconscious
+    DigTsk_SaveUnconscious,
+    DigTsk_FillSlab, /* endless worlds: a Fill room mark (world_fill.c) */
 };
 
 enum SpecialLastJobKinds {

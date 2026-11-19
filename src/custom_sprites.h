@@ -54,6 +54,7 @@ extern TbBigChecksum required_sprite_zip_checksums[REQUIRED_SPRITE_ZIP_COUNT];
 int32_t get_anim_id(const char *name, struct ObjectConfigStats* objst);
 int32_t get_anim_id_(const char* name);
 int32_t get_icon_id(const char *name);
+int custom_sprites_add_builtin_icon(const char *name, const unsigned char *const pngs[], const unsigned int lengths[], int count);
 short get_ensign_id(const char *name);
 struct TbSpriteSheet *load_custom_ensigns_into_sheet(struct TbSpriteSheet *sheet, const unsigned char *palette);
 const struct TbSprite *get_custom_ensign_sprite(struct TbSpriteSheet *sheet, short ensign_id, int frame);

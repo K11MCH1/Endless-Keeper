@@ -38,6 +38,7 @@
 #include "kfx/renderer/RendererManager.h" // RendererPhysicalWidth
 #include "world_attract.h"
 #include "config_campaigns.h"
+#include "world_fill.h"
 #include "post_inc.h"
 #include "bflib_sprite.h"
 
@@ -568,6 +569,7 @@ void init_custom_sprites(LevelNumber lvnum)
         }
         LbJustLog("Loaded /fxdata/ sprite zips: %s, sprite slots: %d/%d, animations: %d, icons: %d.\n", loaded_zip_names, next_free_sprite, KEEPERSPRITE_ADD_NUM, cnt_sprite, cnt_icon);
     }
+    world_fill_register_icons(); /* endless worlds: the Fill room's icons (built into the program) */
 
     if (mods_conf.after_base_cnt > 0)
     {
@@ -606,6 +608,20 @@ static int zip_read_fn(spng_ctx *ctx, void *user, void *dst_src, size_t length)
     unzFile zip = user;
 
     return unzReadCurrentFile(zip, dst_src, length) != length;
+}
+
+/* Endless worlds: PNG icons built into the program (the Fill room's, world_fill.c) are read from memory */
+static const unsigned char *mem_png_at = NULL;
+static size_t mem_png_left = 0;
+
+static int mem_read_fn(spng_ctx *ctx, void *user, void *dst_src, size_t length)
+{
+    if ((mem_png_at == NULL) || (length > mem_png_left))
+        return SPNG_IO_EOF;
+    memcpy(dst_src, mem_png_at, length);
+    mem_png_at += length;
+    mem_png_left -= length;
+    return 0;
 }
 
 /**
@@ -889,7 +905,10 @@ static size_t decode_png_to_sprite(unzFile zip, const char *path, const char *su
     size_t limit = 1024 * 1024 * 2;
     spng_set_chunk_limits(ctx, limit, limit);
 
-    spng_set_png_stream(ctx, zip_read_fn, (void *)zip);
+    if (zip != NULL)
+        spng_set_png_stream(ctx, zip_read_fn, (void *)zip);
+    else
+        spng_set_png_stream(ctx, mem_read_fn, NULL); /* an icon built into the program (custom_sprites_add_builtin_icon) */
 
     struct spng_ihdr ihdr;
 
@@ -3012,4 +3031,52 @@ const struct LensMistData* get_lens_mist_data(const char *name)
         }
     }
     return NULL;
+}
+
+/** Endless worlds: icons kept in the program as PNG files (world_fill.c), added as an icons.json entry would add them:
+ *  the name for the first, the others right after it (a greyed button is the next icon). Returns the first icon. */
+int custom_sprites_add_builtin_icon(const char *name, const unsigned char *const pngs[], const unsigned int lengths[], int count)
+{
+    int first = 0;
+    for (int i = 0; i < count; i++)
+    {
+        struct TbHugeSprite sprite = {0};
+        mem_png_at = pngs[i];
+        mem_png_left = lengths[i];
+        size_t sz = decode_png_to_sprite(NULL, "(built in)", name, &sprite, NULL);
+        mem_png_at = NULL;
+        mem_png_left = 0;
+        if (sz == 0)
+            return 0;
+        if (next_free_icon >= GUI_PANEL_SPRITES_NEW)
+        {
+            ERRORLOG("Too many custom icons allocated");
+            free(sprite.Data);
+            return 0;
+        }
+        add_sprite(custom_sprites, sprite.SWidth, sprite.SHeight, sz, sprite.Data);
+        free(sprite.Data);
+        const int icon = next_free_icon + GUI_PANEL_SPRITES_COUNT;
+        next_free_icon++;
+        if (first == 0)
+            first = icon;
+    }
+    struct NamedCommand key = {name, 0};
+    struct NamedCommand *spr = bsearch(&key, added_icons, num_added_icons, sizeof(added_icons[0]), &cmp_named_command);
+    if (spr == NULL)
+    {
+        if (num_added_icons >= GUI_PANEL_SPRITES_NEW)
+        {
+            ERRORLOG("Too many custom icons");
+            return 0;
+        }
+        spr = &added_icons[num_added_icons++];
+        spr->name = strdup(name);
+    }
+    spr->num = first;
+    const int frame_idx = first - GUI_PANEL_SPRITES_COUNT;
+    if ((frame_idx >= 0) && (frame_idx < GUI_PANEL_SPRITES_NEW))
+        added_icon_frame_count[frame_idx] = 1;
+    qsort(added_icons, num_added_icons, sizeof(added_icons[0]), &cmp_named_command);
+    return first;
 }

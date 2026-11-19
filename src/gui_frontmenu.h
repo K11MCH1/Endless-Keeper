@@ -88,6 +88,7 @@ enum GUI_Menus {
   GMnu_WORLD_BOSS_BAR     = 60, /* endless world: "Join the World Boss" (world_boss.c) */
   GMnu_WORLD_BOSS_PICK    = 61, /* endless world: the creatures to send to a World Boss */
   GMnu_CREATURE_WINDOW    = 62, /* endless world: the creature the Information tool shows, in a window (world_creature_window.c) */
+  GMnu_KEEPER_PANEL       = 63, /* endless world: the Keeper panel, opened by clicking the Soul Container (world_keeper_panel.c) */
 };
 
 #define MENU_INVALID_ID -1

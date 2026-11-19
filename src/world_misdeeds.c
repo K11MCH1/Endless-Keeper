@@ -1661,6 +1661,7 @@ void world_misdeeds_creature_tick(struct Thing *thing)
     case CrSt_ImpImprovesDungeon:
     case CrSt_ImpConvertsDungeon:
     case CrSt_ImpReinforces:
+    case CrSt_ImpFills:
         rec->c[MdC_Work]++;
         break;
     default:

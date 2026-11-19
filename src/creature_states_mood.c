@@ -40,6 +40,7 @@
 #include "room_jobs.h"
 #include "player_utils.h"
 #include "game_legacy.h"
+#include "world_migrate.h"
 #include "post_inc.h"
 
 const struct NamedCommand anger_reason_desc[] = {
@@ -234,6 +235,10 @@ TbBool anger_free_for_anger_decrease(struct Thing *creatng)
 
 void anger_increase_creature_anger_f(struct Thing *creatng, long anger, AnnoyMotive reason, const char *func_name)
 {
+    /* endless worlds: while its keeper's Soul Container is carried the creatures are away from their rooms on purpose:
+       their mood does not sink until it is home (the user, 2026-11-19) */
+    if (world_migrate_state(creatng->owner) != WMig_None)
+        return;
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     if (anger_free_for_anger_increase(creatng))
     {

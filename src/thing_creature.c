@@ -3584,6 +3584,7 @@ struct Thing *kill_creature(struct Thing *creatng, struct Thing *killertng, Play
     }
     update_kills_counters(creatng, killertng, killer_plyr_idx, flags);
     world_misdeeds_on_kill(creatng, killertng); /* endless: Misdeeds */
+    world_record_kill(creatng, thing_exists(killertng) ? killertng->owner : killer_plyr_idx); /* endless: the Keeper panel */
 
     // 'killertng' could be a trap, so verify if it has valid creature control before increasing the kill count and adjusting its anger.
     struct CreatureControl* cctrlgrp = creature_control_get_from_thing(killertng);

@@ -61,6 +61,9 @@
 #include "net_game.h"
 #include "player_utils.h"
 #include "config_magic.h"
+#include "bflib_math.h"
+#include "world_migrate.h"
+#include "world_fill.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2488,6 +2491,9 @@ void world_progress_turn(void)
     world_hand_test_turn();
     world_watchfire_turn();
     world_dark_turn();
+    world_record_turn(); /* the Keeper panel's Time Played */
+    world_migrate_turn(); /* Move The Heart */
+    world_fill_turn(); /* the Fill room */
     world_wallbreak_turn(); /* Beetles and raid Tunnellers break fortified walls */
     if (!world_progress_active())
         return;
@@ -2718,7 +2724,7 @@ int world_player_level(PlayerNumber plyr_idx)
 }
 
 /* the players' records for a dedicated server's console (the simulating machine's, kept in the save) */
-static struct WorldPlayerStats wps[PLAYERS_MAX];
+#define wps game.world_player_record /* in struct Game: a thin client's Keeper panel shows it */
 
 const struct WorldPlayerStats *world_player_stats(PlayerNumber plyr_idx)
 {
@@ -2766,12 +2772,172 @@ void world_player_portal_captured(PlayerNumber plyr_idx, int biome)
         ((biome >= 0) && (biome < WgB_COUNT)) ? wg_biome_name(biome) : "?");
 }
 
-void world_progress_seat_reset(PlayerNumber plyr_idx)
+/* The Keeper panel's statistics (2026-11-19), counted on the simulating machine and seen everywhere (struct Game). */
+static ThingIndex wrec_lost_heart[PLAYERS_MAX];   /* the last Heart counted as lost (one Heart is reported twice) */
+static GameTurn wrec_lost_made[PLAYERS_MAX];
+
+static TbBool wrec_counts(PlayerNumber p)
+{
+    return world_mode_active() && !netstate_is_client() && (p >= 0) && (p < PLAYERS_COUNT) && (p < PLAYERS_MAX) &&
+        world_player_is_human(p);
+}
+
+uint32_t world_player_level_xp(int level)
+{
+    if (level <= 1)
+        return 0;
+    return (uint32_t)WPL_XP_PER_HEART / 2 * (uint32_t)(level - 1) * (uint32_t)level;
+}
+
+void world_record_heart_lost(const struct Thing *heartng)
+{
+    if (!thing_exists(heartng))
+        return;
+    const PlayerNumber p = heartng->owner;
+    if (!wrec_counts(p) || ((wrec_lost_heart[p] == heartng->index) && (wrec_lost_made[p] == heartng->creation_turn)))
+        return;
+    wrec_lost_heart[p] = heartng->index;
+    wrec_lost_made[p] = heartng->creation_turn;
+    wps[p].hearts_lost++;
+    SYNCLOG("World: player %d lost its Heart (%u lost in all)", (int)p, (unsigned)wps[p].hearts_lost);
+}
+
+void world_record_kill(const struct Thing *victim, PlayerNumber killer)
+{
+    if (!wrec_counts(killer) || !thing_exists(victim) || (victim->owner == killer))
+        return;
+    if (victim->owner == PLAYER_GOOD)
+        wps[killer].heroes_killed++;
+    else if (!players_creatures_tolerate_each_other(killer, victim->owner))
+        wps[killer].creatures_killed++;
+}
+
+void world_record_dug(PlayerNumber p, MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    if (!wrec_counts(p))
+        return;
+    const struct Thing *heart = get_player_soul_container(p);
+    if (!thing_exists(heart))
+        return;
+    const long dx = (long)slb_x - (long)subtile_slab(heart->mappos.x.stl.num);
+    const long dy = (long)slb_y - (long)subtile_slab(heart->mappos.y.stl.num);
+    const uint32_t d = (uint32_t)LbSqrL(dx * dx + dy * dy);
+    if (d > wps[p].dug_farthest)
+        wps[p].dug_farthest = d;
+}
+
+void world_record_portrait(PlayerNumber p, ThingModel model)
+{
+    if ((p < 0) || (p >= PLAYERS_MAX) || (model <= 0) || (model >= game.conf.crtr_conf.model_count))
+        return;
+    wps[p].portrait = (uint16_t)model;
+    SYNCLOG("World: player %d's portrait is the %s", (int)p, creature_code_name(model));
+}
+
+/** Time Played: every turn a keeper is here (single player: this machine's; a server: the seats a user holds). */
+static void wrec_play_time(void)
+{
+    if (!world_mode_active() || netstate_is_client())
+        return;
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+    {
+        const struct PlayerInfo *player = get_player(p);
+        if (!world_player_is_human(p) || !player_exists(player) || player_is_placeholder(player) ||
+            (player->victory_state == VicS_LostLevel))
+            continue;
+        if (network_is_active())
+        {
+            const NetUserId u = get_player_primary_user(player);
+            if ((u < 0) || (u >= MAX_NET_USERS) || (netstate_dedicated() && (u == SERVER_ID)))
+                continue;
+        } else if (p != my_player_number)
+            continue;
+        wps[p].play_turns++;
+    }
+}
+
+void world_record_turn(void)
+{
+    wrec_play_time();
+}
+
+/* REC2 (an extra of the world save): the record's fields that came with the Keeper panel (PST1 has the first four) */
+size_t world_record_save_size(void)
+{
+    uint32_t n = 0;
+    for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+        if ((wps[p].hearts_lost | wps[p].heroes_killed | wps[p].creatures_killed | wps[p].dug_farthest | wps[p].portrait) != 0)
+            n++;
+    return (n == 0) ? 0 : (4 + n * 6 * 4);
+}
+
+void world_record_save(uint8_t *buf)
+{
+    uint32_t n = 0;
+    uint8_t *at = buf + 4;
+    for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+    {
+        const struct WorldPlayerStats *st = &wps[p];
+        if ((st->hearts_lost | st->heroes_killed | st->creatures_killed | st->dug_farthest | st->portrait) == 0)
+            continue;
+        const uint32_t v[6] = {(uint32_t)p, st->hearts_lost, st->heroes_killed, st->creatures_killed, st->dug_farthest,
+            st->portrait};
+        memcpy(at, v, sizeof(v));
+        at += sizeof(v);
+        n++;
+    }
+    memcpy(buf, &n, 4);
+}
+
+TbBool world_record_load(const uint8_t *buf, size_t len)
+{
+    uint32_t n = 0;
+    if (len < 4)
+        return false;
+    memcpy(&n, buf, 4);
+    if ((size_t)n * 24 + 4 > len)
+        return false;
+    for (uint32_t k = 0; k < n; k++)
+    {
+        uint32_t v[6];
+        memcpy(v, buf + 4 + k * 24, sizeof(v));
+        if (v[0] >= PLAYERS_MAX)
+            continue;
+        struct WorldPlayerStats *st = &wps[v[0]];
+        st->hearts_lost = v[1];
+        st->heroes_killed = v[2];
+        st->creatures_killed = v[3];
+        st->dug_farthest = v[4];
+        st->portrait = (uint16_t)v[5];
+    }
+    return true;
+}
+
+void world_record_reset(void)
+{
+    for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+    {
+        wps[p].hearts_lost = 0;
+        wps[p].heroes_killed = 0;
+        wps[p].creatures_killed = 0;
+        wps[p].dug_farthest = 0;
+        wps[p].portrait = 0;
+    }
+    memset(wrec_lost_heart, 0, sizeof(wrec_lost_heart));
+    memset(wrec_lost_made, 0, sizeof(wrec_lost_made));
+}
+
+void world_progress_seat_reset(PlayerNumber plyr_idx, TbBool keep_record)
 {
     if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
         return;
-    wpl_xp[plyr_idx] = 0;
-    memset(&wps[plyr_idx], 0, sizeof(wps[plyr_idx]));
+    /* the user, 2026-11-19: level, XP and the Profile's statistics are a lifetime record ("Hearts Lost keeps
+       counting"): a keeper starting again keeps them; another player taking the seat starts from zero */
+    if (!keep_record)
+    {
+        wpl_xp[plyr_idx] = 0;
+        memset(&wps[plyr_idx], 0, sizeof(wps[plyr_idx]));
+    }
     memset(&wpr_players[plyr_idx], 0, sizeof(wpr_players[plyr_idx]));
     memset(game.world_room_level[plyr_idx], 0, sizeof(game.world_room_level[plyr_idx]));
     memset(game.world_room_allowed[plyr_idx], 0, sizeof(game.world_room_allowed[plyr_idx]));
@@ -2779,10 +2945,13 @@ void world_progress_seat_reset(PlayerNumber plyr_idx)
     /* and the mastery bars: the next keeper of the seat began with the last one's (audit 2026-11-11) */
     memset(game.world_room_xp[plyr_idx], 0, sizeof(game.world_room_xp[plyr_idx]));
     wpr_offer_circle[plyr_idx] = 0;
+    world_migrate_seat_reset(plyr_idx); /* no migration going on, and no moved Heart */
+    world_fill_seat_reset(plyr_idx); /* and no Fill room marks */
     pmask_del(&wpr_kit_players, plyr_idx); /* the kit is given again when it starts */
     world_misdeeds_strays_seat_reset(plyr_idx); /* Strays: the old keeper's strays go wild again */
     world_watchfire_seat_reset(plyr_idx); /* and the watchfires */
-    SYNCLOG("World: player %d's level, XP, records and research progress start again from zero", (int)plyr_idx);
+    SYNCLOG("World: player %d's research progress starts again from zero; level, XP and records %s", (int)plyr_idx,
+        keep_record ? "kept" : "too");
 }
 
 /******************************************************************************/
@@ -2900,6 +3069,7 @@ void world_heart_destroyed(const struct Thing *heartng)
         return;
     world_outpost_heart_destroyed(heartng); /* an outpost's heart drops its spellbook */
     world_misdeeds_heart_destroyed(heartng);
+    world_record_heart_lost(heartng); /* the Keeper panel's Hearts Lost */
     const int i = wpl_hit_slot(heartng);
     const PlayerNumber victim = heartng->owner;
     if (i < 0)

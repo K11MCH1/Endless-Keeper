@@ -116,6 +116,8 @@
 #include "net_state.h"
 #include "world_boss.h"
 #include "world_watchfire.h"
+#include "world_keeper_panel.h"
+#include "world_fill.h"
 #include "post_inc.h"
 
 /* the double-click arrays (frontend.h) are indexed by user: one for every packet */
@@ -198,6 +200,20 @@ struct Room *keeper_build_room(NetUserId user,long stl_x,long stl_y,long plyr_id
     // Take top left subtile on single subtile boundbox, take center subtile on full slab boundbox
     MapCoord x = ((ustate->full_slab_cursor == 0) ? slab_subtile(subtile_slab(stl_x), 0) : slab_subtile_center(subtile_slab(stl_x)));
     MapCoord y = ((ustate->full_slab_cursor == 0) ? slab_subtile(subtile_slab(stl_y), 0) : slab_subtile_center(subtile_slab(stl_y)));
+    if (world_fill_is_kind(rkind))
+    {
+        /* endless worlds: the Fill room marks the slab instead (world_fill.c); the rest as a room's */
+        if (world_fill_place(user, plyr_idx, subtile_slab(stl_x), subtile_slab(stl_y)))
+        {
+            if (ustate->boxsize > 0)
+                ustate->boxsize--;
+            dungeon->camera_deviate_jump = (ustate->boxsize > 1) ? 240 : 192;
+            struct Coord3d pos;
+            set_coords_to_slab_center(&pos, subtile_slab(stl_x), subtile_slab(stl_y));
+            create_price_effect(&pos, plyr_idx, roomst->cost);
+        }
+        return INVALID_ROOM;
+    }
     struct Room* room = player_build_room_at(x, y, plyr_idx, rkind, ustate->boxsize);
     if (!room_is_invalid(room))
     {
@@ -889,6 +905,11 @@ TbBool process_user_global_packet_action(NetUserId user)
   case PckA_WorldMisdeedPick:
       if (!netstate_thin_mode() || network_is_host())
           world_misdeeds_packet_pick(plyr_idx, (ThingIndex)pckt->actn_par1, (int)pckt->actn_par2);
+      return 1;
+  case PckA_WorldKeeperPanel:
+      /* the Keeper panel: migrate, call it off, portrait, reset (game state: the server, or every lockstep machine) */
+      if (!netstate_thin_mode() || network_is_host())
+          world_keeper_panel_packet(plyr_idx, (unsigned long)pckt->actn_par1, (unsigned long)pckt->actn_par2);
       return 1;
   case PckA_WorldBossJoin:
       if (!netstate_thin_mode() || network_is_host())

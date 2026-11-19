@@ -10,8 +10,8 @@
  *
  * By day, heroes break in through the ceiling (the FALL spawn of scripts) at open spots about 60 slabs from the
  * player's heart (2026-11-14, the player: it was 100; never nearer than 40): parties of a Tunneller that digs its way to the heart and its followers (2-6 in all). The first
- * raid of a day always comes, the day's others one time in two (2026-11-11), at least four minutes apart, and none in
- * the last two minutes of a day. A raid is bought with a threat budget (2026-11-18; it was the player's best creature):
+ * raid of a day always comes, the day's others one time in two (2026-11-11), at least four minutes apart, up to the
+ * day's end (the last two minutes were kept free 2026-11-18 to 2026-11-19). A raid is bought with a threat budget (2026-11-18; it was the player's best creature):
  * the army's fighting power (world_threat.c) x a curve of the dungeon's days x an adjustment from how the last raids
  * went, growing at most 25% a raid; each hero costs its fighting power. At most 2 parties before day 8, then 3, the
  * third landing 45-90 seconds after the others. The army's upper quarter of levels sets the leader's level and who may
@@ -136,6 +136,25 @@ long world_day_number(void)
     dn_read_lengths();
     dn_time(game.play_gameturn, &day, &t);
     return day;
+}
+
+/* Every third day, and its night, nothing comes: no raid, no wild pack (the user, 2026-11-19: "Every 3 days a night and
+   a day with no enemy spawns. So no Wild packs, no heroes. To give player a breather"). The world's day as the dial
+   shows it (days 3, 6, 9 ...), the same for every keeper. Test switch KFX_WORLD_SAFEEVERY=n: every n-th day (0: never). */
+#define DN_SAFE_EVERY 3
+TbBool world_safe_day(void)
+{
+    static long every = -2;
+    if (every == -2)
+    {
+        const char *v = getenv("KFX_WORLD_SAFEEVERY");
+        every = (v != NULL) ? max(0L, atol(v)) : DN_SAFE_EVERY;
+        if (v != NULL)
+            SYNCLOG("World: test switch KFX_WORLD_SAFEEVERY=%ld", every);
+    }
+    if ((every <= 0) || !world_mode_active())
+        return false;
+    return (world_day_number() % every) == 0;
 }
 
 GameTurn world_daylight_began(void)
@@ -342,7 +361,8 @@ static int dn_draw_day(int x, int y, int size)
         for (int dx = -1; dx <= 1; dx++)
             if ((dx != 0) || (dy != 0))
                 world_window_plain(tx + dx * edge, ty + dy * edge, wide + 4, cap, 0, dark, text);
-    world_window_plain(tx, ty, wide + 4, cap, 0, world_window_ink(WwI_Bright), text);
+    /* a safe day and its night (no raids, no wild packs): the text is green (the user, 2026-11-19) */
+    world_window_plain(tx, ty, wide + 4, cap, 0, world_safe_day() ? colours[4][15][4] : world_window_ink(WwI_Bright), text);
     return gap + cap + (3 * cap + 7) / 8;
 }
 
@@ -446,7 +466,7 @@ static const char *const dn_biome_heroes[WgB_COUNT][2] = {
 #define DN_PARTY_GAP 8               /* slabs at least between two parties' landings */
 #define DN_MAX_PARTIES 5
 #define DN_RETREAT_NIGHTS 1          /* raiders go home at the next dawn (2026-11-11; it was after their third night) */
-#define DN_NIGHT_CLEAR (2 * 60 * 20) /* no raid lands in the last two minutes of a day (the night's packs come then) */
+#define DN_NIGHT_CLEAR 0 /* (the last two minutes of a day were kept free of raids till 2026-11-19: dn_night_clear) */
 #define DN_RAID_GAP (4 * 60 * 20)    /* turns at least between two raids of a day on a player, where the day has room */
 /* A raider whose party's leader died: it goes home at once (the mark is saved and streamed with the creature) */
 #define DN_FLEEING_MARK CHeroTsk_DefendParty
@@ -493,12 +513,12 @@ static uint64_t dn_player_salt(PlayerNumber plyr_idx);
  *  loading its landing chunks there; audit 2026-11-09). Player 0 keeps the time it always had. */
 static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_idx);
 
-/** The end of a day no raid lands in: DN_NIGHT_CLEAR, or a twentieth of it in a short (test) day where that would not
- *  leave half the day. */
+/** The end of a day no raid lands in: none any more (the user, 2026-11-19: "remove the last-two-minutes restriction
+ *  for the Raid parties"; it was DN_NIGHT_CLEAR, two minutes, from 2026-11-18). */
 static GameTurnDelta dn_night_clear(long day)
 {
-    const GameTurnDelta edge = dn_light(day) / 20;
-    return (DN_NIGHT_CLEAR < dn_light(day) / 2) ? max((GameTurnDelta)DN_NIGHT_CLEAR, edge) : edge;
+    (void)day;
+    return 0;
 }
 
 static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_idx)
@@ -1958,6 +1978,11 @@ static void dn_late_turn(void)
         if (!late->active || (game.play_gameturn < late->at))
             continue;
         late->active = 0;
+        if (world_safe_day())
+        {
+            SYNCLOG("World: a raid's late party doesn't land for player %d: a safe day", (int)p);
+            continue;
+        }
         if (dn_thr[p].raid_power > (float)late->cost)
             dn_thr[p].raid_power -= (float)late->cost; /* (planned with it: put back when it lands) */
         MapSlabCoord sx, sy;
@@ -2042,6 +2067,13 @@ static void dn_threat_outcome(PlayerNumber p)
 
 static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
 {
+    if (world_safe_day())
+    {
+        SYNCLOG("World: day %ld raid %d doesn't come for player %d: a safe day", day, idx + 1, (int)plyr_idx);
+        if (idx == 0)
+            dn_owed_day[plyr_idx] = 0; /* (and isn't owed after it) */
+        return;
+    }
     if (dn_invasion_on(plyr_idx))
     {
         SYNCLOG("World: day %ld raid %d doesn't come for player %d: the last raid's heroes are still here%s", day, idx + 1,

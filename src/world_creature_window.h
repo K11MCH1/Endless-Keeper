@@ -49,6 +49,8 @@ int world_window_plain_cap(void);
 /** Splits text at its spaces into lines no wider than w: fills `lines`, returns how many (at most `max`; what is
  *  left over stays in the last, which is then drawn smaller). */
 int world_window_plain_wrap(const char *text, int cap, int w, char lines[][WORLD_WINDOW_LINE], int max);
+/** The window's dress: the game's ornate frame round (x, y, w, h), at the window's own scale (upp: 16ths of a pixel a unit). */
+void world_window_frame(int pos_x, int pos_y, int width, int height, int upp);
 /** A heading or a button's word: the game's own lettering. */
 void world_window_display(int x, int y, int w, int cap, int align, const char *text);
 int world_window_display_width(const char *text, int cap);

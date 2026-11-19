@@ -56,6 +56,7 @@
 #include "world_caretaker.h"
 #include "kfx/profiling/KfxProfilingC.h"
 #include "world_misdeeds.h"
+#include "world_fill.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2601,7 +2602,8 @@ long check_out_uncrowded_reinforce_position(struct Thing *thing, SubtlCodedCoord
         MapSubtlCoord stl_y;
         stl_x = basestl_x + 2 * (long)small_around[idx].delta_x;
         stl_y = basestl_y + 2 * (long)small_around[idx].delta_y;
-        if (slab_is_players_land(thing->owner, subtile_slab(stl_x), subtile_slab(stl_y)))
+        if (slab_is_players_land(thing->owner, subtile_slab(stl_x), subtile_slab(stl_y)) &&
+            !world_fill_keep_out(thing->owner, subtile_slab(stl_x), subtile_slab(stl_y))) /* endless worlds: the Fill room */
         {
             if (!imp_already_reinforcing_at_excluding(thing, stl_x, stl_y))
             {
@@ -3214,6 +3216,7 @@ static TbBool imp_stack_update__impl2(struct Thing *creatng)
     { KFX_C_ZONE_BEGIN(z_st6, "Imp stack: add_empty_traps_to_imp_stack"); add_empty_traps_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/6); KFX_C_ZONE_END(z_st6); }
     { KFX_C_ZONE_BEGIN(z_st7, "Imp stack: add_pretty_and_convert_to_imp_stack"); add_pretty_and_convert_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/64); KFX_C_ZONE_END(z_st7); }
     { KFX_C_ZONE_BEGIN(z_st8, "Imp stack: add_dig_tasks_to_imp_stack"); add_dig_tasks_to_imp_stack(creatng, dungeon, DIGGER_TASK_MAX_COUNT/16 - 1, DigTaskStack_Undug); KFX_C_ZONE_END(z_st8); }
+    world_fill_add_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/8); /* endless worlds: the Fill room's marks */
     { KFX_C_ZONE_BEGIN(z_st9, "Imp stack: add_unclaimed_gold_to_imp_stack"); add_unclaimed_gold_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/64); KFX_C_ZONE_END(z_st9); }
     { KFX_C_ZONE_BEGIN(z_st10, "Imp stack: add_dig_tasks_to_imp_stack"); add_dig_tasks_to_imp_stack(creatng, dungeon, DIGGER_TASK_MAX_COUNT*5/8, DigTaskStack_Gems); KFX_C_ZONE_END(z_st10); }
     { KFX_C_ZONE_BEGIN(z_st11, "Imp stack: add_unclaimed_traps_to_imp_stack"); add_unclaimed_traps_to_imp_stack(dungeon, DIGGER_TASK_MAX_COUNT/4); KFX_C_ZONE_END(z_st11); }
@@ -3808,6 +3811,9 @@ static TbBool check_out_imp_stack__impl(struct Thing *creatng)
             break;
         case DigTsk_DigOrMine:
             ret = check_out_worker_dig_or_mine(creatng, dstack);
+            break;
+        case DigTsk_FillSlab:
+            ret = world_fill_check_out_worker(creatng, dstack);
             break;
         case DigTsk_None:
             ret = 0;

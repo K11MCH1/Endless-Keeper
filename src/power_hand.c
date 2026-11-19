@@ -73,6 +73,7 @@
 #include "world_attract.h"
 #include "world_boss.h"
 #include "world_hand.h"
+#include "world_migrate.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -628,6 +629,8 @@ void draw_power_hand(void)
         }
         return;
     }
+    if (!gameplay_cursor_is_over_gui() && world_migrate_draw_hand(cursor_x, cursor_y))
+        return; /* endless worlds: placing the Soul Container (Move The Heart) */
     if (gameplay_cursor_is_over_gui()) {
         SYNCDBG(7,"Drawing while GUI busy");
         draw_mini_things_in_hand(cursor_x+scale_ui_value(10*global_hand_scale), cursor_y+scale_ui_value(10*global_hand_scale));
@@ -787,6 +790,19 @@ TbBool object_is_slappable_by_player(const struct Thing *thing, PlayerNumber ply
     return false;
 }
 
+/** An object with the CLICKABLE property (objects.cfg) that its owner points at with an empty Hand: the Hand opens over
+ *  it as over a creature, and a click on it is the game's to answer (Endless Keeper: the Soul Container opens the
+ *  Keeper panel). It is never picked up or slapped for that. */
+TbBool object_is_clickable_by_player(const struct Thing *thing, PlayerNumber plyr_idx)
+{
+    if ((thing->class_id != TCls_Object) || (thing->owner != plyr_idx))
+        return false;
+    const struct ObjectConfigStats *objst = get_object_model_stats(thing->model);
+    if ((objst->model_flags & OMF_Clickable) == 0)
+        return false;
+    return power_hand_is_empty(get_player(plyr_idx));
+}
+
 /*void get_nearest_thing_for_hand_or_slap_on_map_block(int32_t *near_distance, struct Thing **near_thing,struct Map *mapblk, long plyr_idx, long x, long y)
 {
   struct Thing *thing;
@@ -833,7 +849,8 @@ long near_map_block_thing_filter_ready_for_hand_or_slap(const struct Thing *thin
     if (!thing_is_picked_up(thing)
         && (thing->active_state != CrSt_CreatureUnconscious))
     {
-      if (can_thing_be_picked_up_by_player(thing, param->plyr_idx) || thing_slappable(thing, param->plyr_idx))
+      if (can_thing_be_picked_up_by_player(thing, param->plyr_idx) || thing_slappable(thing, param->plyr_idx) ||
+          object_is_clickable_by_player(thing, param->plyr_idx))
       {
           // note that abs() is not required because we're computing square of the values
           dist_x = param->primary_number-(MapCoord)thing->mappos.x.val;

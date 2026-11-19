@@ -97,6 +97,7 @@
 #ifdef KFX_ANDROID
 void KfxAndroidNotePacket(const struct Packet *pckt); /* android/native/TouchBridge.cpp */
 #endif
+#include "world_keeper_panel.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -3230,6 +3231,8 @@ static short get_inputs(void)
     switch (view_type)
     {
     case PVT_DungeonTop:
+        if (!inp_handled)
+            inp_handled = world_keeper_panel_inputs(); /* endless worlds: the Soul Container's click, Migrate's placing */
         get_dungeon_control_pausable_action_inputs();
         if (!inp_handled)
             inp_handled = get_dungeon_control_action_inputs();
