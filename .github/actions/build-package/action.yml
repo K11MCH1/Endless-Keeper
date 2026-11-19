@@ -15,12 +15,51 @@ inputs:
 runs:
   using: composite
   steps:
+    # The build tools' packages are kept in the Actions cache: Ubuntu's package mirror was at times so slow for the
+    # runners that downloading them took over 20 minutes (the build itself takes about 6). The cache key is what
+    # this runner would download (names and versions), so new versions are fetched once and cached again; an older
+    # cache still serves every package that hasn't changed, and without any cache it is the plain download.
+    - name: Build tools (what they need)
+      id: tools
+      shell: bash
+      run: |
+        set -euo pipefail
+        pkgs="build-essential cmake ninja-build gcc-mingw-w64-i686 g++-mingw-w64-i686 gcc-mingw-w64-x86-64-win32 g++-mingw-w64-x86-64-win32 python3 libpng16-16t64 p7zip-full"
+        echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
+        sudo apt-get update -q
+        sudo apt-get install -y -qq --print-uris $pkgs | grep "^'" | sort > "$RUNNER_TEMP/build-tools-uris.txt" || true
+        echo "$(wc -l < "$RUNNER_TEMP/build-tools-uris.txt") packages to install"
+        echo "key=build-tools-${{ runner.os }}-${{ runner.arch }}-$(sha256sum "$RUNNER_TEMP/build-tools-uris.txt" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+    - name: Build tools from the cache
+      id: tools-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/build-tools-debs
+        key: ${{ steps.tools.outputs.key }}
+        restore-keys: build-tools-${{ runner.os }}-${{ runner.arch }}-
     - name: Build tools
       shell: bash
       run: |
-        sudo apt-get update -q
-        sudo apt-get install -y -q build-essential cmake ninja-build gcc-mingw-w64-i686 g++-mingw-w64-i686 \
-          gcc-mingw-w64-x86-64-win32 g++-mingw-w64-x86-64-win32 python3 libpng16-16t64 p7zip-full
+        set -euo pipefail
+        debs="$HOME/build-tools-debs"
+        mkdir -p "$debs/partial"
+        echo "$(find "$debs" -maxdepth 1 -name '*.deb' | wc -l) packages from the cache"
+        # apt takes a package from this folder when its name and checksum match, and downloads only the others
+        sudo apt-get install -y -q -o Dir::Cache::archives="$debs" ${{ steps.tools.outputs.pkgs }}
+        sudo chown -R "$(id -u):$(id -g)" "$debs"
+        # keep only what this runner needs, for the cache
+        awk '{print $2}' "$RUNNER_TEMP/build-tools-uris.txt" > "$RUNNER_TEMP/build-tools-keep.txt"
+        for f in "$debs"/*.deb; do
+          [ -e "$f" ] || continue
+          grep -qxF "$(basename "$f")" "$RUNNER_TEMP/build-tools-keep.txt" || rm -f "$f"
+        done
+        rm -rf "$debs/partial" "$debs/lock"
+    - name: Build tools into the cache
+      if: steps.tools-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/build-tools-debs
+        key: ${{ steps.tools.outputs.key }}
     - name: Downloads that retry
       shell: bash
       run: |
