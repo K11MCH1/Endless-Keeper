@@ -396,6 +396,15 @@ extern "C" void KfxAndroidSecondScreenLevelTick(void) { levelAt = SDL_GetTicks()
 extern "C" void KfxAndroidSecondScreenFrame(void) {
     std::lock_guard<std::mutex> lock(guard);
     if (!window) { touches.clear(); return; }
+    if (RendererGetActiveType() != RENDERER_SOFTWARE) {
+        // the map is drawn here by re-running the software drawing into a private buffer; with the Vulkan renderer
+        // those draws would land in the main screen's frame, so the second screen stays blank (2026-11-21)
+        static bool logged = false;
+        if (!logged) { logged = true; LbSyncLog("SecondScreen: off with the Vulkan renderer (choose OpenGL ES for the map here)\n"); }
+        touches.clear();
+        if (!blank) { queue(true); blank = true; }
+        return;
+    }
     bool touched = !touches.empty();
     applyTouches();
     if (!inLevel()) {

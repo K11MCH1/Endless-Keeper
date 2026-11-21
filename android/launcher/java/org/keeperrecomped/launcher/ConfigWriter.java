@@ -26,9 +26,9 @@ final class ConfigWriter {
         v.put("INGAME_RES", "DESKTOP");
         v.put("DISPLAY_NUMBER", "1");
         v.put("VSYNC", onOff(s.bool("vsync")));
-        // KeeperFX draws into its own frame buffer; Vulkan/GLES presentation is the
-        // Android layer's job (intent extra "renderer").
-        v.put("RENDERER", "SOFTWARE");
+        // Vulkan: the engine draws the game on the graphics chip (it falls back to its software drawing where
+        // Vulkan cannot run). OpenGL ES: the software drawing, shown through OpenGL ES (intent extra "renderer").
+        v.put("RENDERER", "gles".equals(s.get("renderer")) ? "SOFTWARE" : "VULKAN");
         v.put("VIEWPORT_MODE", s.get("viewport_mode"));
         v.put("RESIZE_MOVIES", s.get("resize_movies"));
         v.put("FREEZE_GAME_ON_FOCUS_LOST", onOff(s.bool("pause_on_minimize")));

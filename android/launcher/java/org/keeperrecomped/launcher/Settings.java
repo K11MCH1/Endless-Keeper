@@ -67,7 +67,7 @@ final class Settings {
     static {
         // Graphics
         choice("graphics", "Display", "renderer", "vulkan", "Rendering Backend",
-                "How finished frames reach the screen.", "vulkan|Vulkan", "gles|OpenGL ES");
+                "Vulkan draws the game on the graphics chip. OpenGL ES draws it the original way, on the processor.", "vulkan|Vulkan", "gles|OpenGL ES");
         choice("graphics", "Display", "fps_cap", "0", "Max. FPS",
                 "Presentation cap. Display maximum follows the screen's highest refresh rate.",
                 "0|Display maximum", "60|60", "90|90", "120|120", "144|144", "165|165");
