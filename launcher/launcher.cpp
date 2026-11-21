@@ -885,7 +885,7 @@ static void settings_window(float w, float h)
             }
             ImGui::Separator();
             cfg_int(s_cfg, "Display monitor", "DISPLAY_NUMBER", 1, 1, 8, false);
-            cfg_combo(s_cfg, "Rendering Backend", "RENDERER", "OPENGL", {{"OPENGL", "OpenGL"}, {"SOFTWARE", "Software"}});
+            cfg_combo(s_cfg, "Rendering Backend", "RENDERER", "VULKAN", {{"VULKAN", "Vulkan"}, {"OPENGL", "OpenGL"}, {"SOFTWARE", "Software"}});
             cfg_check(s_cfg, "Enable VSync", "VSYNC", true);
             {
                 std::vector<std::string> f = split(s_cfg.get("FRAMES_PER_SECOND", "AUTO 60"));

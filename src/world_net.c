@@ -1070,8 +1070,15 @@ struct HubClient {
     Uint32 invite_at;         /* when that invite came */
     Uint32 invite_times[5];   /* at most 5 invites in any 10 s */
     int invite_pos;
+    Uint32 rate_at;           /* its messages in the second from rate_at (at most HUB_RATE_MAX) */
+    int rate_n;
 };
 #define HUB_HANDSHAKE_MS 10000
+/* Abuse limits (audit 2026-11-21: an upgraded connection that never said hello kept its slot for good, one address
+   could take all 200 slots, messages were not limited, and every hello or drop sent the names list to everyone) */
+#define HUB_HELLO_MS 15000      /* an upgraded connection must say hello (player or server) within this */
+#define HUB_PER_IP_MAX 8        /* connections from one address (this machine itself: no limit) */
+#define HUB_RATE_MAX 30         /* messages a second from one connection; more and it is let go */
 #define HUB_INVITE_MS 60000     /* an invite nobody answers ends after this */
 #define HUB_OUT_MAX (1u << 20)  /* a client that doesn't read is let go past this */
 
@@ -1093,6 +1100,8 @@ static struct {
     int history_count;
     TbBool servers_dirty;
     Uint32 servers_sent;
+    TbBool names_dirty;       /* the names list goes out at most once a second */
+    Uint32 names_sent;
     int next_id;
     int next_uid;
 } H;
@@ -1242,7 +1251,7 @@ static void hub_drop(struct HubClient *c)
     if (role == HubR_Server)
         H.servers_dirty = true;
     else if (role == HubR_Player)
-        hub_send_names_all(); /* everyone else's names box */
+        H.names_dirty = true; /* everyone else's names box (within a second) */
 }
 
 static size_t json_esc(char *dst, size_t size, const char *src)
@@ -1531,6 +1540,19 @@ static void hub_party_message(struct HubClient *c, const char *t, const VALUE *m
 
 static void hub_handle(struct HubClient *c, const char *text, size_t len)
 {
+    {
+        const Uint32 now = now_ms();
+        if ((c->rate_at == 0) || ((int32_t)(now - c->rate_at) >= 1000))
+        {
+            c->rate_at = (now != 0) ? now : 1;
+            c->rate_n = 0;
+        }
+        if (++c->rate_n > HUB_RATE_MAX)
+        {
+            c->closing = true; /* (its messages are not read any more; it goes once its replies are out) */
+            return;
+        }
+    }
     VALUE msg = {0};
     if (json_dom_parse(text, len, NULL, 0, &msg, NULL) != 0)
     {
@@ -1575,7 +1597,7 @@ static void hub_handle(struct HubClient *c, const char *text, size_t len)
                 snprintf(out, sizeof(out), "{\"t\":\"welcome\",\"name\":\"%s\"}", esc);
                 hub_send_text(c, out);
                 hub_send_servers(c);
-                hub_send_names_all(); /* the newcomer's names, and everyone else's update */
+                H.names_dirty = true; /* the newcomer's names, and everyone else's update (within a second) */
                 /* history */
                 char *hist = (char *)malloc(64 + (size_t)HUB_HISTORY * ((WNET_NAME_MAX + WNET_TEXT_MAX) * 6 + 48));
                 if (hist != NULL)
@@ -1904,14 +1926,28 @@ void wnet_hub_poll(void)
             enet_socket_destroy(s);
             continue;
         }
+        char ip[WNET_HOST_MAX];
+        enet_address_get_host_ip(&from, ip, sizeof(ip));
+        hub_bare_ip(ip);
+        if ((strcmp(ip, "127.0.0.1") != 0) && (strcmp(ip, "::1") != 0))
+        {
+            int same = 0;
+            for (int i = 0; i < HUB_CLIENTS_MAX; i++)
+                if (H.c[i].used && (strcmp(H.c[i].ip, ip) == 0))
+                    same++;
+            if (same >= HUB_PER_IP_MAX)
+            {
+                enet_socket_destroy(s);
+                continue;
+            }
+        }
         enet_socket_set_option(s, ENET_SOCKOPT_NONBLOCK, 1);
         struct HubClient *c = &H.c[slot];
         memset(c, 0, sizeof(*c));
         c->s = s;
         c->used = true;
         c->accepted = now_ms();
-        enet_address_get_host_ip(&from, c->ip, sizeof(c->ip));
-        hub_bare_ip(c->ip);
+        snprintf(c->ip, sizeof(c->ip), "%s", ip);
     }
     for (int i = 0; i < HUB_CLIENTS_MAX; i++)
     {
@@ -1938,6 +1974,11 @@ void wnet_hub_poll(void)
         if (!c->upgraded && ((int32_t)(now_ms() - c->accepted) >= HUB_HANDSHAKE_MS))
         {
             hub_drop(c); /* connected and said nothing useful: its slot goes to someone else */
+            continue;
+        }
+        if (c->upgraded && (c->role == HubR_None) && ((int32_t)(now_ms() - c->accepted) >= HUB_HELLO_MS))
+        {
+            hub_drop(c); /* a WebSocket that never said who it is */
             continue;
         }
         if (c->closing)
@@ -1978,6 +2019,12 @@ void wnet_hub_poll(void)
         if (H.c[i].used && (H.c[i].role == HubR_Player) && (H.c[i].invite_from != 0) &&
             ((int32_t)(now_ms() - H.c[i].invite_at) >= HUB_INVITE_MS))
             hub_invite_fail_in(&H.c[i], "no_answer", true);
+    if (H.names_dirty && ((int32_t)(now_ms() - H.names_sent) >= 1000))
+    {
+        H.names_dirty = false;
+        H.names_sent = now_ms();
+        hub_send_names_all();
+    }
     if (H.servers_dirty && ((int32_t)(now_ms() - H.servers_sent) >= 1000))
     {
         H.servers_dirty = false;

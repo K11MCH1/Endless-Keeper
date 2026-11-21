@@ -32,7 +32,7 @@ public:
     void SetScreenFramebuffer(GLuint fbo) { m_screen_fbo = fbo; }
     GLuint GetScreenFramebuffer() const { return m_screen_fbo; }
 
-private:
+protected:
     enum class SlotState : uint8_t { Free, Pending, Realized, Failed };
 
     template <typename Desc, typename Realized>
@@ -71,41 +71,41 @@ private:
     /// @param desc Description to realize.
     /// @param out Receives the realized object.
     /// @return False on failure.
-    bool RealizeTexture(const GpuTextureDesc& desc, GLTexture& out);
+    virtual bool RealizeTexture(const GpuTextureDesc& desc, GLTexture& out);
 
     /// @brief Issues the gl* calls to bring a render target into existence.
     /// @param desc Description to realize.
     /// @param out Receives the realized object.
     /// @return False on failure.
-    bool RealizeRenderTarget(const GpuRenderTargetDesc& desc, GLRenderTarget& out);
+    virtual bool RealizeRenderTarget(const GpuRenderTargetDesc& desc, GLRenderTarget& out);
 
     /// @brief Compiles and links a program.
     /// @param desc Description to realize.
     /// @param out Receives the realized object.
     /// @return False on failure.
-    bool RealizeProgram(const GpuProgramDesc& desc, GLProgram& out);
+    virtual bool RealizeProgram(const GpuProgramDesc& desc, GLProgram& out);
 
     /// @brief Issues the gl* calls to bring a geometry buffer into existence.
     /// @param desc Description to realize.
     /// @param out Receives the realized object.
     /// @return False on failure.
-    bool RealizeGeometryBuffer(const GpuGeometryBufferDesc& desc, GLGeometryBuffer& out);
+    virtual bool RealizeGeometryBuffer(const GpuGeometryBufferDesc& desc, GLGeometryBuffer& out);
 
     /// @brief Deletes a realized texture.
     /// @param texture Object to delete.
-    void DestroyTexture(GLTexture& texture);
+    virtual void DestroyTexture(GLTexture& texture);
 
     /// @brief Deletes a realized render target and its attachments.
     /// @param target Object to delete.
-    void DestroyRenderTarget(GLRenderTarget& target);
+    virtual void DestroyRenderTarget(GLRenderTarget& target);
 
     /// @brief Deletes a realized program.
     /// @param program Object to delete.
-    void DestroyProgram(GLProgram& program);
+    virtual void DestroyProgram(GLProgram& program);
 
     /// @brief Deletes a realized geometry buffer.
     /// @param buffer Object to delete.
-    void DestroyGeometryBuffer(GLGeometryBuffer& buffer);
+    virtual void DestroyGeometryBuffer(GLGeometryBuffer& buffer);
 };
 
 #endif // RENDERER_OPENGL_GLRESOURCEMAPPER_H

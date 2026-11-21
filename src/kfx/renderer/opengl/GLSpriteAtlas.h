@@ -52,7 +52,7 @@ public:
 
     void FlushPendingGL();
 
-private:
+protected:
     std::vector<uint8_t> m_pixels;
     GLResourceMapper* m_resource_mapper = nullptr;
     GpuResourceHandle m_texture_handle = kInvalidGpuResource;
@@ -89,7 +89,7 @@ private:
 
     /** Uploads the dirty region into the given (already-resolved) texture
      *  id. Caller already holds m_mutex. */
-    void flush_dirty(unsigned int tex_id);
+    virtual void flush_dirty(unsigned int tex_id);
 };
 
 #endif // RENDERER_OPENGL_GLSPRITEATLAS_H

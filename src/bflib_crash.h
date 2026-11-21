@@ -30,6 +30,8 @@ extern "C" {
 /******************************************************************************/
 void LbErrorParachuteInstall(void);
 void LbErrorParachuteUpdate(void);
+/** No crash box for this run (a dedicated server, the launcher's background): the crash report is still written. */
+void LbErrorParachuteQuiet(TbBool quiet);
 /******************************************************************************/
 #ifdef __cplusplus
 }

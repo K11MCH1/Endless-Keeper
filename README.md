@@ -272,6 +272,7 @@ gameplay stays exactly as Dungeon Keeper players know it, and the new systems ar
 | ⏱️ | **Chunk work on a budget** | Loading and freezing chunks is queued and spread over turns, so exploring does not cause hitches. |
 | ⚙️ | **Link-time optimisation** | The whole game is optimised as one program: about a quarter less time per turn. |
 | 🌍 | **Faster world generation** | The generator remembers ground it has already worked out, with exactly the same result for every seed. |
+| 🎨 | **Vulkan renderer** | The game draws with Vulkan by default on Windows and Android (on Android it used to draw on the processor). Where Vulkan is missing it falls back to OpenGL (on Android, to the old drawing), and shows for a few seconds which renderer started. |
 | 🔬 | **Measured, not guessed** | The engine is profiled with Tracy, and each round of speed-ups starts from what the profile shows. |
 
 👉 Want to build it yourself or dig into the code? Read the **[Development Guide](docs/DEVELOPMENT.md)** for
@@ -301,7 +302,7 @@ Dungeon Keeper, there is a place for you.
 | 🔥 **The KeeperFX team and contributors** | For [KeeperFX](https://github.com/dkfans/keeperfx), the open-source engine Endless Keeper is built on. None of this would exist without their years of work. |
 | 🔒 **Flip-FriendSpace** | For the Lua security fix, ported from [keeperfx-dx12](https://github.com/Flip-FriendSpace/keeperfx-dx12). |
 | 📱 **M3RT1N99** | For the Android touch controls (picking up and dropping creatures, slapping, and the smooth two-finger camera), ported from their [KeeperFX Android port](https://github.com/M3RT1N99/keeperfx/releases/tag/android-v1.1). |
-| 📦 **Open-source libraries** | SDL, SDL_mixer and SDL_image, LuaJIT, ENet, zlib, libspng, FFmpeg, OpenAL Soft, libcurl, miniupnpc, libnatpmp and the other libraries KeeperFX builds on; Dear ImGui and stb_image in the launcher; stb_truetype for the big text in the game. |
+| 📦 **Open-source libraries** | SDL, SDL_mixer and SDL_image, LuaJIT, ENet, zlib, libspng, FFmpeg, OpenAL Soft, libcurl, miniupnpc, libnatpmp and the other libraries KeeperFX builds on; Dear ImGui and stb_image in the launcher; stb_truetype for the big text in the game; the Khronos Vulkan headers for the Vulkan renderer. |
 
 ---
 

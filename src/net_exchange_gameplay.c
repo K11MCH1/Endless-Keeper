@@ -223,7 +223,8 @@ void process_gameplay_chat_message(NetUserId user, const char *message, MapCoord
     if (message[0] != '\0') {
         char text[PLAYER_MP_MESSAGE_LEN];
         copy_chat_message(text, message);
-        lua_on_chatmsg(plyr_idx, text);
+        if (!netstate_is_client()) /* a joined game's level script is the server's (audit 2026-11-21) */
+            lua_on_chatmsg(plyr_idx, text);
         TbBool shown = true;
         char message_type = MsgType_Local;
         if (network_is_active() || (game.game_kind == GKind_MultiGame)) {

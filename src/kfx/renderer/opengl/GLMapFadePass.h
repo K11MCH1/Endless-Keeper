@@ -37,10 +37,10 @@ public:
 
     /** Compile the composite shader + build the shared unit quad. Safe to
      *  call after construction; idempotent. */
-    bool CompileShaders();
+    virtual bool CompileShaders();
 
     /** Release all GL resources. Must be called on the render thread. */
-    void Shutdown();
+    virtual void Shutdown();
 
     /** True once CompileShaders() has succeeded -- gates
      *  MapFadeSupportsNativeResolution(), matching develop's
@@ -60,18 +60,18 @@ public:
 
     /** Copy the screen target into the world side of the transition. Call
      *  once the world is drawn and before anything of the parchment is. */
-    void CaptureWorldFrame(int w, int h);
+    virtual void CaptureWorldFrame(int w, int h);
 
     /** Copy the screen target into the parchment side of the transition.
      *  Call once the whole parchment view is drawn. */
-    void CaptureParchmentFrame(int w, int h);
+    virtual void CaptureParchmentFrame(int w, int h);
 
     /** Draw the full-screen wipe composite (MAPFADE_FRAGMENT_SHADER,
      *  sampling the parchment and world snapshots) over the screen target. */
-    void ResolveComposite(int screen_w, int screen_h);
+    virtual void ResolveComposite(int screen_w, int screen_h);
 
-private:
-    bool init_quad();
+protected:
+    virtual bool init_quad();
 
     void EnsureCaptureResources(int w, int h);
 

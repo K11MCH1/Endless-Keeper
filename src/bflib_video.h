@@ -35,6 +35,7 @@ enum KfxWindowFlags {
     KFX_WF_OPENGL               = 0x10, // window must be OpenGL-capable at creation
     KFX_WF_KEEP_COMPOSITED      = 0x20, // desktop fullscreen must stay composited by the OS compositor
     KFX_WF_DESKTOP_FULLSCREEN_ONLY = 0x40, // exclusive fullscreen requests use desktop fullscreen, scaled by the renderer
+    KFX_WF_VULKAN               = 0x80, // window must be Vulkan-capable at creation
 };
 
 #ifdef __cplusplus

@@ -1597,6 +1597,7 @@ static uint8_t *simcheck_cc;
 #define NS_WIRE_COPY 0x40000000u    /* in NsWire.raw_len: this is the unreliable copy of a turn */
 #define NS_ZSTD_LEVEL 3
 static uint32_t ns_caps[MAX_NET_CONNECTIONS];
+static uint8_t ns_caps_changes[MAX_NET_CONNECTIONS]; /* changes since its last keyframe */
 static ZSTD_CDict *ns_cdict_shared, *ns_cdict_own;
 static ZSTD_DDict *ns_ddict_shared, *ns_ddict_own;
 static __thread ZSTD_CCtx *ns_cctx;
@@ -1657,6 +1658,12 @@ void netstate_server_caps(NetUserId source, const char *buffer, size_t size)
     }
     if ((caps & NS_CAP_ZSTD1) && !ns_zstd_ready())
         caps &= ~NS_CAP_ZSTD1;
+    /* a client says its caps once or twice a connection; one that flips them on and on wrote a log line and got the
+       roles table every time (audit 2026-11-21): after eight changes its caps stay as they are */
+    if ((ns_caps[source] != caps) && (ns_caps_changes[source] >= 8))
+        return;
+    if (ns_caps[source] != caps)
+        ns_caps_changes[source]++;
     if (ns_caps[source] != caps)
         SYNCLOG("Thin-client server: user %d reads%s%s", (int)source, (caps & NS_CAP_ZSTD1) ? " zstd with the dictionaries" : " zlib only",
             (caps & NS_CAP_DUAL1) ? ", and takes each turn's unreliable copy too" : "");
@@ -1762,7 +1769,9 @@ static void interest_of(NetUserId c, struct NsInterest *in)
     }
     if ((c < 0) || (c >= MAX_NET_USERS))
     {
-        in->all = true;
+        /* a joiner not seated yet gets no ground and no other things until it has its seat; seatless watchers of a full
+           world the whole world, as before (audit 2026-11-21: every joiner was sent the whole world unfogged) */
+        in->all = !fog_filter_on() || thin_user_watching(c);
         return;
     }
     in->plyr = get_net_user_player_number(c);
@@ -1772,9 +1781,14 @@ static void interest_of(NetUserId c, struct NsInterest *in)
         in->fog = true;
         in->vision = get_player_vision_mask(in->plyr);
     }
-    if ((in->plyr < 0) || user_state_invalid(ustate) || (get_user_view_type(c) == PVT_MapScreen))
+    if ((in->plyr < 0) || user_state_invalid(ustate))
     {
-        in->all = true;
+        in->all = !fog_filter_on(); /* (a seat being handed over: nothing meanwhile) */
+        return;
+    }
+    if (get_user_view_type(c) == PVT_MapScreen)
+    {
+        in->all = true; /* every loaded page, through the fog filter */
         return;
     }
     MapSubtlCoord vx = ustate->dungeon_camera.x / COORD_PER_STL, vy = ustate->dungeon_camera.y / COORD_PER_STL;
@@ -2061,6 +2075,8 @@ static struct {
 /* the first turn a client may get its next keyframe: one every NS_KF_GAP turns at most, whatever it asks */
 #define NS_KF_GAP 40
 static GameTurn kf_next_turn[MAX_NET_CONNECTIONS];
+static GameTurn kf_last_turn[MAX_NET_CONNECTIONS]; /* the last keyframe's turn */
+static uint8_t kf_streak[MAX_NET_CONNECTIONS];     /* keyframes close together: the gap doubles with each */
 
 /** zlib's format at its fastest level in a message; thread-safe (each thread has its own compressor). */
 static char *make_state_message(const uint8_t *raw, size_t len, size_t *msg_len)
@@ -2350,6 +2366,7 @@ static void build_keyframe_for(NetUserId c)
     interest_of(c, &in);
     fog_update_client(c, &in);
     ns_caps[c] = 0; /* it says again what it reads once it has this keyframe */
+    ns_caps_changes[c] = 0;
     if (!cl_init(c))
     {
         rec_failed = true;
@@ -2555,8 +2572,9 @@ static void diff_client_cctrls(struct NsWriter *w, NetUserId c, const struct NsI
     for (int n = 0; n < live_count; n++)
         if (cl_copy(c, live_list[n].idx) != NULL)
             cc_want_thing(cc, &game.things_data[live_list[n].idx]);
-    /* its own creatures, wherever they are (its panel lists them) */
-    if (in->all)
+    /* its own creatures, wherever they are (its panel lists them); all of them only for a client without fog (a player
+       with the map open got every creature's control, enemies in the fog too: audit 2026-11-21) */
+    if (in->all && !in->fog)
         memset(cc->wanted, 0xFF, sizeof(cc->wanted));
     else if ((in->plyr >= 0) && (in->plyr < PLAYERS_COUNT))
     {
@@ -3071,7 +3089,11 @@ void netstate_server_after_turn(void)
     const NetUserMask new_clients = numask_andnot(clients, known_clients);
     for (NetUserId c = 0; c < MAX_NET_CONNECTIONS; c++)
         if (numask_has(new_clients, c))
+        {
             kf_next_turn[c] = 0; /* a new client in this slot: no waiting */
+            kf_streak[c] = 0;
+            kf_last_turn[c] = 0;
+        }
     keyframe_wanted = numask_or(keyframe_wanted, new_clients);
     known_clients = numask_or(known_clients, clients);
     /* clients that left: their copies go */
@@ -3212,7 +3234,14 @@ void netstate_server_after_turn(void)
             (unsigned long)game.play_gameturn, (int)c, (unsigned)rec_len);
         kf_start(c, get_time_tick_ns() - kt0);
         numask_del(&keyframe_wanted, c);
-        kf_next_turn[c] = game.play_gameturn + NS_KF_GAP;
+        /* keyframes close together wait longer each time (audit 2026-11-21: any client could ask for one every
+           2 seconds and keep the keyframe workers busy, ~55 MB each): 2, 4, 8, 16, then 32 s; a minute calm resets it */
+        if ((kf_last_turn[c] != 0) && (game.play_gameturn - kf_last_turn[c] < 1200))
+            kf_streak[c] = (uint8_t)min(kf_streak[c] + 1, 4);
+        else
+            kf_streak[c] = 0;
+        kf_last_turn[c] = game.play_gameturn;
+        kf_next_turn[c] = game.play_gameturn + ((GameTurn)NS_KF_GAP << kf_streak[c]);
     }
     tn = get_time_tick_ns();
     stats_t[NsT_Keyframes] += tn - tp;
@@ -3262,6 +3291,8 @@ void netstate_server_user_reset(NetUserId user)
     clear_user_packet_history(user);
     numask_del(&known_clients, user); /* a keyframe goes to the new occupant */
     kf_next_turn[user] = 0;
+    kf_streak[user] = 0;
+    kf_last_turn[user] = 0;
     anticheat_user_reset(user);
     fog_forget_user(user);
 }

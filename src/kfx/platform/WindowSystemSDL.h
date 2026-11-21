@@ -26,6 +26,8 @@ public:
 
     bool HasWindow() const override;
     SDL_Window* GetSDLWindow() const;
+    void* GetNativeWindow() const override { return m_window; }
+    void DestroyWindow() override;
     unsigned int GetWindowFlags() const override;
     void GetWindowSize(int* out_w, int* out_h) const override;
     void GetDrawableSize(int* out_w, int* out_h) const override;

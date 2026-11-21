@@ -71,7 +71,7 @@ static TbBool curtain_load(void)
         curtain_pal[4 * i + 3] = 255;
     }
     const size_t cells = (size_t)w * (size_t)h;
-    if (RendererGetActiveType() != RENDERER_OPENGL)
+    if (!RendererIsGPUBackend())
     {
         /* one palette for the whole screen: each of the picture's colours becomes the game palette's nearest */
         const unsigned char *game_pal = RendererGetActivePalette();

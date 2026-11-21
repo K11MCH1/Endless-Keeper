@@ -931,7 +931,16 @@ static int keeper_register(const struct WgStructRef *ref)
     if (k >= 0)
         return k;
     if (W.keeper_count >= WORLD_KEEPER_CODES)
+    {
+        /* (audit 2026-11-21: this was silent; keepers met from here on are made neutral) */
+        static GameTurn told = (GameTurn)-1;
+        if (told != game.play_gameturn / 20000)
+        {
+            told = game.play_gameturn / 20000;
+            WARNLOG("World: all %d keeper codes are taken: keepers met from now on stay neutral ground", (int)WORLD_KEEPER_CODES);
+        }
         return -1; /* an owner byte names keepers 0-148 (a world saved before kept more on record: those stay) */
+    }
     k = W.keeper_count++;
     struct WorldKeeper *wk = &W.keepers[k];
     memset(wk, 0, sizeof(*wk));
@@ -2343,13 +2352,17 @@ static TbBool pack(const uint8_t *raw, uint32_t raw_len, uint8_t **out, uint32_t
     return true;
 }
 
-static TbBool unpack(const uint8_t *z, uint32_t zlen, uint8_t **out, uint32_t *out_len)
+/* The whole world blob may be far bigger than one chunk's record (audit 2026-11-21: a busy server's loaded pages and
+   explored chunks can pass 64 MiB, and such a save was written but refused when loaded: "saved world is damaged"). */
+#define WORLD_BLOB_RAW_MAX (1024u * 1024u * 1024u)
+
+static TbBool unpack_max(const uint8_t *z, uint32_t zlen, uint8_t **out, uint32_t *out_len, uint32_t max_raw)
 {
     if (zlen < 4)
         return false;
     uint32_t raw_len;
     memcpy(&raw_len, z, 4);
-    if (raw_len > 64u * 1024u * 1024u)
+    if (raw_len > max_raw)
         return false;
     uint8_t *raw = (uint8_t *)malloc(raw_len ? raw_len : 1);
     if (raw == NULL)
@@ -2363,6 +2376,11 @@ static TbBool unpack(const uint8_t *z, uint32_t zlen, uint8_t **out, uint32_t *o
     *out = raw;
     *out_len = raw_len;
     return true;
+}
+
+static TbBool unpack(const uint8_t *z, uint32_t zlen, uint8_t **out, uint32_t *out_len)
+{
+    return unpack_max(z, zlen, out, out_len, 64u * 1024u * 1024u);
 }
 
 /* What world_read_slab_box read of chunks that weren't loaded: slab kinds and the player's slabs, by world chunk
@@ -2438,9 +2456,9 @@ static void rec_get_masks16(struct RecReader *r, PlayerBitFlags *masks, int coun
 }
 
 /** Stores a chunk's record; false when it couldn't be (out of memory). */
-static TbBool store_chunk_record(const struct WorldChunkData *cd)
+/** A chunk's record packed (touches nothing shared: job threads may make several at once). */
+static TbBool record_pack(const struct WorldChunkData *cd, uint8_t **out, uint32_t *out_len)
 {
-    peek_cache_forget(cd->cx, cd->cy);
     struct RecWriter w;
     memset(&w, 0, sizeof(w));
     rec_u32(&w, WORLD_REC_MAGIC);
@@ -2468,25 +2486,35 @@ static TbBool store_chunk_record(const struct WorldChunkData *cd)
         free(w.buf);
         return false;
     }
+    const TbBool ok = pack(w.buf, w.len, out, out_len);
+    free(w.buf);
+    return ok;
+}
+
+/** Puts a packed record into the store (it takes z). */
+static TbBool store_packed_record(int32_t cx, int32_t cy, uint8_t *z, uint32_t zlen)
+{
+    peek_cache_forget(cx, cy);
+    struct ChunkSlot *s = table_insert(&W.store, cx, cy);
+    if (s == NULL)
+    {
+        free(z);
+        return false;
+    }
+    free(s->data);
+    s->data = z;
+    s->len = zlen;
+    return true;
+}
+
+static TbBool store_chunk_record(const struct WorldChunkData *cd)
+{
+    peek_cache_forget(cd->cx, cd->cy);
     uint8_t *z;
     uint32_t zlen;
-    TbBool stored = false;
-    if (pack(w.buf, w.len, &z, &zlen))
-    {
-        struct ChunkSlot *s = table_insert(&W.store, cd->cx, cd->cy);
-        if (s != NULL)
-        {
-            free(s->data);
-            s->data = z;
-            s->len = zlen;
-            stored = true;
-        } else
-        {
-            free(z);
-        }
-    }
-    free(w.buf);
-    return stored;
+    if (!record_pack(cd, &z, &zlen))
+        return false;
+    return store_packed_record(cd->cx, cd->cy, z, zlen);
 }
 
 /** An owner in a record from before WCK6: humans were 0xF0 + player (players 1-15), keepers 3 + index. */
@@ -3019,7 +3047,11 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
     }
     KFX_C_ZONE_END(z_frz_map);
     KFX_C_ZONE_BEGIN(z_frz_things, "Freeze: record the things");
-    /* things: everything standing in the chunk, except what is held in a hand */
+    /* things: everything standing in the chunk, except what is held in a hand. Hearts and creatures first (audit
+       2026-11-21): a record holds WORLD_MAX_THINGS_PER_CHUNK things and the rest were lost without a word, a Heart too
+       when its index came late (its keeper then never needed one again) */
+    long dropped = 0;
+    for (int pass = 0; pass < 3; pass++)
     for (long i = 1; i < THINGS_COUNT; i++)
     {
         struct Thing *thing = thing_get(i);
@@ -3028,6 +3060,11 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
         MapSubtlCoord tx = thing->mappos.x.stl.num, ty = thing->mappos.y.stl.num;
         if ((tx < stl_x0) || (tx >= stl_x0 + CHUNK_STL) || (ty < stl_y0) || (ty >= stl_y0 + CHUNK_STL))
             continue;
+        const int rank = thing_is_dungeon_heart(thing) ? 0 : (thing->class_id == TCls_Creature) ? 1 : 2;
+        if (rank != pass)
+            continue;
+        if (thing_is_frozen_kind(thing) && (cd->thing_count >= WORLD_MAX_THINGS_PER_CHUNK))
+            dropped++;
         if ((thing->class_id == TCls_Object) && thing_is_lair_totem(thing))
         {
             /* a creature that isn't frozen with this chunk gets this lair back when the chunk loads again */
@@ -3052,6 +3089,9 @@ static TbBool freeze_window_chunk(int lcx, int lcy)
             }
         }
     }
+    if (dropped > 0)
+        WARNLOG("World: chunk (%d,%d) holds more things than a record keeps (%d): %ld were not kept", (int)cd->cx, (int)cd->cy,
+            (int)WORLD_MAX_THINGS_PER_CHUNK, dropped);
     KFX_C_ZONE_END(z_frz_things);
     KFX_C_ZONE_BEGIN(z_frz_books, "Freeze: books and crates");
     /* spellbooks and workshop crates in the chunk's rooms: off the map now, out of their owners' totals (the thaw
@@ -4776,7 +4816,7 @@ static void cm_soon_collect(void)
 }
 
 /* New starts made while the world runs whose ground is still coming (load_start_staged). */
-#define START_COMING_MAX 8
+#define START_COMING_MAX 32 /* (audit 2026-11-21: was 8; a ninth start at once never got its setup look round) */
 static struct StartComing {
     PlayerNumber plyr;
     int64_t hx, hy;      /* its heart, a world slab */
@@ -5381,18 +5421,77 @@ static int cm_count_budget(void)
     return budget;
 }
 
+/* Counted budgets (audit 2026-11-21: a replay of a chunked world went out of sync, because the turn a chunk came in or
+   a start's books were ready depended on the wall clock). A turn does at most `ops` queued chunk loads and freezes and
+   `steps` book steps. The counts for the next turn are worked out from this machine's timing at the end of a turn
+   (wrb_plan_next) and go into the replay when they change; a replay uses the recorded ones. Both are the same game. */
+#define WRB_DEFAULT_OPS 2
+#define WRB_DEFAULT_STEPS 16
+#define WRB_PENDING 8
+static struct { GameTurn turn; uint16_t ops, steps; } wrb_pending[WRB_PENDING];
+static int wrb_pending_n;
+static uint16_t wrb_ops = WRB_DEFAULT_OPS, wrb_steps = WRB_DEFAULT_STEPS; /* from the turn the last change took effect */
+static GameTurn wrb_last_turn;
+static int64_t wrb_op_ns = 4000000, wrb_step_ns = 100000; /* this machine's cost of one, averaged */
+
+/** From the replay: from turn `turn` on, these counts (replay.c, LTK_WorldBudget). */
+void world_replay_budget_set(uint32_t turn, uint16_t ops, uint16_t steps)
+{
+    if (wrb_pending_n >= WRB_PENDING)
+        return;
+    wrb_pending[wrb_pending_n].turn = (GameTurn)turn;
+    wrb_pending[wrb_pending_n].ops = (uint16_t)max(1, (int)ops);
+    wrb_pending[wrb_pending_n].steps = (uint16_t)max(1, (int)steps);
+    wrb_pending_n++;
+}
+
+/** The counts of this turn (changes due now taken in; a new world or an earlier turn: the defaults again). */
+static void wrb_current(void)
+{
+    if (game.play_gameturn < wrb_last_turn)
+    {
+        wrb_ops = WRB_DEFAULT_OPS;
+        wrb_steps = WRB_DEFAULT_STEPS;
+    }
+    wrb_last_turn = game.play_gameturn;
+    int keep = 0;
+    for (int i = 0; i < wrb_pending_n; i++)
+    {
+        if (wrb_pending[i].turn <= game.play_gameturn)
+        {
+            wrb_ops = wrb_pending[i].ops;
+            wrb_steps = wrb_pending[i].steps;
+        } else
+            wrb_pending[keep++] = wrb_pending[i];
+    }
+    wrb_pending_n = keep;
+}
+
+/** At a turn's end: the next turn's counts from this machine's timing (not in a replay: it has them). */
+static void wrb_plan_next(void)
+{
+    if (replay.load_enable)
+        return;
+    const int ops = (int)max(1L, min(32L, (long)(CM_TURN_BUDGET_NS / max(wrb_op_ns, (int64_t)1))));
+    int steps = (int)max(1L, min(4096L, (long)(3000000 / max(wrb_step_ns, (int64_t)1))));
+    int p2 = 1;
+    while (p2 * 2 <= steps)
+        p2 *= 2;
+    steps = p2; /* (powers of two: fewer changes to record) */
+    if ((ops == wrb_ops) && (steps == wrb_steps) && (wrb_pending_n == 0))
+        return;
+    wrb_pending_n = 0;
+    world_replay_budget_set((uint32_t)(game.play_gameturn + 1), (uint16_t)ops, (uint16_t)steps);
+    replay_record_world_budget((uint32_t)(game.play_gameturn + 1), (uint16_t)ops, (uint16_t)steps);
+}
+
 static void cm_do_queued(uint32_t now, int *loaded, int *ngone)
 {
     const int64_t t0 = get_time_tick_ns();
-    const int count_budget = cm_count_budget();
+    const int count_budget = (cm_count_budget() > 0) ? cm_count_budget() : (int)wrb_ops;
     while ((cm_load_i < cm_load_n) || (cm_freeze_i < cm_freeze_n))
     {
-        if (count_budget > 0)
-        {
-            if (*loaded + *ngone >= count_budget)
-                break;
-        } else
-        if ((*loaded + *ngone > 0) && (get_time_tick_ns() - t0 >= CM_TURN_BUDGET_NS))
+        if (*loaded + *ngone >= count_budget)
             break;
         if (cm_load_i < cm_load_n)
         {
@@ -5419,6 +5518,11 @@ static void cm_do_queued(uint32_t now, int *loaded, int *ngone)
             (*ngone)++;
         }
     }
+    if (*loaded + *ngone > 0)
+    {
+        const int64_t each = (get_time_tick_ns() - t0) / (*loaded + *ngone);
+        wrb_op_ns = (3 * wrb_op_ns + each) / 4;
+    }
 }
 
 /** Research books ahead (book_cave_guaranteed): a little of a start's answer every turn. A new start whose ground is
@@ -5435,10 +5539,16 @@ static void world_books_ahead(void)
         struct BookStart *b = book_start_of(start_coming[i].hx, start_coming[i].hy);
         if ((b == NULL) || b->ready)
             continue;
+        /* counted steps (about BOOKS_AHEAD_NS of this machine's time; wrb_plan_next) */
         const int64_t t0 = get_time_tick_ns();
-        while (!book_start_step(b) && (get_time_tick_ns() - t0 < BOOKS_AHEAD_NS))
+        int done = 0;
+        while (done < (int)wrb_steps)
         {
+            done++;
+            if (book_start_step(b))
+                break;
         }
+        wrb_step_ns = (3 * wrb_step_ns + (get_time_tick_ns() - t0) / done) / 4;
         return;
     }
     if ((cursor_stamps != W.stamp_count) || (book_start_n == 0))
@@ -5803,12 +5913,18 @@ static int64_t prof_sum[WPS_COUNT], prof_max[WPS_COUNT];
 static long prof_count[WPS_COUNT];
 static GameTurn prof_last_report;
 
+static int prof_enabled = -1;
+
+void world_prof_force_on(void)
+{
+    prof_enabled = 1;
+}
+
 int64_t world_prof_now(void)
 {
-    static int enabled = -1;
-    if (enabled < 0)
-        enabled = (getenv("KFX_WORLD_PROFILE") != NULL) ? 1 : 0;
-    if (!enabled)
+    if (prof_enabled < 0)
+        prof_enabled = (getenv("KFX_WORLD_PROFILE") != NULL) ? 1 : 0;
+    if (!prof_enabled)
         return 0;
     const int64_t t = get_time_tick_ns();
     return (t != 0) ? t : 1;
@@ -7101,7 +7217,7 @@ static TbBool record_free_seat(struct WorldChunkData *cd, PlayerNumber p, uint8_
             changed = true;
         }
     }
-    static int remap[WORLD_MAX_THINGS_PER_CHUNK];
+    int remap[WORLD_MAX_THINGS_PER_CHUNK]; /* (not static: job threads run this for several records at once) */
     const int old_count = cd->thing_count;
     int n = 0;
     for (int t = 0; t < old_count; t++)
@@ -7156,7 +7272,34 @@ static int32_t *store_keys(int *count)
 }
 
 /** The same in the stored (frozen) ground. Returns the records changed. */
-static struct WorldChunkData respawn_chunk;
+/* Each stored record is read, freed of the seat and packed again on the job threads (audit 2026-11-21: one after
+   another this held a big server for seconds at every Start again, reset or delete: ~0.1 ms a record, 20,000 records);
+   the store itself is only changed afterwards, here, in the keys' order: the same records as before. */
+static struct WorldChunkData respawn_chunk; /* (the main thread's record in a dungeon reset) */
+struct FreeSeatJob {
+    const int32_t *keys;
+    PlayerNumber p;
+    uint8_t wown;
+    uint8_t **z;      /* per key: its new packed record, NULL when unchanged */
+    uint32_t *zlen;
+};
+
+static void free_seat_job(uint32_t start, uint32_t end, uint32_t thread, void *args)
+{
+    (void)thread;
+    const struct FreeSeatJob *job = (const struct FreeSeatJob *)args;
+    struct WorldChunkData *cd = (struct WorldChunkData *)malloc(sizeof(struct WorldChunkData));
+    for (uint32_t k = start; k < end; k++)
+    {
+        job->z[k] = NULL;
+        if ((cd == NULL) || !load_chunk_record(job->keys[2 * k], job->keys[2 * k + 1], cd))
+            continue;
+        if (record_free_seat(cd, job->p, job->wown) && !record_pack(cd, &job->z[k], &job->zlen[k]))
+            job->z[k] = NULL;
+    }
+    free(cd);
+}
+
 static int free_seat_stored(PlayerNumber p)
 {
     const uint8_t wown = (p == PLAYER0) ? (uint8_t)WOwn_Player : (uint8_t)(WOwn_HumanBase + p);
@@ -7164,15 +7307,29 @@ static int free_seat_stored(PlayerNumber p)
     int32_t *keys = store_keys(&nkeys);
     if (keys == NULL)
         return 0;
-    int changed_records = 0;
-    struct WorldChunkData *cd = &respawn_chunk;
-    for (int k = 0; k < nkeys; k++)
+    struct FreeSeatJob job;
+    job.keys = keys;
+    job.p = p;
+    job.wown = wown;
+    job.z = (uint8_t **)calloc((size_t)nkeys + 1, sizeof(uint8_t *));
+    job.zlen = (uint32_t *)calloc((size_t)nkeys + 1, sizeof(uint32_t));
+    if ((job.z == NULL) || (job.zlen == NULL))
     {
-        if (!load_chunk_record(keys[2 * k], keys[2 * k + 1], cd))
-            continue;
-        if (record_free_seat(cd, p, wown) && store_chunk_record(cd))
-            changed_records++;
+        free(job.z);
+        free(job.zlen);
+        free(keys);
+        return 0;
     }
+    const int64_t t0 = get_time_tick_ns();
+    kfx_parallel_for((uint32_t)nkeys, 16, free_seat_job, &job);
+    int changed_records = 0;
+    for (int k = 0; k < nkeys; k++)
+        if ((job.z[k] != NULL) && store_packed_record(keys[2 * k], keys[2 * k + 1], job.z[k], job.zlen[k]))
+            changed_records++;
+    SYNCLOG("World: player %d's things taken out of %d stored chunks (%d changed) in %.1f ms", (int)p, nkeys,
+        changed_records, (double)(get_time_tick_ns() - t0) / 1e6);
+    free(job.z);
+    free(job.zlen);
     free(keys);
     peek_cache_drop();
     return changed_records;
@@ -7505,6 +7662,40 @@ static void remake_chunk(const struct WorldChunkData *old, int32_t cx, int32_t c
 }
 
 /** Has the chunk record ground of a human seat other than this one? */
+static TbBool record_has_other_seat(const struct WorldChunkData *cd, uint8_t wown);
+
+/* A dungeon reset's store pass, the part the job threads can do: each record that is not made again is freed of the
+   seat and packed (remake[k] = 0); a record to be made again is left to the main thread (remake[k] = 1). */
+struct ResetSeatJob {
+    struct FreeSeatJob base;
+    const int64_t *boxp;
+    uint8_t *remake;
+};
+
+static void reset_seat_job(uint32_t start, uint32_t end, uint32_t thread, void *args)
+{
+    (void)thread;
+    struct ResetSeatJob *job = (struct ResetSeatJob *)args;
+    struct WorldChunkData *cd = (struct WorldChunkData *)malloc(sizeof(struct WorldChunkData));
+    for (uint32_t k = start; k < end; k++)
+    {
+        const int32_t cx = job->base.keys[2 * k], cy = job->base.keys[2 * k + 1];
+        job->base.z[k] = NULL;
+        job->remake[k] = 1;
+        if ((cd == NULL) || !load_chunk_record(cx, cy, cd))
+            continue;
+        TbBool remake = (table_find(&reset_chunks, cx, cy) != NULL) || chunk_in_box(cx, cy, job->boxp);
+        for (int i = 0; (i < WG_CHUNK_CELLS) && !remake; i++)
+            remake = (cd->owner[i] == job->base.wown);
+        if (remake)
+            continue;
+        job->remake[k] = 0;
+        if (record_free_seat(cd, job->base.p, job->base.wown) && !record_pack(cd, &job->base.z[k], &job->base.zlen[k]))
+            job->base.z[k] = NULL;
+    }
+    free(cd);
+}
+
 static TbBool record_has_other_seat(const struct WorldChunkData *cd, uint8_t wown)
 {
     for (int i = 0; i < WG_CHUNK_CELLS; i++)
@@ -7754,9 +7945,38 @@ static TbBool seat_reset_ex(PlayerNumber p, char *why, size_t why_len, TbBool re
         int nkeys = 0;
         int32_t *keys = store_keys(&nkeys);
         struct WorldChunkData *cd = &respawn_chunk;
+        /* the records only freed of the seat are made on the job threads first (audit 2026-11-21: seconds on a big
+           server); those made again, and the store's changes, follow in the keys' order as before */
+        struct ResetSeatJob rj;
+        memset(&rj, 0, sizeof(rj));
+        rj.base.keys = keys;
+        rj.base.p = p;
+        rj.base.wown = wown;
+        rj.boxp = boxp;
+        if (keys != NULL)
+        {
+            rj.base.z = (uint8_t **)calloc((size_t)nkeys + 1, sizeof(uint8_t *));
+            rj.base.zlen = (uint32_t *)calloc((size_t)nkeys + 1, sizeof(uint32_t));
+            rj.remake = (uint8_t *)calloc((size_t)nkeys + 1, 1);
+            if ((rj.base.z != NULL) && (rj.base.zlen != NULL) && (rj.remake != NULL))
+                kfx_parallel_for((uint32_t)nkeys, 16, reset_seat_job, &rj);
+            else
+            {
+                free(rj.base.z);
+                free(rj.base.zlen);
+                free(rj.remake);
+                memset(&rj, 0, sizeof(rj)); /* (one after another, as before) */
+            }
+        }
         for (int k = 0; (keys != NULL) && (k < nkeys); k++)
         {
             const int32_t cx = keys[2 * k], cy = keys[2 * k + 1];
+            if ((rj.remake != NULL) && !rj.remake[k])
+            {
+                if ((rj.base.z[k] != NULL) && store_packed_record(cx, cy, rj.base.z[k], rj.base.zlen[k]))
+                    freed++;
+                continue;
+            }
             if (!load_chunk_record(cx, cy, cd))
                 continue;
             TbBool remake = (table_find(&reset_chunks, cx, cy) != NULL) || chunk_in_box(cx, cy, boxp);
@@ -7777,6 +7997,9 @@ static TbBool seat_reset_ex(PlayerNumber p, char *why, size_t why_len, TbBool re
             if (record_free_seat(cd, p, wown) && store_chunk_record(cd))
                 freed++;
         }
+        free(rj.base.z);
+        free(rj.base.zlen);
+        free(rj.remake);
         free(keys);
         peek_cache_drop();
     }
@@ -8445,6 +8668,8 @@ static TbBool world_autoshift(void)
             enum SaveCheckResult why;
             enum SaveLoadOutcome outcome = SaveManager_Load(n, &why);
             SYNCLOG("World autoshift: loaded slot %d, outcome %d, check %d", n, (int)outcome, (int)why);
+            if (outcome == SvLoad_Done)
+                network_after_save_loaded(); /* as the game's other load paths do (a server: its stream again) */
             W.last_shift_turn = game.play_gameturn;
         }
         return true;
@@ -11021,7 +11246,9 @@ void world_process_turn(void)
     if (world_paged)
     {
         world_autoshift(); /* test hook: only its save, load and quit steps do anything here */
+        wrb_current(); /* this turn's counted budgets (replays stay in step) */
         WORLD_PROF(WPS_Chunks, chunk_manager_turn()); /* no window to shift: chunks come and go */
+        wrb_plan_next();
         return;
     }
     if (world_autoshift())
@@ -11854,7 +12081,17 @@ TbBool world_save_blob(unsigned char **data, uint32_t *len)
         free(w.buf);
         return false;
     }
+    if (w.len > WORLD_BLOB_RAW_MAX)
+    {
+        ERRORLOG("World: the world is too big to save (%lu bytes, at most %lu)", (unsigned long)w.len,
+            (unsigned long)WORLD_BLOB_RAW_MAX);
+        free(w.buf);
+        return false;
+    }
     TbBool ok = pack(w.buf, w.len, data, len);
+    if (ok)
+        SYNCLOG("World: saved world %lu bytes (%lu packed), %ld chunk pages", (unsigned long)w.len, (unsigned long)*len,
+            (long)wp_count());
     free(w.buf);
     return ok;
 }
@@ -11888,7 +12125,7 @@ enum WorldBlobCheck world_blob_check(const unsigned char *data, uint32_t len, ch
         why[0] = 0;
     uint8_t *raw;
     uint32_t raw_len;
-    if (!unpack(data, len, &raw, &raw_len))
+    if (!unpack_max(data, len, &raw, &raw_len, WORLD_BLOB_RAW_MAX))
         return wbc_fail(WBC_Damaged, why, why_len, "the saved world can't be unpacked");
     struct RecReader r = {raw, raw_len, 0, false};
     enum WorldBlobCheck res = WBC_Ok;
@@ -11957,7 +12194,7 @@ TbBool world_load_blob(const unsigned char *data, uint32_t len)
     world_level_end();
     uint8_t *raw;
     uint32_t raw_len;
-    if (!unpack(data, len, &raw, &raw_len))
+    if (!unpack_max(data, len, &raw, &raw_len, WORLD_BLOB_RAW_MAX))
     {
         ERRORLOG("World: saved world is damaged");
         return false;

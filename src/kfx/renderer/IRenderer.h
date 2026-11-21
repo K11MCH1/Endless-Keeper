@@ -9,6 +9,7 @@ enum RendererType {
     RENDERER_AUTO     = 0,  // pick the best available backend at startup
     RENDERER_SOFTWARE = 1,  // CPU software renderer, SDL display output
     RENDERER_OPENGL   = 2,  // OpenGL backend
+    RENDERER_VULKAN   = 3,  // Vulkan backend (Endless Keeper, 2026-11-21); falls back to OpenGL
 };
 
 enum OverlayCaptureKind {

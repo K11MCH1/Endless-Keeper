@@ -3,6 +3,7 @@
 #include "kfx/renderer/RendererManager_Internal.h"
 #include "kfx/renderer/RendererSoftware.h"
 #include "kfx/renderer/RendererOpenGL.h"
+#include "kfx/renderer/RendererVulkan.h"
 #include "bflib_basics.h"
 #include "bflib_mouse.h"
 #include "bflib_video.h"
@@ -14,6 +15,11 @@
 #include "kfx/lense/LensManager.h"
 #include "kfx/renderer/RendererSettings.h"
 #include <cstring>          // memcpy (s_last_palette_rgb8 buffering)
+#include <string>
+#include <vector>
+#include <cstdio>
+#include <cstdlib>
+#include <SDL3/SDL.h>
 #include "post_inc.h"
 
 static IRenderer*   s_active_renderer = nullptr;
@@ -32,12 +38,75 @@ static IRenderer* create_renderer(RendererType type)
     {
         case RENDERER_SOFTWARE: return new RendererSoftware();
         case RENDERER_OPENGL:   return new RendererOpenGL();
+        case RENDERER_VULKAN:   return new RendererVulkan();
         default:                return nullptr;
     }
 }
 
+/* Renderer fallbacks (Endless Keeper, 2026-11-21): what was asked for, what started, and why not the first. */
+static std::string s_last_init_failure;
+static std::string s_fallback_note;      // "Vulkan unavailable" etc., shown with the startup notice
+static int s_vulkan_probe = -1;          // -1 not probed, 0 unusable, 1 usable
+static std::string s_vulkan_probe_reason;
+
+static const char* renderer_type_name(RendererType t)
+{
+    switch (t)
+    {
+    case RENDERER_SOFTWARE: return "Software";
+    case RENDERER_OPENGL:   return "OpenGL";
+    case RENDERER_VULKAN:   return "Vulkan";
+    default:                return "?";
+    }
+}
+
+RendererType RendererFallbackAfter(RendererType failed)
+{
+#ifdef KFX_ANDROID
+    (void)failed;
+    return RENDERER_SOFTWARE; // no desktop OpenGL on Android
+#else
+    return (failed == RENDERER_VULKAN) ? RENDERER_OPENGL : RENDERER_SOFTWARE;
+#endif
+}
+
+void RendererNoteFallback(RendererType from, RendererType to, const char* reason)
+{
+    WARNLOG("Renderer: %s unavailable (%s); starting %s instead", renderer_type_name(from),
+            (reason && reason[0]) ? reason : "no reason given", renderer_type_name(to));
+    if (s_fallback_note.empty())
+        s_fallback_note = std::string(renderer_type_name(from)) + " unavailable";
+}
+
+const char* RendererLastInitFailure(void)
+{
+    return s_last_init_failure.c_str();
+}
+
+const char* RendererFallbackNote(void)
+{
+    return s_fallback_note.c_str();
+}
+
 RendererType RendererResolveType(RendererType requested)
 {
+    if (requested == RENDERER_AUTO)
+        requested = RENDERER_VULKAN;
+    if (requested == RENDERER_VULKAN)
+    {
+        // probed once, before the window exists (its flags depend on the answer)
+        if (s_vulkan_probe < 0)
+        {
+            std::string device;
+            s_vulkan_probe = RendererVulkan_Probe(s_vulkan_probe_reason, device) ? 1 : 0;
+            if (s_vulkan_probe)
+                SYNCLOG("Renderer: Vulkan available on '%s'", device.c_str());
+            else
+                RendererNoteFallback(RENDERER_VULKAN, RendererFallbackAfter(RENDERER_VULKAN), s_vulkan_probe_reason.c_str());
+        }
+        return s_vulkan_probe ? RENDERER_VULKAN : RendererFallbackAfter(RENDERER_VULKAN);
+    }
+    /* Android's seam replaces the line below (software there for everything but Vulkan): keep it unchanged */
     return (requested == RENDERER_AUTO) ? RENDERER_SOFTWARE : requested;
 }
 
@@ -49,6 +118,8 @@ unsigned int RendererGetRequiredWindowFlags(RendererType type)
         // monitor, and a real display mode change does the same, so GL scales
         // into a composited desktop fullscreen window instead.
         case RENDERER_OPENGL: return KFX_WF_OPENGL | KFX_WF_KEEP_COMPOSITED | KFX_WF_DESKTOP_FULLSCREEN_ONLY;
+        // Vulkan keeps OpenGL's composited desktop fullscreen, so HDR monitors and alt-tab behave the same
+        case RENDERER_VULKAN: return KFX_WF_VULKAN | KFX_WF_KEEP_COMPOSITED | KFX_WF_DESKTOP_FULLSCREEN_ONLY;
         default:               return 0;
     }
 }
@@ -74,6 +145,8 @@ int RendererInit(RendererType type)
     if (!rend->Init())
     {
         ERRORLOG("Renderer '%s' failed to initialise", rend->GetName());
+        s_last_init_failure = (resolved == RENDERER_VULKAN) ? static_cast<RendererVulkan*>(rend)->FailReason()
+                                                            : std::string("initialisation failed");
         delete rend;
         return 0;
     }
@@ -99,6 +172,11 @@ void RendererShutdown(void)
 RendererType RendererGetActiveType(void)
 {
     return s_active_type;
+}
+
+TbBool RendererIsGPUBackend(void)
+{
+    return (s_active_type == RENDERER_OPENGL || s_active_type == RENDERER_VULKAN) ? 1 : 0;
 }
 
 const unsigned char* RendererGetActivePalette(void)
@@ -138,8 +216,43 @@ void RendererClearScreen(unsigned char colour)
         s_active_renderer->ClearScreen(colour);
 }
 
+/* Test hook (Vulkan work, 2026-11-21): KFX_RENDER_SHOTS="120,300" saves the renderer's own screenshot of those
+   presented frames as scrshots/rshot_<renderer>_<frame>.png, for comparing the renderers' pictures. */
+static void render_shots_hook(void)
+{
+    static int s_parsed = 0;
+    static std::vector<long> s_frames;
+    static long s_count = 0;
+    if (!s_parsed)
+    {
+        s_parsed = 1;
+        const char* v = SDL_getenv("KFX_RENDER_SHOTS");
+        while (v != nullptr && *v != '\0')
+        {
+            s_frames.push_back(strtol(v, (char**)&v, 10));
+            while (*v == ',' || *v == ' ') v++;
+        }
+    }
+    s_count++;
+    if (s_frames.empty() || s_active_renderer == nullptr)
+        return;
+    for (long f : s_frames)
+    {
+        if (f != s_count)
+            continue;
+        char path[128];
+        snprintf(path, sizeof(path), "scrshots/rshot_%s_%ld.png", s_active_renderer->GetName(), f);
+        if (!s_active_renderer->ScheduleScreenshot(path, 1))
+            WARNLOG("KFX_RENDER_SHOTS: the %s renderer takes no screenshots", s_active_renderer->GetName());
+        else
+            SYNCLOG("KFX_RENDER_SHOTS: frame %ld -> %s", f, path);
+    }
+}
+
 void RendererPresentFrame(void)
 {
+    renderer_notice_draw(s_active_renderer ? s_active_renderer->GetName() : nullptr, s_fallback_note.c_str());
+    render_shots_hook();
     if (s_active_renderer != nullptr) {
         s_active_renderer->PresentFrame();
     }

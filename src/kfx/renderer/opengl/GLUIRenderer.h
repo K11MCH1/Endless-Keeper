@@ -20,8 +20,8 @@ struct AsianFont;
 
 class GLUIRenderer : public IUIRenderer {
 public:
-    bool Init();
-    void Shutdown();
+    virtual bool Init();
+    virtual void Shutdown();
 
     /** Also gives the atlas its liveness query, so a full atlas keeps the
      *  handles this renderer still holds. */
@@ -67,12 +67,12 @@ public:
     /** Flush the WorldOverlay layer (depth-tested against world geometry --
      *  creature status). Call after BuildQuadsFromIR(), from
      *  RendererOpenGL::FGDrawWorldSpriteLayer(). */
-    void DrawWorldSpriteLayerRT();
+    virtual void DrawWorldSpriteLayerRT();
 
     /** Flush the WorldOverlayFlat layer (no depth test -- room flags,
      *  floating gold/damage text). Call from
      *  RendererOpenGL::FGDrawWorldOverlayFlatLayer(). */
-    void DrawWorldOverlayFlatLayerRT();
+    virtual void DrawWorldOverlayFlatLayerRT();
 
     /** Flush the Overlay layer (drawn dead-last, over GameUI -- zoom-box
      *  corner frames/thing sprites). Call from
@@ -117,7 +117,7 @@ public:
 
     const char* GetName() const override { return "GL-UI"; }
 
-private:
+protected:
     GLSpriteAtlas* m_atlas = nullptr;
     GLResourceMapper* m_resource_mapper = nullptr;
     GpuResourceHandle m_palette_tex_handle = kInvalidGpuResource;
@@ -147,13 +147,13 @@ private:
      *  glyph handle (those are never forgotten). */
     bool IsSpriteHandleLive(SpriteHandle handle) const;
 
-    void draw_textured_quad(GpuResourceHandle shader_handle, float x, float y, float w, float h,
+    virtual void draw_textured_quad(GpuResourceHandle shader_handle, float x, float y, float w, float h,
                             float u0, float v0, float u1, float v1,
                             float r, float g, float b, float a,
                             float remap_row = -1.0f);
-    void draw_solid_quad(float x, float y, float w, float h, float r, float g, float b, float a);
-    void ensure_clut_valid();
-    int resolve_clut_row(const unsigned char* cmap);
+    virtual void draw_solid_quad(float x, float y, float w, float h, float r, float g, float b, float a);
+    virtual void ensure_clut_valid();
+    virtual int resolve_clut_row(const unsigned char* cmap);
 
     static constexpr SpriteHandle kDbcHandleBase = 0x80000000u;
     std::unordered_map<uint64_t, SpriteHandle> m_dbc_glyph_handles;
@@ -191,18 +191,18 @@ private:
     /** Batched flush of one layer's quads (world layers -- no text
      *  interleaving needed, text never carries WorldOverlay/WorldOverlayFlat
      *  ambient state). Clears `quads` when done. */
-    void FlushQuadLayer(std::vector<UIQuad>& quads, bool depth_test);
+    virtual void FlushQuadLayer(std::vector<UIQuad>& quads, bool depth_test);
 
     /** Flush one run of same-PassType quads as a single batched draw call --
      *  the actual GL work (bind program/textures, build the shared scratch
      *  vertex buffer, glDrawArrays). Shared by FlushQuadLayer() and
      *  DrawGameUIQuadsInterleaved()'s text-interleaved walk. */
-    void FlushQuadRun(const std::vector<UIQuad>& run, PassType pass, int remap_row);
+    virtual void FlushQuadRun(const std::vector<UIQuad>& run, PassType pass, int remap_row);
 
     /** Merge+batch+draw one GameUI-shaped quad vector interleaved with text
      *  by seq -- shared by DrawGameUILayerRT() (the real per-frame path) and
      *  DrawFromIR() (a local one-shot vector). Clears `quads` when done. */
-    void DrawGameUIQuadsInterleaved(std::vector<UIQuad>& quads, const TextCommandBuffers& text,
+    virtual void DrawGameUIQuadsInterleaved(std::vector<UIQuad>& quads, const TextCommandBuffers& text,
                                     GLTextRenderer* text_renderer);
 
     // Batched-layer scratch VAO/VBO -- separate from m_geom_handle (the
@@ -217,7 +217,7 @@ private:
     std::vector<uint8_t> m_slab_pending;
     int m_slab_pending_dim = 0;
 
-    void FlushPendingSlabUpload();
+    virtual void FlushPendingSlabUpload();
 
     // Minimap: 2-slot CPU buffer -- AcquireMinimapBuffer() hands out
     // slot[m_minimap_write_idx] each frame; SubmitMinimap() records that slot
@@ -233,7 +233,7 @@ private:
     int m_minimap_tex_size = 0; // RT: currently-allocated texture side length, 0 = none yet
 
     /** RT: uploads buffer `slot` into the minimap texture. */
-    bool UploadMinimap(int slot, int size);
+    virtual bool UploadMinimap(int slot, int size);
 };
 
 #endif // RENDERER_OPENGL_GLUIRENDERER_H

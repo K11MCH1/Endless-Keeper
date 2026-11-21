@@ -413,18 +413,37 @@ size_t server_roles_seat_json(char *buf, size_t cap, PlayerNumber plyr_idx)
 /******************************************************************************/
 /* The admin's commands */
 
-/** The seat whose player has this name (any case), or -1. */
+/** The seat whose player has this name (any case), or -1. "#<seat>" names the seat itself (Keeper Server sends that:
+ *  audit 2026-11-21, a look-alike name could catch a role meant for someone else); a name that two players (two
+ *  logins) share is refused. */
 static PlayerNumber seat_named(const char *name)
 {
     const PlayerNumber *seats = NULL;
     const int n = world_seat_players(&seats);
+    if (name[0] == '#')
+    {
+        char *end = NULL;
+        const long v = strtol(name + 1, &end, 10);
+        for (int i = 0; (i < n) && (end != name + 1) && (*end == '\0'); i++)
+            if (seats[i] == v)
+                return seats[i];
+        return -1;
+    }
+    PlayerNumber found = -1;
     for (int i = 0; i < n; i++)
     {
         const struct PlayerInfo *player = get_player(seats[i]);
-        if (!player_invalid(player) && (player->player_name[0] != '\0') && (strcasecmp(player->player_name, name) == 0))
-            return seats[i];
+        if (player_invalid(player) || (player->player_name[0] == '\0') || (strcasecmp(player->player_name, name) != 0))
+            continue;
+        if ((found >= 0) && (world_seat_token(found) != world_seat_token(seats[i])))
+        {
+            server_admin_log("warn", "More than one player is named %s: pick them by seat", name);
+            return -1;
+        }
+        if (found < 0)
+            found = seats[i];
     }
-    return -1;
+    return found;
 }
 
 static void tell_player(PlayerNumber p, const char *text)

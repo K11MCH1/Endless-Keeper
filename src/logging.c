@@ -244,6 +244,12 @@ int LbJustLog(const char *format, ...)
     return result;
 }
 
+/** The file the error log writes to (the crash report copies it). */
+const char *LbErrorLogFileName(void)
+{
+    return error_log.filename;
+}
+
 int LbErrorLogSetup(const char *directory, const char *filename, TbBool flag)
 {
     if (error_log_initialised) {

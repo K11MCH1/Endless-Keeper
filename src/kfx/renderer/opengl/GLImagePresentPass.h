@@ -47,10 +47,10 @@ public:
 
     /** Compile the blit/transparent/zoom shaders + build the shared quad.
      *  Safe to call after construction; idempotent. */
-    bool CompileShaders();
+    virtual bool CompileShaders();
 
     /** Release all GL resources. Must be called on the render thread. */
-    void Shutdown();
+    virtual void Shutdown();
 
     /** True once CompileShaders() has succeeded -- without it
      *  RendererOpenGL::PresentImage() draws nothing. */
@@ -100,7 +100,7 @@ public:
      *  RendererSoftware::PresentImage()'s letterboxing of an OPAQUE present,
      *  since nothing else draws on an FMV/splash/landview frame.
      *  Does not draw the transparent overlay -- see ResolveOverlay(). */
-    void Resolve(int screen_w, int screen_h);
+    virtual void Resolve(int screen_w, int screen_h);
 
     /** Draws the transparent overlay (e.g. the landview window frame) over
      *  whatever is already on screen. Called separately from Resolve() and
@@ -108,16 +108,16 @@ public:
      *  Game UI (e.g. landview ensigns), not just on top of the background,
      *  so it can't run in the same early image-present phase as Resolve().
      *  No-op if no overlay was submitted this frame. */
-    void ResolveOverlay(int screen_w, int screen_h);
+    virtual void ResolveOverlay(int screen_w, int screen_h);
 
-private:
-    bool init_quad();
-    void upload_overlay_texture();  // overlay image -> m_overlay_tex_handle
-    void upload_overlay_coverage_texture(); // overlay coverage -> m_coverage_tex_handle
-    void upload_opaque_texture(size_t idx); // m_rt_cmds[idx].pixels -> m_opaque_slots[idx].tex_handle
-    void upload_zoom_texture();     // landview image -> m_zoom_tex_handle (only when a new copy arrived)
-    void upload_embedded_palette(const std::vector<unsigned char>& embedded_palette); // -> m_embedded_palette_tex_handle
-    void draw_quad(GLuint program, GLuint image_tex, GLuint palette_tex,
+protected:
+    virtual bool init_quad();
+    virtual void upload_overlay_texture();  // overlay image -> m_overlay_tex_handle
+    virtual void upload_overlay_coverage_texture(); // overlay coverage -> m_coverage_tex_handle
+    virtual void upload_opaque_texture(size_t idx); // m_rt_cmds[idx].pixels -> m_opaque_slots[idx].tex_handle
+    virtual void upload_zoom_texture();     // landview image -> m_zoom_tex_handle (only when a new copy arrived)
+    virtual void upload_embedded_palette(const std::vector<unsigned char>& embedded_palette); // -> m_embedded_palette_tex_handle
+    virtual void draw_quad(GLuint program, GLuint image_tex, GLuint palette_tex,
                   int dst_x, int dst_y, int dst_w, int dst_h, int screen_w, int screen_h,
                   GLuint coverage_tex = 0);
 

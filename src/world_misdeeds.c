@@ -3420,6 +3420,7 @@ static struct Thing *md_panel_thing(void)
 static void md_text(int x, int y, int w, int px, int align, const char *text)
 {
     const unsigned long flg_mem = RendererGetDrawFlags();
+    const struct TbSpriteSheet *font_mem = lbFontPtr;
     LbTextSetFont(winfont);
     RendererClearDrawFlags(Lb_TEXT_ONE_COLOR | Lb_TEXT_HALIGN_CENTER | Lb_TEXT_HALIGN_RIGHT | Lb_TEXT_HALIGN_LEFT |
         Lb_TEXT_HALIGN_JUSTIFY);
@@ -3439,6 +3440,7 @@ static void md_text(int x, int y, int w, int px, int align, const char *text)
     LbTextDrawResized(0, 0, units, text);
     LbTextSetWindow(0, 0, MyScreenWidth, MyScreenHeight);
     RendererSetDrawFlags(flg_mem);
+    LbTextSetFont(font_mem); /* the menus' own drawing takes the font as it finds it (audit 2026-11-21) */
 }
 
 /** Sampled time as game hours and tenths (a day and a night are 24 of them). */

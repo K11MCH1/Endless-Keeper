@@ -694,6 +694,7 @@ enum LongTurnReplayRecordKind {
     LTK_Resync = 4, // payload: the resync message as sent by the host (its header, then zlib-compressed data)
     LTK_NetworkStopped = 5, // no payload: lost the host, continued locally
     LTK_SpectatorNotice = 6, // payload: uint8_t joined, uint8_t icon, spectator name (NUL-terminated)
+    LTK_WorldBudget = 7, // Endless Keeper: payload uint32_t turn, uint16_t chunk ops, uint16_t book steps (from that turn on)
     // TODO: resyncs / state transfers?
     // Could also carry cheat menu buttons, API actions, etc.
 };
@@ -864,6 +865,19 @@ static TbBool read_long_turn_records(TbBool apply)
         if (apply && (kind == LTK_NetworkStopped))
         {
             apply_recorded_network_stop();
+        } else
+        if (apply && (kind == LTK_WorldBudget) && (len >= 8))
+        {
+            unsigned char wb[8];
+            if (!read_packet_bytes(wb, sizeof(wb)))
+                return false;
+            used = sizeof(wb);
+            uint32_t turn;
+            uint16_t ops, steps;
+            memcpy(&turn, wb, 4);
+            memcpy(&ops, wb + 4, 2);
+            memcpy(&steps, wb + 6, 2);
+            world_replay_budget_set(turn, ops, steps);
         }
         if ((len > used) && !skip_packet_bytes(len - used))
             return false;
@@ -1203,6 +1217,19 @@ void replay_record_chat_message(NetUserId user, const char *message, MapCoord cu
     memcpy(payload + len, message, msg_len);
     len += msg_len;
     replay_write_record(is_command ? LTK_ChatCommand : LTK_ChatMessage, payload, len);
+}
+
+/** Endless Keeper (2026-11-21): the chunk and book budgets from a turn on, so a replay of a chunked world loads its
+ *  chunks on the same turns (world_stream.c, wrb_plan_next). */
+void replay_record_world_budget(uint32_t turn, uint16_t ops, uint16_t steps)
+{
+    if (!replay.save_enable || !replay.fopened)
+        return;
+    unsigned char payload[8];
+    memcpy(payload, &turn, 4);
+    memcpy(payload + 4, &ops, 2);
+    memcpy(payload + 6, &steps, 2);
+    replay_write_record(LTK_WorldBudget, payload, sizeof(payload));
 }
 
 void replay_record_spectator_notice(const char *notice, size_t size)

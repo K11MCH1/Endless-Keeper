@@ -162,6 +162,8 @@ TbBool world_player_heart_loaded(void);
  *  after the host's navigation mesh is in, what derives from the map. */
 TbBool world_load_blob_for_resync(const unsigned char *data, uint32_t len);
 void world_after_resync(void);
+/** From a replay (LTK_WorldBudget): the chunk and book budgets from that turn on. */
+void world_replay_budget_set(uint32_t turn, uint16_t ops, uint16_t steps);
 /** A human player's heart isn't in a frozen chunk. */
 TbBool world_human_heart_loaded(PlayerNumber plyr_idx);
 /** A human player of the endless world: PLAYER0, or (network games) another user's player; not a world keeper,
@@ -226,6 +228,8 @@ enum WorldProfSection {
     WPS_TCreatures, WPS_TTraps, WPS_TShots, WPS_TObjects, WPS_TEffects, WPS_TOther, WPS_Path, WPS_COUNT
 };
 int64_t world_prof_now(void);
+/** Switches the timer on for the rest of the run (lag_watch.c, after a lag). */
+void world_prof_force_on(void);
 void world_prof_add(int section, int64_t t0);
 /** Adds the time since t0 to a section shown as a total a turn (many calls a turn). */
 void world_prof_sum(int section, int64_t t0);

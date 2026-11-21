@@ -270,7 +270,8 @@ static void scan_chunk(MapSlabCoord x0, MapSlabCoord y0, uint32_t elapsed)
                 continue;
             int64_t wx, wy;
             world_slab_to_world(x, y, &wx, &wy);
-            if (world_caretaker_active(p) || world_dark_anchored(p, x, y) || imp_near(p, x, y))
+            /* an away co-op partner has no caretaker, but its ground is kept as a caretaker's is (audit 2026-11-21) */
+            if (world_caretaker_active(p) || world_coop_seat_away(p) || world_dark_anchored(p, x, y) || imp_near(p, x, y))
             {
                 struct DarkSlot *s = dk_find(wx, wy, false);
                 if (s != NULL)
@@ -476,7 +477,7 @@ TbBool world_dark_load(const uint8_t *buf, size_t len)
     if (len < 4)
         return false;
     memcpy(&n, buf, 4);
-    if ((size_t)n * sizeof(struct DarkSlot) + 4 > len)
+    if (n > (len - 4) / sizeof(struct DarkSlot)) /* (no overflow on 32-bit builds: audit 2026-11-21) */
         return false;
     for (uint32_t i = 0; i < n; i++)
     {

@@ -33,6 +33,7 @@
 #include "world_stream.h"
 #include "bflib_enet.h"
 #include "server_admin.h"
+#include "net_anticheat.h"
 #include "thing_list.h"
 #include "chat_box.h"
 #include "post_inc.h"
@@ -222,6 +223,12 @@ TbError process_network_spectator_chat(NetUserId source, const char *buffer, siz
         if (!network_user_is_spectator(source) || netstate.users[source].spectator_state == NetSpectator_Loading) {
             return Lb_OK;
         }
+        /* the players' chat rules for watchers and joiners too (audit 2026-11-21: a muted player could talk to everyone
+           as a spectator, with no rate limit) */
+        if (!anticheat_chat_allowed(source) || server_admin_user_muted(source)) {
+            return Lb_OK;
+        }
+        server_admin_chat(source, -1, netstate.users[source].name, message);
         icon = netstate.users[source].spectator_icon;
         netstate.msg_buffer[2] = icon;
         /* Endless Keeper: the line goes out with its sender's name (the others had no way to tell who said it) */
@@ -424,7 +431,7 @@ static void thin_unique_name(NetUserId id)
         TbBool used = false;
         /* a dedicated server's own user plays no keeper: its name (the PC's settings) is not taken */
         for (NetUserId u = netstate_dedicated() ? SERVER_ID + 1 : 0; (u < MAX_NET_CONNECTIONS) && !used; u++) {
-            used = (u != id) && IsUserActive(u) && (strcmp(netstate.users[u].name, candidate) == 0);
+            used = (u != id) && IsUserActive(u) && (strcasecmp(netstate.users[u].name, candidate) == 0);
         }
         if (!used) {
             SYNCLOG("Server: %s is already here; the new one is %s", base, candidate);
@@ -575,6 +582,15 @@ static PlayerNumber thin_own_seat(uint64_t token, const char *name, TbBool coop,
     return PLAYER_NONE;
 }
 
+/* Seatless watchers of a full world (they are sent the world; a joiner not seated yet is sent nothing: audit
+   2026-11-21, a joiner got the whole world unfogged, 60 s of it during a party wait). */
+static NetUserMask thin_watching;
+
+TbBool thin_user_watching(NetUserId user)
+{
+    return (user >= MAX_NET_USERS) && (user < MAX_NET_CONNECTIONS) && numask_has(thin_watching, user) && IsUserActive(user);
+}
+
 static void thin_seat_joiners(void)
 {
     static NetUserMask full_noted;
@@ -605,6 +621,7 @@ static void thin_seat_joiners(void)
         struct NetUser *spectator = &netstate.users[spectator_id];
         if (!IsUserActive(spectator_id)) {
             numask_del(&full_noted, spectator_id);
+            numask_del(&thin_watching, spectator_id);
             party_wait_from[spectator_id] = 0;
             continue;
         }
@@ -657,7 +674,7 @@ static void thin_seat_joiners(void)
            player's own: they became "<name> (2)") */
         TbBool renamed_here = false; /* "<name> (2)": not a name for its seats to keep */
         for (NetUserId u = netstate_dedicated() ? SERVER_ID + 1 : SERVER_ID; u < MAX_NET_CONNECTIONS; u++) {
-            if ((u != spectator_id) && IsUserActive(u) && (strcmp(netstate.users[u].name, spectator->name) == 0)) {
+            if ((u != spectator_id) && IsUserActive(u) && (strcasecmp(netstate.users[u].name, spectator->name) == 0) /* any case: "ALICE" is not told apart from "Alice" (audit 2026-11-21) */) {
                 thin_unique_name(spectator_id);
                 renamed_here = true;
                 break;
@@ -775,9 +792,11 @@ static void thin_seat_joiners(void)
                 send_spectator_notice(spectator_id, SpectatorNotice_Joined, ALL_NET_CONNECTIONS_MASK); /* as a spectator */
                 numask_add(&told, spectator_id);
             }
+            numask_add(&thin_watching, spectator_id);
             numask_add(&full_noted, spectator_id);
             continue;
         }
+        numask_del(&thin_watching, spectator_id);
         party_wait_from[spectator_id] = 0;
         SYNCLOG("Server: %s %s as player %d (user %d)%s", spectator->name, returning ? "comes back" : "joins", (int)seat, (int)user,
             (pair_seat != PLAYER_NONE) ? ": a new pair of co-op dungeons" : (world_seat_is_coop(seat) ? " (its co-op dungeon)" : ""));

@@ -108,7 +108,7 @@ public:
      *  early at CompileShaders() time (before init_fades_table()/
      *  RendererSettings_Load() have run); the caller invokes this once,
      *  after both are confirmed ready. */
-    void RefreshFadeTableAndSettings();
+    virtual void RefreshFadeTableAndSettings();
 
     // IWorldViewRenderer
     void BeginWorldPass(int w, int h, int vp_x, int vp_y) override;
@@ -170,9 +170,9 @@ public:
 
     void SubmitPossessionLens(const IRWorldLensCmd& cmd) override;
 
-    bool BeginLensCapture(const float* clear_rgba);
+    virtual bool BeginLensCapture(const float* clear_rgba);
 
-    void ResolveLensComposite();
+    virtual void ResolveLensComposite();
 
     /** Submit one keeper-sprite (creature/object) for GPU rendering.*/
     void SubmitKeeperSprite(const struct SpriteScale* scale,
@@ -187,13 +187,13 @@ public:
     /** Game thread: end the redirect started by BeginCursorCapture(). */
     void EndCursorCapture();
 
-    void DrawCursorKeeperSprites();
+    virtual void DrawCursorKeeperSprites();
 
-private:
-    bool init_gl_resources();
-    void free_gl_resources();
-    bool compile_world_shaders();
-    void push_shade_uniforms();
+protected:
+    virtual bool init_gl_resources();
+    virtual void free_gl_resources();
+    virtual bool compile_world_shaders();
+    virtual void push_shade_uniforms();
 
     bool append_triangle(int tile_id,
                          const struct PolyPoint* p0,
@@ -216,56 +216,56 @@ private:
     /** Core GL draw pass: uploads the vertex buffer, executes the tile
      *  draw commands in order, then resets the viewport to the full
      *  screen and clears the draw-command list. */
-    void gpu_execute_passes(int vp_x, int vp_y_gl, int screen_w, int screen_h,
+    virtual void gpu_execute_passes(int vp_x, int vp_y_gl, int screen_w, int screen_h,
                             const std::vector<WorldVertex>& tile_verts);
 
     // ── Keeper sprites ───────────────────────────────────────────────────────
-    bool init_keeper_sprite_shader();
-    bool init_keeper_sprite_instancing();
+    virtual bool init_keeper_sprite_shader();
+    virtual bool init_keeper_sprite_instancing();
     void free_keeper_sprite_resources();  // called from free_gl_resources()
 
     /** Render-thread: bulk decode+upload of every currently-RAM-resident
      *  keeper sprite, capped at k_kspr_atlas_preload_max. */
-    void execute_preload_atlas();
+    virtual void execute_preload_atlas();
 
     void execute_clear_atlas();
 
     /** Rebuild CLUT row 0 (identity) when the palette has changed since the
      *  last check; invalidates every cached remap row (they bake in RGB
      *  values from the old palette). Called at the top of gpu_execute_passes(). */
-    void ensure_clut_valid();
+    virtual void ensure_clut_valid();
 
     /** Look up (or decode + upload) the atlas layer for a sprite. Keyed by
      *  @p sprite_id (stable across sprite-heap reload, unlike a raw data
      *  pointer -- see the .cpp file header). Returns -1 when the atlas is
      *  absent/full or sprite_id is unknown (< 0). */
-    int resolve_atlas_layer(int32_t sprite_id, const unsigned char* data, int src_w, int src_h,
+    virtual int resolve_atlas_layer(int32_t sprite_id, const unsigned char* data, int src_w, int src_h,
                             bool* darkens = nullptr);
     void push_keeper_sprite_instance(const KsprInstance& inst, bool darken);
 
     /** Look up (or lazily build) the CLUT row for a remap table. Returns the
      *  row's V texcoord; identity row 0 when the CLUT is full. */
-    float resolve_clut_v(const unsigned char* remap);
+    virtual float resolve_clut_v(const unsigned char* remap);
 
     void append_keeper_sprite_instance(const IRWorldKeeperSpriteCmd& cmd);
-    void flush_keeper_sprite_instances();
+    virtual void flush_keeper_sprite_instances();
 
-    int render_keepersprite_gpu(const IRWorldKeeperSpriteCmd& cmd);
+    virtual int render_keepersprite_gpu(const IRWorldKeeperSpriteCmd& cmd);
     void DrawKeeperSpriteGL(const IRWorldKeeperSpriteCmd& cmd);
 
-    bool init_lens_shaders();
+    virtual bool init_lens_shaders();
     void free_lens_resources();  // called from free_gl_resources()
     void ensure_lens_fbo(int w, int h);
-    void upload_lens_textures_if_dirty();
+    virtual void upload_lens_textures_if_dirty();
 
-    bool init_shadow_shader();
+    virtual bool init_shadow_shader();
     void free_shadow_resources();  // called from free_gl_resources()
 
     void append_shadow_quad(const struct BucketKindCreatureShadow* sh,
                             int32_t draw_idx, const unsigned char* data,
                             int src_w, int src_h);
 
-    void draw_shadows_gpu();
+    virtual void draw_shadows_gpu();
 
     GLuint ResolvePaletteTexId() const;
     GLuint ResolveShaderId(GpuResourceHandle handle) const;

@@ -1809,6 +1809,11 @@ static short process_command_line(unsigned short argc, char *argv[])
         start_params.overrides[Clo_Renderer] = true;
         start_params.renderer_type = RENDERER_OPENGL;
       } else
+      if (strcasecmp(parstr, "vulkan") == 0)
+      {
+        start_params.overrides[Clo_Renderer] = true;
+        start_params.renderer_type = RENDERER_VULKAN;
+      } else
       if (strcasecmp(parstr, "nocd") == 0) // kept for legacy reasons
       {
           WARNLOG("The -nocd commandline parameter is no longer functional. Game music from CD is a setting in keeperfx.cfg instead.");
@@ -1985,6 +1990,7 @@ static short process_command_line(unsigned short argc, char *argv[])
       {
           /* a dedicated endless-world server: it opens to the network by itself and plays no keeper */
           netstate_set_dedicated(true);
+          LbErrorParachuteQuiet(true);
           int port = atoi(pr2str);
           if (port > 0)
           {
@@ -2001,6 +2007,7 @@ static short process_command_line(unsigned short argc, char *argv[])
       {
           /* the launcher's background: this run is hidden and hands its frames over (world_attract.c) */
           world_attract_configure(pr2str);
+          LbErrorParachuteQuiet(true);
           narg++;
       }
       else if (strcasecmp(parstr,"loadseed") == 0)
@@ -2299,8 +2306,12 @@ static short resolve_startup_config(void)
 #endif
 
     process_cmdline_overrides();
+    if (start_params.overrides[Clo_Renderer])
+        requested_renderer_type = start_params.renderer_type;
 
+    const int renderer_asked = requested_renderer_type;
     requested_renderer_type = (int)RendererResolveType((RendererType)requested_renderer_type);
+    SYNCLOG("Renderer: asked for %d, starting %d (1 software, 2 OpenGL, 3 Vulkan)", renderer_asked, requested_renderer_type);
     return 1;
 }
 
@@ -2377,7 +2388,22 @@ int LbBullfrogMain(unsigned short argc, char *argv[])
     }
 
     world_attract_mark("window");
-    retval &= (RendererInit((RendererType)requested_renderer_type) != 0);
+    {
+        /* Vulkan, then OpenGL, then software (Endless Keeper, 2026-11-21): a backend that fails to start after
+           its window was made gets a new window for the next one (SDL3 windows are born for one API) */
+        int rend_ok = (RendererInit((RendererType)requested_renderer_type) != 0);
+        while (!rend_ok && (requested_renderer_type == RENDERER_VULKAN || requested_renderer_type == RENDERER_OPENGL))
+        {
+            const int next = RendererFallbackAfter((RendererType)requested_renderer_type);
+            RendererNoteFallback((RendererType)requested_renderer_type, (RendererType)next, RendererLastInitFailure());
+            PlatformManager_DestroyWindow();
+            requested_renderer_type = next;
+            if (!setup_screen_mode_zero(get_frontend_vidmode()))
+                break;
+            rend_ok = (RendererInit((RendererType)requested_renderer_type) != 0);
+        }
+        retval &= rend_ok;
+    }
     world_attract_mark("renderer");
     RendererSettings_Load();
     PlatformManager_SetWindowTitle(PROGRAM_NAME);

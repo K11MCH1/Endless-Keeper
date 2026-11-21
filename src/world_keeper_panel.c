@@ -615,6 +615,7 @@ void world_keeper_panel_draw_last(void)
     if ((gmnu == NULL) || (gmnu->visual_state == 0) || !gmnu->is_turned_on)
         return;
     const TbDrawFlagsMask flg_mem = RendererGetDrawFlags();
+    const struct TbSpriteSheet *font_mem = lbFontPtr;
     LbTextSetFont(winfont);
     LbTextSetWindow(0, 0, MyScreenWidth / pixel_size, MyScreenHeight / pixel_size);
     if (gmnu->draw_cb != NULL)
@@ -622,6 +623,7 @@ void world_keeper_panel_draw_last(void)
     if (gmnu->visual_state == 2)
         draw_menu_buttons(gmnu);
     RendererSetDrawFlags(flg_mem);
+    LbTextSetFont(font_mem); /* (audit 2026-11-21: what is drawn after it took this font) */
 }
 
 /******************************************************************************/

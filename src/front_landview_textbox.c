@@ -170,7 +170,7 @@ void landview_textbox_draw(struct LandViewTextBox *box)
     if (box->glass_map != NULL) {
         lbDisplay.GlassMap = (unsigned char *)box->glass_map;
         style = ROUNDSLAB64K_DARK;
-        if (RendererGetActiveType() == RENDERER_OPENGL) {
+        if (RendererIsGPUBackend()) {
             style = ROUNDSLAB64K_DARKER;
         }
         fill_colour = LbPaletteFindColour(RendererGetActivePalette(), 0, 0, 0);

@@ -23,8 +23,8 @@ class GLResourceMapper;
  *  Render thread only. */
 class GLPaletteIndexLookup {
 public:
-    bool Init(GLResourceMapper* mapper);
-    void Shutdown();
+    virtual bool Init(GLResourceMapper* mapper);
+    virtual void Shutdown();
 
     /** Rebuild the nearest-colour fallback from @p engine_palette (768 bytes,
      *  6-bit). Call once the palette is loaded. */
@@ -36,9 +36,9 @@ public:
 
     GpuResourceHandle GetTexture() const { return m_tex_handle; }
 
-private:
+protected:
     void apply_palette();
-    void upload();
+    virtual void upload();
 
     GLResourceMapper* m_mapper = nullptr;
     GpuResourceHandle m_tex_handle = kInvalidGpuResource;

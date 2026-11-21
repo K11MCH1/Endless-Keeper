@@ -405,10 +405,74 @@ static void wm_corner_close(const struct Thing *heart, int k, struct Coord3d *po
     pos->z.val = get_floor_height_at(pos);
 }
 
-/** An enemy creature (heroes, a keeper not allied; not held, knocked out or dying) within `slabs` of the thing, or
- *  NULL. (Held to its corner, an Imp's own sense of danger never runs: the user, 2026-11-19, "the 2 imps in the back
+/** An enemy creature (heroes, a keeper not allied; not held, knocked out or dying) within `slabs` of the thing that
+ *  can walk to it (wm_enemy_reaches), or NULL. (Held to its corner, an Imp's own sense of danger never runs: the user, 2026-11-19, "the 2 imps in the back
  *  of the Soul Container don't flee at the presence of enemies. They seem to get stuck.") */
 #define WM_FEAR_SLABS 4
+
+/** A slab no enemy walks through to the Imps: rock, earth, gold, any wall (fortified too), a door (it has to be broken
+ *  first), lava for a creature that does not fly. */
+static TbBool wm_fear_wall(MapSlabCoord x, MapSlabCoord y, TbBool flier)
+{
+    if ((x < 0) || (y < 0) || (x >= game.map_tiles_x) || (y >= game.map_tiles_y))
+        return true;
+    const struct SlabMap *slb = get_slabmap_block(x, y);
+    if (slabmap_block_invalid(slb) || slab_kind_is_door(slb->kind))
+        return true;
+    if (slb->kind == SlbT_LAVA)
+        return !flier;
+    const struct SlabConfigStats *slabst = get_slab_kind_stats(slb->kind);
+    return (slabst->block_flags & (SlbAtFlg_Filled | SlbAtFlg_Digable | SlbAtFlg_Valuable)) != 0;
+}
+
+/** Can the enemy walk to the thing in at most 2 x slabs + 2 slab steps over open slabs (the four sides)? A hero on the
+ *  far side of a wall is no danger to the Imps (the user, 2026-11-21: "The raid's Tunneller was on the other side of a
+ *  fortified wall. Imps shouldn't flee then"). */
+#define WM_FEAR_BOX 32
+static TbBool wm_enemy_reaches(const struct Thing *thing, const struct Thing *enemy, int slabs)
+{
+    const MapSlabCoord tx = subtile_slab(thing->mappos.x.stl.num), ty = subtile_slab(thing->mappos.y.stl.num);
+    const MapSlabCoord ex = subtile_slab(enemy->mappos.x.stl.num), ey = subtile_slab(enemy->mappos.y.stl.num);
+    const int r = slabs + 3, w = 2 * r + 1;
+    if ((w > WM_FEAR_BOX) || (labs((long)ex - tx) > r) || (labs((long)ey - ty) > r))
+        return false;
+    if ((ex == tx) && (ey == ty))
+        return true;
+    const TbBool flier = ((enemy->movement_flags & TMvF_Flying) != 0);
+    uint8_t steps[WM_FEAR_BOX * WM_FEAR_BOX];
+    int16_t queue[WM_FEAR_BOX * WM_FEAR_BOX];
+    memset(steps, 0xFF, sizeof(steps));
+    int head = 0, tail = 0;
+    const int start = (ey - ty + r) * w + (ex - tx + r), goal = r * w + r;
+    steps[start] = 0;
+    queue[tail++] = (int16_t)start;
+    const int most = 2 * slabs + 2;
+    static const int dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
+    while (head < tail)
+    {
+        const int c = queue[head++];
+        if (steps[c] >= most)
+            continue;
+        const int cx = c % w, cy = c / w;
+        for (int d = 0; d < 4; d++)
+        {
+            const int nx = cx + dx[d], ny = cy + dy[d];
+            if ((nx < 0) || (ny < 0) || (nx >= w) || (ny >= w))
+                continue;
+            const int n = ny * w + nx;
+            if (steps[n] != 0xFF)
+                continue;
+            if (n == goal)
+                return true;
+            if (wm_fear_wall(tx - r + nx, ty - r + ny, flier))
+                continue;
+            steps[n] = (uint8_t)(steps[c] + 1);
+            queue[tail++] = (int16_t)n;
+        }
+    }
+    return false;
+}
+
 static const struct Thing *wm_enemy_near(PlayerNumber p, const struct Thing *thing, int slabs)
 {
     const MapSubtlCoord r = slabs * STL_PER_SLB;
@@ -425,7 +489,8 @@ static const struct Thing *wm_enemy_near(PlayerNumber p, const struct Thing *thi
                     break;
                 i = t->next_on_mapblk;
                 if (thing_is_creature(t) && (t->owner != p) && players_are_enemies(p, t->owner) &&
-                    !creature_is_kept_in_custody(t) && !creature_is_being_unconscious(t) && !creature_is_dying(t))
+                    !creature_is_kept_in_custody(t) && !creature_is_being_unconscious(t) && !creature_is_dying(t) &&
+                    wm_enemy_reaches(thing, t, slabs))
                     return t;
             }
         }
@@ -537,6 +602,14 @@ static void wm_imp_to(struct Thing *imp, const struct Coord3d *at)
     cleanup_current_thing_state(imp);
     if (setup_person_move_to_coord(imp, at, NavRtF_Default))
         imp->continue_state = CrSt_ImpDoingNothing;
+    else if ((game.play_gameturn % 200) == 0)
+    {
+        /* (so a log says it: such an Imp is free meanwhile and the Imps' own work takes it away) */
+        const struct SlabMap *slb = get_slabmap_for_subtile(at->x.stl.num, at->y.stl.num);
+        WARNLOG("World: migration: Imp %d at (%d,%d) can't walk to its corner (%d,%d): floor height %d, slab kind %d",
+            (int)imp->index, (int)imp->mappos.x.stl.num, (int)imp->mappos.y.stl.num, (int)at->x.stl.num, (int)at->y.stl.num,
+            (int)get_floor_filled_subtiles_at(at->x.stl.num, at->y.stl.num), slabmap_block_invalid(slb) ? -1 : (int)slb->kind);
+    }
 }
 
 /******************************************************************************/
@@ -911,10 +984,22 @@ static void wm_turn_one(PlayerNumber p)
     if (!wm_goal(p, &gx, &gy))
         return; /* (its goal is not in the loaded window now: wait) */
     /* the way: found again when there is none (a load, a shift) or now and then (walls dug, doors built) */
+    /* after a failed search, the next one waits 50 turns (audit 2026-11-21: a blocked way was searched again every turn,
+       up to 1024x1024 slabs each time) */
+    static GameTurn failed_at[PLAYERS_MAX];
+    const TbBool wait_after_fail = (failed_at[p] != 0) && (game.play_gameturn >= failed_at[p]) &&
+        (game.play_gameturn - failed_at[p] < 50);
+    if ((wm_path[p] == NULL) && wait_after_fail)
+    {
+        wm[p].carried = 0;
+        return;
+    }
     if ((wm_path[p] == NULL) || ((game.play_gameturn - wm_path_made[p]) > 400))
     {
+        failed_at[p] = 0;
         if (!wm_find_path(p, subtile_slab(heart->mappos.x.stl.num), subtile_slab(heart->mappos.y.stl.num), gx, gy))
         {
+            failed_at[p] = game.play_gameturn;
             if ((game.play_gameturn % 400) == 0)
                 tell_keeper(p, "The Imps can't get the Soul Container through: the way is blocked.");
             wm[p].carried = 0;
@@ -947,6 +1032,7 @@ static void wm_turn_one(PlayerNumber p)
         wm_fill_corners(p, heart);
     int at = 0;
     long slowest = 0;
+    MapCoordDelta away[4] = {0, 0, 0, 0}; /* each Imp from the place it is sent to (the progress line) */
     for (int k = 0; k < 4; k++)
     {
         struct Thing *imp = wm_imp(p, k);
@@ -962,7 +1048,10 @@ static void wm_turn_one(PlayerNumber p)
         {
             /* no floor there and no pedestal (a door's post, a wall's edge): its corner comes in towards the Soul
                Container till there is floor - never out, round to the other side of the wall */
-            for (MapCoord d = WM_CORNER - 64; d >= 0; d -= 64)
+            /* down to 0, the Soul Container's own place (2026-11-21: the steps stopped at 32; with the Container near the
+               far edge of its subtile every step was still on a Treasury pillar, the Imp was sent onto the pillar, could
+               not walk there, went reinforcing walls, and the Container waited in the air till it was dropped) */
+            for (MapCoord d = WM_CORNER - 64; ; d = max(d - 64, 0))
             {
                 struct Coord3d in = close;
                 in.x.val = heart->mappos.x.val + ((k & 1) ? d : -d);
@@ -972,6 +1061,8 @@ static void wm_turn_one(PlayerNumber p)
                     close = in;
                     break;
                 }
+                if (d == 0)
+                    break;
             }
         }
         if (wm_standable(close.x.val, close.y.val) || !pedestal)
@@ -998,6 +1089,7 @@ static void wm_turn_one(PlayerNumber p)
             }
         }
         const MapCoordDelta d = get_chessboard_distance(&imp->mappos, &target);
+        away[k] = d;
         if (d <= WM_AT)
             at++;
         const long speed = get_creature_speed(imp);
@@ -1011,11 +1103,9 @@ static void wm_turn_one(PlayerNumber p)
         for (int k = 0; (k < 4) && (n < (int)sizeof(line) - 40); k++)
         {
             struct Thing *imp = wm_imp(p, k);
-            struct Coord3d corner;
-            wm_corner(heart, k, &corner);
             if (thing_exists(imp))
-                n += snprintf(line + n, sizeof(line) - n, " [%d: %ld away, state %d]", (int)imp->index,
-                    (long)get_chessboard_distance(&imp->mappos, &corner), (int)imp->active_state);
+                n += snprintf(line + n, sizeof(line) - n, " [%d: %ld away, state %d]", (int)imp->index, (long)away[k],
+                    (int)imp->active_state);
             else
                 n += snprintf(line + n, sizeof(line) - n, " [none]");
         }
@@ -1396,6 +1486,7 @@ static void wm_test_turn(void)
     static PlayerNumber raid_p = -1;   /* the keeper whose carry the raiders wait for */
     static MapSlabCoord raid_x, raid_y; /* their pocket's middle (8 slabs north of the tunnel's middle) */
     static TbBool prep_only = false;
+    static TbBool walled = false; /* raiders < 0: their pocket is 3 slabs north, behind a fortified wall, no way out */
     static PlayerNumber tp = -1;
     if (at == -2)
     {
@@ -1412,7 +1503,8 @@ static void wm_test_turn(void)
         }
         distance = max(8L, min(distance, 120L));
         creatures = max(0L, min(creatures, 60L));
-        raiders = max(0L, min(raiders, 20L));
+        walled = (raiders < 0);
+        raiders = max(0L, min(labs(raiders), 20L));
         south = max(-30L, min(south, 30L));
         const char *c = getenv("KFX_WORLD_MIGRATECANCEL");
         cancel_after = (c != NULL) ? atol(c) : -1;
@@ -1432,6 +1524,12 @@ static void wm_test_turn(void)
             for (int j = -1; j <= 1; j++)
                 for (int i = -1; i <= 1; i++)
                     wm_test_slab(game.neutral_player_num, raid_x + i, raid_y + j, SlbT_PATH, &skipped);
+            if (walled)
+            {
+                /* a fortified wall between the pocket and the tunnel: the heroes are 3 slabs from it and cannot get out */
+                for (int i = -2; i <= 2; i++)
+                    wm_test_slab(raid_p, raid_x + i, raid_y + 2, SlbT_WALLDRAPE, &skipped);
+            } else
             for (MapSlabCoord y = raid_y + 2; y < raid_y + 8; y++)
                 wm_test_slab(game.neutral_player_num, raid_x, y, SlbT_PATH, &skipped);
             static const char *const heroes[6] = {"KNIGHT", "ARCHER", "BARBARIAN", "WIZARD", "MONK", "SAMURAI"};
@@ -1453,12 +1551,12 @@ static void wm_test_turn(void)
                 if (thing_is_invalid(thing))
                     continue;
                 set_creature_level(thing, (CrtrExpLevel)(2 + (i % 4)));
-                if (setup_person_move_to_coord(thing, &goal, NavRtF_Default))
+                if (!walled && setup_person_move_to_coord(thing, &goal, NavRtF_Default))
                     thing->continue_state = CrSt_GoodDoingNothing;
                 made++;
             }
-            SYNCLOG("World: migration test: %d hero raiders come out 8 slabs north of the tunnel at slab (%d,%d)", made,
-                (int)raid_x, (int)raid_y);
+            SYNCLOG("World: migration test: %d hero raiders come out %s at slab (%d,%d)", made,
+                walled ? "3 slabs north of the tunnel, behind a fortified wall" : "8 slabs north of the tunnel", (int)raid_x, (int)raid_y);
             raid_p = -1;
         }
     }
@@ -1593,9 +1691,9 @@ static void wm_test_turn(void)
     {
         raid_p = p;
         raid_x = hx + distance / 2;
-        raid_y = hy - 8;
-        SYNCLOG("World: migration test: %ld hero raiders wait 8 slabs north of the tunnel's middle, slab (%d,%d)", raiders,
-            (int)raid_x, (int)raid_y);
+        raid_y = walled ? hy - 3 : hy - 8;
+        SYNCLOG("World: migration test: %ld hero raiders wait %s north of the tunnel's middle, slab (%d,%d)", raiders,
+            walled ? "3 slabs (behind a fortified wall)" : "8 slabs", (int)raid_x, (int)raid_y);
     }
     if (prep_only)
     {
@@ -1641,7 +1739,7 @@ TbBool world_migrate_load(const uint8_t *buf, size_t len)
     if (len < 4)
         return false;
     memcpy(&n, buf, 4);
-    if ((size_t)n * 32 + 4 > len)
+    if (n > (len - 4) / 32) /* (no overflow on 32-bit builds: audit 2026-11-21) */
         return false;
     for (uint32_t k = 0; k < n; k++)
     {

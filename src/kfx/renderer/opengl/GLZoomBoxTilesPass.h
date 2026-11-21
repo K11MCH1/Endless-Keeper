@@ -40,10 +40,10 @@ public:
     ~GLZoomBoxTilesPass();
 
     /** Compile the shader + build the geometry buffer. Safe after construction. */
-    bool CompileShaders();
+    virtual bool CompileShaders();
 
     /** Release all GL resources. Must be called on the render thread. */
-    void Shutdown();
+    virtual void Shutdown();
 
     /** True once CompileShaders() has succeeded -- without it
      *  RendererOpenGL::SubmitZoomBoxTiles() draws nothing. */
@@ -71,9 +71,9 @@ public:
 
     /** Build one quad per revealed tile and draw them in a single batched
      *  call. */
-    void Resolve(int screen_w, int screen_h);
+    virtual void Resolve(int screen_w, int screen_h);
 
-private:
+protected:
     IRZoomBoxTilesCmd m_cmd;    // GT: written by Submit()
     IRZoomBoxTilesCmd m_rt_cmd; // RT: stable copy after FlipBuffers()
 

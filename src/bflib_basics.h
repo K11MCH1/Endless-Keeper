@@ -163,6 +163,7 @@ int LbConfigLog(int32_t line, const char *format, ...) __attribute__ ((format(pr
 
 int LbErrorLogSetup(const char *directory, const char *filename, TbBool flag);
 int LbErrorLogClose(void);
+const char *LbErrorLogFileName(void);
 
 int LbLogClose(struct TbLog *log) __attribute__ ((nonnull(1)));
 int LbLogSetup(struct TbLog *log, const char *filename, ulong flags) __attribute__ ((nonnull(1, 2)));

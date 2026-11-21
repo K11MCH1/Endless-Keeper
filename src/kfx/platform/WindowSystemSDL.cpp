@@ -451,7 +451,12 @@ bool WindowSystemSDL::CreateWindow(const char* title, int x, int y, int w, int h
     if (flags & KFX_WF_HIDDEN)     sdl3_flags |= SDL_WINDOW_HIDDEN;
     if (world_attract_active())    sdl3_flags |= SDL_WINDOW_HIDDEN; // the launcher's background: no window to see
 
-    if (flags & KFX_WF_OPENGL)
+    if (flags & KFX_WF_VULKAN)
+    {
+        // hidden until RendererVulkan::Init() has its swapchain, as the OpenGL window waits for its context
+        sdl3_flags |= SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN;
+    }
+    else if (flags & KFX_WF_OPENGL)
     {
         sdl3_flags |= SDL_WINDOW_OPENGL;
         // Created hidden regardless of the caller's KFX_WF_HIDDEN request:
@@ -480,6 +485,14 @@ bool WindowSystemSDL::CreateWindow(const char* title, int x, int y, int w, int h
     if (!(sdl3_flags & SDL_WINDOW_FULLSCREEN))
         SDL_SetWindowPosition(m_window, x, y);
     return true;
+}
+
+void WindowSystemSDL::DestroyWindow()
+{
+    if (m_window == nullptr)
+        return;
+    SDL_DestroyWindow(m_window);
+    m_window = nullptr;
 }
 
 void WindowSystemSDL::ShowWindow()

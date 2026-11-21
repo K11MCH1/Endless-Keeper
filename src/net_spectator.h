@@ -22,6 +22,8 @@ TbBool network_spectator_wait(enum NetMessageType message_type);
 TbBool network_spectator_start(void);
 TbBool network_spectator_is_catching_up(void);
 TbError process_network_spectator_bootstrap(NetUserId source, const char *buffer, size_t size);
+/** A seatless watcher of a full endless world (sent the world); a joiner not seated yet is not one. */
+TbBool thin_user_watching(NetUserId user);
 TbError process_network_spectator_ready(NetUserId source, const char *buffer, size_t size);
 void network_spectator_request_resync(void);
 TbError process_network_spectator_chat(NetUserId source, const char *buffer, size_t size);

@@ -1437,7 +1437,10 @@ static void wb_drop_loot(void)
     {
         if ((game.world_boss_joined[p] != 1) || !world_player_is_human(p))
             continue; /* (a keeper whose creatures all fell has gone home: no share; nor has a computer keeper one) */
-        const MapSlabCoord ly = y1 + 2 + (row * 4) % (2 * WB_ARENA_HALF - 3), lx = x1 + 4;
+        /* seven rows four slabs apart a column, a second column 12 slabs on (audit 2026-11-21: rows wrapped round, so
+           from the eighth keeper on a share lay a slab from another's and the book search took the other's books) */
+        const int per_col = (2 * WB_ARENA_HALF - 3 + 3) / 4;
+        const MapSlabCoord ly = y1 + 2 + (row % per_col) * 4, lx = x1 + 4 + (row / per_col) * 12;
         row++;
         int n = 0;
         struct Coord3d pos;
@@ -2388,6 +2391,7 @@ void world_boss_turn(void)
 static void wb_text_col(int x, int y, int w, int px, int align, const char *text, int colour)
 {
     const unsigned long flg_mem = RendererGetDrawFlags();
+    const struct TbSpriteSheet *font_mem = lbFontPtr;
     LbTextSetFont(winfont);
     RendererClearDrawFlags(Lb_TEXT_ONE_COLOR | Lb_TEXT_HALIGN_CENTER | Lb_TEXT_HALIGN_RIGHT | Lb_TEXT_HALIGN_LEFT |
         Lb_TEXT_HALIGN_JUSTIFY);
@@ -2402,6 +2406,7 @@ static void wb_text_col(int x, int y, int w, int px, int align, const char *text
     LbTextDrawResized(0, 0, max(36 * px / line, 4), text);
     LbTextSetWindow(0, 0, MyScreenWidth, MyScreenHeight);
     RendererSetDrawFlags(flg_mem);
+    LbTextSetFont(font_mem); /* the menus' own drawing takes the font as it finds it (audit 2026-11-21) */
 }
 
 static void wb_text(int x, int y, int w, int px, int align, const char *text)

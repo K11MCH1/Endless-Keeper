@@ -202,6 +202,7 @@ const struct NamedCommand conf_commands[] = {
   const struct NamedCommand renderer_type_desc[] = {
   {"SOFTWARE",     RENDERER_SOFTWARE},
   {"OPENGL",       RENDERER_OPENGL},
+  {"VULKAN",       RENDERER_VULKAN},
   {NULL,           0},
   };
 
@@ -1070,7 +1071,8 @@ static void load_string_configuration(const char *buf, int32_t len, const char *
                 COMMAND_TEXT(cmd_num),config_textname);
             break;
           }
-          requested_renderer_type = i;
+          if (!start_params.overrides[Clo_Renderer]) // -vulkan / -opengl win over the file
+              requested_renderer_type = i;
           break;
       case 50: // VIEWPORT_MODE
           i = recognize_conf_parameter(buf,&pos,len,viewport_mode_desc);

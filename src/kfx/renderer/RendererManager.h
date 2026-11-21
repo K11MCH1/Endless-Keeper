@@ -15,6 +15,7 @@ typedef int RendererType;
 #  define RENDERER_AUTO     0
 #  define RENDERER_SOFTWARE 1
 #  define RENDERER_OPENGL   2
+#  define RENDERER_VULKAN   3
 
 typedef int OverlayCaptureKind;
 #  define OVERLAY_CAPTURE_PARCHMENT 0
@@ -34,8 +35,21 @@ extern "C" {
 int          RendererInit(RendererType type);
 void         RendererShutdown(void);
 RendererType RendererGetActiveType(void);
+/** OpenGL or Vulkan: the GPU backends draw the same picture from the same IR. */
+TbBool RendererIsGPUBackend(void);
 
 RendererType RendererResolveType(RendererType requested);
+
+/** The backend tried after `failed` (Vulkan -> OpenGL -> software; on Android straight to software). */
+RendererType RendererFallbackAfter(RendererType failed);
+/** A backend could not be used and `to` is tried next (logged; noted for the startup notice). */
+void RendererNoteFallback(RendererType from, RendererType to, const char* reason);
+/** Why the last RendererInit() failed. */
+const char* RendererLastInitFailure(void);
+/** "Vulkan unavailable" after a fallback, else "". */
+const char* RendererFallbackNote(void);
+/** Draws the startup notice (the renderer the game started on, top right, 4 s). renderer_notice.c */
+void renderer_notice_draw(const char* renderer_name, const char* fallback_note);
 
 // Window flags (KfxWindowFlags, bflib_video.h) required by a given backend --
 // e.g. KFX_WF_OPENGL for RENDERER_OPENGL. Queried by

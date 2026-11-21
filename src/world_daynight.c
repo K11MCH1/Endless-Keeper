@@ -2119,6 +2119,20 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         free(area.reach);
         return;
     }
+    /* another human keeper's floor is no landing either (audit 2026-11-21: a co-op partner's corridors 11 slabs from
+       the heart were open ground, and the raid landed in the partner's dungeon). Loaded ground only: the slabs read
+       from the store or the generator say just whose they are not. */
+    for (MapSlabCoord y = by1; y <= by2; y++)
+        for (MapSlabCoord x = bx1; x <= bx2; x++)
+        {
+            const size_t c = (size_t)(y - by1) * w + (size_t)(x - bx1);
+            if ((area.kind[c] != SlbT_CLAIMED) || area.mine[c] || (world_is_chunked() && (wp_page_of_slab(x, y) == NULL)))
+                continue;
+            const struct SlabMap *slb = get_slabmap_block(x, y);
+            const PlayerNumber o = slabmap_block_invalid(slb) ? PLAYER_NEUTRAL : slabmap_owner(slb);
+            if ((o >= 0) && (o < PLAYERS_COUNT) && (o != plyr_idx) && world_player_is_human(o))
+                area.mine[c] = 1;
+        }
     dn_reach(&area, hx, hy); /* only where a Tunneller can get to the heart from */
     int ncand = 0, best_blockers = -1, best_off = 0;
     for (MapSlabCoord y = by1; y <= by2; y++)

@@ -244,6 +244,33 @@ static TbBool cr_razed(const struct CrRoad *r)
     return false;
 }
 
+/** Whether a disturbed fortress is in the outposts' list now (its road's slot is still its memory). */
+static TbBool cr_listed(int32_t fcx, int32_t fcy)
+{
+    int32_t x, y;
+    int64_t cx, cy;
+    TbBool disturbed;
+    for (int n = 0; world_outpost_fortress_get(n, &x, &y, &cx, &cy, &disturbed); n++)
+        if (disturbed && (x == fcx) && (y == fcy))
+            return true;
+    return false;
+}
+
+/** A full table (audit 2026-11-21: slots were never given back, so after 64 disturbed fortresses in a world's life no
+ *  road ever began again): the slot of a dead road, else of a finished one, whose fortress is not in the list now. */
+static int cr_spent_slot(void)
+{
+    for (int pass = 0; pass < 2; pass++)
+        for (int i = 0; i < CR_ROADS; i++)
+        {
+            const struct CrRoad *r = &cr_roads[i];
+            const TbBool spent = (pass == 0) ? (r->dead != 0) : (r->count >= CR_STEPS);
+            if (r->used && spent && !cr_listed(r->fcx, r->fcy))
+                return i;
+        }
+    return -1;
+}
+
 /** Test hook KFX_WORLD_CRUSADETEST=1: at turn 100 the fortress nearest the world start begins a road (as if disturbed),
  *  and roads grow every day, towards keepers from their first day. */
 static void cr_test_start(void)
@@ -292,6 +319,8 @@ static void cr_start_roads(long day)
             }
             have = have || ((cr_roads[i].fcx == fcx) && (cr_roads[i].fcy == fcy));
         }
+        if (!have && (free_i < 0))
+            free_i = cr_spent_slot();
         if (have || (free_i < 0))
             continue;
         struct CrRoad *r = &cr_roads[free_i];

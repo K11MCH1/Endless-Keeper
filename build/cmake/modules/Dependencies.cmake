@@ -20,6 +20,11 @@ find_package(OpenGL REQUIRED)
 add_library(glad STATIC "${CMAKE_SOURCE_DIR}/deps/glad/src/glad.c")
 target_include_directories(glad PUBLIC "${CMAKE_SOURCE_DIR}/deps/glad/include")
 
+# Vulkan renderer (Endless Keeper, 2026-11-21): headers only. The Vulkan loader is opened at run time through
+# SDL (VK_NO_PROTOTYPES), so the exe imports nothing new and still starts on Windows 7 / without Vulkan.
+add_library(vulkan_headers INTERFACE)
+target_include_directories(vulkan_headers INTERFACE "${CMAKE_SOURCE_DIR}/deps/vulkan-headers/include")
+
 # kfx_fetch(<dir> <url> [SKIP_EXAMPLES]): download + extract into <builddir>/deps/<dir>/ once.
 # SKIP_EXAMPLES leaves out libexec/, where the SDL dev packages put their example programs. The
 # build doesn't use them, and Windows Defender reports some of them as malware (a false positive).
@@ -282,5 +287,5 @@ function(kfx_link_dependencies TARGET)
             centitoml
             miniupnpc natpmp dl)
     endif()
-    target_link_libraries(${TARGET} PRIVATE OpenGL::GL glad)
+    target_link_libraries(${TARGET} PRIVATE OpenGL::GL glad vulkan_headers)
 endfunction()

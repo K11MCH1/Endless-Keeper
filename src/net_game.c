@@ -1122,6 +1122,8 @@ void sync_initial_network_seed(void)
 /** Thin-client play: this running single-player endless world becomes a server that others join, as Minecraft's
  *  Open to LAN. The session is created at once (online service: -connect and the session list find it), the game is
  *  a network game from now on, and joiners get what they check against: this game's map and sprite checksums. */
+static void world_list_open(void);
+
 TbBool network_open_running_game(void)
 {
     if (network_is_active() || !world_mode_active() || !world_paged) {
@@ -1180,7 +1182,16 @@ TbBool network_open_running_game(void)
         struct PlayerInfo *host = get_my_player();
         snprintf(host->player_name, sizeof(host->player_name), "%s", net_player_name);
     }
-    /* the world list: a dedicated server keeps one (the hub) unless -nohub; every open world registers */
+    world_list_open();
+    message_add(MsgType_Blank, 0, "The world is open: others can join");
+    SYNCLOG("Server: the world is open to the network (port %u, campaign %s, level %d)", (unsigned)enet_get_bound_port(),
+        campaign.fname, (int)get_loaded_level_number());
+    return true;
+}
+
+/** The world list: a dedicated server keeps one (the hub) unless -nohub; every open world registers. */
+static void world_list_open(void)
+{
     if (netstate_dedicated() && !wnet_hub_off)
     {
         if (wnet_hub_start(wnet_hub_port_wanted))
@@ -1204,10 +1215,18 @@ TbBool network_open_running_game(void)
         wnet_server_begin(title, (int)enet_get_bound_port());
         server_admin_log("world", "\"%s\" is open to players on UDP port %u", title, (unsigned)enet_get_bound_port());
     }
-    message_add(MsgType_Blank, 0, "The world is open: others can join");
-    SYNCLOG("Server: the world is open to the network (port %u, campaign %s, level %d)", (unsigned)enet_get_bound_port(),
-        campaign.fname, (int)get_loaded_level_number());
-    return true;
+}
+
+/** A save loaded while serving (2026-11-21, found by the code audit): the load's world_level_end stopped the state
+ *  stream, the keyframe workers, the hub and the listing, and nothing began them again, so every joined player was
+ *  left at "Waiting for the server...". They start again here, as when the world opened: each client gets a keyframe
+ *  of the loaded world. */
+static void network_server_after_load(void)
+{
+    netstate_level_start();
+    world_list_open();
+    SYNCLOG("Server: a save was loaded: every joined player gets the loaded world again");
+    server_admin_log("world", "A save was loaded: the players get the loaded world");
 }
 
 /** After a save is loaded in an endless world, outside a network game: a world saved while it was a server plays on
@@ -1215,6 +1234,10 @@ TbBool network_open_running_game(void)
  *  for when the world is opened again). */
 void network_after_save_loaded(void)
 {
+    if (network_is_active() && netstate_is_server() && world_mode_active()) {
+        network_server_after_load();
+        return;
+    }
     if (network_is_active() || !world_mode_active()) {
         return;
     }

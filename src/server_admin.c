@@ -281,6 +281,33 @@ static PlayerNumber seat_by_name(const char *name)
 {
     const PlayerNumber *seats = NULL;
     const int n = world_seat_players(&seats);
+    /* "#<seat>": the seat itself (Keeper Server sends that); a name two players (two logins) share is refused (audit
+       2026-11-21: a look-alike name could catch a kick or ban meant for someone else) */
+    if (name[0] == '#')
+    {
+        char *end = NULL;
+        const long v = strtol(name + 1, &end, 10);
+        for (int i = 0; (i < n) && (end != name + 1) && (*end == '\0'); i++)
+            if (seats[i] == v)
+                return seats[i];
+        return -1;
+    }
+    for (int i = 0; i < n; i++)
+    {
+        const char *pn = seat_name(seats[i]);
+        if ((pn[0] == '\0') || (strcasecmp(pn, name) != 0))
+            continue;
+        for (int k = i + 1; k < n; k++)
+        {
+            const char *pk = seat_name(seats[k]);
+            if ((pk[0] != '\0') && (strcasecmp(pk, name) == 0) && (world_seat_token(seats[k]) != world_seat_token(seats[i])))
+            {
+                server_admin_log("warn", "More than one player is named %s: pick them by seat", name);
+                return -1;
+            }
+        }
+        break;
+    }
     PlayerNumber solo = -1, any = -1;
     for (int i = 0; i < n; i++)
     {
@@ -610,9 +637,10 @@ TbBool server_admin_user_muted(int user)
     if (A.port <= 0)
         return false;
     lists_load();
-    if ((user <= SERVER_ID) || (user >= MAX_NET_USERS) || (mutes_count == 0))
+    if ((user <= SERVER_ID) || (user >= MAX_NET_CONNECTIONS) || (mutes_count == 0))
         return false;
-    const PlayerNumber p = get_user_state(user)->player_id;
+    /* a watcher or a joiner not seated yet (ids past the players'): by its name (audit 2026-11-21) */
+    const PlayerNumber p = (user < MAX_NET_USERS) ? get_user_state(user)->player_id : PLAYER_NONE;
     const uint64_t token = ((p >= 0) && (p < PLAYERS_COUNT)) ? world_seat_token(p) : 0;
     for (int i = 0; i < mutes_count; i++)
         if (entry_matches(&mutes[i], token, netstate.users[user].name, NULL))

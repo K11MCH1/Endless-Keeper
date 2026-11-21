@@ -475,6 +475,10 @@ TbError process_network_message(NetUserId source, void *server_buf, size_t frame
         }
         return handle_chat_message(source, read_pos, message_size, expected_frame_type);
     case NETMSG_GAMEPLAY_REPAIR:
+        /* a thin-client server has no lockstep packets to repair: it was relayed to every player, a 99-fold amplifier
+           for one client (audit 2026-11-21) */
+        if (netstate_thin_mode() && (netstate.my_id == SERVER_ID))
+            return Lb_OK;
         if (read_repair_packet_history(source, read_pos, message_size - (read_pos - netstate.msg_buffer)) && netstate.my_id == SERVER_ID && source != SERVER_ID) {
             send_to_active_peers(1, NetSend_Unsequenced, netstate.msg_buffer, message_size, numask_andnot(ALL_NET_USERS_MASK, numask_or(numask_of(source), numask_of(netstate.my_id))));
         }

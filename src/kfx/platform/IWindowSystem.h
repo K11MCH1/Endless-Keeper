@@ -124,6 +124,10 @@ public:
      *  creation used to be decided before the renderer type was known. */
     virtual bool CreateWindow(const char* /*title*/, int /*x*/, int /*y*/, int /*w*/, int /*h*/, unsigned int /*flags*/) { return false; }
     virtual bool SetWindowTitle(const char* /*title*/) { return false; }
+    /** Destroys the window (a renderer fallback: the next backend needs a window made for it). */
+    virtual void DestroyWindow() {}
+    /** The platform's window object (SDL: SDL_Window*), for Vulkan surface creation. */
+    virtual void* GetNativeWindow() const { return nullptr; }
     virtual void ShowWindow() {}
 
     /** Create an OpenGL context for a window created with KFX_WF_OPENGL. The

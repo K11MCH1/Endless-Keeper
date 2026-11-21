@@ -37,6 +37,7 @@
 #include <excpt.h>
 #include <dbghelp.h>
 #include <psapi.h>
+#include <shellapi.h>
 #endif
 #if defined(BF_POSIX_CRASH)
 #include <execinfo.h>
@@ -122,11 +123,303 @@ void exit_handler(void)
     LbErrorLog("Application exit called.\n");
 }
 
+/******************************************************************************/
+/* Endless Keeper crash report (2026-11-21, the user: "We need a crash handler as well that shows a windows pop up
+   window instead of just closing the game and showing nothing", after a crash inside Intel's OpenGL driver left only
+   the log): a minidump with every thread, a copy of the log (the launcher's background may write over keeperfx.log),
+   both in crashes\, and a message box saying what happened and where the files are. No box for a run nobody watches:
+   a dedicated server, the launcher's background (LbErrorParachuteQuiet), windowless test runs (SDL's dummy video
+   driver) or KFX_CRASH_QUIET. */
+static TbBool crash_quiet = false;
+
+void LbErrorParachuteQuiet(TbBool quiet)
+{
+    crash_quiet = quiet;
+}
+
+#if defined(_WIN32)
+static char crash_dump_path[MAX_PATH];
+static char crash_log_path[MAX_PATH];
+static char crash_log_source[MAX_PATH]; /* the log this run writes (-log, or keeperfx.log) */
+
+static TbBool crash_box_wanted(void)
+{
+    if (crash_quiet || (getenv("KFX_CRASH_QUIET") != NULL))
+        return false;
+    const char *drv = getenv("SDL_VIDEO_DRIVER");
+    if (drv == NULL)
+        drv = getenv("SDL_VIDEODRIVER");
+    return !((drv != NULL) && (strcmp(drv, "dummy") == 0));
+}
+
+/** Where the fault was: "igxe2hpgicd64.dll+0xbba37", or the address alone. */
+static void crash_where(const void *addr, char *out, size_t len, TbBool *in_driver)
+{
+    HMODULE mod = NULL;
+    *in_driver = false;
+    if ((addr != NULL) && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            (LPCSTR)addr, &mod) && (mod != NULL))
+    {
+        char name[MAX_PATH];
+        if (GetModuleFileNameA(mod, name, sizeof(name)) == 0)
+            snprintf(name, sizeof(name), "?");
+        const char *base = strrchr(name, '\\');
+        base = (base != NULL) ? base + 1 : name;
+        snprintf(out, len, "%s+0x%llx", base, (unsigned long long)((const char *)addr - (const char *)mod));
+        /* the graphics drivers' OpenGL parts: Intel (ig*), NVIDIA (nvoglv*), AMD (atio*, amdxc*) */
+        if ((_strnicmp(base, "ig", 2) == 0) || (_strnicmp(base, "nvogl", 5) == 0) || (_strnicmp(base, "atio", 4) == 0) ||
+            (_strnicmp(base, "amdx", 4) == 0))
+            *in_driver = true;
+    } else
+        snprintf(out, len, "address %p", addr);
+}
+
+/** Writes crashes\crash-<date>-<time>.dmp (every thread, the memory they point at) and notes the log copy's name.
+ *  fault_thread: the thread the fault happened on (the report itself is written on a helper thread). */
+static TbBool crash_write_dump(LPEXCEPTION_POINTERS info, DWORD fault_thread)
+{
+    crash_dump_path[0] = '\0';
+    crash_log_path[0] = '\0';
+    snprintf(crash_log_source, sizeof(crash_log_source), "%s", LbErrorLogFileName());
+    char dir[MAX_PATH];
+    if (GetCurrentDirectoryA(sizeof(dir) - 16, dir) == 0)
+        return false;
+    strcat(dir, "\\crashes");
+    CreateDirectoryA(dir, NULL);
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char stem[MAX_PATH];
+    snprintf(stem, sizeof(stem), "%s\\crash-%04d%02d%02d-%02d%02d%02d", dir, st.wYear, st.wMonth, st.wDay, st.wHour,
+        st.wMinute, st.wSecond);
+    snprintf(crash_log_path, sizeof(crash_log_path), "%s.log", stem);
+    char path[MAX_PATH];
+    snprintf(path, sizeof(path), "%s.dmp", stem);
+    HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE)
+        return false;
+    MINIDUMP_EXCEPTION_INFORMATION mei;
+    mei.ThreadId = fault_thread;
+    mei.ExceptionPointers = info;
+    mei.ClientPointers = FALSE;
+    const MINIDUMP_TYPE kind = (MINIDUMP_TYPE)(MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory |
+        MiniDumpWithUnloadedModules | MiniDumpWithHandleData);
+    const BOOL ok = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file, kind, (info != NULL) ? &mei : NULL,
+        NULL, NULL);
+    CloseHandle(file);
+    if (!ok)
+    {
+        DeleteFileA(path);
+        LbErrorLog("Crash report: the dump could not be written (error %lu)\n", (unsigned long)GetLastError());
+        return false;
+    }
+    snprintf(crash_dump_path, sizeof(crash_dump_path), "%s", path);
+    LbErrorLog("Crash report: %s\n", crash_dump_path);
+    return true;
+}
+
+static BOOL CALLBACK crash_hide_window(HWND wnd, LPARAM lparam)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(wnd, &pid);
+    /* Async (audit 2026-11-21): ShowWindow on a window of another thread waits for that thread, and with a fault on
+       the render thread the window's thread (the main one) is itself waiting for the render thread: the box never came */
+    if ((pid == (DWORD)lparam) && IsWindowVisible(wnd))
+        ShowWindowAsync(wnd, SW_HIDE);
+    return TRUE;
+}
+
+/** After the log is closed: its copy beside the dump, then the box. */
+static void crash_tell_user(const char *what, const void *addr)
+{
+    if ((crash_log_path[0] != '\0') && ((crash_log_source[0] == '\0') || !CopyFileA(crash_log_source, crash_log_path, FALSE)))
+        crash_log_path[0] = '\0';
+    if (!crash_box_wanted())
+        return;
+    char where[MAX_PATH + 32];
+    TbBool in_driver = false;
+    crash_where(addr, where, sizeof(where), &in_driver);
+    char text[2048];
+    int n = snprintf(text, sizeof(text), "Endless Keeper ran into an error and has to close.\n\nWhat happened: %s\nWhere: %s\n",
+        what, where);
+    if (replay_crashlog_state != 0)
+        n += snprintf(text + n, sizeof(text) - n, "Game turn: %u\n", (unsigned)replay_crashlog_turn);
+    if (in_driver)
+        n += snprintf(text + n, sizeof(text) - n, "\nThis happened inside the graphics card's driver. Installing the newest "
+            "driver for your graphics card often fixes this.\n");
+    if ((crash_dump_path[0] != '\0') && (crash_log_path[0] != '\0'))
+        n += snprintf(text + n, sizeof(text) - n, "\nA crash report was saved:\n%s\n%s\n\nPlease send both files with your "
+            "bug report.\n\nOpen the folder now?", crash_dump_path, crash_log_path);
+    else if (crash_dump_path[0] != '\0')
+        n += snprintf(text + n, sizeof(text) - n, "\nA crash report was saved:\n%s\n\nPlease send it and the game's log (%s) "
+            "with your bug report.\n\nOpen the folder now?", crash_dump_path, crash_log_source);
+    else
+        n += snprintf(text + n, sizeof(text) - n, "\nNo crash report could be saved. The game's log is %s.\n", crash_log_source);
+    /* the game's own windows go first: a full-screen window would cover the box */
+    EnumWindows(crash_hide_window, (LPARAM)GetCurrentProcessId());
+    const UINT kind = MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND | MB_TASKMODAL | ((crash_dump_path[0] != '\0') ? MB_YESNO : MB_OK);
+    if ((MessageBoxA(NULL, text, "Endless Keeper has crashed", kind) == IDYES) && (crash_dump_path[0] != '\0'))
+    {
+        char args[MAX_PATH + 16];
+        snprintf(args, sizeof(args), "/select,\"%s\"", crash_dump_path);
+        ShellExecuteA(NULL, "open", "explorer.exe", args, NULL, SW_SHOWNORMAL);
+    }
+}
+
+static volatile LONG crash_once = 0;
+static volatile DWORD crash_thread = 0;        /* the thread whose fault is being reported */
+static volatile DWORD crash_helper_thread = 0; /* the thread writing the report */
+
+/** A fault while another fault is being reported (audit 2026-11-21). A second thread waits for good, so the report and
+ *  the box are not cut off: the process ends when the first report is done. A fault on the reporting threads
+ *  themselves gives up (true: end now). */
+static TbBool crash_second_fault(void)
+{
+    const DWORD me = GetCurrentThreadId();
+    if ((me == crash_thread) || (me == crash_helper_thread))
+        return true;
+    for (;;)
+        Sleep(INFINITE);
+}
+
+struct CrashJob {
+    LPEXCEPTION_POINTERS info;
+    DWORD thread;
+    const char *what;
+    const void *addr;
+    TbBool overflow; /* a stack overflow: the log lines are written here too (the faulting thread has no stack) */
+};
+
+static void crash_describe(DWORD code, char *what, size_t len);
+
+static DWORD WINAPI crash_job_run(LPVOID param)
+{
+    struct CrashJob *job = (struct CrashJob *)param;
+    crash_helper_thread = GetCurrentThreadId();
+    if (job->overflow)
+    {
+        static char what[96];
+        LbErrorLog("Failure code %lx received.\n", (unsigned long)EXCEPTION_STACK_OVERFLOW);
+        LbErrorLog("Stack overflow: no stack trace here, see the crash report.\n");
+        log_replay_crashlog();
+        crash_describe(EXCEPTION_STACK_OVERFLOW, what, sizeof(what));
+        job->what = what;
+    }
+    crash_write_dump(job->info, job->thread);
+    LbErrorLogClose();
+    crash_tell_user(job->what, job->addr);
+    return 0;
+}
+
+/** The dump, the log copy and the box, on a fresh thread with its own stack (audit 2026-11-21): after a stack overflow
+ *  the faulting thread has no stack left for MiniDumpWriteDump and MessageBox, and the dump of the faulting thread is
+ *  better taken from outside it. Done here if no thread can be made. */
+static void crash_report(LPEXCEPTION_POINTERS info, const char *what, const void *addr)
+{
+    struct CrashJob job;
+    job.info = info;
+    job.thread = GetCurrentThreadId();
+    job.what = what;
+    job.addr = addr;
+    job.overflow = false;
+    HANDLE th = CreateThread(NULL, 256 * 1024, crash_job_run, &job, 0, NULL);
+    if (th == NULL)
+    {
+        crash_job_run(&job);
+        return;
+    }
+    WaitForSingleObject(th, INFINITE);
+    CloseHandle(th);
+}
+
+/** A stack overflow: a few hundred bytes of stack are left (a 32-bit build died in the crash handler's first log
+ *  line, 2026-11-21), so everything, the log lines too, is done on the helper thread; nothing here needs stack (the
+ *  job is static). The caller ends the program after. */
+static void crash_overflow(LPEXCEPTION_POINTERS info)
+{
+    static struct CrashJob job;
+    job.info = info;
+    job.thread = GetCurrentThreadId();
+    job.what = "a stack overflow";
+    job.addr = info->ExceptionRecord->ExceptionAddress;
+    job.overflow = true;
+    HANDLE th = CreateThread(NULL, 256 * 1024, crash_job_run, &job, 0, NULL);
+    if (th != NULL)
+        WaitForSingleObject(th, INFINITE);
+}
+
+/** "a memory access fault (exception 0xc0000005)" and the like. */
+static void crash_describe(DWORD code, char *what, size_t len)
+{
+    if (code == EXCEPTION_ACCESS_VIOLATION)
+        snprintf(what, len, "a memory access fault (exception 0x%08lx)", (unsigned long)code);
+    else if (code == EXCEPTION_INT_DIVIDE_BY_ZERO)
+        snprintf(what, len, "a division by zero (exception 0x%08lx)", (unsigned long)code);
+    else if (code == EXCEPTION_STACK_OVERFLOW)
+        snprintf(what, len, "a stack overflow (exception 0x%08lx)", (unsigned long)code);
+    else if (code == EXCEPTION_ILLEGAL_INSTRUCTION)
+        snprintf(what, len, "an illegal instruction (exception 0x%08lx)", (unsigned long)code);
+    else
+        snprintf(what, len, "exception 0x%08lx", (unsigned long)code);
+}
+
+/* The last fault of each kind that ends a program, as it happened (copied the moment Windows raised it): on 64-bit
+   MinGW the C runtime turns a fault into a signal (ctrl_handler) and the exception's details are gone by then. */
+static EXCEPTION_RECORD crash_last_rec;
+static CONTEXT crash_last_ctx;
+static DWORD crash_last_thread;
+static volatile LONG crash_have_last = 0;
+
+static LONG CALLBACK crash_first_chance(PEXCEPTION_POINTERS info)
+{
+    const DWORD code = info->ExceptionRecord->ExceptionCode;
+    if ((code == EXCEPTION_ACCESS_VIOLATION) || (code == EXCEPTION_INT_DIVIDE_BY_ZERO) || (code == EXCEPTION_STACK_OVERFLOW) ||
+        (code == EXCEPTION_ILLEGAL_INSTRUCTION) || (code == EXCEPTION_PRIV_INSTRUCTION) || (code == EXCEPTION_IN_PAGE_ERROR))
+    {
+        crash_last_rec = *info->ExceptionRecord;
+        crash_last_rec.ExceptionRecord = NULL;
+        crash_last_ctx = *info->ContextRecord;
+        crash_last_thread = GetCurrentThreadId();
+        InterlockedExchange(&crash_have_last, 1);
+    }
+    /* a stack overflow is reported here, first, while some stack is left (the later handlers need more) */
+    if ((code == EXCEPTION_STACK_OVERFLOW) && (InterlockedExchange(&crash_once, 1) == 0))
+    {
+        crash_thread = GetCurrentThreadId();
+        crash_overflow(info);
+        TerminateProcess(GetCurrentProcess(), (UINT)EXCEPTION_STACK_OVERFLOW);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
 void ctrl_handler(int sig_id)
 {
     signal(sig_id, SIG_DFL);
     LbErrorLog("Failure signal: %s.\n",sigstr(sig_id));
     log_replay_crashlog();
+#if defined(_WIN32)
+    /* a fault (not Ctrl-C or a close): the crash report and the box too */
+    const TbBool fault = (sig_id == SIGILL) || (sig_id == SIGABRT) || (sig_id == SIGFPE) || (sig_id == SIGSEGV);
+    if (fault && (InterlockedExchange(&crash_once, 1) != 0))
+        crash_second_fault(); /* another thread's fault: waits; the reporting threads' own: on to the end */
+    else if (fault)
+    {
+        crash_thread = GetCurrentThreadId();
+        /* the fault behind the signal, when this thread had one: its place and the dump's fault context */
+        const TbBool known = (sig_id != SIGABRT) && crash_have_last && (crash_last_thread == GetCurrentThreadId());
+        EXCEPTION_POINTERS ep;
+        ep.ExceptionRecord = &crash_last_rec;
+        ep.ContextRecord = &crash_last_ctx;
+        char what[96];
+        if (known)
+        {
+            crash_describe(crash_last_rec.ExceptionCode, what, sizeof(what));
+            LbErrorLog("The signal came from %s at %p.\n", what, crash_last_rec.ExceptionAddress);
+        } else
+            snprintf(what, sizeof(what), "%s", sigstr(sig_id));
+        crash_report(known ? &ep : NULL, what, known ? crash_last_rec.ExceptionAddress : NULL);
+    }
+#endif
     RendererResetScreen(true);
     LbErrorLogClose();
     raise(sig_id);
@@ -163,6 +456,7 @@ _backtrace(int depth , LPCONTEXT context)
         if(keeperFxBaseAddr == 0x00000000)
         {
             fclose(mapFile);
+            mapFile = NULL; /* (audit 2026-11-21: it was read and closed again below, inside the crash handler) */
         }
     }
     else
@@ -343,6 +637,18 @@ _backtrace(int depth , LPCONTEXT context)
 
 static LONG CALLBACK ctrl_handler_w32(LPEXCEPTION_POINTERS info)
 {
+    if (InterlockedExchange(&crash_once, 1) != 0)
+    {
+        crash_second_fault(); /* another thread's fault waits for good; the reporting threads' own ends the program */
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
+    crash_thread = GetCurrentThreadId();
+    const TbBool overflow = (info->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW);
+    if (overflow)
+    {
+        crash_overflow(info);
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
     switch (info->ExceptionRecord->ExceptionCode) {
     case EXCEPTION_ACCESS_VIOLATION:
         switch (info->ExceptionRecord->ExceptionInformation[0])
@@ -369,15 +675,23 @@ static LONG CALLBACK ctrl_handler_w32(LPEXCEPTION_POINTERS info)
         break;
     }
     log_replay_crashlog();
-    if (!SymInitialize(GetCurrentProcess(), 0, TRUE)) {
+    if (overflow) {
+        /* the stack walk needs more stack than an overflowed thread has left; the dump holds the stack */
+        LbErrorLog("Stack overflow: no stack trace here, see the crash report.\n");
+    }
+    else if (!SymInitialize(GetCurrentProcess(), 0, TRUE)) {
         LbErrorLog("Failed to init symbol context\n");
     }
     else {
             _backtrace(16 , info->ContextRecord);
             SymCleanup(GetCurrentProcess());
     }
+    {
+        char what[96];
+        crash_describe(info->ExceptionRecord->ExceptionCode, what, sizeof(what));
+        crash_report(info, what, info->ExceptionRecord->ExceptionAddress);
+    }
     RendererResetScreen(true);
-    LbErrorLogClose();
     return EXCEPTION_EXECUTE_HANDLER;
 }
 #endif
@@ -633,6 +947,13 @@ void LbErrorParachuteInstall(void)
     atexit(exit_handler);
 #if defined(_WIN32)
     SetUnhandledExceptionFilter(ctrl_handler_w32);
+    AddVectoredExceptionHandler(0, crash_first_chance);
+    {
+        /* stack kept back for a stack overflow's own handling on this (the game's) thread: without it a 32-bit build
+           was ended by Windows before any handler ran, with no report (2026-11-21) */
+        ULONG guarantee = 64 * 1024;
+        SetThreadStackGuarantee(&guarantee);
+    }
 #endif
 }
 

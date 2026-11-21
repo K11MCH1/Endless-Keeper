@@ -38,7 +38,7 @@ public:
     // ITileAtlas
     bool              Init() override;
     void              Free() override;
-    void              Rebuild();
+    virtual void              Rebuild();
     void              UpdateAnimatedTiles() override;
     GpuResourceHandle GetAtlasTextureArray() const override;
 
@@ -51,7 +51,7 @@ protected:
     void UploadFull(int variation) override;
     void UploadAnimatedStrip(int variation, int y_offset, int h_pixels) override;
 
-private:
+protected:
     GLResourceMapper* m_resource_mapper = nullptr;
     GpuResourceHandle m_texture_handle = kInvalidGpuResource; // GL_TEXTURE_2D_ARRAY: 2048×1024×32 R8
     uint8_t* m_r8_scratch = nullptr;  // R8 (1 byte/pixel) CPU scratch; replaces m_rgba_scratch

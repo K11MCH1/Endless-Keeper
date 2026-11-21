@@ -18,11 +18,11 @@ public:
     TbBool DrawTextResized(int32_t x, int32_t y, int32_t units_per_px, const char* text) override;
 
     /** Render thread: draws the glyphs laid out for cmd at submission. */
-    void DrawGlyphs(const IRTextDrawCmd& cmd, const TextCommandBuffers& text);
+    virtual void DrawGlyphs(const IRTextDrawCmd& cmd, const TextCommandBuffers& text);
 
     const char* GetName() const override { return "GL-TEXT"; }
 
-private:
+protected:
     GLUIRenderer* m_ui = nullptr;
 
     struct DrawState {

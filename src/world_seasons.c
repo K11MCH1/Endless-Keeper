@@ -184,6 +184,11 @@ void world_seasons_turn(void)
     if (!world_mode_active())
         return;
     static int last = -1;
+    static GameTurn seen = 0;
+    /* another world or a loaded save (the turn goes back or jumps): its season is not news (audit 2026-11-21) */
+    if ((game.play_gameturn < seen) || (game.play_gameturn > seen + 100))
+        last = -1;
+    seen = game.play_gameturn;
     const int s = world_season();
     if (s != last)
     {

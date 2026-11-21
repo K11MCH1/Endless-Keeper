@@ -71,6 +71,7 @@
 #include "world_stream.h"
 #include "net_state.h"
 #include "world_caretaker.h"
+#include "lag_watch.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -377,6 +378,7 @@ static bool keeper_wait_for_screen_focus()
           return true;
         if (!freeze_game_on_focus_lost())
           return true;
+        lag_watch_idle();
         LbSleepFor(50);
         update_gameplay_delta_time();
         local_state.process_turn_time = 1.0;
@@ -496,6 +498,7 @@ static void update_multiplayer_clock_adjust(void)
 // if networking had its own thread, it wouldn't need the yield that calls this function, but for now it does
 void gameplay_loop_draw()
 {
+    int64_t lag_draw_t0 = 0;
     if (network_is_active()) {
         netstate.sp->update(NULL);
     }
@@ -544,6 +547,7 @@ void gameplay_loop_draw()
             process_frame_time = min(1.L, process_frame_time - 1.L);
         }
         // Update lights
+        lag_draw_t0 = get_time_tick_ns();
         const int64_t world_prof_frame = world_prof_now();
         update_light_render_area();
         if (frametime_enabled())
@@ -563,7 +567,10 @@ void gameplay_loop_draw()
     }
     // Move the graphics window to center of screen buffer and swap screen
     if ( do_draw ) {
+        const int64_t lag_present_t0 = get_time_tick_ns();
         RendererPresentFrame();
+        const int64_t lag_present_t1 = get_time_tick_ns();
+        lag_watch_frame(lag_present_t0 - lag_draw_t0, lag_present_t1 - lag_present_t0);
     }
     frametime_end_measurement(Frametime_Draw);
 
@@ -586,6 +593,43 @@ void network_yield_waiting_gameplay_packets()
     // Reduce game speed during lag spikes.
     if (local_state.process_turn_time > 2.0)
         local_state.process_turn_time = 2.0;
+}
+
+/* Test hooks of the crash report and the lag watch (2026-11-21): KFX_CRASH_TEST="turn[,kind]" crashes at that turn
+   (kind 0 a memory fault, 1 abort(), 2 a stack overflow); KFX_LAG_TEST="turn,ms" makes that turn take ms longer. */
+static int crash_test_recurse(int n)
+{
+    volatile char pad[4096];
+    pad[0] = (char)n;
+    if (n < 0)
+        return 0;
+    return crash_test_recurse(n + 1) + pad[0];
+}
+
+static void crash_and_lag_tests(void)
+{
+    static long crash_at = -2, crash_kind = 0, lag_at = -1, lag_ms = 0;
+    if (crash_at == -2)
+    {
+        crash_at = -1;
+        const char *c = getenv("KFX_CRASH_TEST");
+        if (c != NULL)
+            sscanf(c, "%ld,%ld", &crash_at, &crash_kind);
+        const char *l = getenv("KFX_LAG_TEST");
+        if (l != NULL)
+            sscanf(l, "%ld,%ld", &lag_at, &lag_ms);
+    }
+    if ((lag_at >= 0) && ((long)game.play_gameturn == lag_at) && (lag_ms > 0))
+        LbSleepFor(lag_ms);
+    if ((crash_at >= 0) && ((long)game.play_gameturn == crash_at))
+    {
+        SYNCLOG("Test switch KFX_CRASH_TEST: crashing now (kind %ld)", crash_kind);
+        if (crash_kind == 1)
+            abort();
+        if (crash_kind == 2)
+            crash_test_recurse(1); /* a stack overflow */
+        *(volatile int *)(intptr_t)crash_kind = 1; /* (address 0: a memory fault) */
+    }
 }
 
 static void gameplay_loop_logic()
@@ -734,6 +778,7 @@ static void gameplay_loop_logic()
     }
     local_state.process_turn_time -= 1.0;
 
+    const int64_t lag_turn_t0 = get_time_tick_ns();
     if (netstate_is_client())
         update_thin_client();
     else if (netstate_is_server())
@@ -744,6 +789,8 @@ static void gameplay_loop_logic()
     } else
         update();
     netstate_server_after_turn();
+    crash_and_lag_tests();
+    lag_watch_turn(get_time_tick_ns() - lag_turn_t0, local_state.fast_forward == 0);
 
     frametime_end_measurement(Frametime_Logic);
 

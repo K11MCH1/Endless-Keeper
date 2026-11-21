@@ -432,7 +432,7 @@ TbBool world_storage_load(const uint8_t *buf, size_t len)
     if (len < 4)
         return false;
     memcpy(&n, buf, 4);
-    if ((size_t)n * sizeof(struct LootEntry) + 4 > len)
+    if (n > (len - 4) / sizeof(struct LootEntry)) /* (no overflow on 32-bit builds: audit 2026-11-21) */
         return false;
     for (uint32_t i = 0; (i < n) && (i < WORLD_LOOT_MAX); i++)
         memcpy(&loot[i], buf + 4 + (size_t)i * sizeof(struct LootEntry), sizeof(struct LootEntry));

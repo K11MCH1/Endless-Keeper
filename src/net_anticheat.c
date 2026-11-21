@@ -67,7 +67,7 @@ struct AcUser {
     int msg_in_window;
     TbBool msg_flood_reported;
 };
-static struct AcUser ac_users[MAX_NET_USERS];
+static struct AcUser ac_users[MAX_NET_CONNECTIONS];
 
 TbBool anticheat_active(void)
 {
@@ -81,14 +81,14 @@ void anticheat_reset(void)
 
 void anticheat_user_reset(NetUserId user)
 {
-    if ((user < 0) || (user >= MAX_NET_USERS))
+    if ((user < 0) || (user >= MAX_NET_CONNECTIONS))
         return;
     memset(&ac_users[user], 0, sizeof(ac_users[user]));
 }
 
 unsigned long anticheat_count(NetUserId user, enum AnticheatKind kind)
 {
-    if ((user < 0) || (user >= MAX_NET_USERS) || ((int)kind < 0) || (kind >= ACk_Count))
+    if ((user < 0) || (user >= MAX_NET_CONNECTIONS) || ((int)kind < 0) || (kind >= ACk_Count))
         return 0;
     return ac_users[user].count[kind];
 }
@@ -107,14 +107,14 @@ static const char *kind_name(enum AnticheatKind kind)
 
 static const char *user_name(NetUserId user)
 {
-    if ((user >= 0) && (user < MAX_NET_USERS) && (netstate.users[user].name[0] != '\0'))
+    if ((user >= 0) && (user < MAX_NET_CONNECTIONS) && (netstate.users[user].name[0] != '\0'))
         return netstate.users[user].name;
     return "?";
 }
 
 void anticheat_report(NetUserId user, enum AnticheatKind kind, const char *fmt, ...)
 {
-    if ((user < 0) || (user >= MAX_NET_USERS) || ((int)kind < 0) || (kind >= ACk_Count))
+    if ((user < 0) || (user >= MAX_NET_CONNECTIONS) || ((int)kind < 0) || (kind >= ACk_Count))
         return;
     struct AcUser *au = &ac_users[user];
     au->count[kind]++;
@@ -160,7 +160,7 @@ void anticheat_clean_name(char *name)
 
 TbBool anticheat_chat_allowed(NetUserId user)
 {
-    if (!anticheat_active() || (user <= SERVER_ID) || (user >= MAX_NET_USERS))
+    if (!anticheat_active() || (user <= SERVER_ID) || (user >= MAX_NET_CONNECTIONS))
         return true;
     struct AcUser *au = &ac_users[user];
     const uint64_t now = SDL_GetTicks();
@@ -182,7 +182,7 @@ TbBool anticheat_chat_allowed(NetUserId user)
 
 TbBool anticheat_message_allowed(NetUserId user)
 {
-    if (!anticheat_active() || (user <= SERVER_ID) || (user >= MAX_NET_USERS))
+    if (!anticheat_active() || (user <= SERVER_ID) || (user >= MAX_NET_CONNECTIONS))
         return true;
     struct AcUser *au = &ac_users[user];
     const uint64_t now = SDL_GetTicks();
@@ -274,6 +274,23 @@ void anticheat_check_packet(NetUserId user, struct Packet *pckt)
     const long par1 = pckt->actn_par1, par2 = pckt->actn_par2;
     switch (pckt->action)
     {
+    case PckA_PlyrToggleAlly:
+    {
+        /* each toggle redraws the whole map panel and the doors' navigation on the server (audit 2026-11-21): a real
+           player and at most one toggle every 3 seconds */
+        static GameTurn ally_turn[MAX_NET_USERS];
+        if ((par1 < 0) || (par1 >= PLAYERS_COUNT) || (par1 == plyr_idx))
+        {
+            anticheat_report(user, ACk_Impossible, "ally toggle with player %ld", par1);
+            drop_action(pckt);
+        } else if ((ally_turn[user] != 0) && (game.play_gameturn >= ally_turn[user]) && (game.play_gameturn - ally_turn[user] < 60))
+        {
+            anticheat_report(user, ACk_Flood, "ally toggles faster than one every 3 seconds");
+            drop_action(pckt);
+        } else
+            ally_turn[user] = game.play_gameturn;
+        break;
+    }
     case PckA_SetPlyrState:
         if ((par1 < 0) || (par1 >= PSt_ListEnd))
         {

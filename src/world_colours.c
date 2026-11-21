@@ -13,6 +13,7 @@
 
 #include "world_stream.h"
 #include "world_pages.h"
+#include "net_state.h"
 #include "player_data.h"
 #include "player_instances.h"
 #include "dungeon_data.h"
@@ -66,7 +67,8 @@ static unsigned char colour_table[COLOURS_COUNT];
 
 static TbBool colours_active(void)
 {
-    return world_mode_active() && (my_player_number < PLAYERS_COUNT) &&
+    /* nobody looks at a dedicated server's screen: its scan of every loaded slab was for nothing (audit 2026-11-21) */
+    return world_mode_active() && !netstate_dedicated() && (my_player_number < PLAYERS_COUNT) &&
         (my_player_number != PLAYER_GOOD) && (my_player_number != PLAYER_NEUTRAL);
 }
 
