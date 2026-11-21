@@ -57,6 +57,11 @@ void world_progress_client_turn(void);
 int world_progress_books_of(const struct WgStructRef *ref, uint64_t world_seed, TbBool guaranteed, uint8_t *box_kind);
 /** The object model of a research book (0 when the map pack doesn't have it). */
 ThingModel world_progress_book_model(void);
+/** Endless research books are drawn in their grade's colour (1 white, 2 green, 3 blue, 4 red, 5 purple), lore books
+ *  in the colour of the tier of what they teach (the user, 2026-11-20: to tell them from ordinary spellbooks). The
+ *  remap table to draw the thing with, with the light `shade` (0-31, rounded to 4 levels; 32 or more: none) on it, or
+ *  NULL. The tables are kept: the same few are handed out every time (OpenGL keeps each as a row of a 128-row table). */
+const unsigned char *world_book_draw_remap(const struct Thing *thing, int shade);
 /** A research book's kind for a grade and biome. */
 uint8_t world_progress_book_kind(int grade, int biome);
 /** The grade of a book found that far from the start. */

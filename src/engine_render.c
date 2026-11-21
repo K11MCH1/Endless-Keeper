@@ -78,6 +78,7 @@
 #include "world_boss.h"
 #include "world_migrate.h"
 #include "world_fill.h"
+#include "world_progress.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -4974,10 +4975,16 @@ void draw_fastview_mapwho(struct Camera *cam, struct BucketKindJontySprite *jspr
     shade_intensity >>= 8;
 
     int size_on_screen = thing->sprite_size * (int)((((int64_t)camera_zoom << 13) / 0x10000) / pixel_size) / 0x10000;
+    const unsigned char *book_remap = world_book_draw_remap(thing, shade_intensity); /* endless: a book's grade colour */
     if ( thing->rendering_flags & TRF_Tint_Flags )
     {
         RendererAddDrawFlags(Lb_SPRITE_REMAP);
         lbSpriteReMapPtr = &pixmap.ghost[256 * thing->tint_colour];
+    }
+    else if (book_remap != NULL)
+    {
+        RendererAddDrawFlags(Lb_SPRITE_REMAP);
+        lbSpriteReMapPtr = (unsigned char *)book_remap;
     }
     else if ( shade_intensity == 0x2000 )
     {
@@ -8010,6 +8017,7 @@ static void prepare_jonty_remap_and_scale(int32_t *scale, const struct BucketKin
     long shade;
     long shade_factor;
     long fade;
+    const unsigned char *book_remap; /* endless: a book's grade colour */
     thing = jspr->thing;
     long minimum_lightness = game.conf.rules[thing->owner].gameplay.thing_minimum_illumination << 8;
     if (lens_mode == 0)
@@ -8050,6 +8058,11 @@ static void prepare_jonty_remap_and_scale(int32_t *scale, const struct BucketKin
         RendererAddDrawFlags(Lb_SPRITE_REMAP);
         shade_factor = thing->tint_colour;
         lbSpriteReMapPtr = &pixmap.ghost[256 * shade_factor];
+    } else
+    if ((book_remap = world_book_draw_remap(thing, shade_factor)) != NULL)
+    {
+        RendererAddDrawFlags(Lb_SPRITE_REMAP); /* endless: a book's grade colour */
+        lbSpriteReMapPtr = (unsigned char *)book_remap;
     } else
     if (shade_factor == 32)
     {

@@ -14,6 +14,7 @@
 #include "bflib_basics.h"
 #include "globals.h"
 #include <cstring>
+#include "sprite_recolour.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -252,6 +253,8 @@ int VkUIRenderer::resolve_clut_row(const unsigned char* cmap)
         row[i * 4 + 2] = m_frame_palette ? m_frame_palette[palette_index * 4 + 2] : 255;
         row[i * 4 + 3] = 255;
     }
+    if (m_frame_palette)
+        sprite_recolour_row_rgba(cmap, m_frame_palette, row); /* Endless: a registered recolour in true colour */
     // a new row: no draw recorded before it in this frame reads it, so it can go before the frame's draws
     m_vk->core->UploadImage(*clut, 0, row_idx, 0, 256, 1, row, sizeof(row), 4);
     std::array<uint8_t, 256> copy;

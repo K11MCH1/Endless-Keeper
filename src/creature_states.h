@@ -187,6 +187,7 @@ enum CreatureStates {
     CrSt_CreatureSaveUnconsciousCreature,
     CrSt_ImpArrivesAtFill, /* endless worlds: the Fill room (world_fill.c) */
     CrSt_ImpFills,
+    CrSt_ImpOnExpedition, /* endless worlds: an Imp away on an expedition (world_expedition.c) */
     CrSt_ListEnd,
 };
 

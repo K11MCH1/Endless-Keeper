@@ -76,6 +76,7 @@
 #include "world_circles.h"
 #include "world_migrate.h"
 #include "world_dark.h"
+#include "world_expedition.h"
 #include "front_simple.h"
 #include "post_inc.h"
 
@@ -1070,6 +1071,51 @@ void draw_overhead_room_icons(const struct TbRect *map_area, long block_size, Pl
     }
 }
 
+/* Endless worlds: the keeper's expeditions (world_expedition.c), as on the minimap: three red dots each, a red ring
+   going out from its place again and again, the query mode's question mark on what they found */
+static void draw_overhead_expeditions(const struct TbRect *map_area, long block_size, PlayerNumber plyr_idx)
+{
+    static struct WorldExpeditionView view;
+    world_expedition_view(plyr_idx, &view);
+    if (view.dots + view.pings + view.marks == 0)
+        return;
+    const unsigned char red = world_expedition_colour();
+    const long slab = COORD_PER_STL * STL_PER_SLB;
+    for (int i = 0; i < view.pings; i++)
+    {
+        const long pos_x = map_area->left + (long)((int64_t)block_size * view.ping_x[i] / slab);
+        const long pos_y = map_area->top + (long)((int64_t)block_size * view.ping_y[i] / slab);
+        if (parchment_point_hidden((int)pos_x, (int)pos_y))
+            continue;
+        /* the Call to Arms ring's eight steps, out to six slabs */
+        const long radius = max(2L, block_size * (1 + (long)(get_gameturn() & 7)) * 3 / 4);
+        UIRenderer_SubmitCircleOutline(pos_x, pos_y, radius, red);
+        UIRenderer_SubmitCircleOutline(pos_x, pos_y, radius + 1, red);
+    }
+    for (int i = 0; i < view.dots; i++)
+    {
+        const long pos_x = map_area->left + (long)((int64_t)block_size * view.dot_x[i] / slab);
+        const long pos_y = map_area->top + (long)((int64_t)block_size * view.dot_y[i] / slab);
+        if (!parchment_point_hidden((int)pos_x, (int)pos_y))
+            draw_overhead_creature_dot(pos_x, pos_y, block_size, red);
+    }
+    const long icon = world_expedition_qmark_icon();
+    const struct TbSprite *spr = (icon > 0) ? get_panel_sprite(icon) : NULL;
+    if ((spr == NULL) || (spr->SHeight <= 0))
+        return;
+    /* the size of the minimap's (14 pixels tall at 640x480, scaled with the interface), whatever the zoom */
+    const int ps_units_per_px = max(8, (int)(16 * scale_ui_value(14) / spr->SHeight));
+    for (int i = 0; i < view.marks; i++)
+    {
+        const long pos_x = map_area->left + (long)((int64_t)block_size * view.mark_x[i] / slab);
+        const long pos_y = map_area->top + (long)((int64_t)block_size * view.mark_y[i] / slab);
+        if (parchment_point_hidden((int)pos_x, (int)pos_y))
+            continue;
+        UIRenderer_SubmitPanelSpriteRaw(pos_x - spr->SWidth * ps_units_per_px / 16 / 2,
+            pos_y - spr->SHeight * ps_units_per_px / 16 / 2, ps_units_per_px, spr, 0);
+    }
+}
+
 int draw_overhead_call_to_arms(const struct TbRect *map_area, long block_size, PlayerNumber plyr_idx)
 {
     int n = 0;
@@ -1353,6 +1399,7 @@ void draw_2d_map(void)
         parchment_clip_on = true;
         draw_overhead_things(&view_area, block_size, player->id_number);
         draw_overhead_room_icons(&view_area, block_size, player->id_number);
+        draw_overhead_expeditions(&view_area, block_size, player->id_number); /* endless worlds: the Expedition spell */
         MapSlabCoord heart_x, heart_y;
         if (world_parchment_heart(&heart_x, &heart_y))
         {

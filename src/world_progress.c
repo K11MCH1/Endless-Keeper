@@ -10,8 +10,13 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 #include "world_stream.h"
+#include "bflib_datetm.h"
+#include "bflib_dernc.h"
+#include "sprite_recolour.h"
+#include "config.h"
 #include "net_secure.h"
 #include "world_gen.h"
 #include "world_daynight.h"
@@ -64,6 +69,11 @@
 #include "bflib_math.h"
 #include "world_migrate.h"
 #include "world_fill.h"
+#include "world_expedition.h"
+#include "front_simple.h"
+#include "vidmode.h"
+#include "engine_render.h"
+#include "bflib_video.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -161,6 +171,8 @@ struct WprPlayer {
     uint8_t offer_count;
     uint8_t offer_items[3];
     uint16_t offer_things[3];   /* the lore books on the map */
+    uint8_t kind_w[4];          /* the book kinds' chances (rooms, spells, traps and doors, duplicates); all 0: the start */
+    uint8_t kind_streak;        /* rooms, spells, traps or doors learnt one after another (no duplicate between) */
 };
 
 static int wpr_requested;
@@ -172,10 +184,10 @@ static int wpr_ids[WPR_ITEMS];  /* the item's room, power, trap or door kind (<=
 static ThingModel book_model, lore_model;
 
 #define WPR_SAVE_MAGIC 0x31475250u /* "PRG1" */
-#define WPR_SAVE_VERSION 5 /* 2: the seats that had the kit, after the players (16 bits); 3: as a player set (u8 words, the
+#define WPR_SAVE_VERSION 6 /* 2: the seats that had the kit, after the players (16 bits); 3: as a player set (u8 words, the
                               words); 4: then the room levels (count, then per player 4 levels, 4 allowed, the room
                               researched now, the turn its level began waiting); 5: rooms and spells (players, entries,
-                              then per player the levels, the allowed levels, the entry researched now, the turn) */
+                              then per player the levels, the allowed levels, the entry researched now, the turn); 6: the book kinds' chances and row, after the levels */
 
 /* rooms with levels: a level-up among a book's choices is item WPR_ITEMS + room */
 #define WPR_TRAINING 1
@@ -405,7 +417,8 @@ static TbBool kit_room(const char *name)
 static TbBool kit_power(const char *name)
 {
     return (strcmp(name, "POWER_HAND") == 0) || (strcmp(name, "POWER_SLAP") == 0) || (strcmp(name, "POWER_POSSESS") == 0) ||
-        (strcmp(name, "POWER_IMP") == 0) || (strncmp(name, "POWER_PICKUP_", 13) == 0);
+        (strcmp(name, "POWER_IMP") == 0) || (strncmp(name, "POWER_PICKUP_", 13) == 0) ||
+        (strcmp(name, "POWER_EXPEDITION") == 0); /* the Expedition spell from the start (world_expedition.c) */
 }
 
 static void lock_portal_creatures(PlayerNumber plyr_idx);
@@ -647,12 +660,13 @@ void world_progress_drop_books(MapSubtlCoord stl_x, MapSubtlCoord stl_y, int gra
 
 void world_progress_raid(PlayerNumber plyr_idx, long day, int raid_idx, uint64_t world_seed)
 {
-    /* the first raid of every day carries a book, from day 1 (2026-11-11; it was from day 2, one time in two) */
+    /* every raid carries a book (the user, 2026-11-20: raids bring fewer heroes now; it was the first raid of each
+       day only, from day 1 - 2026-11-11 - and before that from day 2, one time in two) */
     (void)world_seed;
-    if (!world_progress_active() || (plyr_idx < 0) || (plyr_idx >= PLAYERS_COUNT) || (raid_idx != 0))
+    if (!world_progress_active() || (plyr_idx < 0) || (plyr_idx >= PLAYERS_COUNT))
         return;
     wpr_players[plyr_idx].raid_pending++;
-    SYNCLOG("World progress: day %ld's first raid on player %d carries a research book", day, (int)plyr_idx);
+    SYNCLOG("World progress: day %ld's raid %d on player %d carries a research book", day, raid_idx + 1, (int)plyr_idx);
 }
 
 void world_progress_raid_over(PlayerNumber plyr_idx)
@@ -678,6 +692,213 @@ void world_progress_creature_died(struct Thing *creatng)
     const int grade = min(4, 1 + (int)((max(day, 1L) - 1) / 6));
     world_progress_drop_books(creatng->mappos.x.stl.num, creatng->mappos.y.stl.num, grade,
         world_biome_at_subtile(creatng->mappos.x.stl.num, creatng->mappos.y.stl.num), 1);
+}
+
+/******************************************************************************/
+/* the books' colours by grade */
+
+static unsigned char wbc_tab[5][256];
+/* The tables with the light on them: 4 levels, not the game's 32 - each table drawn is a row of the OpenGL renderer's
+   colour table, which holds 128 and is only emptied when the palette changes (5 grades x 32 levels would fill it, and
+   sprites needing a new row would lose their colours and shading). Made once each, kept. */
+#define WBC_LIGHTS 4 /* dark, dim, lit, bright (2026-11-21: a book in the dark was drawn at a quarter, a faint glow) */
+static unsigned char wbc_lit[5][WBC_LIGHTS][256];
+static uint8_t wbc_lit_made[5];
+static uint32_t wbc_pal_sum = 0;
+static TbBool wbc_ready = false;
+static unsigned char wbc_mask[256]; /* the cover's colours: what is recoloured */
+/* The colours the OpenGL and Vulkan renderers draw (sprite_recolour.c; the user, 2026-11-21: "blue still looks like
+   lavender" - the palette has no blue): true white, green, blue, red, purple, from each pixel's own shaded colour. The
+   software renderer draws the tables above, the palette's nearest. */
+static const struct SpriteRecolour wbc_true[5] = {
+    {  0.0f, 0.00f, 0.03f, 0.50f, 0.50f}, /* white: its lines kept */
+    {135.0f, 0.42f, 0.04f, 0.62f, 0.36f}, /* green (pastel: the user, 2026-11-21 "make the colors softer, pastel-like") */
+    {210.0f, 0.42f, 0.06f, 0.62f, 0.37f}, /* blue */
+    {355.0f, 0.40f, 0.05f, 0.62f, 0.37f}, /* red */
+    {285.0f, 0.40f, 0.05f, 0.62f, 0.36f}, /* purple */
+};
+
+static const unsigned char *wbc_identity(void)
+{
+    static unsigned char id[256];
+    static TbBool made = false;
+    if (!made)
+    {
+        for (int i = 0; i < 256; i++)
+            id[i] = (unsigned char)i;
+        made = true;
+    }
+    return id;
+}
+
+/** The five tables: the cover's colours (saturated, not the gold trim) take the grade's hue with their own saturation
+ *  and brightness, as the nearest colour of the palette; pages, greys and the gold stay (wbc_build). */
+/* The palette the tables are made from: the game's own palette file, not the palette in use - a gamma setting
+   brightens that one, and tables made from it picked other colours (2026-11-21: with gamma 2 the white books came out
+   lilac); the gamma brightens a book's colours as it does all others. The palette in use if the file can't be read. */
+static unsigned char wbc_file_pal[768];
+static const unsigned char *wbc_P = NULL;
+static const unsigned char *wbc_palette(void)
+{
+    static int loaded = -1;
+    if (loaded < 0)
+        loaded = (LbFileLoadAt(prepare_file_path(FGrp_StdData, "palette.dat"), wbc_file_pal) == 768) ? 1 : 0;
+    return loaded ? wbc_file_pal : engine_palette;
+}
+
+static void wbc_hsv(int i, float *hue, float *sat, float *lum)
+{
+    const float r = wbc_P[3 * i] / 63.0f, g = wbc_P[3 * i + 1] / 63.0f, b = wbc_P[3 * i + 2] / 63.0f;
+    const float cmax = max(r, max(g, b)), cmin = min(r, min(g, b));
+    *sat = (cmax > 0.0f) ? (cmax - cmin) / cmax : 0.0f;
+    float h = 0.0f;
+    if (cmax > cmin)
+    {
+        if (cmax == r)
+            h = 60.0f * ((g - b) / (cmax - cmin));
+        else if (cmax == g)
+            h = 60.0f * (2.0f + (b - r) / (cmax - cmin));
+        else
+            h = 60.0f * (4.0f + (r - g) / (cmax - cmin));
+        if (h < 0.0f)
+            h += 360.0f;
+    }
+    *hue = h;
+    *lum = 0.30f * r + 0.59f * g + 0.11f * b;
+}
+
+/** A colour from hue (degrees), saturation and value (0-1). */
+static void wbc_rgb(float hue, float sat, float val, float *r, float *g, float *b)
+{
+    const float c = val * sat, hp = hue / 60.0f;
+    const float x = c * (1.0f - fabsf(fmodf(hp, 2.0f) - 1.0f));
+    float r1 = 0.0f, g1 = 0.0f, b1 = 0.0f;
+    if (hp < 1.0f) { r1 = c; g1 = x; }
+    else if (hp < 2.0f) { r1 = x; g1 = c; }
+    else if (hp < 3.0f) { g1 = c; b1 = x; }
+    else if (hp < 4.0f) { g1 = x; b1 = c; }
+    else if (hp < 5.0f) { r1 = x; b1 = c; }
+    else { r1 = c; b1 = x; }
+    const float m = val - c;
+    *r = r1 + m;
+    *g = g1 + m;
+    *b = b1 + m;
+}
+
+static void wbc_build(void)
+{
+    wbc_P = wbc_palette();
+    if (wbc_P == NULL)
+        return;
+    /* the palette looked at no more than every 100 ms (2026-11-21: it was hashed for every book drawn, twice a book in
+       the 3D view) */
+    static TbClockMSec looked = 0;
+    const TbClockMSec now = LbTimerClock();
+    if (wbc_ready && (now - looked < 100))
+        return;
+    looked = now;
+    uint32_t sum = 2166136261u;
+    for (int i = 0; i < 768; i++)
+        sum = (sum ^ wbc_P[i]) * 16777619u;
+    if (wbc_ready && (sum == wbc_pal_sum))
+        return;
+    float hue[256], sat[256], lum[256];
+    for (int i = 0; i < 256; i++)
+        wbc_hsv(i, &hue[i], &sat[i], &lum[i]);
+    /* Each cover colour keeps its own saturation and brightness and takes the grade's hue; the nearest colour of the
+       whole palette is drawn (2026-11-21, the user: "All the colors are suffering from the same issue as white": each
+       grade was matched to one hue family's few shades, many cover shades became one and the book's lines were gone) */
+    /* (the palette has no true blue and no mid greys: white is ivory - its whites and the warm beige ramp - and blue
+       is the lilac ramp, so each keeps a light-to-dark range for the lines) */
+    static const float grade_hue[5] = {45.0f, 120.0f, 268.0f, 2.0f, 300.0f};
+    for (int k = 0; k < 5; k++)
+    {
+        for (int i = 0; i < 256; i++)
+        {
+            const TbBool keep = (i == 0) || (sat[i] < 0.22f) || ((hue[i] >= 38.0f) && (hue[i] <= 70.0f)); /* (pages, greys, gold) */
+            wbc_mask[i] = keep ? 0 : 1;
+            if (keep)
+            {
+                wbc_tab[k][i] = (unsigned char)i;
+                continue;
+            }
+            const float v = max(wbc_P[3 * i], max(wbc_P[3 * i + 1], wbc_P[3 * i + 2])) / 63.0f;
+            float s2 = sat[i], v2 = v;
+            if (k == 0)
+            {
+                s2 = 0.12f; /* white: ivory, its light and dark kept */
+                v2 = min(1.0f, v * 0.55f + 0.45f);
+            } else if (k == 2)
+            {
+                s2 = 0.24f; /* blue: the lilac ramp (the palette's saturated blues are near black) */
+                v2 = min(1.0f, v * 0.65f + 0.33f);
+            } else if (k == 3)
+                v2 = min(1.0f, v * 1.15f + 0.04f); /* (red: the dark reds read as brown) */
+            float r, g, b;
+            wbc_rgb(grade_hue[k], s2, v2, &r, &g, &b);
+            int best = i;
+            float bestd = 1e9f;
+            for (int j = 1; j < 256; j++)
+            {
+                const float dr = wbc_P[3 * j] / 63.0f - r, dg = wbc_P[3 * j + 1] / 63.0f - g,
+                    db = wbc_P[3 * j + 2] / 63.0f - b;
+                const float ds = sat[j] - s2; /* (and as grey or as coloured: the palette's greys are lilac) */
+                const float d = 3.0f * dr * dr + 4.0f * dg * dg + 2.0f * db * db + 1.5f * ds * ds;
+                if (d < bestd)
+                {
+                    bestd = d;
+                    best = j;
+                }
+            }
+            wbc_tab[k][i] = (unsigned char)best;
+        }
+    }
+    /* the true colours the OpenGL and Vulkan renderers draw instead (sprite_recolour.c) */
+    for (int k = 0; k < 5; k++)
+        sprite_recolour_register(wbc_tab[k], wbc_identity(), wbc_mask, &wbc_true[k]);
+    memset(wbc_lit_made, 0, sizeof(wbc_lit_made));
+    wbc_pal_sum = sum;
+    wbc_ready = true;
+}
+
+const unsigned char *world_book_draw_remap(const struct Thing *thing, int shade)
+{
+    if (!world_mode_active() || (book_model <= 0) || !thing_exists(thing) || (thing->class_id != TCls_Object) ||
+        ((thing->model != book_model) && (thing->model != lore_model)))
+        return NULL;
+    const int kind = thing->custom_box.box_kind;
+    int grade = 0;
+    if ((thing->model == lore_model) && (wrl_of_levelup_kind(kind) >= 0))
+    {
+        const int it = wrl_items[wrl_of_levelup_kind(kind)];
+        grade = (it >= 0) ? wpr_items[it].tier : 1; /* a level's lore book: its item's tier (a starting room's: 1) */
+    } else if (kind >= WORLD_LORE_KIND_FIRST)
+    {
+        const int it = kind - WORLD_LORE_KIND_FIRST;
+        grade = ((it >= 0) && (it < WPR_ITEMS)) ? wpr_items[it].tier : 0;
+    } else if ((kind >= WORLD_BOOK_KIND_FIRST) && (kind < WORLD_OUTPOST_BOOK_KIND))
+        grade = (kind - 128) / 8;
+    if (grade <= 0)
+        return NULL; /* (a heroes' spellbook keeps the ordinary look) */
+    grade = min(grade, 5);
+    wbc_build();
+    if (!wbc_ready)
+        return NULL;
+    /* the light, to the nearest of 0, 8, 16, 24 (and 32: none) */
+    const int level = (shade < 0) ? WBC_LIGHTS : min(WBC_LIGHTS, max(0, (shade + 4) / 8));
+    if (level >= WBC_LIGHTS)
+        return wbc_tab[grade - 1];
+    const int g = grade - 1;
+    if (!(wbc_lit_made[g] & (1u << level)))
+    {
+        const unsigned char *fade = &pixmap.fade_tables[256 * (8 * level)];
+        for (int i = 0; i < 256; i++)
+            wbc_lit[g][level][i] = wbc_tab[g][fade[i]]; /* darkened first, then coloured (2026-11-21: the other way round
+                                                         the darkening took a pale cover to the palette's lilac greys) */
+        sprite_recolour_register(wbc_lit[g][level], fade, wbc_mask, &wbc_true[g]);
+        wbc_lit_made[g] |= (uint8_t)(1u << level);
+    }
+    return wbc_lit[g][level];
 }
 
 /******************************************************************************/
@@ -1469,9 +1690,76 @@ static void give_boon(PlayerNumber plyr_idx, int grade, uint64_t roll)
    Library, traps and doors only once it has the Workshop. A kind with nothing left to teach gives its chance to the
    others. */
 enum WprBookKind { WBK_Room, WBK_Spell, WBK_Trap, WBK_Duplicate, WBK_COUNT };
+/* The kinds' chances move (the user, 2026-11-20): they start at these; learning a room, spell or trap/door (after the
+   Library and Training Room) takes WBK_STEP from its own kind and gives half each to the other two, and each one learnt
+   in a row (no duplicate between) adds WBK_DUP_STEP times the row's length to the duplicates; a duplicate learnt sets
+   the duplicates back to their start and ends the row, the rest gaining what they lose. No kind below WBK_MIN; the
+   four always add up to 100. */
 static const int wbk_chance[WBK_COUNT] = {40, 30, 20, 10};
+#define WBK_STEP 6
+#define WBK_DUP_STEP 2
+#define WBK_MIN 5
 static const char *const wbk_names[WBK_COUNT] = {"rooms", "spells", "traps and doors", "duplicates"};
 #define WPR_WORKSHOP 2
+
+static void wbk_defaults(struct WprPlayer *wp)
+{
+    if ((wp->kind_w[0] | wp->kind_w[1] | wp->kind_w[2] | wp->kind_w[3]) != 0)
+        return;
+    for (int b = 0; b < WBK_COUNT; b++)
+        wp->kind_w[b] = (uint8_t)wbk_chance[b];
+}
+
+/** Floors at WBK_MIN, then scales to 100 (the rounding's rest to the largest). */
+static void wbk_normalize(int *w)
+{
+    for (int b = 0; b < WBK_COUNT; b++)
+        w[b] = max(w[b], WBK_MIN);
+    int sum = 0;
+    for (int b = 0; b < WBK_COUNT; b++)
+        sum += w[b];
+    int out = 0, big = 0;
+    for (int b = 0; b < WBK_COUNT; b++)
+    {
+        w[b] = max(WBK_MIN, (w[b] * 100 + sum / 2) / sum);
+        out += w[b];
+        if (w[b] > w[big])
+            big = b;
+    }
+    w[big] += 100 - out;
+}
+
+static int wbk_of(int i);
+
+/** A book taught item i (chosen from its lore books, or at once): the kinds' chances move. */
+static void wbk_learned(PlayerNumber plyr_idx, int i)
+{
+    struct WprPlayer *wp = &wpr_players[plyr_idx];
+    wbk_defaults(wp);
+    int w[WBK_COUNT];
+    for (int b = 0; b < WBK_COUNT; b++)
+        w[b] = wp->kind_w[b];
+    const int k = wbk_of(i);
+    if (k == WBK_Duplicate)
+    {
+        wp->kind_streak = 0;
+        w[WBK_Duplicate] = wbk_chance[WBK_Duplicate];
+    } else
+    {
+        w[k] -= WBK_STEP;
+        for (int b = 0; b < WBK_Duplicate; b++)
+            if (b != k)
+                w[b] += WBK_STEP / 2;
+        if (wp->kind_streak < 255)
+            wp->kind_streak++;
+        w[WBK_Duplicate] += WBK_DUP_STEP * wp->kind_streak;
+    }
+    wbk_normalize(w);
+    for (int b = 0; b < WBK_COUNT; b++)
+        wp->kind_w[b] = (uint8_t)w[b];
+    SYNCLOG("World progress: player %d learnt %s from a book: the kinds' chances now rooms %d, spells %d, traps and doors %d, "
+        "duplicates %d (%d in a row)", (int)plyr_idx, opt_label(i), w[0], w[1], w[2], w[3], (int)wp->kind_streak);
+}
 
 static int wbk_of(int i)
 {
@@ -1490,7 +1778,8 @@ static int wbk_of(int i)
  *  are left (0: no kind it may get has anything). */
 static int book_kind_filter(PlayerNumber plyr_idx, int *open, int n, uint64_t roll)
 {
-    const struct WprPlayer *wp = &wpr_players[plyr_idx];
+    struct WprPlayer *wp = &wpr_players[plyr_idx];
+    wbk_defaults(wp);
     const TbBool library = (wp->unlocked & ((uint64_t)1 << WPR_LIBRARY)) || item_had(plyr_idx, WPR_LIBRARY);
     const TbBool workshop = (wp->unlocked & ((uint64_t)1 << WPR_WORKSHOP)) || item_had(plyr_idx, WPR_WORKSHOP);
     int count[WBK_COUNT] = {0};
@@ -1502,7 +1791,7 @@ static int book_kind_filter(PlayerNumber plyr_idx, int *open, int n, uint64_t ro
         count[WBK_Trap] = 0;
     int total = 0;
     for (int b = 0; b < WBK_COUNT; b++)
-        total += (count[b] > 0) ? wbk_chance[b] : 0;
+        total += (count[b] > 0) ? wp->kind_w[b] : 0;
     if (total <= 0)
         return 0;
     int pick = (int)(wpr_mix(roll ^ 0x4B494E44ULL) % (uint64_t)total), kind = 0;
@@ -1511,16 +1800,16 @@ static int book_kind_filter(PlayerNumber plyr_idx, int *open, int n, uint64_t ro
         if (count[b] <= 0)
             continue;
         kind = b;
-        if (pick < wbk_chance[b])
+        if (pick < wp->kind_w[b])
             break;
-        pick -= wbk_chance[b];
+        pick -= wp->kind_w[b];
     }
     int m = 0;
     for (int k = 0; k < n; k++)
         if (wbk_of(open[k]) == kind)
             open[m++] = open[k];
-    SYNCLOG("World progress: player %d's book is of %s (%d of them open; library %d, workshop %d)", (int)plyr_idx,
-        wbk_names[kind], m, (int)library, (int)workshop);
+    SYNCLOG("World progress: player %d's book is of %s (%d of them open; library %d, workshop %d; chances %d/%d/%d/%d)",
+        (int)plyr_idx, wbk_names[kind], m, (int)library, (int)workshop, wp->kind_w[0], wp->kind_w[1], wp->kind_w[2], wp->kind_w[3]);
     return m;
 }
 
@@ -1598,10 +1887,15 @@ TbBool world_progress_activate(struct Thing *thing, struct PlayerInfo *player)
         }
         const int item = is_levelup ? WRL_ITEM(wrl_of_levelup_kind(kind)) : (kind - WORLD_LORE_KIND_FIRST);
         if ((item >= WPR_ITEMS) && (item < WPR_OPTIONS))
+        {
             room_level_allow(plyr_idx, item - WPR_ITEMS, &pos, wpr_offer_circle[plyr_idx]);
-        else
+            wbk_learned(plyr_idx, item);
+        } else
         if (item_usable(item) && !wpr_item_disabled(item) && !(wp->unlocked & ((uint64_t)1 << item)))
+        {
             unlock_item(plyr_idx, item, &pos);
+            wbk_learned(plyr_idx, item);
+        }
         for (int c = 0; c < wp->offer_count; c++)
         {
             struct Thing *other = thing_get(wp->offer_things[c]);
@@ -1667,6 +1961,7 @@ TbBool world_progress_activate(struct Thing *thing, struct PlayerInfo *player)
     if ((wpr_mode == 2) || automatic || (k == 1) || (lore_model <= 0))
     {
         take_option(plyr_idx, opt[0], &pos, circle);
+        wbk_learned(plyr_idx, opt[0]);
         return true;
     }
     wpr_offer_circle[plyr_idx] = (uint8_t)circle;
@@ -1693,7 +1988,10 @@ TbBool world_progress_activate(struct Thing *thing, struct PlayerInfo *player)
     SYNCLOG("World progress: player %d is offered %s%s%s%s%s", (int)plyr_idx, opt_label(opt[0]),
         (k > 1) ? ", " : "", (k > 1) ? opt_label(opt[1]) : "", (k > 2) ? ", " : "", (k > 2) ? opt_label(opt[2]) : "");
     if (wp->offer_count == 0)
+    {
         take_option(plyr_idx, opt[0], &pos, circle);
+        wbk_learned(plyr_idx, opt[0]);
+    }
     return true;
 }
 
@@ -1723,8 +2021,9 @@ static void test_books(void)
         /* the heart room is the player's ground: 3 subtiles south and east of the heart's centre and on */
         for (int i = 0; i < want; i++)
         {
-            world_progress_drop_books(heart->mappos.x.stl.num + 3 + (i % 3), heart->mappos.y.stl.num + 3 + (i / 3), grade,
-                i % WgB_COUNT, 1);
+            /* (grade 0: grades 1 to 5 in turn, to see their colours side by side) */
+            world_progress_drop_books(heart->mappos.x.stl.num + 3 + (i % 5), heart->mappos.y.stl.num + 3 + (i / 5),
+                (grade > 0) ? grade : 1 + (i % 5), i % WgB_COUNT, 1);
         }
     }
 }
@@ -2494,6 +2793,7 @@ void world_progress_turn(void)
     world_record_turn(); /* the Keeper panel's Time Played */
     world_migrate_turn(); /* Move The Heart */
     world_fill_turn(); /* the Fill room */
+    world_expedition_turn(); /* the Expedition spell */
     world_wallbreak_turn(); /* Beetles and raid Tunnellers break fortified walls */
     if (!world_progress_active())
         return;
@@ -2532,7 +2832,8 @@ size_t world_progress_save_size(void)
 {
     if (wpr_mode <= 0)
         return 0;
-    return 4 + 4 + 1 + 1 + PLAYERS_COUNT * sizeof(struct WprSaved) + 1 + 4 * wpr_mask_words() + 2 + PLAYERS_COUNT * (2 * WRL_ROOMS + 5);
+    return 4 + 4 + 1 + 1 + PLAYERS_COUNT * sizeof(struct WprSaved) + 1 + 4 * wpr_mask_words() + 2 + PLAYERS_COUNT * (2 * WRL_ROOMS + 5) +
+        1 + PLAYERS_COUNT * 5;
 }
 
 void world_progress_save(uint8_t *buf)
@@ -2570,6 +2871,13 @@ void world_progress_save(uint8_t *buf)
         memcpy(buf, game.world_room_allowed[p], WRL_ROOMS); buf += WRL_ROOMS;
         *buf++ = game.world_room_researching[p];
         memcpy(buf, &wpr_players[p].lvl_pending_since, 4); buf += 4;
+    }
+    /* version 6: the book kinds' chances and row */
+    *buf++ = (uint8_t)PLAYERS_COUNT;
+    for (int p = 0; p < PLAYERS_COUNT; p++)
+    {
+        memcpy(buf, wpr_players[p].kind_w, 4); buf += 4;
+        *buf++ = wpr_players[p].kind_streak;
     }
 }
 
@@ -2636,6 +2944,16 @@ TbBool world_progress_load(const uint8_t *buf, size_t len)
                 }
                 game.world_room_researching[pl] = (e[2 * n] <= WRL_ROOMS) ? e[2 * n] : 0;
                 memcpy(&wpr_players[pl].lvl_pending_since, e + 2 * n + 1, 4);
+            }
+            const uint8_t *kw = lv + 2 + (size_t)lv[0] * stride;
+            const size_t kw_len = lv_len - (2 + (size_t)lv[0] * stride);
+            if ((version >= 6) && (kw_len >= 1) && (kw_len >= 1 + (size_t)kw[0] * 5))
+            {
+                for (int pl = 0; (pl < kw[0]) && (pl < PLAYERS_COUNT); pl++)
+                {
+                    memcpy(wpr_players[pl].kind_w, kw + 1 + (size_t)pl * 5, 4);
+                    wpr_players[pl].kind_streak = kw[1 + (size_t)pl * 5 + 4];
+                }
             }
         } else
         if ((version == 4) && (lv_len >= 1) && (lv_len >= 1 + (size_t)lv[0] * 13))
@@ -2947,6 +3265,7 @@ void world_progress_seat_reset(PlayerNumber plyr_idx, TbBool keep_record)
     wpr_offer_circle[plyr_idx] = 0;
     world_migrate_seat_reset(plyr_idx); /* no migration going on, and no moved Heart */
     world_fill_seat_reset(plyr_idx); /* and no Fill room marks */
+    world_expedition_seat_reset(plyr_idx); /* its expeditions' Imps back, and no question marks */
     pmask_del(&wpr_kit_players, plyr_idx); /* the kit is given again when it starts */
     world_misdeeds_strays_seat_reset(plyr_idx); /* Strays: the old keeper's strays go wild again */
     world_watchfire_seat_reset(plyr_idx); /* and the watchfires */

@@ -58,6 +58,7 @@
 #include "world_daynight.h"
 #include "world_pages.h"
 #include "world_colours.h"
+#include "world_expedition.h"
 #include "roomspace_input.h"
 #include "post_inc.h"
 
@@ -451,6 +452,80 @@ static void draw_line_to_heart(const struct MinimapOverlay *ov)
     }
 }
 
+/** A ring of the Call to Arms' shape (the midpoint circle the Alarm Bells' flag draws), centred on (x, y). */
+static void panel_map_draw_ring(int32_t center_x, int32_t center_y, int32_t radius, TbPixel col, int units_per_px)
+{
+    if (radius <= 1)
+        return;
+    int sy = radius;
+    int sx;
+    int i = 3 - 2 * radius;
+    for (sx = 0; sx < sy; sx++)
+    {
+        panel_map_draw_circle_points(center_x, center_y, sx, sy, col);
+        if (i >= 0)
+        {
+            i += 4 * (sx - sy) + 10*units_per_px/16;
+            sy--;
+        } else
+        {
+            i += 4 * (sx - 1) + 10*units_per_px/16;
+        }
+    }
+    if (sy == sx)
+        panel_map_draw_circle_points(center_x, center_y, sx, sy, col);
+}
+
+/* Endless worlds: the local keeper's expeditions (world_expedition.c): three red dots each, a red Call to Arms ring
+   going out from its place again and again (as the Alarm Bells' flag), and the query mode's question mark on what
+   they found. Only that keeper sees them. */
+static void draw_overlay_expeditions(const struct MinimapOverlay *ov, int32_t units_per_px)
+{
+    if (ov->player == &local_observer_player)
+        return;
+    static struct WorldExpeditionView view;
+    world_expedition_view(ov->player->id_number, &view);
+    if (view.dots + view.pings + view.marks == 0)
+        return;
+    const TbPixel red = world_expedition_colour();
+    const struct PowerConfigStats *ctast = get_power_model_stats(PwrK_CALL2ARMS);
+    float circle_time = (float)(get_gameturn() & 7);
+    if ((game.operation_flags & GOF_Paused) == 0)
+        circle_time += local_state.process_turn_time;
+    for (int i = 0; i < view.pings; i++)
+    {
+        MapCoord x = view.ping_x[i], y = view.ping_y[i];
+        map_to_minimap(&x, &y, ov->cam, ov->zoom);
+        const int64_t cscale = (int64_t)(circle_time * ctast->strength[0]);
+        panel_map_draw_ring(x + ov->basepos, y + ov->basepos, (int32_t)(((cscale >> 3) << 8) / ov->zoom), red, units_per_px);
+    }
+    for (int i = 0; i < view.dots; i++)
+    {
+        MapCoord x = view.dot_x[i], y = view.dot_y[i];
+        map_to_minimap(&x, &y, ov->cam, ov->zoom);
+        panel_map_draw_creature_dot(x + ov->basepos, y + ov->basepos, red, ov->basic_zoom, ov->is_low_res);
+    }
+    const unsigned char *qidx, *qmask;
+    int qw, qh;
+    world_expedition_qmark_bitmap(&qidx, &qmask, &qw, &qh);
+    const int px = max(1, (units_per_px * 3 / 4 + 8) / 16); /* minimap pixels a pixel of the mark */
+    for (int i = 0; i < view.marks; i++)
+    {
+        MapCoord x = view.mark_x[i], y = view.mark_y[i];
+        map_to_minimap(&x, &y, ov->cam, ov->zoom);
+        const int32_t left = x + ov->basepos - qw * px / 2, top = y + ov->basepos - qh * px / 2;
+        for (int qy = 0; qy < qh; qy++)
+            for (int qx = 0; qx < qw; qx++)
+            {
+                if (!qmask[qy * qw + qx])
+                    continue;
+                for (int dy = 0; dy < px; dy++)
+                    for (int dx = 0; dx < px; dx++)
+                        panel_map_draw_pixel(left + qx * px + dx, top + qy * px + dy, qidx[qy * qw + qx]);
+            }
+    }
+}
+
 void panel_map_draw_overlay_things(int32_t units_per_px, int32_t scaled_zoom, int32_t basic_zoom)
 {
     SYNCDBG(7,"Starting");
@@ -470,6 +545,7 @@ void panel_map_draw_overlay_things(int32_t units_per_px, int32_t scaled_zoom, in
     draw_overlay_things_of_class(TCls_Trap, draw_overlay_trap, &ov);
     draw_overlay_things_of_class(TCls_Creature, draw_overlay_creature, &ov);
     draw_overlay_things_of_class(TCls_Object, draw_overlay_spell_or_box, &ov);
+    draw_overlay_expeditions(&ov, units_per_px); /* endless worlds: the Expedition spell */
     draw_line_to_heart(&ov);
 }
 

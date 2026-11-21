@@ -67,6 +67,7 @@
 #include "world_misdeeds.h"
 #include "world_boss.h"
 #include "world_truce.h"
+#include "world_expedition.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -102,6 +103,7 @@ static TbResult magic_use_power_obey         (PowerKind power_kind, PlayerNumber
 static TbResult magic_use_power_hold_audience(PowerKind power_kind, PlayerNumber plyr_idx, struct Thing *thing, MapSubtlCoord stl_x, MapSubtlCoord stl_y, KeepPwrLevel power_level, unsigned long mod_flags);
 static TbResult magic_use_power_armageddon   (PowerKind power_kind, PlayerNumber plyr_idx, struct Thing *thing, MapSubtlCoord stl_x, MapSubtlCoord stl_y, KeepPwrLevel power_level, unsigned long mod_flags);
 static TbResult magic_use_power_tunneller    (PowerKind power_kind, PlayerNumber plyr_idx, struct Thing *thing, MapSubtlCoord stl_x, MapSubtlCoord stl_y, KeepPwrLevel power_level, unsigned long mod_flags);
+static TbResult magic_use_power_expedition   (PowerKind power_kind, PlayerNumber plyr_idx, struct Thing *thing, MapSubtlCoord stl_x, MapSubtlCoord stl_y, KeepPwrLevel power_level, unsigned long mod_flags);
 
 typedef TbResult (*Magic_use_Func)(PowerKind power_kind, PlayerNumber plyr_idx, struct Thing *thing, MapSubtlCoord stl_x, MapSubtlCoord stl_y, KeepPwrLevel power_level, unsigned long mod_flags);
 
@@ -121,6 +123,7 @@ const Magic_use_Func magic_use_func_list[] = {
      &magic_use_power_hold_audience,
      &magic_use_power_armageddon,
      &magic_use_power_tunneller,
+     &magic_use_power_expedition,
 };
 /******************************************************************************/
 
@@ -1354,6 +1357,12 @@ static TbResult magic_use_power_imp(PowerKind power_kind, PlayerNumber plyr_idx,
     thing_play_sample(thing, powerst->select_sound_idx, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
     play_creature_sound(thing, CrSnd_Happy, 2, 0);
     return Lb_SUCCESS;
+}
+
+/** Endless worlds: the Expedition spell (world_expedition.c pays for it, once it knows three Imps can go). */
+static TbResult magic_use_power_expedition(PowerKind power_kind, PlayerNumber plyr_idx, struct Thing *thing, MapSubtlCoord stl_x, MapSubtlCoord stl_y, KeepPwrLevel power_level, unsigned long mod_flags)
+{
+    return world_expedition_cast_at_subtile(plyr_idx, stl_x, stl_y, (mod_flags & PwMod_CastForFree) != 0);
 }
 
 static TbResult magic_use_power_tunneller(PowerKind power_kind, PlayerNumber plyr_idx, struct Thing *thing, MapSubtlCoord stl_x, MapSubtlCoord stl_y, KeepPwrLevel power_level, unsigned long mod_flags)

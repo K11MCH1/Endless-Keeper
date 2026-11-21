@@ -50,6 +50,7 @@
 #include "keeperfx.hpp"
 #include "custom_sprites.h"
 #include "sprites.h"
+#include "world_expedition.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -335,7 +336,9 @@ TbBool set_pointer_graphic_spell(long spridx, long frame)
   {
       spr = get_new_icon_sprite(i);
       SYNCDBG(8,"Activating pointer %ld", i);
-      LbMouseChangeSpriteAndHotspot(spr, x/2, y/2);
+      long hot_x = x/2, hot_y = y/2;
+      world_expedition_pointer_hotspot(i, &hot_x, &hot_y); /* endless worlds: the Expedition's pointer, by its middle */
+      LbMouseChangeSpriteAndHotspot(spr, hot_x, hot_y);
   }
   else
   {

@@ -118,6 +118,7 @@
 #include "world_watchfire.h"
 #include "world_keeper_panel.h"
 #include "world_fill.h"
+#include "world_expedition.h"
 #include "post_inc.h"
 
 /* the double-click arrays (frontend.h) are indexed by user: one for every packet */
@@ -905,6 +906,10 @@ TbBool process_user_global_packet_action(NetUserId user)
   case PckA_WorldMisdeedPick:
       if (!netstate_thin_mode() || network_is_host())
           world_misdeeds_packet_pick(plyr_idx, (ThingIndex)pckt->actn_par1, (int)pckt->actn_par2);
+      return 1;
+  case PckA_WorldExpedition:
+      if (!netstate_thin_mode() || network_is_host())
+          world_expedition_packet(plyr_idx, (int32_t)pckt->actn_par1, (int32_t)pckt->actn_par2);
       return 1;
   case PckA_WorldKeeperPanel:
       /* the Keeper panel: migrate, call it off, portrait, reset (game state: the server, or every lockstep machine) */

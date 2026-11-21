@@ -395,6 +395,10 @@ struct Game {
      *  marks were last all done (the panel's meter). Here so that a thin client draws the marks. */
     struct WorldFillMark world_fill[WORLD_FILL_MAX];
     uint16_t world_fill_done[PLAYERS_MAX];
+    /** Endless worlds (2026-11-21): the Expedition spell's expeditions and the places they found (world_expedition.c).
+     *  Here so that a thin client draws the dots, the ping and the question marks. */
+    struct WorldExpedition world_expedition[PLAYERS_MAX][WORLD_EXPEDITIONS_MAX];
+    struct WorldExpeditionMark world_expedition_mark[PLAYERS_MAX][WORLD_EXPEDITION_MARKS];
     /** Endless worlds (2026-11-09): each player's rooms and spells with levels (Lair, Hatchery, Library, Training Room;
      *  Create Imp, Sight of Evil, Speed Monster, Conceal Monster, Heal, Lightning Strike, Protect Monster): the level
      *  researched and the level duplicate books allow (0 counts as 1; saved with the world's progress, PRG1). */

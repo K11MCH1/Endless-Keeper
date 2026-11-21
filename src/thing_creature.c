@@ -117,6 +117,7 @@
 #include "world_caretaker.h"
 #include "world_sword.h"
 #include "world_hand.h"
+#include "world_expedition.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2421,6 +2422,15 @@ void update_creature_count(struct Thing *creatng)
         return;
     }
     if (is_hero_thing(creatng) || is_neutral_thing(creatng)) {
+        return;
+    }
+    /* endless worlds: an Imp away on an expedition is counted, but can't be picked up (as an Imp kept in an enemy's
+       prison: world_expedition.c) */
+    if (world_expedition_imp(creatng))
+    {
+        struct Dungeon* exdungeon = get_players_num_dungeon(creatng->owner);
+        if (!dungeon_invalid(exdungeon))
+            exdungeon->crmodel_state_type_count[creatng->model][get_creature_state_type(creatng)]++;
         return;
     }
     if (thing_is_picked_up(creatng) || creature_is_being_unconscious(creatng)) {

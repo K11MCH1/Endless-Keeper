@@ -26,6 +26,7 @@
 #include "world_colours.h"
 #include <algorithm>
 #include <cstring>
+#include "sprite_recolour.h"
 #include "post_inc.h"
 
 static constexpr int k_kspr_decode_dim = 256;
@@ -580,6 +581,7 @@ float VkWorldViewRenderer::resolve_clut_v(const unsigned char* remap)
         row_data[ci*4+2] = RendererPaletteChannel8(m_rt_palette[ri*3+2]);
         row_data[ci*4+3] = 255;
     }
+    sprite_recolour_row_pal6(remap, m_rt_palette, row_data); /* Endless: a registered recolour in true colour */
     // a new row: nothing drawn earlier this frame reads it
     m_vk->core->UploadImage(*clut, 0, row_idx, 0, 256, 1, row_data, sizeof(row_data), 4);
     std::array<uint8_t, 256> remap_copy;

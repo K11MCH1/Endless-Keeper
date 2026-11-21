@@ -64,6 +64,29 @@ struct WorldFillMark {
     int32_t check_turn;   /* when "blocked" was last worked out (while an Imp walks to it: when it set off) */
 };
 
+/** The Expedition spell (world_expedition.c): three Imps away towards a place. Kept in struct Game (a thin client draws
+ *  the dots and the ping) and in the world save (EXP1). Places are world slabs. */
+#define WORLD_EXPEDITIONS_MAX 8 /* at once, per keeper */
+struct WorldExpedition {
+    uint8_t used;
+    uint8_t reserved[3];
+    int32_t from_x, from_y; /* where the dots set off: the dungeon's outermost slab on the line towards the place */
+    int32_t to_x, to_y;     /* the place */
+    int32_t start_turn;     /* when they set off */
+    int32_t walk_turns;     /* turns from there to the place */
+    uint16_t imp[3];        /* the Imps away (thing index) */
+    uint16_t reserved2;
+    int32_t imp_made[3];    /* and their creation turns (an index can be used again) */
+};
+/** A place an expedition found (a question mark on the keeper's maps until the keeper's view reaches it). */
+#define WORLD_EXPEDITION_MARKS 64 /* per keeper */
+struct WorldExpeditionMark {
+    int32_t x, y;  /* the world slab */
+    uint8_t used;
+    uint8_t kind;  /* WExF_* (world_expedition.c) */
+    uint16_t reserved;
+};
+
 #pragma pack()
 
 #ifdef __cplusplus

@@ -3507,6 +3507,8 @@ static void wb_mouse_test(void)
             if (((b->flags & LbBtnF_Active) == 0) || !check_if_pos_is_over_button(b, x, y))
                 continue;
             const size_t len = strlen(under);
+            if (len + 40 >= sizeof(under))
+                break;
             snprintf(under + len, sizeof(under) - len, " #%d(menu %d, value %ld, flags %02x)", i, (int)b->gmenu_idx,
                 ((b->draw_call == wb_flat_button) || (b->draw_call == wb_scroll_draw)) ? b->content.lval : -1L,
                 (unsigned)b->flags);
@@ -3681,9 +3683,10 @@ void world_boss_local_turn(void)
                 (abs((int)subtile_slab(c->mappos.y.stl.num) - (int)ay) < 20))
                 crs++;
         }
+        const int cam_sx = user_state_invalid(ustate) ? -1 : (int)(ustate->dungeon_camera.x / COORD_PER_STL / 3);
+        const int cam_sy = user_state_invalid(ustate) ? -1 : (int)(ustate->dungeon_camera.y / COORD_PER_STL / 3);
         SYNCLOG("World boss test: this machine: the arena's page %s (its middle at slab (%d,%d)), %d creatures in it, camera "
-            "at slab (%d,%d)", page ? "here" : "missing", (int)ax, (int)ay, crs, (int)(ustate->dungeon_camera.x / COORD_PER_STL / 3),
-            (int)(ustate->dungeon_camera.y / COORD_PER_STL / 3));
+            "at slab (%d,%d)", page ? "here" : "missing", (int)ax, (int)ay, crs, cam_sx, cam_sy);
     }
     was_at_fight = at_fight;
 }

@@ -121,6 +121,14 @@ _UKR = """Спостерігач приєднався до вас. Ці вели
 # Endless Keeper: name of a room (the Fill room)
 ENG = "Fill"
 
+[ENDLESS_EXPEDITION_NAME]
+# Endless Keeper: name of a keeper spell (Expedition)
+ENG = "Expedition"
+
+[ENDLESS_EXPEDITION_TOOLTIP]
+# Endless Keeper: the Expedition spell's tooltip
+ENG = "Expedition: 3 Imps scout towards the place you point at, on the map or the full map, and mark what they find with a question mark. Costs 10,000 gold."
+
 [ENDLESS_FILL_TOOLTIP]
 # Endless Keeper: the Fill room's tooltip
 ENG = "Fill: your Imps fill the marked floor with earth walls. Costs 30 gold per tile. Sell Room takes marks away (no gold back)."

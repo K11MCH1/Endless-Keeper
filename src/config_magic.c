@@ -446,6 +446,7 @@ const struct NamedCommand magic_use_func_commands[] = {
     {"magic_use_power_hold_audience", 12},
     {"magic_use_power_armageddon",    13},
     {"magic_use_power_tunneller",     14},
+    {"magic_use_power_expedition",    15}, /* endless worlds: the Expedition spell (world_expedition.c) */
     {NULL,                             0},
 };
 

@@ -37,6 +37,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include "world_colours.h"
+#include "sprite_recolour.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -1815,6 +1816,7 @@ float GLWorldViewRenderer::resolve_clut_v(const unsigned char* remap)
         row_data[ci*4+2] = RendererPaletteChannel8(m_rt_palette[ri*3+2]);
         row_data[ci*4+3] = 255;
     }
+    sprite_recolour_row_pal6(remap, m_rt_palette, row_data); /* Endless: a registered recolour in true colour */
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, clut_tex->id);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, row_idx, 256, 1,

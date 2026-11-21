@@ -371,11 +371,16 @@ static struct Thing *al_hero(const char *name, MapSlabCoord x, MapSlabCoord y, i
     struct Thing *thing = create_thing_at_position_then_move_to_valid_and_add_light(&pos, TCls_Creature, model, PLAYER_GOOD);
     if (thing_is_invalid(thing))
         return INVALID_THING;
+    struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    if (creature_control_invalid(cctrl))
+    {
+        delete_thing_structure(thing, 0);
+        return INVALID_THING;
+    }
     thing->mappos.z.val = get_ceiling_height(&thing->mappos);
     create_effect(&thing->mappos, TngEff_CeilingBreach, thing->owner);
     initialise_thing_state(thing, CrSt_CreatureHeroEntering);
     set_flag(thing->rendering_flags, TRF_Invisible);
-    struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
     cctrl->countdown = 24 + 8 * k;
 #ifdef CREATURE_MAX_LEVEL_LIMIT
     const int cap = CREATURE_MAX_LEVEL_LIMIT;
@@ -410,7 +415,8 @@ static void al_raise_flag(MapSlabCoord x, MapSlabCoord y)
     al_flag_idx = flag->index;
     al_flag_until = game.play_gameturn + AL_FLAG_TURNS;
     struct PowerConfigStats *powerst = get_power_model_stats(PwrK_CALL2ARMS);
-    thing_play_sample(flag, powerst->select_sound_idx, NORMAL_PITCH, 0, 3, 0, 6, FULL_LOUDNESS);
+    if (powerst != NULL)
+        thing_play_sample(flag, powerst->select_sound_idx, NORMAL_PITCH, 0, 3, 0, 6, FULL_LOUDNESS);
     SYNCLOG("World alarm: the heroes' flag (thing %d) flies over the seam at engine slab (%d,%d)", (int)flag->index,
         (int)x, (int)y);
 }
@@ -452,6 +458,11 @@ static void al_fire_stage(struct AlEntry *e)
     for (int k = 0; k < AL_KINDS; k++)
         if (depth >= al_kinds[k].from)
             kinds[nk++] = al_kinds[k].name;
+    if (nk <= 0)
+    {
+        kinds[0] = "THIEF";
+        nk = 1;
+    }
     const int stage = e->stage;
     if (stage == 0)
         al_raise_flag(seam_x, seam_y); /* the warning: flag and horn on the seam; the heroes come from far off */
@@ -476,6 +487,11 @@ static void al_fire_stage(struct AlEntry *e)
         if (thing_is_invalid(h))
             continue;
         struct CreatureControl *cctrl = creature_control_get_from_thing(h);
+        if (creature_control_invalid(cctrl))
+        {
+            delete_thing_structure(h, 0);
+            continue;
+        }
         cctrl->party.target_plyr_idx = p;
         cctrl->party.objective = (stage == 1) ? CHeroTsk_StealGold : (stage == 2) ? CHeroTsk_AttackDnHeart : CHeroTsk_AttackEnemies;
         if (thing_is_invalid(leader))

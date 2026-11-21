@@ -72,6 +72,7 @@
 #include "custom_sprites.h"
 #include "keeperfx.hpp"
 #include "world_misdeeds.h"
+#include "world_expedition.h"
 #include "world_curtain.h"
 #include "world_stream.h"
 #include "post_inc.h"
@@ -864,6 +865,10 @@ void process_pointer_graphic(void)
           set_pointer_graphic(MousePG_Invisible);
         break;
     case PVT_MapScreen:
+        if (world_expedition_map_pointer()) /* endless worlds: the Expedition chosen: its pointer over the full map */
+            break;
+        set_pointer_graphic(MousePG_Arrow);
+        break;
     case PVT_MapFadeIn:
     case PVT_MapFadeOut:
         set_pointer_graphic(MousePG_Arrow);

@@ -212,6 +212,7 @@ enum TbPacketAction {
         PckA_WorldBossJoin,      /* endless world: join a World Boss fight (four thing indexes, two in par1, two in par2) */
         PckA_WorldWatchfire,     /* endless world: set a watchfire down at subtile (par1, par2) (world_watchfire.c) */
         PckA_WorldKeeperPanel,   /* endless world: the Keeper panel (what in par1's top 4 bits; world_keeper_panel.c) */
+        PckA_WorldExpedition,    /* endless world: the Expedition spell cast from the full map, at world slab (par1, par2) */
 };
 
 /** Packet flags for non-action player operation. **/

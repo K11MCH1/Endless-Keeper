@@ -98,6 +98,7 @@
 void KfxAndroidNotePacket(const struct Packet *pckt); /* android/native/TouchBridge.cpp */
 #endif
 #include "world_keeper_panel.h"
+#include "world_expedition.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2272,6 +2273,9 @@ static short get_map_action_inputs(void)
         }
         if (left_button_released) {
             left_button_released = 0;
+            /* endless worlds: with the Expedition spell chosen, a click on the full map sends it there */
+            if (world_valid && world_expedition_map_click(stl_x, stl_y))
+                return true;
             set_players_packet_action(player, PckA_ZoomFromMap, stl_x, stl_y, 0, 0);
             return true;
         }

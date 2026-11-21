@@ -94,6 +94,7 @@
 #include "world_defectors.h"
 #include "world_wallbreak.h"
 #include "world_fill.h"
+#include "world_expedition.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -315,6 +316,7 @@ const struct NamedCommand process_func_commands[] = {
     {"creature_save_unconscious_creature",         136},
     {"imp_arrives_at_fill",                        137}, /* endless worlds: the Fill room (world_fill.c) */
     {"imp_fills",                                  138},
+    {"imp_on_expedition",                          139}, /* endless worlds: the Expedition spell (world_expedition.c) */
     {NULL,                                           0},
 };
 
@@ -458,6 +460,7 @@ const CreatureStateFunc1 process_func_list[] = {
     creature_save_unconscious_creature,
     imp_arrives_at_fill,
     imp_fills,
+    imp_on_expedition,
 };
 
 const struct NamedCommand cleanup_func_commands[] = {

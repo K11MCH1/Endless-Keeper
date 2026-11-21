@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstring>
 #include <unordered_set>
+#include "sprite_recolour.h"
 #include "post_inc.h"
 
 namespace {
@@ -298,6 +299,8 @@ int GLUIRenderer::resolve_clut_row(const unsigned char* cmap)
             m_frame_palette ? m_frame_palette[palette_index * 4 + 2] : 255;
         row[i * 4 + 3] = 255;
     }
+    if (m_frame_palette)
+        sprite_recolour_row_rgba(cmap, m_frame_palette, row); /* Endless: a registered recolour in true colour */
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, clut_tex->id);

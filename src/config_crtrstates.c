@@ -31,6 +31,7 @@
 #include "config_creature.h"
 #include "creature_states.h"
 #include "world_fill.h"
+#include "world_expedition.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -183,6 +184,7 @@ static TbBool load_creaturestates_config_file(const char *fname, unsigned short 
     // Parse blocks of the config file
     parse_named_field_blocks(buf, len, fname, flags, &crstates_states_named_fields_set);
     world_fill_states_fallback(); /* endless worlds: the Fill room's two states, should the file lack them */
+    world_expedition_states_fallback(); /* and the Expedition's Imps' state */
 
     //Freeing and exiting
     KfxFree(buf);
