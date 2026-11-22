@@ -68,6 +68,7 @@
 #include "local_camera.h"
 #include "world_attract.h"
 #include "chat_box.h"
+#include "net_matchmaking.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -337,6 +338,7 @@ void world_menu_test_tick(void)
     }
     case 'O':
         /* the network service screen: online service and a new session, as -server does */
+        matchmaking_endless_session = true;
         if (setup_network_service(FrontendNetSvc_Online))
         {
             frontnet_service_setup();
@@ -992,6 +994,7 @@ static void wl_join(const char *address)
     wnet_menu_close();
     LbNetwork_ClearCmdLineSessions();
     LbNetwork_InitSessionsFromCmdLine(addr);
+    matchmaking_endless_session = true; /* Endless Mode's own hub: KeeperFX's lobby server is left alone */
     if (!setup_network_service(FrontendNetSvc_Online))
     {
         wl_back_to_list();

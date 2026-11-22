@@ -1,3 +1,4 @@
+/** @file net_lan.c: LAN game discovery over UDP broadcast on LAN_DISCOVERY_PORT: hosts answer, the lobby lists the sessions it hears (lan_sessions). */
 #include "pre_inc.h"
 #include "net_lan.h"
 #include "net_lobby.h"
@@ -212,6 +213,8 @@ void lan_service(void)
                 snprintf(entry->session.version, sizeof(entry->session.version), "%s", "1.4.0");
             }
             entry->last_seen_milliseconds = now;
+            /* only Endless Keeper's games of this release are listed (net_main.h) */
+            entry->session.in_use = net_session_version_is_ours(entry->session.version);
         }
     }
 }
@@ -225,6 +228,8 @@ void lan_refresh_sessions(void)
         if (now - session_cache[i].last_seen_milliseconds > LAN_SESSION_TIMEOUT_MS)
             continue;
         session_cache[write_index++] = session_cache[i];
+        if (!session_cache[i].session.in_use)
+            continue; /* another game's, or another release's: heard, not listed */
         struct TbNetworkSessionNameEntry *entry = &lan_sessions[lan_session_count++];
         *entry = session_cache[i].session;
         entry->id = lan_session_count;

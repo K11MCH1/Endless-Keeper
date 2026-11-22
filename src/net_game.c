@@ -1139,6 +1139,7 @@ TbBool network_open_running_game(void)
     }
     /* no stock service: an endless world isn't put on KeeperFX's public list or the LAN; the world list has it */
     net_service_index_selected = FrontendNetSvc_None;
+    matchmaking_endless_session = true;
     if (net_player_name[0] == '\0') {
         snprintf(net_player_name, sizeof(net_player_name), "%s", net_config_info.net_player_name);
     }

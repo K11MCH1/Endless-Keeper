@@ -60,6 +60,15 @@ TbBool matchmaking_enabled = false;
 char matchmaking_ws_url[MATCHMAKING_URL_MAX] = "";
 char matchmaking_ip_url[MATCHMAKING_URL_MAX] = "";
 #endif
+/* Endless Mode's multiplayer (the World List, an endless world open to the network) has its own section and hub:
+   while it is set up, the lobby server is left alone - nothing is listed, made or punched there (the user,
+   2026-11-22). The original game's Multiplayer menu clears it. */
+TbBool matchmaking_endless_session = false;
+
+static TbBool matchmaking_active(void)
+{
+    return matchmaking_enabled && !matchmaking_endless_session;
+}
 
 static CURL *curl_handle = NULL;
 static char hosted_lobby_id[MATCHMAKING_ID_MAX] = {0};
@@ -328,7 +337,7 @@ static int websocket_exchange(const char *request, const char *expected_type, VA
 
 int matchmaking_request_list(void)
 {
-    if (!matchmaking_enabled || !mutex) {
+    if (!matchmaking_active() || !mutex) {
         return 0;
     }
     SDL_LockMutex(mutex);
@@ -435,7 +444,7 @@ static int matchmaking_connect_thread(void *request)
 
 void matchmaking_connect_async(void)
 {
-    if (!matchmaking_enabled) {
+    if (!matchmaking_active()) {
         return;
     }
     matchmaking_init();
@@ -502,6 +511,10 @@ static void read_lobbies(const VALUE *message)
         if (!id || !name || !*id || strlen(id) >= SESSION_LOBBY_ID_MAX_LEN || strcmp(id, hosted_lobby_id) == 0) {
             continue;
         }
+        /* only Endless Keeper's lobbies of this release: KeeperFX's, and other Endless releases', aren't shown */
+        if (!net_session_version_is_ours(value_string(value_dict_get(lobby, "version")))) {
+            continue;
+        }
         struct TbNetworkSessionNameEntry *session = &listed_sessions[listed_session_count++];
         memset(session, 0, sizeof(*session));
         session->in_use = 1;
@@ -535,7 +548,7 @@ static int matchmaking_create_thread(void *previous_thread)
 
 int matchmaking_create(const char *udp_ipv4, int udp_ipv4_port, int udp_ipv6_port, int direct_ipv4_port)
 {
-    if (!matchmaking_enabled) {
+    if (!matchmaking_active()) {
         return 0;
     }
     matchmaking_init();
@@ -561,7 +574,7 @@ int matchmaking_punch(const char *lobby_id, const char *udp_ipv4, int udp_ipv4_p
     if (net_join_role == NetRole_Spectator) {
         role = "spectator";
     }
-    if (!matchmaking_enabled || !mutex) {
+    if (!matchmaking_active() || !mutex) {
         return -1;
     }
     char request[SEND_BUFFER_SIZE];
@@ -593,7 +606,7 @@ int matchmaking_punch(const char *lobby_id, const char *udp_ipv4, int udp_ipv4_p
 
 void matchmaking_service(void)
 {
-    if (!matchmaking_enabled || !mutex) {
+    if (!matchmaking_active() || !mutex) {
         return;
     }
     struct LobbyAdvertisement advertisement;
@@ -640,6 +653,10 @@ void matchmaking_service(void)
 
 void matchmaking_refresh_sessions(void)
 {
+    if (matchmaking_endless_session) {
+        matchmaking_session_count = 0;
+        return;
+    }
     if (!mutex || !SDL_TryLockMutex(mutex)) {
         return;
     }
@@ -650,7 +667,7 @@ void matchmaking_refresh_sessions(void)
 
 int matchmaking_poll_punch(PunchAddresses *output)
 {
-    if (!mutex || !SDL_TryLockMutex(mutex)) {
+    if (!matchmaking_active() || !mutex || !SDL_TryLockMutex(mutex)) {
         return 0;
     }
     int result = 0;

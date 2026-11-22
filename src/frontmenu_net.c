@@ -49,6 +49,7 @@
 #include "net_exchange_common.h"
 #include "net_lobby.h"
 #include "packets.h"
+#include "net_matchmaking.h"
 #include "post_inc.h"
 
 static int32_t lobby_chat_text_width;
@@ -574,6 +575,8 @@ void frontnet_service_select(struct GuiButton *gbtn)
       frontend_set_state(FeSt_NET_SERVICE);
   } else
   {
+      /* the original game's Multiplayer menu: KeeperFX's lobby server may be used (Endless Mode's has its own) */
+      matchmaking_endless_session = false;
       setup_network_service(srvidx);
   }
 }

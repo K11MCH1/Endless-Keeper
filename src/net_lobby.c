@@ -86,7 +86,8 @@ void net_lobby_refresh_metadata(void)
     advertised_rejoin_open = session.rejoin_open;
     session.max_spectators = MAX_NET_SPECTATORS;
     session.spectator_count = net_lobby_spectator_count();
-    snprintf(session.version, sizeof(session.version), "%d.%d.%d.%d", VER_MAJOR, VER_MINOR, VER_RELEASE, VER_BUILD);
+    /* "1.4.0.5593 Endless 15": KeeperFX shows (and its lobby server matches) the numbers before the space */
+    net_endless_version_text(session.version, sizeof(session.version));
     struct LevelInformation *level = get_level_info(get_selected_level_number());
     if (netstate.locked && level) {
         session.max_players = min(session.max_players, max(level->players, 2));

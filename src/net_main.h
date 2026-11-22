@@ -23,6 +23,8 @@
 #include "bflib_netsession.h"
 #include "user_prefs.h"
 #include "ver_defs.h"
+#include <stdio.h>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -288,6 +290,28 @@ static inline TbBool net_versions_match(const struct GameVersionPacket *version_
         (version_a->minor == version_b->minor) &&
         (version_a->release == version_b->release) &&
         (version_a->build == version_b->build);
+}
+
+/* Endless Keeper's own mark on its multiplayer games: every release reports KeeperFX's version numbers, so a
+   lobby (KeeperFX's lobby server, the LAN) and a login also carry "Endless <release>". Endless Keeper lists and
+   lets in only games of its own release, and KeeperFX's own games are never let in, whatever their version. */
+#ifndef ENDLESS_RELEASE
+#define ENDLESS_RELEASE ""
+#endif
+#define NET_ENDLESS_TAG "Endless " ENDLESS_RELEASE
+
+/** The version text a lobby carries: "1.4.0.5593 Endless 15". */
+static inline void net_endless_version_text(char *output, size_t size)
+{
+    snprintf(output, size, "%d.%d.%d.%d %s", VER_MAJOR, VER_MINOR, VER_RELEASE, VER_BUILD, NET_ENDLESS_TAG);
+}
+
+/** A listed lobby is one this game may show and join: Endless Keeper of the same release. */
+static inline TbBool net_session_version_is_ours(const char *version)
+{
+    char own[64];
+    net_endless_version_text(own, sizeof(own));
+    return (version != NULL) && (strcmp(version, own) == 0);
 }
 
 TbError LbNetwork_Init(uint32_t srvcindex, uint32_t maxplayrs, struct TbNetworkUserInfo *locplayr, struct ServiceInitData *init_data);

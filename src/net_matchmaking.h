@@ -43,6 +43,7 @@ typedef struct {
 
 extern struct TbNetworkSessionNameEntry matchmaking_sessions[MATCHMAKING_SESSIONS_MAX];
 extern TbBool matchmaking_enabled;
+extern TbBool matchmaking_endless_session;
 extern char matchmaking_ws_url[MATCHMAKING_URL_MAX];
 extern char matchmaking_ip_url[MATCHMAKING_URL_MAX];
 extern int matchmaking_session_count;
