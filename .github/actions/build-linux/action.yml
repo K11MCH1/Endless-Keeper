@@ -1,0 +1,83 @@
+name: Build the Endless Keeper Linux archive
+description: >
+  Installs what the native Linux build needs and builds Endless Keeper's Linux (x86_64) archive with
+  installer/make-linux-package.sh: keeperfx and keeperfx_hvlog with their libraries in lib/, and the game data.
+  Run it on ubuntu-24.04: the archive runs on systems with the same or a newer glibc (2.39).
+inputs:
+  output:
+    description: Where the archive (.tar.gz) goes
+    default: pkg/endless-keeper-linux_x86_64.tar.gz
+  release:
+    description: Endless Keeper's release number, for the main menu (empty = "dev")
+    default: ''
+  stage:
+    description: The release's stage (Alpha, Beta, Stable; empty = Alpha)
+    default: ''
+runs:
+  using: composite
+  steps:
+    # As in build-package: the packages are kept in the Actions cache (Ubuntu's mirror was at times very slow for the
+    # runners). SDL3 is not packaged for Ubuntu 24.04, so CMake builds it from source; most of these are its build
+    # dependencies (X11, Wayland, GL, audio, image and sound decoders). patchelf is for the library bundle.
+    - name: Build tools (what they need)
+      id: tools
+      shell: bash
+      run: |
+        set -euo pipefail
+        pkgs="build-essential cmake ninja-build pkg-config patchelf python3 libpng-dev \
+          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev \
+          libopenal-dev libluajit-5.1-dev libminizip-dev libnatpmp-dev \
+          libspng-dev libminiupnpc-dev libssl-dev libzstd-dev zlib1g-dev \
+          wayland-protocols libwayland-dev libdecor-0-dev \
+          libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+          libxfixes-dev libxss-dev libxtst-dev libxkbcommon-dev \
+          libgl1-mesa-dev libegl1-mesa-dev libdrm-dev libgbm-dev \
+          libasound2-dev libpulse-dev libdbus-1-dev libudev-dev \
+          libjpeg-dev libogg-dev libvorbis-dev libflac-dev libmpg123-dev libopusfile-dev"
+        pkgs=$(echo $pkgs)
+        echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
+        sudo apt-get update -q
+        sudo apt-get install -y -qq --print-uris $pkgs | grep "^'" | sort > "$RUNNER_TEMP/linux-tools-uris.txt" || true
+        echo "$(wc -l < "$RUNNER_TEMP/linux-tools-uris.txt") packages to install"
+        echo "key=linux-build-tools-${{ runner.os }}-${{ runner.arch }}-$(sha256sum "$RUNNER_TEMP/linux-tools-uris.txt" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+    - name: Build tools from the cache
+      id: tools-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/linux-build-tools-debs
+        key: ${{ steps.tools.outputs.key }}
+        restore-keys: linux-build-tools-${{ runner.os }}-${{ runner.arch }}-
+    - name: Build tools
+      shell: bash
+      run: |
+        set -euo pipefail
+        debs="$HOME/linux-build-tools-debs"
+        mkdir -p "$debs/partial"
+        echo "$(find "$debs" -maxdepth 1 -name '*.deb' | wc -l) packages from the cache"
+        sudo apt-get install -y -q -o Dir::Cache::archives="$debs" ${{ steps.tools.outputs.pkgs }} > /dev/null
+        sudo chown -R "$(id -u):$(id -g)" "$debs"
+        awk '{print $2}' "$RUNNER_TEMP/linux-tools-uris.txt" > "$RUNNER_TEMP/linux-tools-keep.txt"
+        for f in "$debs"/*.deb; do
+          [ -e "$f" ] || continue
+          grep -qxF "$(basename "$f")" "$RUNNER_TEMP/linux-tools-keep.txt" || rm -f "$f"
+        done
+        rm -rf "$debs/partial" "$debs/lock"
+    - name: Build tools into the cache
+      if: steps.tools-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/linux-build-tools-debs
+        key: ${{ steps.tools.outputs.key }}
+    - name: Downloads that retry
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/curl-retry"
+        printf '#!/bin/sh\nexec /usr/bin/curl --retry 12 --retry-delay 20 --retry-connrefused "$@"\n' > "$RUNNER_TEMP/curl-retry/curl"
+        chmod +x "$RUNNER_TEMP/curl-retry/curl"
+        echo "$RUNNER_TEMP/curl-retry" >> "$GITHUB_PATH"
+    - name: Linux archive
+      shell: bash
+      env:
+        ENDLESS_RELEASE: ${{ inputs.release }}
+        ENDLESS_STAGE: ${{ inputs.stage }}
+      run: installer/make-linux-package.sh "${{ inputs.output }}"

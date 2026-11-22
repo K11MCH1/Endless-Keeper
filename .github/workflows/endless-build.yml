@@ -1,5 +1,5 @@
-# Builds the Endless Keeper package and the Android app for every change to main and for pull requests, to show they
-# still build. Nothing is released; both are kept for two weeks as downloads of the run (the APK is signed with a
+# Builds the Endless Keeper package, the Linux archive and the Android app for every change to main and for pull
+# requests, to show they still build. Nothing is released; both are kept for two weeks as downloads of the run (the APK is signed with a
 # throwaway key, so it can't update an installed app).
 name: Build
 
@@ -53,6 +53,22 @@ jobs:
         with:
           name: endless-keeper-${{ github.sha }}
           path: pkg/endless-keeper.7z
+          retention-days: 14
+
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/build-linux
+        with:
+          release: ${{ needs.version.outputs.release }}
+          stage: ${{ needs.version.outputs.stage }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: endless-keeper-linux-${{ github.sha }}
+          path: pkg/endless-keeper-linux_x86_64.tar.gz
+          compression-level: 0
           retention-days: 14
 
   android:

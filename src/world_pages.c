@@ -503,7 +503,7 @@ TbBool wp_stl_iter_next(struct WpStlIter *it, MapSubtlCoord *stl_x, MapSubtlCoor
             if (++it->y == WP_CHUNK_STL)
             {
                 /* the next row of chunks: the pages that share the next cy */
-                struct WpSlabIter rows;
+                struct WpSlabIter rows = {0};
                 rows.g = it->e;
                 wp_slab_iter_row(&rows);
                 it->g = rows.g;

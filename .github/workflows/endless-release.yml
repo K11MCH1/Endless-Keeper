@@ -1,8 +1,10 @@
 # Builds and publishes an Endless Keeper release: the package (installer/make-package.sh, on Linux), the setup
-# (Inno Setup, on Windows), the Android app (android/, on Linux) and a GitHub release with all three.
+# (Inno Setup, on Windows), the native Linux archive (installer/make-linux-package.sh), the Android app (android/, on
+# Linux) and a GitHub release with all of them.
 #
 # Names: <KeeperFX stable>-<Endless Keeper release> <stage>, e.g. 1.4.0-4 Alpha: EndlessKeeperSetup-1_4_0-4-Alpha.exe,
-# endless-keeper-1_4_0-4-Alpha-patch.zip and .7z (for an existing Endless Keeper folder), EndlessKeeper-1_4_0-4-Alpha.apk (version 1.4.0-4 Alpha), tag v1.4.0-4-alpha. The
+# endless-keeper-1_4_0-4-Alpha-patch.zip and .7z (for an existing Endless Keeper folder), endless-keeper-1_4_0-4-Alpha-linux_x86_64.tar.gz
+# (Linux, over a KeeperFX 1.4.0 folder), EndlessKeeper-1_4_0-4-Alpha.apk (version 1.4.0-4 Alpha), tag v1.4.0-4-alpha. The
 # KeeperFX version is the setup's base (BaseVersion in installer/endless-keeper.iss); the release number is one more
 # than the highest so far; the stage stays what the last release had unless one is given. Alpha and Beta are
 # published as pre-releases. The game's main menu shows "Endless Keeper <base>-<release> <stage>" over the KeeperFX
@@ -185,6 +187,28 @@ jobs:
           path: apk/
           retention-days: 7
 
+  # a failed Linux build never holds up a release: it goes out without the Linux archive (add it later with the
+  # "Linux build for a release" workflow, endless-linux.yml). Built for the KeeperFX update's releases too (prebuilt),
+  # from the commit it pushed.
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - uses: ./.github/actions/build-linux
+        with:
+          release: ${{ needs.version.outputs.release }}
+          stage: ${{ needs.version.outputs.stage }}
+          output: linux/endless-keeper-${{ needs.version.outputs.file }}-linux_x86_64.tar.gz
+      - uses: actions/upload-artifact@v6
+        with:
+          name: endless-keeper-linux
+          path: linux/
+          compression-level: 0
+          retention-days: 7
+
   setup:
     needs: [version, package]
     if: ${{ !cancelled() && needs.version.result == 'success' && (needs.package.result == 'success' || needs.package.result == 'skipped') }}
@@ -230,7 +254,7 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: [version, setup, android]
+    needs: [version, setup, android, linux]
     if: ${{ !cancelled() && needs.setup.result == 'success' && (needs.android.result == 'success' || (inputs.prebuilt && needs.android.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     env:
@@ -254,6 +278,11 @@ jobs:
         if: ${{ needs.android.result == 'success' }}
         with:
           name: endless-keeper-android
+          path: out
+      - uses: actions/download-artifact@v7
+        if: ${{ needs.linux.result == 'success' }}
+        with:
+          name: endless-keeper-linux
           path: out
 
       - name: Release notes
@@ -281,7 +310,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          files=(out/EndlessKeeperSetup-*.exe out/endless-keeper-*-patch.zip out/endless-keeper-*-patch.7z out/EndlessKeeper-*.apk)
+          files=(out/EndlessKeeperSetup-*.exe out/endless-keeper-*-patch.zip out/endless-keeper-*-patch.7z out/endless-keeper-*-linux_x86_64.tar.gz out/EndlessKeeper-*.apk)
           ls -la "${files[@]}"
           flags=()
           [ "$STAGE" = Stable ] || flags+=(--prerelease)

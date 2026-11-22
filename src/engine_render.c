@@ -5365,7 +5365,7 @@ void draw_status_sprites(long scrpos_x, long scrpos_y, struct Thing *thing)
     int h_add;
     h_add = 0;
     int w;
-    int h;
+    int h = 0;
     const struct TbSprite *spr;
     int bs_units_per_px;
     spr = get_button_sprite(GBS_creature_states_cloud);

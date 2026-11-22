@@ -1,0 +1,42 @@
+# Builds Endless Keeper's native Linux (x86_64) archive and adds it to a published release, for releases made before
+# the Release workflow built one (it builds one for every release now). The archive is built from the commit this workflow runs on
+# (main by default), labelled with the release's number and stage, so run it while main holds the same game as that
+# release. An archive of the same name already on the release is replaced.
+#
+# Name: endless-keeper-<base>-<release>-<Stage>-linux_x86_64.tar.gz, e.g. endless-keeper-1_4_0-15-Alpha-linux_x86_64.tar.gz
+name: Linux build for a release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The release to add it to (e.g. v1.4.0-15-alpha)'
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Version
+        id: version
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+(\.[0-9]+)?)-([a-z]+)$ ]] || { echo "not a release tag: $TAG"; exit 1; }
+          gh release view "$TAG" --json tagName > /dev/null
+          base=${BASH_REMATCH[1]}; release=${BASH_REMATCH[2]}; stage=${BASH_REMATCH[4]}; stage=${stage^}
+          { echo "release=$release"; echo "stage=$stage"; echo "file=endless-keeper-${base//./_}-$release-$stage-linux_x86_64.tar.gz"; } | tee -a "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/build-linux
+        with:
+          release: ${{ steps.version.outputs.release }}
+          stage: ${{ steps.version.outputs.stage }}
+          output: out/${{ steps.version.outputs.file }}
+      - name: Add it to the release
+        run: gh release upload "$TAG" "out/${{ steps.version.outputs.file }}" --clobber

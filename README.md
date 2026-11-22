@@ -174,7 +174,7 @@ Planned:
 
 | | Requirement |
 |:-:|---|
-| 💻 | **Windows 10 or 11**. 64-bit is recommended: big worlds can use up to 4 GB of memory. |
+| 💻 | **Windows 10 or 11**. 64-bit is recommended: big worlds can use up to 4 GB of memory. Or **64-bit Linux** (x86_64, glibc 2.39 or newer), see [Linux](#linux) below. |
 | 💿 | **An original copy of Dungeon Keeper** (GOG, Steam or the original CD). Endless Keeper does not include the original game: its art, sound and music come from your copy. Only the Zombie brings its own sprites and voice, with a few parts adapted from the original. |
 | 🔥 | **KeeperFX 1.4.0 (stable).** Endless Keeper is built on it. The setup downloads it for you (about 360 MB) from KeeperFX's own GitHub releases, so you need an internet connection during setup. |
 | 🌐 | **For hosting over the internet:** port 5556 open (UDP) on your router or firewall. |
@@ -215,6 +215,28 @@ Planned:
 4. Delete `keeperfx-launcher-qt.exe` and `keeperfx-launcher-legacy.exe`: KeeperFX's launcher would update the folder
    to plain KeeperFX.
 5. Start `EndlessKeeper.exe`, Endless Keeper's launcher.
+
+</details>
+
+<details>
+<summary id="linux">Linux</summary>
+
+Endless Keeper runs natively on 64-bit Linux (x86_64) with glibc 2.39 or newer: Ubuntu 24.04, Debian 13, Fedora 40,
+SteamOS 3.6, Arch and anything newer. It uses the system's own graphics (OpenGL, X11 or Wayland) and sound (ALSA,
+PulseAudio or PipeWire); everything else comes in its `lib/` folder.
+
+1. Unpack KeeperFX's [`keeperfx_1_4_0_complete.7z`](https://github.com/dkfans/keeperfx/releases/tag/v1.4.0) into
+   an empty folder, for example `~/Games/EndlessKeeper` (never into a KeeperFX installation: a newer KeeperFX's
+   own `keeperfx` cannot play Endless Mode).
+2. Copy the original Dungeon Keeper files into it, as in step 3 of *Installing by hand* above.
+3. Unpack `endless-keeper-…-linux_x86_64.tar.gz` from the [Releases](https://github.com/K11MCH1/Endless-Keeper/releases)
+   page over it: `tar -xzf endless-keeper-*-linux_x86_64.tar.gz -C ~/Games/EndlessKeeper`
+4. Start it from that folder with `./keeperfx` and choose **Endless Mode** in the main menu. Options go in
+   `keeperfx.cfg`.
+
+To update, unpack the newer Linux archive over the folder (it replaces `keeperfx.cfg`, so keep a copy of yours). If
+the game does not start, `ldd ./keeperfx | grep "not found"` shows which system library is missing; the game writes
+`keeperfx.log` in its folder.
 
 </details>
 

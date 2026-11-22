@@ -1947,7 +1947,7 @@ TbBool world_progress_activate(struct Thing *thing, struct PlayerInfo *player)
         give_boon(plyr_idx, grade, roll); /* nothing of a kind it may get yet */
         return true;
     }
-    int opt[3];
+    int opt[3] = {0};
     const int k = choose_options(open, nk, biome, roll, opt);
     static int automatic = -1;
     if (automatic < 0)

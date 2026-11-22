@@ -196,7 +196,7 @@ void message_draw(void)
     int icon_units_per_px;
     int tx_units_per_px = font_size_units_per_px(chat_font_size);
     int upp = units_per_pixel;
-    long x0, y0;
+    long x0 = 0, y0 = 0;
     if (world_mode_active())
     {
         message_world_place(&x0, &y0, &tx_units_per_px, &upp);
