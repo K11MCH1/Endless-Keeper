@@ -205,7 +205,7 @@ Planned:
 
 1. Unpack KeeperFX's [`keeperfx_1_4_0_complete.7z`](https://github.com/dkfans/keeperfx/releases/tag/v1.4.0) into
    an empty folder.
-2. Unpack `endless-keeper-…-patch.7z` (or the `.zip`) from the [Releases](https://github.com/K11MCH1/Endless-Keeper/releases)
+2. Unpack `endless-keeper-…-patch.zip` from the [Releases](https://github.com/K11MCH1/Endless-Keeper/releases)
    page over it, replacing files. The patch is only for a folder of Endless Keeper's own: never unpack it into your
    KeeperFX installation.
 3. Copy `data\bluepal.dat`, `bluepall.dat`, `dogpal.pal`, `hitpall.dat`, `lightng.pal`, `redpal.col`, `redpall.dat`,
