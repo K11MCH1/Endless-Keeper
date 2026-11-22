@@ -226,7 +226,7 @@ public final class LauncherActivity extends Activity {
                 JSONObject state = State.load(this);
                 String found = null, title = "";
                 String installed = state.optString("kfx_version");
-                if (!state.optBoolean("kfx_from_folder")) {
+                { // Endless Keeper: an imported KeeperFX folder is replaced by the stable release too
                     JSONObject stable = api.stable();
                     if (!stable.optString("version").equals(installed))
                         found = stable.optString("name", "KeeperFX " + stable.optString("version"));

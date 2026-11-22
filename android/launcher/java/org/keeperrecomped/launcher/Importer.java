@@ -23,8 +23,10 @@ import java.util.Locale;
  * <li>Dungeon Keeper (EA/Origin "Dungeon Keeper/DATA", GOG "Dungeon Keeper Gold", CD):
  *     a folder holding {@code data/bluepal.dat} and {@code sound/}. Copied to
  *     {@link Paths#dk} with lowercase names, as the KeeperFX launcher does.</li>
- * <li>A KeeperFX installation (the same plus {@code fxdata/}), e.g. copied from a PC.
- *     Copied to {@link Paths#kfx} as is, without Windows binaries.</li>
+ * <li>A KeeperFX installation (the same plus {@code fxdata/}), e.g. copied from a PC or GOG's.
+ *     Endless Keeper (2026-11-22) takes only its Dungeon Keeper files ({@link #copyOnly}), as the Windows
+ *     setup does: the KeeperFX base is always the stable release the launcher downloads, never a folder of
+ *     an unknown version.</li>
  * </ul>
  */
 final class Importer {
@@ -160,6 +162,68 @@ final class Importer {
     void copy(Found found, File dest, Progress progress) throws IOException {
         long[] done = {0};
         copyDir(found, found.root, dest, !found.keeperfx, done, progress);
+    }
+
+    /**
+     * Only the files in {@code wanted} (lowercase paths such as {@code data/bluepal.dat}) from the found tree, with
+     * lowercase names, to {@code dest}. Returns how many were copied.
+     */
+    int copyOnly(Found found, File dest, java.util.Set<String> wanted, Progress progress) throws IOException {
+        long[] done = {0};
+        return copyOnlyDir(found, found.root, "", dest, wanted, done, progress);
+    }
+
+    private int copyOnlyDir(Found f, Node dir, String rel, File dest, java.util.Set<String> wanted, long[] done,
+            Progress progress) throws IOException {
+        int copied = 0;
+        for (Node n : dir.children) {
+            String name = n.name.toLowerCase(Locale.ROOT);
+            if (name.contains("/") || name.equals("..") || name.equals("."))
+                continue;
+            String path = rel + name;
+            if (n.dir) {
+                boolean under = false;
+                for (String w : wanted)
+                    under |= w.startsWith(path + "/");
+                if (under && !skipDir(n.name)) {
+                    list(n);
+                    copied += copyOnlyDir(f, n, path + "/", dest, wanted, done, progress);
+                }
+            } else if (wanted.contains(path)) {
+                File out = new File(dest, path);
+                out.getParentFile().mkdirs();
+                copyFile(f, n, out, done, progress);
+                copied++;
+            }
+        }
+        return copied;
+    }
+
+    private void copyFile(Found f, Node n, File out, long[] done, Progress progress) throws IOException {
+        File dest = out.getParentFile();
+        String name = out.getName();
+        if (out.isFile() && out.length() == n.size && n.size > 0) {
+            done[0] += n.size; // already imported
+        } else {
+            File part = new File(dest, name + ".part");
+            Uri uri = DocumentsContract.buildDocumentUriUsingTree(tree, n.docId);
+            try (InputStream in = resolver.openInputStream(uri); OutputStream o = new FileOutputStream(part)) {
+                if (in == null)
+                    throw new IOException("Cannot read " + n.name);
+                byte[] buf = new byte[1 << 18];
+                int r;
+                while ((r = in.read(buf)) > 0) {
+                    o.write(buf, 0, r);
+                    done[0] += r;
+                }
+            }
+            if (out.exists())
+                out.delete();
+            if (!part.renameTo(out))
+                throw new IOException("Cannot write " + out);
+        }
+        if (progress != null && !progress.update(done[0], f.bytes, n.name))
+            throw new IOException("cancelled");
     }
 
     private void copyDir(Found f, Node dir, File dest, boolean lowercase, long[] done, Progress progress) throws IOException {

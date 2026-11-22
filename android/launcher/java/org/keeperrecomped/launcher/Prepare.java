@@ -216,7 +216,11 @@ final class Prepare {
         task = "prepare";
         JSONObject state = State.load(ctx);
         File dk = Paths.dk(ctx), kfx = Paths.kfx(ctx);
-        boolean kfxFromFolder = state.optBoolean("kfx_from_folder");
+        // Endless Keeper (2026-11-22): never a KeeperFX folder as the base, also for a game imported that way before
+        // (the stable release is downloaded over it below).
+        boolean kfxFromFolder = false;
+        if (state.optBoolean("kfx_from_folder"))
+            State.put(ctx, "kfx_from_folder", false);
 
         if (tree != null) {
             step(0, 25, "Reading the game folder");
@@ -224,21 +228,42 @@ final class Prepare {
             Importer.Found found = importer.find();
             emit(0, "Found " + (found.keeperfx ? "a KeeperFX installation" : "Dungeon Keeper") + " in " + found.path
                     + " (" + found.files + " files, " + mb(found.bytes) + ")");
-            step(0, 25, found.keeperfx ? "Importing KeeperFX" : "Importing Dungeon Keeper");
-            File dest = found.keeperfx ? kfx : dk;
-            importer.copy(found, dest, (done, total, file) -> {
+            step(0, 25, "Importing Dungeon Keeper");
+            int files = found.files;
+            Importer.Progress shown = (done, total, file) -> {
                 emit(total > 0 ? (double) done / total : 0, mb(done) + " / " + mb(total) + "  " + file);
                 return !cancelled;
-            });
-            kfxFromFolder = found.keeperfx;
-            state = State.load(ctx);
-            state.put("source_path", found.path).put("source_uri", tree.toString()).put("source_files", found.files)
-                    .put("kfx_from_folder", kfxFromFolder).put("imported_at", now());
+            };
             if (found.keeperfx) {
-                state.put("kfx_version", "folder");
-                // KeeperFX folders hold the DK files it needs; keep a lowercase copy for the original profile.
-                copyDkSubset(kfx, dk);
+                // Endless Keeper (2026-11-22): from a KeeperFX folder (a PC's, GOG's) only its Dungeon Keeper files,
+                // as the Windows setup does; the KeeperFX base is the stable release downloaded below, so its
+                // sounds and other base files are the version Endless Keeper is built on.
+                java.util.Set<String> wanted = new java.util.HashSet<>();
+                for (String f : DK_DATA)
+                    wanted.add("data/" + f);
+                for (String f : DK_SOUND)
+                    wanted.add("sound/" + f);
+                for (String f : DK_MUSIC) {
+                    wanted.add("music/" + f);
+                    wanted.add(f);
+                }
+                files = importer.copyOnly(found, dk, wanted, shown);
+                for (String f : DK_MUSIC) { // music at the top of a folder goes in music/
+                    File top = new File(dk, f);
+                    if (top.isFile() && !new File(dk, "music/" + f).isFile()) {
+                        new File(dk, "music").mkdirs();
+                        top.renameTo(new File(dk, "music/" + f));
+                    }
+                }
+            } else {
+                importer.copy(found, dk, shown);
             }
+            kfxFromFolder = false;
+            state = State.load(ctx);
+            state.put("source_path", found.path).put("source_uri", tree.toString()).put("source_files", files)
+                    .put("kfx_from_folder", false).put("imported_at", now());
+            if ("folder".equals(state.optString("kfx_version")))
+                state.put("kfx_version", "");
             State.save(ctx, state);
         } else if (!new File(dk, "data/bluepal.dat").isFile() && !new File(kfx, "data/bluepal.dat").isFile()) {
             throw new IOException("Choose your Dungeon Keeper folder first.");
@@ -638,8 +663,8 @@ final class Prepare {
         if (!new File(Paths.kfx(ctx), "fxdata").isDirectory())
             throw new IOException("Prepare the game first.");
         State.put(ctx, "pinned", false); // updating means following the newest version again
-        if (!State.load(ctx).optBoolean("kfx_from_folder"))
-            installStable(0, 60);
+        State.put(ctx, "kfx_from_folder", false); // Endless Keeper: the stable release, also over an imported folder
+        installStable(0, 60);
         copyDkSubset(Paths.dk(ctx), Paths.kfx(ctx));
         if ("ALPHA".equals(settings.get("release_channel")))
             applyAlpha(60, 85);
