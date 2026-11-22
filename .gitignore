@@ -61,3 +61,4 @@ debug.log
 /android/build/
 __pycache__/
 /out64
+/out-linux

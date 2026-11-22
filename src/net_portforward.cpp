@@ -43,6 +43,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdlib>
+#include <cstring>
 #ifndef _WIN32
 #include <arpa/inet.h>
 #endif
