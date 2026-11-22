@@ -1,0 +1,56 @@
+# Builds the Android app again for a published release and replaces the release's APK: the app of the commit this
+# workflow runs on (main by default), with the release's version name and code and the release signing key, so it
+# installs over the release's first APK. Run it while main holds the same game as that release (the app downloads
+# that release's own patch for Endless Keeper's files).
+#
+# Name: EndlessKeeper-<base>-<release>-<Stage>.apk, e.g. EndlessKeeper-1_4_0-15-Alpha.apk (version 1.4.0-15 Alpha)
+name: Android app for a release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The release whose APK is replaced (e.g. v1.4.0-15-alpha)'
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Version
+        id: version
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-([0-9]+)(\.([0-9]))?-([a-z]+)$ ]] || { echo "not a release tag: $TAG"; exit 1; }
+          gh release view "$TAG" --json tagName > /dev/null
+          major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}; rel=${BASH_REMATCH[3]}; n=${BASH_REMATCH[4]}
+          patch=${BASH_REMATCH[6]:-0}; stage=${BASH_REMATCH[7]}; stage=${stage^}
+          base="$major.$minor.$rel"; label=$n; [ "$patch" = 0 ] || label="$n.$patch"
+          {
+            echo "release=$label"
+            echo "stage=$stage"
+            echo "name=$base-$label $stage"
+            # as the Release workflow numbers them (endless-release.yml)
+            echo "code=$(( major * 100000000 + minor * 1000000 + rel * 10000 + n * 10 + patch ))"
+            echo "file=EndlessKeeper-${base//./_}-$label-$stage.apk"
+          } | tee -a "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/build-android
+        with:
+          release: ${{ steps.version.outputs.release }}
+          stage: ${{ steps.version.outputs.stage }}
+          version-name: ${{ steps.version.outputs.name }}
+          version-code: ${{ steps.version.outputs.code }}
+          output: apk/${{ steps.version.outputs.file }}
+          keystore-base64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          keystore-password: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          require-key: 'true'
+      - name: Replace the release's APK
+        run: gh release upload "$TAG" "apk/${{ steps.version.outputs.file }}" --clobber
