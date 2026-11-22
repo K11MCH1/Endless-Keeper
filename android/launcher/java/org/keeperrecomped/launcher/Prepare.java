@@ -668,7 +668,7 @@ final class Prepare {
 
     /**
      * This app's Endless Keeper release patch as {tag, file}: "1.4.0-11.2 Alpha" is v1.4.0-11.2-alpha /
-     * endless-keeper-1_4_0-11.2-Alpha-patch.7z. Null for a build that is no release (a dev build).
+     * endless-keeper-1_4_0-11.2-Alpha-patch.zip (the .7z until 1.4.0-15). Null for a build that is no release (a dev build).
      */
     static String[] endlessPatch(Context c) {
         java.util.regex.Matcher m = java.util.regex.Pattern
@@ -677,7 +677,7 @@ final class Prepare {
             return null;
         String base = m.group(1) + "." + m.group(2) + "." + m.group(3);
         return new String[]{"v" + base + "-" + m.group(4) + "-" + m.group(5).toLowerCase(Locale.ROOT),
-                "endless-keeper-" + base.replace('.', '_') + "-" + m.group(4) + "-" + m.group(5) + "-patch.7z"};
+                "endless-keeper-" + base.replace('.', '_') + "-" + m.group(4) + "-" + m.group(5) + "-patch.zip"};
     }
 
     /** What the installed Endless Keeper files were put in for: this app's version over this KeeperFX data. */
@@ -725,7 +725,8 @@ final class Prepare {
                     + ". Endless Mode needs them: check the connection and tap Update.");
         }
         step(mid, to, "Installing Endless Keeper " + appVersion(ctx) + " files");
-        extract7z(archive, kfx, null);
+        dropAlpha();
+        extractZip(archive, kfx);
         State.put(ctx, "endless_files", endlessSignature(ctx, State.load(ctx)));
         AppLog.i("Endless Keeper files installed: " + patch[1]);
         discard(archive);
@@ -842,6 +843,58 @@ final class Prepare {
     }
 
     // ---- helpers ----
+
+    /**
+     * Endless Keeper (2026-11-22): a KeeperFX alpha patch installed by an older version of this app (its default
+     * channel was Alpha) goes: its files that the stable release doesn't have are deleted (when the lists can be
+     * read; Endless Keeper's files are put in right after), and the data counts as the stable release again.
+     */
+    private void dropAlpha() {
+        JSONObject state = State.load(ctx);
+        String alpha = state.optString("alpha_version");
+        if (alpha.isEmpty())
+            return;
+        try {
+            removeAlphaFiles(alpha, files("stable", api.stable().optString("version")));
+        } catch (Exception e) {
+            AppLog.w("alpha " + alpha + "'s own files stay (lists not readable): " + e);
+        }
+        try {
+            state = State.load(ctx);
+            state.put("alpha_version", "").put("alpha_title", "").put("alpha_run_id", "").put("alpha_date", "")
+                    .put("alpha_commit", "");
+            State.save(ctx, state);
+        } catch (Exception e) {
+            AppLog.w("alpha state not cleared: " + e);
+        }
+    }
+
+    /** A release patch .zip over {@code dest}, as extract7z does: no binaries, symbol maps or keeperfx.cfg. */
+    private void extractZip(File archive, File dest) throws IOException {
+        dest.mkdirs();
+        try (ZipFile zip = new ZipFile(archive)) {
+            int total = zip.size(), i = 0;
+            for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
+                ZipEntry z = e.nextElement();
+                check();
+                i++;
+                if (z.isDirectory())
+                    continue;
+                String rel = z.getName().replace('\\', '/');
+                if (!safeRelative(rel) || skipBinary(rel) || rel.equalsIgnoreCase("keeperfx.cfg"))
+                    continue;
+                File out = new File(dest, rel);
+                out.getParentFile().mkdirs();
+                try (InputStream in = zip.getInputStream(z)) {
+                    Files.copy(in, out.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                }
+                emit(total > 0 ? (double) i / total : 0, rel);
+            }
+        } catch (java.util.zip.ZipException e) {
+            archive.delete();
+            throw new IOException(archive.getName() + " is not a readable zip archive; it will be downloaded again.");
+        }
+    }
 
     private void extract7z(File archive, File dest, String stripPrefix) throws IOException {
         long block = SevenZip.largestBlock(archive.getPath());

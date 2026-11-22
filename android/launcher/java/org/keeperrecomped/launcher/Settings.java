@@ -129,11 +129,9 @@ final class Settings {
         integer("advanced", "Multiplayer", "multiplayer_port", 5556, 1, 65535, "Multiplayer port", null);
         bool("advanced", "API", "api_enabled", false, "Enable API", "Local scripting API for tools.");
         integer("advanced", "API", "api_port", 5599, 1, 65535, "API port", null);
-        choice("advanced", "Launcher", "release_channel", "ALPHA", "KeeperFX Release Channel",
-                "Alpha adds the latest alpha patch on top of the stable release.", "STABLE|Stable", "ALPHA|Alpha");
         bool("advanced", "Launcher", "check_updates", true, "Automatically check for KeeperFX updates", null);
         integer("advanced", "Launcher", "update_interval_days", 0, 0, 365, "Update check interval in days", "0 = always check.");
-        bool("advanced", "Launcher", "auto_update", false, "Update automatically", "Apply new alpha patches when the launcher opens.");
+        bool("advanced", "Launcher", "auto_update", false, "Update automatically", "Apply a new KeeperFX stable release when the launcher opens.");
         bool("advanced", "Launcher", "backup_saves", true, "Backup savefiles during update", null);
         bool("advanced", "Launcher", "website_integration", true, "Enable website integration", "Fetch News and Workshop from keeperfx.net.");
         // Also shown, reversed, under Play → Game version as "Delete downloaded patches after install."
@@ -168,6 +166,11 @@ final class Settings {
     }
 
     String get(String key) {
+        // Endless Keeper (2026-11-22): its engine is built on KeeperFX's stable release, so the game data is always
+        // the stable release; KeeperFX's alpha patches (Keeper Recomped's default channel) brought data newer than
+        // the engine, and the launcher then asked for a "Rebuild game" that would compile plain KeeperFX.
+        if ("release_channel".equals(key))
+            return "STABLE";
         Def d = BY_KEY.get(key);
         if (d == null)
             throw new IllegalArgumentException("Unknown setting " + key);

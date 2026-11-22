@@ -241,8 +241,8 @@ jobs:
           "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" /Q "/DRelease=$N" "/DReleaseNum=$NUM" "/DStage=$S" \
             "/DPackageDir=$(cygpath -w "$PWD/rel/stage")" "/DOutputDir=$(cygpath -w "$PWD/out")" "$(cygpath -w "$PWD/rel/endless-keeper.iss")"
           # the patch: the same files, for a folder that already is Endless Keeper (never a KeeperFX one). The launcher
-          # updates with the zip (every Windows can unpack one); it is the only patch file (the 7z, the same files, was
-          # dropped after 1.4.0-15)
+          # updates with the zip (every Windows can unpack one), and so does the Android app (from 1.4.0-16; older apps
+          # fetch their own release's 7z); it is the only patch file (the 7z, the same files, was dropped after 1.4.0-15)
           ( cd rel/stage && "/c/Program Files/7-Zip/7z.exe" a -tzip -mx=7 "../../out/endless-keeper-$FILE-patch.zip" . > /dev/null )
           cp rel/commit.txt out/
           ls -la out

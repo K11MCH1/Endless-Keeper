@@ -64,41 +64,28 @@ const kr = {
     // Prepare & Build installs the newest alpha too, not only Update.
     if (this.updateVersion && state.alpha_version === this.updateVersion) $('updateBanner').classList.add('hidden');
     fact('KeeperFX', kv ?(kv === 'folder' ? 'from your folder' : kv) + (state.alpha_version ? ' + alpha ' + state.alpha_version : '') : 'not installed', kv ? 'ok' : '');
-    fact('Channel', s.channel === 'ALPHA' ? 'Alpha patches' : 'Stable');
     if (state.last_error) fact('Last error', state.last_error, 'bad');
     $('facts').innerHTML = facts.join('');
 
     const running = s.running || this.progress.running;
     const ready = s.kfx_ready && state.prepared;
 
-    // Game data version vs the engine that runs it: warn and offer a rebuild when they differ.
-    const v = s.version || {};
+    // Endless Keeper (2026-11-22): the engine is Endless Keeper's own, built into the app on KeeperFX's stable
+    // release, and the game data is that stable release with Endless Keeper's files over it. Keeper Recomped's
+    // version check ("Rebuild the game to bring in this version's engine fixes") would compile plain KeeperFX,
+    // which has no Endless Mode, so there is no rebuild and no version choice here.
     const ei = s.engine_info || {};
-    const appEngine = 'KeeperFX ' + (ei.version || '') + (ei.commit ? ' (' + ei.commit.slice(0, 7) + ')' : '') + ', built into the app';
-    const engineNow = v.engine ? v.engine + ', built on this phone' : appEngine;
     const vf = [];
-    vf.push(`<dt>Game data</dt><dd>${esc(v.data ? 'KeeperFX ' + v.data + (v.pinned ? ' (chosen version)' : '')
-      : kv === 'folder' ? 'KeeperFX from your folder' : 'not installed')}</dd>`);
-    vf.push(`<dt>Engine</dt><dd class="${s.engine ? (v.matches ? 'ok' : 'warn') : 'bad'}">${esc(s.engine ? engineNow : 'not in this build')}</dd>`);
+    vf.push(`<dt>Game data</dt><dd>${esc(ready ? 'KeeperFX ' + (kv && kv !== 'folder' ? kv : 'from your folder')
+      + (s.app_version ? ' + Endless Keeper ' + s.app_version : '') : 'not installed')}</dd>`);
+    vf.push(`<dt>Engine</dt><dd class="${s.engine ? 'ok' : 'bad'}">${esc(s.engine
+      ? 'Endless Keeper ' + (s.app_version || '') + (ei.version ? ' (KeeperFX ' + ei.version + ')' : '') + ', built into the app'
+      : 'not in this build')}</dd>`);
     $('versionFacts').innerHTML = vf.join('');
-    let warn = '';
-    if (ready && v.data && !v.matches) {
-      warn = v.unbuildable
-        ? (v.unbuildable_older
-          ? `KeeperFX ${v.data} cannot be built for Android: it is older than the code the Android engine is built on. `
-          : `KeeperFX ${v.data} changed code the Android engine hooks into, so it needs an app update before it can be built. `)
-          + `The game runs this data on ${engineNow}, which may not suit it.`
-        : v.kit_changed
-          ? 'This app update changes the game engine. Rebuild the game to include it (it takes about a minute).'
-          : `The game data is KeeperFX ${v.data}, but the engine is ${engineNow}. `
-            + 'Rebuild the game to bring in this version\'s engine fixes (it takes about a minute).';
-    }
-    if (v.engine_error && !running) warn += (warn ? ' ' : '') + 'Last engine build failed: ' + v.engine_error;
-    $('versionWarn').textContent = warn;
-    $('versionWarn').classList.toggle('hidden', !warn);
-    $('rebuild').disabled = running || !ready || !v.can_build || !v.data || v.unbuildable;
-    $('rebuild').classList.toggle('primary', !!(ready && v.data && !v.matches && !v.unbuildable));
-    $('changeVersion').disabled = running || !ready || !!state.kfx_from_folder;
+    $('versionWarn').textContent = '';
+    $('versionWarn').classList.add('hidden');
+    $('rebuild').classList.add('hidden');
+    $('changeVersion').classList.add('hidden');
     $('playKfx').disabled = running || !ready || !s.engine;
     $('playOriginal').disabled = running || !ready || !s.engine;
     $('originalCaption').textContent = 'Original campaign only, no mods, own saves — on the KeeperFX engine';
