@@ -982,6 +982,7 @@ static void draw_overhead_world_map(const struct TbRect *map_area, long block_si
         KfxFree(dist);
         KfxFree(above);
     }
+    if (world_dark_on())
     {
         /* The Dark Takes It Back: the reach of each of this keeper's anchors, as a dotted ring (watchfires not drawn) */
         enum { ANCHORS_DRAWN = 64 };

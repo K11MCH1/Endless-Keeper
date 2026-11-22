@@ -31,7 +31,10 @@ extern "C" {
  * to their biomes, landmarks (great rivers, mountain ranges, giant caverns), open and solid stretches, gold by
  * biome, and five new biomes: lava and flooded oceans (islands), lava and flooded rivers (braided, with fords)
  * and Dead Man's Land (plain earth). A world keeps the version it was made with. */
-#define WG_GENERATOR_LATEST 7
+/* Version 8 (2026-11-22, the user: "everything seems too far to reach"): version 7's land, its structures packed
+ * tighter (about 2.5 times as many in the same ground: smaller placement grids, the same sizes) and nearer the start
+ * (hero fortresses from 40 slabs, computer keepers from 80; portals and caves as before). */
+#define WG_GENERATOR_LATEST 8
 #define WG_V6_BIOMES 8 /* the biomes of versions 2-6: points of the climate */
 #define WG_CHUNK 16
 #define WG_CHUNK_CELLS (WG_CHUNK * WG_CHUNK)

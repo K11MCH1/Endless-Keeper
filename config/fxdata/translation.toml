@@ -131,4 +131,4 @@ ENG = "Expedition: 3 Imps scout towards the place you point at, on the map or th
 
 [ENDLESS_FILL_TOOLTIP]
 # Endless Keeper: the Fill room's tooltip
-ENG = "Fill: your Imps fill the marked floor with earth walls. Costs 30 gold per tile. Sell Room takes marks away (no gold back)."
+ENG = "Fill: bring the ceiling down on your own empty claimed floor and it fills with earth. Costs 50 gold per tile."

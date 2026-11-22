@@ -25,6 +25,10 @@ struct Thing;
 
 #define WALLBREAK_TURNS (60 * 20) /* one minute */
 
+/** Do raid Tunnellers break fortified walls? Off since 2026-11-22 (test switch KFX_WORLD_RAIDWALLS=on). */
+TbBool world_wallbreak_raids(void);
+/** Do wild Beetles break fortified walls? Off since 2026-11-22 (test switch KFX_WORLD_BEETLEWALLS=on). */
+TbBool world_wallbreak_beetles(void);
 /** Is this engine slab a wall a Beetle or a raid's Tunneller may break? */
 TbBool world_wallbreak_can(MapSlabCoord x, MapSlabCoord y);
 /** The breaker works at the wall (x, y) beside it: 0 the wall can't be broken, 1 at work (the breaker is held where it

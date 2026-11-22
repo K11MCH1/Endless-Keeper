@@ -99,6 +99,26 @@ TbBool world_wallbreak_can(MapSlabCoord x, MapSlabCoord y)
     return rings_off || !world_dark_anchored(owner, x, y); /* inside the keeper's rings it holds */
 }
 
+TbBool world_wallbreak_raids(void)
+{
+    /* off since 2026-11-22 (the user: "Disable ... the logic that allows Raids to break into reinforced walls"): a
+       raid goes round to a hole or a door again. Test switch KFX_WORLD_RAIDWALLS=on: as before. */
+    static int on = -1;
+    if (on < 0)
+        on = ((getenv("KFX_WORLD_RAIDWALLS") != NULL) && (strcmp(getenv("KFX_WORLD_RAIDWALLS"), "on") == 0)) ? 1 : 0;
+    return on != 0;
+}
+
+TbBool world_wallbreak_beetles(void)
+{
+    /* off since 2026-11-22 (the user: "Wild Beetles can still break walls outside the rings ... This needs to be
+       disabled as well"): a Beetle digs earth only and goes round walls. Test switch KFX_WORLD_BEETLEWALLS=on. */
+    static int on = -1;
+    if (on < 0)
+        on = ((getenv("KFX_WORLD_BEETLEWALLS") != NULL) && (strcmp(getenv("KFX_WORLD_BEETLEWALLS"), "on") == 0)) ? 1 : 0;
+    return on != 0;
+}
+
 static long wb_tunneller_model(void)
 {
     static long tunneller = -2;
@@ -351,6 +371,9 @@ static TbBool breaker_must_go(const struct Thing *breaker)
 int world_wallbreak_work(struct Thing *breaker, MapSlabCoord x, MapSlabCoord y)
 {
     if (!thing_exists(breaker) || !world_wallbreak_can(x, y))
+        return 0;
+    /* (off since 2026-11-22 for raids and wild Beetles alike, whoever asks) */
+    if ((breaker->model == wb_tunneller_model()) ? !world_wallbreak_raids() : !world_wallbreak_beetles())
         return 0;
     {
         /* only a wall it stands beside (a breaker that went off fighting kept asking about its old wall from far away,
@@ -869,7 +892,7 @@ void world_wallbreak_turn(void)
     walldiag_turn();
     hold_breakers();
     steppers_turn();
-    if ((game.play_gameturn % 20) == 7)
+    if (((game.play_gameturn % 20) == 7) && world_wallbreak_raids())
         tunnellers_second();
 }
 

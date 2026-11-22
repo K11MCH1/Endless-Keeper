@@ -61,6 +61,8 @@
 #include "world_misdeeds.h"
 #include "world_alarm.h"
 #include "world_fill.h"
+#include "world_wild.h"
+#include "world_daynight.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1154,6 +1156,8 @@ long instf_tunnel(struct Thing *creatng, int32_t *param)
         } else {
         dig_out_block(stl_x, stl_y, creatng->owner);
         world_circles_dug(creatng->owner, stl_x, stl_y); /* endless worlds: digging through a circle's line */
+        if (world_raid_hero(creatng))
+            world_wild_raid_dug(stl_x, stl_y); /* endless worlds: a raid's tunnel falls in behind it (world_wild.c) */
         }
     return 1;
 }

@@ -1053,16 +1053,6 @@ static TbBool wrl_can_raise(PlayerNumber p, int r)
     return wrl_owned(p, r) && (wrl_allowed(p, r) < wrl_top[r]);
 }
 
-static int opt_tier(int i)
-{
-    return (i >= WPR_ITEMS) ? 1 : wpr_items[i].tier;
-}
-
-static int opt_biome(int i)
-{
-    return (i >= WPR_ITEMS) ? -1 : wpr_items[i].biome;
-}
-
 static const char *opt_label(int i)
 {
     return (i >= WPR_ITEMS) ? wrl_labels[i - WPR_ITEMS] : wpr_items[i].label;
@@ -1454,15 +1444,16 @@ static int open_set(PlayerNumber plyr_idx, int grade, int *out)
             continue;
         if (wpr_item_disabled(i))
             continue; /* Destroy Walls and Armageddon stay off */
-        if (item_had(plyr_idx, i))
-            continue; /* had already (researched, captured): not worth a book */
+        if (item_known(plyr_idx, i))
+            continue; /* had already (researched, captured), or its research ("?") is open: not worth a book */
         if (i == WPR_ARMAGEDDON)
         {
             if ((grade < 5) || (known < 40))
                 continue;
-        } else if (wpr_items[i].tier > grade)
-            continue;
-        if ((i == WPR_TORTURE) && !(wp->unlocked & ((uint64_t)1 << WPR_PRISON)) && !item_had(plyr_idx, WPR_PRISON))
+        }
+        /* any tier (the user, 2026-11-22: "The Spellbook system was never supposed to grant Players Rooms, Spells and
+           Traps in order"): a keeper may get a Prison or Lightning Strike early */
+        if ((i == WPR_TORTURE) && !(wp->unlocked & ((uint64_t)1 << WPR_PRISON)) && !item_known(plyr_idx, WPR_PRISON))
             continue; /* the Prison first, from a book or the Library (audit 2026-11-09) */
         out[n++] = i;
     }
@@ -1473,13 +1464,23 @@ static int open_set(PlayerNumber plyr_idx, int grade, int *out)
     return n;
 }
 
-/** A book's chosen item: learnt, or a room the keeper has raised a level. */
+/** A book's chosen item after the Library and Training Room (the user, 2026-11-22): not learnt outright, its research
+ *  opens ("?"): the Library's creatures research a room or spell, the Workshop's make the first of a trap or door. */
+static void research_item(PlayerNumber plyr_idx, int i, const struct Coord3d *where)
+{
+    open_item_research(plyr_idx, i);
+    create_effect(where, TngEff_ResearchComplete, plyr_idx);
+    SYNCLOG("World progress: player %d's book opens the %s's research (%s)", (int)plyr_idx, wpr_items[i].label,
+        ((wpr_items[i].kind == WprK_Trap) || (wpr_items[i].kind == WprK_Door)) ? "the Workshop makes the first" : "the Library researches it");
+}
+
+/** A book's chosen item: its research opened, or a room the keeper has raised a level. */
 static void take_option(PlayerNumber plyr_idx, int i, const struct Coord3d *where, int circle)
 {
     if (i >= WPR_ITEMS)
         room_level_allow(plyr_idx, i - WPR_ITEMS, where, circle);
     else
-        unlock_item(plyr_idx, i, where);
+        research_item(plyr_idx, i, where);
 }
 
 static void unlock_item(PlayerNumber plyr_idx, int i, const struct Coord3d *where)
@@ -1684,7 +1685,6 @@ static void give_boon(PlayerNumber plyr_idx, int grade, uint64_t roll)
     }
 }
 
-/** The options of a book: one from the highest open tier, one of the book's biome, one more; distinct. */
 /* A book's kind (the user, 2026-11-15): drawn first, by chance, then the book's choices are all of that kind. Rooms,
    spells (keeper powers), traps (with doors: both are the Workshop's), duplicates; spells only once the keeper has the
    Library, traps and doors only once it has the Workshop. A kind with nothing left to teach gives its chance to the
@@ -1813,33 +1813,27 @@ static int book_kind_filter(PlayerNumber plyr_idx, int *open, int n, uint64_t ro
     return m;
 }
 
+/** A book's choices (the user, 2026-11-22): two of its kind, drawn at random, any tier. */
+#define WPR_CHOICES 2
 static int choose_options(const int *open, int n, int biome, uint64_t roll, int *opt)
 {
+    (void)biome;
     int count = 0;
-    int top = 0;
-    for (int k = 0; k < n; k++)
-        top = max(top, opt_tier(open[k]));
-    for (int pass = 0; (pass < 3) && (count < 3); pass++)
+    while ((count < WPR_CHOICES) && (count < n))
     {
+        roll = wpr_mix(roll + (uint64_t)count + 1);
         int cand[WPR_OPTIONS];
         int m = 0;
         for (int k = 0; k < n; k++)
         {
-            const int i = open[k];
             TbBool taken = false;
             for (int c = 0; c < count; c++)
-                taken = taken || (opt[c] == i);
-            if (taken)
-                continue;
-            if ((pass == 0) && (opt_tier(i) != top))
-                continue;
-            if ((pass == 1) && (opt_biome(i) != biome))
-                continue;
-            cand[m++] = i;
+                taken = taken || (opt[c] == open[k]);
+            if (!taken)
+                cand[m++] = open[k];
         }
         if (m == 0)
-            continue;
-        roll = wpr_mix(roll + pass);
+            break;
         opt[count++] = cand[roll % (uint64_t)m];
     }
     return count;
@@ -1891,9 +1885,9 @@ TbBool world_progress_activate(struct Thing *thing, struct PlayerInfo *player)
             room_level_allow(plyr_idx, item - WPR_ITEMS, &pos, wpr_offer_circle[plyr_idx]);
             wbk_learned(plyr_idx, item);
         } else
-        if (item_usable(item) && !wpr_item_disabled(item) && !(wp->unlocked & ((uint64_t)1 << item)))
+        if (item_usable(item) && !wpr_item_disabled(item) && !(wp->unlocked & ((uint64_t)1 << item)) && !item_known(plyr_idx, item))
         {
-            unlock_item(plyr_idx, item, &pos);
+            research_item(plyr_idx, item, &pos);
             wbk_learned(plyr_idx, item);
         }
         for (int c = 0; c < wp->offer_count; c++)
@@ -3266,6 +3260,7 @@ void world_progress_seat_reset(PlayerNumber plyr_idx, TbBool keep_record)
     world_migrate_seat_reset(plyr_idx); /* no migration going on, and no moved Heart */
     world_fill_seat_reset(plyr_idx); /* and no Fill room marks */
     world_expedition_seat_reset(plyr_idx); /* its expeditions' Imps back, and no question marks */
+    world_spawn_portal_reset(plyr_idx); /* its first portal is chosen again */
     pmask_del(&wpr_kit_players, plyr_idx); /* the kit is given again when it starts */
     world_misdeeds_strays_seat_reset(plyr_idx); /* Strays: the old keeper's strays go wild again */
     world_watchfire_seat_reset(plyr_idx); /* and the watchfires */

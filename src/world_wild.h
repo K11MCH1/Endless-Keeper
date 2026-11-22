@@ -28,6 +28,8 @@ TbBool world_wild_from_last_night(const struct Thing *thing);
 /** The burrows and tunnels wild packs dug, to fall in again at dawn: kept in the world save (the WBT1 extra). */
 /** A slab dug open as part of a wild tunnel (a wall a Beetle broke through, world_wallbreak.c): it falls in with the
  *  tunnel after dawn. */
+/** A raid Tunneller dug this subtile's slab out: it falls in again like a wild tunnel (by day, nobody's, empty, no raider near). */
+void world_wild_raid_dug(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 void world_wild_tunnel_slab(MapSlabCoord x, MapSlabCoord y);
 void world_wild_reset(void);
 size_t world_wild_save_size(void);

@@ -38,6 +38,7 @@
 #include "world_misdeeds.h"
 #include "world_pools.h"
 #include "world_seasons.h"
+#include "world_stream.h"
 #include "post_inc.h"
 #include <stdint.h>
 
@@ -326,7 +327,9 @@ TbBool generate_creature_at_random_entrance(struct Dungeon * dungeon, ThingModel
 {
     SYNCDBG(9,"Starting");
 
-    struct Room* room = pick_random_room_of_role(dungeon->owner, RoRoF_CrPoolSpawn);
+    struct Room* room = world_spawn_portal(dungeon->owner); /* endless worlds: the keeper's first portal (world_stream.c) */
+    if (room_is_invalid(room))
+        room = pick_random_room_of_role(dungeon->owner, RoRoF_CrPoolSpawn);
     if (room_is_invalid(room))
     {
         ERRORLOG("Could not get a random entrance for player %d",(int)dungeon->owner);

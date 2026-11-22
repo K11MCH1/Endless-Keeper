@@ -491,6 +491,8 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
 #define WILD_SITE_MIN 48             /* slabs from the heart: imps digging or mining further out are a work site, and
                                         burrows open round them (2026-11-13) */
 #define WILD_MAX_TUNNEL 4096
+#define WILD_RAID_KEEP 8             /* slabs: a raid's tunnel this near a raider stays open (it falls in behind them) */
+#define WILD_RAID_KEPT 64            /* raiders looked at for that, at most */
 #define WILD_MAX_DIGGERS 48
 #define WILD_DIG_PHASES 5            /* a digger gets its turn every fifth pass (a pass every fourth turn: once a second) */
 #define WILD_COLLAPSE_A_PASS 5       /* slabs that fall in in one pass (about 25 a second) */
@@ -630,6 +632,18 @@ void world_wild_tunnel_slab(MapSlabCoord x, MapSlabCoord y)
     wild_open_slab(x, y);
 }
 
+void world_wild_raid_dug(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+{
+    /* a raid Tunneller dug a slab out (the user, 2026-11-22: "close up their tunnels behind them the way that we close
+       the Wild Packs' tunnels"): it falls in like a wild tunnel, by day, once it is nobody's, empty and no raider is
+       near (WILD_RAID_KEEP) */
+    const MapSlabCoord x = subtile_slab(stl_x), y = subtile_slab(stl_y);
+    if (!world_mode_active() || !wild_open_at(x, y) || (wild_tunnels >= WILD_MAX_TUNNEL))
+        return;
+    world_slab_to_world(x, y, &wild_tunnel[wild_tunnels].x, &wild_tunnel[wild_tunnels].y);
+    wild_tunnels++;
+}
+
 static TbBool wild_creature_on_slab(MapSlabCoord x, MapSlabCoord y)
 {
     for (int dy = 0; dy < STL_PER_SLB; dy++)
@@ -672,6 +686,27 @@ static void wild_collapse_turn(void)
         dig_y[digs] = subtile_slab(bt->mappos.y.stl.num);
         digs++;
     }
+    /* the raiders on the map (their tunnel stays open round them, and falls in behind) */
+    MapSlabCoord raid_x[WILD_RAID_KEPT], raid_y[WILD_RAID_KEPT];
+    int raiders = 0;
+    {
+        const struct Dungeon *heroes = get_players_num_dungeon(PLAYER_GOOD);
+        long guard = 0;
+        for (ThingIndex ri = dungeon_invalid(heroes) ? 0 : heroes->creatr_list_start; (ri > 0) && (guard++ < CREATURES_COUNT) &&
+            (raiders < WILD_RAID_KEPT);)
+        {
+            const struct Thing *rt = thing_get(ri);
+            const struct CreatureControl *rc = creature_control_get_from_thing(rt);
+            if (thing_is_invalid(rt) || creature_control_invalid(rc))
+                break;
+            ri = rc->players_next_creature_idx;
+            if (!world_raid_hero(rt))
+                continue;
+            raid_x[raiders] = subtile_slab(rt->mappos.x.stl.num);
+            raid_y[raiders] = subtile_slab(rt->mappos.y.stl.num);
+            raiders++;
+        }
+    }
     for (int i = 0; i < wild_tunnels; i++)
     {
         MapSlabCoord x, y;
@@ -688,6 +723,8 @@ static void wild_collapse_turn(void)
                     TbBool in_use = false;
                     for (int d = 0; (d < digs) && !in_use; d++)
                         in_use = (wild_dist2(x, y, dig_x[d], dig_y[d]) <= (long)WILD_DIG_KEEP * WILD_DIG_KEEP);
+                    for (int d = 0; (d < raiders) && !in_use; d++)
+                        in_use = (wild_dist2(x, y, raid_x[d], raid_y[d]) <= (long)WILD_RAID_KEEP * WILD_RAID_KEEP);
                     if (in_use)
                     {
                         wild_tunnel[kept++] = wild_tunnel[i];
@@ -900,7 +937,7 @@ static TbBool wild_plan_step(MapSlabCoord bx, MapSlabCoord by, MapSlabCoord tx, 
                     step = 1;
                 else if (wild_earth_at(ex, ey))
                     step = 3;
-                else if (world_wallbreak_can(ex, ey))
+                else if (world_wallbreak_beetles() && world_wallbreak_can(ex, ey))
                     step = WILD_WALL_COST; /* a keeper's fortified wall outside its rings (world_wallbreak.c) */
                 else
                     continue;
@@ -1107,7 +1144,7 @@ static void wild_diggers_turn(int phase)
             }
             continue;
         }
-        if (world_wallbreak_can(nx, ny))
+        if (world_wallbreak_beetles() && world_wallbreak_can(nx, ny))
         {
             /* a fortified wall outside the keeper's rings: the Beetle breaks it where it stands (world_wallbreak.c
                holds it there); the wall is dug out, and it walks on through */

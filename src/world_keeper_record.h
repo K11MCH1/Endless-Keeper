@@ -60,8 +60,9 @@ struct WorldFillMark {
     uint16_t worker[3];   /* the Imps coming or filling, up to three as at a dig (thing index, 0: none) */
     uint16_t wait;        /* turns the Imps have waited at it for the slab to be clear */
     uint16_t walk_from[3]; /* when each of them set off (the turn's low 16 bits) */
-    uint16_t reserved2;
-    int32_t check_turn;   /* when "blocked" was last worked out (while an Imp walks to it: when it set off) */
+    uint16_t cave;        /* 1: a cave-in fill (2026-11-22): the slab fills with earth by itself, no Imp (world_fill.c) */
+    int32_t check_turn;   /* when "blocked" was last worked out (while an Imp walks to it: when it set off); a cave-in
+                             fill: when it began */
 };
 
 /** The Expedition spell (world_expedition.c): three Imps away towards a place. Kept in struct Game (a thin client draws

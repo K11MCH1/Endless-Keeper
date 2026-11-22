@@ -283,6 +283,7 @@ static std::string g_up_why, g_up_stage;
 static float g_up_fraction = 0;
 static std::atomic<bool> g_cancel(false);
 static bool g_prompt_update = false, g_prompted = false;
+static bool g_manual_check = false; /* "Check for Update" was pressed: its answer is shown when the check is done */
 static bool g_show_settings = false, g_show_options = false;
 static std::string g_message;       /* a box with one line and OK */
 static HANDLE g_game_process = nullptr;
@@ -508,6 +509,7 @@ static void play()
 
 static std::string t_version; /* test hook "version=1.4.0-6.1": the version the launcher takes itself for */
 static bool t_update = false;   /* test hook "update=1": the update box's Update clicks itself */
+static bool t_check = false;    /* test hook "check=1": Check for Update presses itself once the first list is in */
 
 static std::vector<int> installed_version()
 {
@@ -541,6 +543,15 @@ static void check_updates()
             g_up = UP_FAILED;
         }
     }).detach();
+}
+
+/** "Check for Update": the list is fetched again; when it comes, the update prompt if there is a newer release, else a
+ *  word that this is the newest (message_boxes). */
+static void check_now()
+{
+    g_manual_check = true;
+    g_prompted = false;
+    check_updates();
 }
 
 static void start_update(const Release &rel)
@@ -1144,6 +1155,21 @@ static void message_boxes(float w, float h)
         g_prompted = true;
         g_prompt_update = true;
     }
+    if (t_check && ((up == UP_LISTED) || (up == UP_FAILED)) && !g_prompt_update)
+    {
+        t_check = false;
+        check_now();
+        return;
+    }
+    if (g_manual_check && ((up == UP_LISTED) || (up == UP_FAILED)))
+    {
+        /* "Check for Update" (2026-11-22): the prompt when there is a newer release, else a word that there is none */
+        g_manual_check = false;
+        if (up == UP_FAILED)
+            g_message = std::string(T("The release list could not be loaded.")) + " (" + why + ")";
+        else if (!have_newer)
+            g_message = std::string(T("You have the newest version:")) + " " + GAME_TITLE;
+    }
     if (g_prompt_update && !ImGui::IsPopupOpen(titled("Update").c_str()) && !ImGui::IsPopupOpen(titled("Settings").c_str()))
         ImGui::OpenPopup(titled("Update").c_str());
     ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -1243,6 +1269,8 @@ static void message_boxes(float w, float h)
             ImGui::PopStyleColor();
             ImGui::Text("%s %s", T("Current version:"), GAME_TITLE);
             ImGui::Text("%s %s", T("New version:"), plain(newest.title).c_str());
+            ImGui::Dummy(ImVec2(0, 4 * S));
+            ImGui::TextWrapped("%s", T("A new version is available. Do you want to update now?")); /* (the user, 2026-11-22) */
             ImGui::Dummy(ImVec2(0, 6 * S));
             const ImVec2 base = ImGui::GetCursorScreenPos();
             if (button("yes", T("Update"), base, ImVec2(bw, 36 * S), true, 19 * S) || t_update)
@@ -1325,11 +1353,14 @@ static void frame(float w, float h)
     ImVec2 box_pos, box_size;
     if (narrow)
     {
-        const float half = (col_w - gap) * 0.5f;
-        if (button("play", T("Play"), ImVec2(pad, top), ImVec2(half, set_h * 1.2f), true, 26 * S, !busy))
+        const float third = (col_w - gap * 2) / 3.0f;
+        if (button("play", T("Play"), ImVec2(pad, top), ImVec2(third, set_h * 1.2f), true, 26 * S, !busy))
             play();
-        if (button("settings", T("Settings"), ImVec2(pad + half + gap, top), ImVec2(half, set_h * 1.2f), false, 20 * S, !busy))
+        if (button("settings", T("Settings"), ImVec2(pad + third + gap, top), ImVec2(third, set_h * 1.2f), false, 20 * S, !busy))
             g_show_settings = true;
+        if (button("check", T("Check for Update"), ImVec2(pad + (third + gap) * 2, top), ImVec2(third, set_h * 1.2f), false, 17 * S,
+            !busy && (up != UP_CHECKING) && !opt_no_update))
+            check_now();
         box_pos = ImVec2(pad, top + set_h * 1.2f + gap);
         box_size = ImVec2(w - pad * 2, bottom - box_pos.y);
         engine_view_focus(w * 0.5f, h * 0.5f);
@@ -1338,8 +1369,13 @@ static void frame(float w, float h)
         const float by = std::max(top, bottom - play_h - gap - set_h);
         if (button("play", T("Play"), ImVec2(pad, by), ImVec2(col_w, play_h), true, 40 * S, !busy))
             play();
-        if (button("settings", T("Settings"), ImVec2(pad, by + play_h + gap), ImVec2(col_w, set_h), false, 22 * S, !busy))
+        /* Settings, and beside it Check for Update (2026-11-22) */
+        const float half = (col_w - gap) * 0.5f;
+        if (button("settings", T("Settings"), ImVec2(pad, by + play_h + gap), ImVec2(half, set_h), false, 22 * S, !busy))
             g_show_settings = true;
+        if (button("check", T("Check for Update"), ImVec2(pad + half + gap, by + play_h + gap), ImVec2(half, set_h), false, 18 * S,
+            !busy && (up != UP_CHECKING) && !opt_no_update))
+            check_now();
         /* the box keeps to the right: the battle shows between it and the buttons */
         const float box_w = std::min(w - (pad + col_w + pad) - pad, std::max(430 * S, w * 0.46f));
         box_pos = ImVec2(w - pad - box_w, top);
@@ -1537,6 +1573,7 @@ int main(int, char **)
                 else if (key == "version") t_version = val;
                 else if (key == "lang") load_language(val);
                 else if (key == "update") t_update = true;
+                else if (key == "check") t_check = true;
                 else if (key == "size") sscanf(val.c_str(), "%dx%d", &t_w, &t_h);
             }
             at = end + 1;

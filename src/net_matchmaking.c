@@ -48,10 +48,18 @@
 #define MATCHMAKING_HOST_DEFAULT "matchmaking.keeperfx.workers.dev"
 
 /* Endless Keeper (2026-11-10): off unless a server of one's own is set (MATCHMAKING_SERVER). KeeperFX's own lobby server
-   is never used: its online lobbies are KeeperFX's players' (LAN and direct-address games stay). */
+   is never used: its online lobbies are KeeperFX's players' (LAN and direct-address games stay). Android (the user,
+   2026-11-22: lobbies made on the phone appeared on KeeperFX's multiplayer Discord channel before): KeeperFX's lobby
+   server again, as in KeeperFX, set by the app's Multiplayer settings. */
+#ifdef KFX_ANDROID
+TbBool matchmaking_enabled = true;
+char matchmaking_ws_url[MATCHMAKING_URL_MAX] = MATCHMAKING_WS_PREFIX MATCHMAKING_HOST_DEFAULT MATCHMAKING_WS_SUFFIX;
+char matchmaking_ip_url[MATCHMAKING_URL_MAX] = MATCHMAKING_IP_PREFIX MATCHMAKING_HOST_DEFAULT MATCHMAKING_IP_SUFFIX;
+#else
 TbBool matchmaking_enabled = false;
 char matchmaking_ws_url[MATCHMAKING_URL_MAX] = "";
 char matchmaking_ip_url[MATCHMAKING_URL_MAX] = "";
+#endif
 
 static CURL *curl_handle = NULL;
 static char hosted_lobby_id[MATCHMAKING_ID_MAX] = {0};
@@ -95,11 +103,13 @@ void matchmaking_set_server(const char *host)
     if (scheme_end) {
         host = scheme_end + 3;
     }
+#ifndef KFX_ANDROID
     if (strstr(host, MATCHMAKING_HOST_DEFAULT) != NULL) {
         LbNetLog("Matchmaking: KeeperFX's lobby server isn't used by Endless Keeper\n");
         matchmaking_set_server(NULL);
         return;
     }
+#endif
     size_t length = strlen(host);
     if (length > 0 && host[length - 1] == '/') {
         length--;

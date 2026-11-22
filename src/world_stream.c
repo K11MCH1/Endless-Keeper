@@ -196,6 +196,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_MIGRATE 0x3147494Du  /* "MIG1": Move The Heart (world_migrate.c) */
 #define WORLD_EXTRA_FILL 0x314C4946u     /* "FIL1": the Fill room's marks (world_fill.c) */
 #define WORLD_EXTRA_EXPEDITION 0x31505845u /* "EXP1": the Expedition spell's expeditions and marks (world_expedition.c) */
+#define WORLD_EXTRA_SPAWNPORTAL 0x314F5046u /* "FPO1": the portal each keeper's creatures come from (world_spawn_portal) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -286,7 +287,7 @@ struct WorldState {
     char seed_text[64];
     uint64_t seed;
     struct WgWorld *gen;
-    int gen_version;                   /* the generator version the world was made with (6 or 7; kept for good) */
+    int gen_version;                   /* the generator version the world was made with (6, 7 or 8; kept for good) */
     int32_t origin_cx, origin_cy;      /* world chunk at window chunk (0,0) */
     struct ChunkTable store;           /* frozen chunk records (zlib) */
     struct ChunkTable memory;          /* map memory: CHUNK_STL_CELLS u16 panel codes, raw */
@@ -4382,6 +4383,140 @@ static void update_creature_limit(void)
     }
 }
 
+/******************************************************************************/
+/* The portal a keeper's creatures come from (the user, 2026-11-22: "Creatures should always come from the 1st portal
+   Player captures. The extra portals only serves to increase the max creature players can have. If the 1st portal is
+   somehow lost, the game should use the portal nearest to the Player Dungeon Heart that was captured"). The first is
+   the keeper's portal nearest its Heart when its first creature comes (its start portal); kept by the place (world
+   slab), as rooms are made again when their chunk comes back. Saved: FPO1. */
+struct SpawnPortal {
+    int64_t x, y;   /* the first portal's middle, world slab */
+    uint8_t state;  /* 0 none yet, 1 the first portal, 2 lost (the nearest to the Heart from now on) */
+};
+static struct SpawnPortal spawn_portal[PLAYERS_MAX];
+
+struct Room *world_spawn_portal(PlayerNumber p)
+{
+    if (!W.active || (p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX))
+        return INVALID_ROOM;
+    struct SpawnPortal *sp = &spawn_portal[p];
+    const struct Thing *heart = find_players_dungeon_heart(p);
+    struct Room *nearest = INVALID_ROOM;
+    long best = LONG_MAX;
+    for (long ri = 1; ri < ROOMS_COUNT; ri++)
+    {
+        struct Room *room = room_get(ri);
+        if (!room_exists(room) || (room->owner != p) || !room_role_matches(room->kind, RoRoF_CrPoolSpawn))
+            continue;
+        long d = 0;
+        if (thing_exists(heart))
+        {
+            const long dx = (long)room->central_stl_x - heart->mappos.x.stl.num, dy = (long)room->central_stl_y - heart->mappos.y.stl.num;
+            d = dx * dx + dy * dy;
+        }
+        if (d < best)
+        {
+            best = d;
+            nearest = room;
+        }
+    }
+    if (sp->state == 0)
+    {
+        if (room_is_invalid(nearest))
+            return INVALID_ROOM;
+        sp->x = world_slab_x_of(subtile_slab(nearest->central_stl_x));
+        sp->y = world_slab_y_of(subtile_slab(nearest->central_stl_y));
+        sp->state = 1;
+        SYNCLOG("World: player %d's creatures come from its first portal, at world slab (%ld,%ld)", (int)p, (long)sp->x, (long)sp->y);
+        return nearest;
+    }
+    if (sp->state == 1)
+    {
+        MapSlabCoord ex, ey;
+        if (world_engine_slab(sp->x, sp->y, &ex, &ey))
+        {
+            struct Room *first = slab_room_get(ex, ey);
+            if (room_exists(first) && (first->owner == p) && room_role_matches(first->kind, RoRoF_CrPoolSpawn))
+                return first;
+            sp->state = 2;
+            SYNCLOG("World: player %d's first portal at world slab (%ld,%ld) is lost: its creatures come from the portal nearest "
+                "its Heart from now on", (int)p, (long)sp->x, (long)sp->y);
+        }
+        /* (not loaded: the nearest one meanwhile) */
+    }
+    return nearest;
+}
+
+void world_spawn_portal_reset(PlayerNumber p)
+{
+    if ((p >= 0) && (p < PLAYERS_MAX))
+        memset(&spawn_portal[p], 0, sizeof(spawn_portal[p]));
+}
+
+static void spawn_portal_reset_all(void)
+{
+    memset(spawn_portal, 0, sizeof(spawn_portal));
+}
+
+#pragma pack(1)
+struct SpawnPortalSaved {
+    uint32_t plyr;
+    int64_t x, y;
+    uint8_t state;
+};
+#pragma pack()
+
+static size_t spawn_portal_save_size(void)
+{
+    size_t n = 0;
+    for (int p = 0; p < PLAYERS_MAX; p++)
+        n += (spawn_portal[p].state != 0) ? 1 : 0;
+    return (n == 0) ? 0 : 4 + n * sizeof(struct SpawnPortalSaved);
+}
+
+static void spawn_portal_save(uint8_t *buf)
+{
+    uint32_t n = 0;
+    uint8_t *at = buf + 4;
+    for (int p = 0; p < PLAYERS_MAX; p++)
+    {
+        if (spawn_portal[p].state == 0)
+            continue;
+        struct SpawnPortalSaved s;
+        s.plyr = (uint32_t)p;
+        s.x = spawn_portal[p].x;
+        s.y = spawn_portal[p].y;
+        s.state = spawn_portal[p].state;
+        memcpy(at, &s, sizeof(s));
+        at += sizeof(s);
+        n++;
+    }
+    memcpy(buf, &n, 4);
+}
+
+static TbBool spawn_portal_load(const uint8_t *buf, size_t len)
+{
+    spawn_portal_reset_all();
+    if (len < 4)
+        return false;
+    uint32_t n;
+    memcpy(&n, buf, 4);
+    if (len < 4 + (size_t)n * sizeof(struct SpawnPortalSaved))
+        return false;
+    for (uint32_t i = 0; i < n; i++)
+    {
+        struct SpawnPortalSaved s;
+        memcpy(&s, buf + 4 + i * sizeof(s), sizeof(s));
+        if ((s.plyr < PLAYERS_MAX) && (s.state <= 2))
+        {
+            spawn_portal[s.plyr].x = s.x;
+            spawn_portal[s.plyr].y = s.y;
+            spawn_portal[s.plyr].state = s.state;
+        }
+    }
+    return true;
+}
+
 /** Who owns each portal in the window now. Portals outside it keep the owner they had when their chunk left. */
 static void update_portals(void)
 {
@@ -6042,7 +6177,7 @@ void world_set_next_seed(const char *seed_text)
     snprintf(world_next_seed, sizeof(world_next_seed), "%s", (seed_text != NULL) ? seed_text : "");
 }
 
-/** The generator version this build gives a new world. Test hook: KFX_WORLD_GENVERSION=6 or 7. */
+/** The generator version this build gives a new world. Test hook: KFX_WORLD_GENVERSION=6, 7 or 8. */
 int world_new_gen_version(void)
 {
     const char *v = getenv("KFX_WORLD_GENVERSION");
@@ -6255,8 +6390,8 @@ void world_level_start(void)
             if (counts[b] > 0)
                 snprintf(text + strlen(text), sizeof(text) - strlen(text), "%s%s %d", text[0] ? ", " : "", wg_biome_name(b),
                     counts[b]);
-        SYNCLOG("World: generator version 7 start in %s; within 48 slabs: %s; %ld%% lava or water",
-            wg_biome_name(wg_biome_at(W.gen, W.home_x, W.home_y)), text, (samples > 0) ? liquid * 100 / samples : 0);
+        SYNCLOG("World: generator version %d start in %s; within 48 slabs: %s; %ld%% lava or water",
+            W.gen_version, wg_biome_name(wg_biome_at(W.gen, W.home_x, W.home_y)), text, (samples > 0) ? liquid * 100 / samples : 0);
     }
     world_start_test();
     server_admin_log("world", "New world, seed %s: %d chunks generated around the start, %d keepers known", W.seed_text, count,
@@ -10265,6 +10400,92 @@ static void world_testportal_hook(void)
     take_over_room(best, PLAYER0);
 }
 
+/** Test hook KFX_WORLD_SPAWNTEST="turn": at that turn player 0 takes the two portals nearest its heart (it may own one
+ *  already; the ground of the generator's portals near it is loaded at turn-60), the portal its creatures come from is
+ *  logged, the first one becomes nobody's, and the choice is logged again (the nearest to the heart); at turn+40 again. */
+static void world_spawntest_hook(void)
+{
+    static long at = -2;
+    if (at == -2)
+        at = (getenv("KFX_WORLD_SPAWNTEST") != NULL) ? atol(getenv("KFX_WORLD_SPAWNTEST")) : -1;
+    if (at < 0)
+        return;
+    const long t = (long)game.play_gameturn;
+    struct Thing *heart = find_players_dungeon_heart(PLAYER0);
+    if (!thing_exists(heart))
+        return;
+    if ((t == at - 60) && (W.gen != NULL))
+    {
+        /* the ground of the generator's portals near the heart, so that two can be taken */
+        const int64_t hx = world_slab_x_of(subtile_slab(heart->mappos.x.stl.num)), hy = world_slab_y_of(subtile_slab(heart->mappos.y.stl.num));
+        struct WgStructRef refs[16];
+        const int n = wg_structures_in(W.gen, hx - 150, hy - 150, hx + 150, hy + 150, 1u << WgT_Portal, refs, 16);
+        for (int i = 0; (i < n) && (i < 16) && (i < 4); i++)
+        {
+            SYNCLOG("Spawn test: loading the ground of the portal at world slab (%ld,%ld)", (long)refs[i].portal_x, (long)refs[i].portal_y);
+            world_load_chunks_landing_world(refs[i].portal_x, refs[i].portal_y);
+        }
+    }
+    if (t == at)
+    {
+        for (int k = 0; k < 2; k++)
+        {
+            struct Room *best = NULL;
+            long best_d = LONG_MAX;
+            for (long ri = 1; ri < ROOMS_COUNT; ri++)
+            {
+                struct Room *room = room_get(ri);
+                if (!room_exists(room) || !room_role_matches(room->kind, RoRoF_CrPoolSpawn) || (room->owner == PLAYER0))
+                    continue;
+                const long d = labs((long)room->central_stl_x - heart->mappos.x.stl.num) + labs((long)room->central_stl_y - heart->mappos.y.stl.num);
+                if (d < best_d)
+                {
+                    best_d = d;
+                    best = room;
+                }
+            }
+            if (best != NULL)
+            {
+                SYNCLOG("Spawn test: player 0 takes the portal at subtile (%d,%d)", (int)best->central_stl_x, (int)best->central_stl_y);
+                take_over_room(best, PLAYER0);
+            }
+        }
+    }
+    for (int step = 0; (step < 2) && ((t == at) || (t == at + 40)); step++)
+    {
+        if ((t == at) && (step == 1))
+        {
+            const struct SpawnPortal *sp = &spawn_portal[PLAYER0];
+            MapSlabCoord ex, ey;
+            if ((sp->state == 1) && world_engine_slab(sp->x, sp->y, &ex, &ey))
+            {
+                struct Room *first = slab_room_get(ex, ey);
+                if (room_exists(first))
+                {
+                    SYNCLOG("Spawn test: the first portal (subtile %d,%d) becomes nobody's", (int)first->central_stl_x, (int)first->central_stl_y);
+                    take_over_room(first, game.neutral_player_num);
+                }
+            }
+        }
+        int owned = 0;
+        for (long ri = 1; ri < ROOMS_COUNT; ri++)
+        {
+            struct Room *room = room_get(ri);
+            if (room_exists(room) && room_role_matches(room->kind, RoRoF_CrPoolSpawn) && (room->owner == PLAYER0))
+            {
+                owned++;
+                SYNCLOG("Spawn test: turn %ld, player 0's portal at subtile (%d,%d), %ld subtiles from the heart", t,
+                    (int)room->central_stl_x, (int)room->central_stl_y,
+                    labs((long)room->central_stl_x - heart->mappos.x.stl.num) + labs((long)room->central_stl_y - heart->mappos.y.stl.num));
+            }
+        }
+        struct Room *r = world_spawn_portal(PLAYER0);
+        SYNCLOG("Spawn test: turn %ld, %d portals; new creatures come from %s (subtile %d,%d), first portal state %d", t, owned,
+            room_is_invalid(r) ? "none" : "the portal", room_is_invalid(r) ? -1 : (int)r->central_stl_x,
+            room_is_invalid(r) ? -1 : (int)r->central_stl_y, (int)spawn_portal[PLAYER0].state);
+    }
+}
+
 static struct Thing *test_find_outpost_book(void)
 {
     const struct StructureList *slist = get_list_for_thing_class(TCls_Object);
@@ -11113,10 +11334,281 @@ void world_client_turn(void)
     world_client_test_turn();
 }
 
+/******************************************************************************/
+/* Keeper Map (tools/keepermap): the world as it is, for an app beside the game. The app writes save/keepermap.req;
+   at the next check (every 10 turns) this machine writes save/keepermap.dat and deletes the request. The file holds
+   the seed and the generator version (the app makes the untouched ground itself), the players' starts, colours and
+   Hearts, and every chunk whose ground may differ from the generator's: the loaded pages (live) and the stored
+   records, each with its slabs' kinds, owners (engine players) and texture packs, and the things on them. A thin
+   client knows no seed: its file has the loaded pages only. Nothing in the game changes; reading the stored records
+   takes about 0.02 ms each. */
+
+#define KMAP_MAGIC 0x31504D4Bu /* "KMP1" */
+#define KMAP_VERSION 1u
+
+struct KmapBuf {
+    uint8_t *p;
+    size_t len, cap;
+    TbBool err;
+};
+
+static void kmap_put(struct KmapBuf *b, const void *v, size_t n)
+{
+    if (b->err)
+        return;
+    if (b->len + n > b->cap)
+    {
+        size_t nc = (b->cap == 0) ? (1u << 20) : b->cap;
+        while (nc < b->len + n)
+            nc *= 2;
+        uint8_t *np = (uint8_t *)realloc(b->p, nc);
+        if (np == NULL)
+        {
+            b->err = true;
+            return;
+        }
+        b->p = np;
+        b->cap = nc;
+    }
+    memcpy(b->p + b->len, v, n);
+    b->len += n;
+}
+static void kmap_u8(struct KmapBuf *b, uint8_t v) { kmap_put(b, &v, 1); }
+static void kmap_u16(struct KmapBuf *b, uint16_t v) { kmap_put(b, &v, 2); }
+static void kmap_i32(struct KmapBuf *b, int32_t v) { kmap_put(b, &v, 4); }
+static void kmap_i64(struct KmapBuf *b, int64_t v) { kmap_put(b, &v, 8); }
+static void kmap_str(struct KmapBuf *b, const char *s)
+{
+    const size_t n = (s != NULL) ? strlen(s) : 0;
+    kmap_u8(b, (uint8_t)min(n, (size_t)255));
+    kmap_put(b, s, min(n, (size_t)255));
+}
+
+/** A stored record's owner as an engine player, without giving a keeper a colour (255: a keeper with none yet). */
+static uint8_t kmap_owner(uint8_t wown)
+{
+    switch (wown)
+    {
+    case WOwn_Neutral: return (uint8_t)game.neutral_player_num;
+    case WOwn_Player: return PLAYER0;
+    case WOwn_Heroes: return PLAYER_GOOD;
+    default:
+        if ((wown > WOwn_HumanBase) && (wown < WOwn_HumanBase + PLAYERS_COUNT))
+            return (uint8_t)(wown - WOwn_HumanBase);
+        if ((wown >= WOwn_Keeper0) && (wown < WOwn_HumanBase) && (wown - WOwn_Keeper0 < W.keeper_count))
+            return (W.keepers[wown - WOwn_Keeper0].slot >= 0) ? (uint8_t)W.keepers[wown - WOwn_Keeper0].slot : 255;
+        return (uint8_t)game.neutral_player_num;
+    }
+}
+
+static void kmap_thing(struct KmapBuf *b, int64_t wsx, int64_t wsy, uint8_t oclass, uint16_t model, uint8_t owner, uint8_t level)
+{
+    kmap_i64(b, wsx);
+    kmap_i64(b, wsy);
+    kmap_u8(b, oclass);
+    kmap_u16(b, model);
+    kmap_u8(b, owner);
+    kmap_u8(b, level);
+}
+
+static TbBool kmap_write(const char *path)
+{
+    struct KmapBuf b;
+    memset(&b, 0, sizeof(b));
+    kmap_i32(&b, (int32_t)KMAP_MAGIC);
+    kmap_i32(&b, (int32_t)KMAP_VERSION);
+    const TbBool has_gen = (W.gen != NULL);
+    char seed[64];
+    memset(seed, 0, sizeof(seed));
+    if (has_gen)
+        snprintf(seed, sizeof(seed), "%s", W.seed_text);
+    kmap_put(&b, seed, sizeof(seed));
+    kmap_i32(&b, has_gen ? wg_world_version(W.gen) : 0);
+    kmap_i32(&b, my_player_number);
+    kmap_i32(&b, game.neutral_player_num);
+    kmap_i32(&b, game.texture_id);
+    kmap_i32(&b, (int32_t)game.play_gameturn);
+    /* the players: colour, name, Heart */
+    kmap_i32(&b, PLAYERS_COUNT);
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        struct PlayerInfo *player = get_player(p);
+        const TbBool exists = player_exists(player);
+        kmap_u8(&b, (uint8_t)exists);
+        kmap_u8(&b, (p == game.neutral_player_num) ? (uint8_t)game.neutral_player_num : get_player_color_idx(p));
+        kmap_str(&b, exists ? player->player_name : "");
+        const struct Thing *heart = find_players_dungeon_heart(p);
+        if (thing_exists(heart))
+        {
+            kmap_u8(&b, 1);
+            kmap_i64(&b, world_slab_x_of(subtile_slab(heart->mappos.x.stl.num)));
+            kmap_i64(&b, world_slab_y_of(subtile_slab(heart->mappos.y.stl.num)));
+        } else
+            kmap_u8(&b, 0);
+    }
+    /* the starts (the circles count from them) */
+    if (has_gen)
+    {
+        struct WgStructRef start;
+        wg_start_ref(W.gen, &start);
+        kmap_i32(&b, 1 + W.stamp_count);
+        for (int i = 0; i < 1 + W.stamp_count; i++)
+        {
+            int64_t sx, sy;
+            world_start_at(&start, i, &sx, &sy);
+            kmap_i64(&b, sx);
+            kmap_i64(&b, sy);
+            kmap_i32(&b, (i == 0) ? PLAYER0 : W.stamps[i - 1].plyr);
+        }
+    } else
+        kmap_i32(&b, 0);
+    /* the chunks: loaded pages first (live), then the stored records of chunks that aren't loaded */
+    const size_t count_at = b.len;
+    kmap_i32(&b, 0);
+    int32_t chunks = 0;
+    for (struct WorldPage *pg = world_paged ? wp_first() : NULL; pg != NULL; pg = pg->next)
+    {
+        kmap_i32(&b, (int32_t)(pg->cx - WP_ORIGIN_SLB / WG_CHUNK));
+        kmap_i32(&b, (int32_t)(pg->cy - WP_ORIGIN_SLB / WG_CHUNK));
+        kmap_u8(&b, 1);
+        uint8_t kind[WG_CHUNK_CELLS], owner[WG_CHUNK_CELLS];
+        for (int i = 0; i < WG_CHUNK_CELLS; i++)
+        {
+            kind[i] = pg->slab[i].kind;
+            owner[i] = (uint8_t)slabmap_owner(&pg->slab[i]);
+        }
+        kmap_put(&b, kind, sizeof(kind));
+        kmap_put(&b, owner, sizeof(owner));
+        kmap_put(&b, pg->ext, WG_CHUNK_CELLS);
+        chunks++;
+    }
+    int nkeys = 0;
+    int32_t *keys = has_gen ? store_keys(&nkeys) : NULL;
+    struct WorldChunkData *cd = (nkeys > 0) ? (struct WorldChunkData *)malloc(sizeof(struct WorldChunkData)) : NULL;
+    /* the stored records' things are kept for the things list below */
+    struct KmapBuf tb;
+    memset(&tb, 0, sizeof(tb));
+    int32_t things = 0;
+    for (int k = 0; (k < nkeys) && (cd != NULL); k++)
+    {
+        const int32_t cx = keys[2 * k], cy = keys[2 * k + 1];
+        if (world_paged && (wp_page(engine_chunk_of(cx), engine_chunk_of(cy)) != NULL))
+            continue; /* (loaded: written live above) */
+        if (!load_chunk_record(cx, cy, cd))
+            continue;
+        kmap_i32(&b, cx);
+        kmap_i32(&b, cy);
+        kmap_u8(&b, 0);
+        kmap_put(&b, cd->kind, WG_CHUNK_CELLS);
+        uint8_t owner[WG_CHUNK_CELLS];
+        for (int i = 0; i < WG_CHUNK_CELLS; i++)
+            owner[i] = kmap_owner(cd->owner[i]);
+        kmap_put(&b, owner, sizeof(owner));
+        kmap_put(&b, cd->texture, WG_CHUNK_CELLS);
+        chunks++;
+        const int64_t ox = (int64_t)cx * WG_CHUNK * STL_PER_SLB, oy = (int64_t)cy * WG_CHUNK * STL_PER_SLB;
+        for (int t = 0; t < cd->thing_count; t++)
+        {
+            const struct WorldThing *wt = &cd->things[t];
+            kmap_thing(&tb, ox + wt->x / COORD_PER_STL, oy + wt->y / COORD_PER_STL, wt->oclass, wt->model,
+                kmap_owner(wt->owner), wt->level);
+            things++;
+        }
+    }
+    free(cd);
+    free(keys);
+    if (!b.err)
+        memcpy(b.p + count_at, &chunks, 4);
+    /* the things: the loaded ground's (creatures, objects, traps, doors), then the stored records' */
+    static const ThingClass kclasses[] = {TCls_Creature, TCls_Object, TCls_Trap, TCls_Door};
+    struct KmapBuf lb;
+    memset(&lb, 0, sizeof(lb));
+    int32_t live_things = 0;
+    for (size_t c = 0; c < sizeof(kclasses) / sizeof(kclasses[0]); c++)
+    {
+        const struct StructureList *list = get_list_for_thing_class(kclasses[c]);
+        long guard = 0;
+        for (ThingIndex ti = list->index; (ti > 0) && (guard++ <= (long)THINGS_COUNT);)
+        {
+            const struct Thing *thing = thing_get(ti);
+            if (thing_is_invalid(thing))
+                break;
+            ti = thing->next_of_class;
+            if (!thing_exists(thing) || thing_is_picked_up(thing) || ((thing->alloc_flags & TAlF_IsInLimbo) != 0))
+                continue;
+            const MapSubtlCoord sx = thing->mappos.x.stl.num, sy = thing->mappos.y.stl.num;
+            const int64_t wsx = world_slab_x_of(sx / STL_PER_SLB) * STL_PER_SLB + sx % STL_PER_SLB;
+            const int64_t wsy = world_slab_y_of(sy / STL_PER_SLB) * STL_PER_SLB + sy % STL_PER_SLB;
+            uint8_t level = 0;
+            if (thing->class_id == TCls_Creature)
+            {
+                const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+                level = creature_control_invalid(cctrl) ? 0 : (uint8_t)min((int)cctrl->exp_level + 1, 255);
+            }
+            kmap_thing(&lb, wsx, wsy, thing->class_id, (uint16_t)thing->model, (uint8_t)thing->owner, level);
+            live_things++;
+        }
+    }
+    kmap_i32(&b, live_things + things);
+    if (!lb.err && (lb.len > 0))
+        kmap_put(&b, lb.p, lb.len);
+    if (!tb.err && (tb.len > 0))
+        kmap_put(&b, tb.p, tb.len);
+    free(lb.p);
+    free(tb.p);
+    /* the names of the creature and object models */
+    kmap_i32(&b, game.conf.crtr_conf.model_count);
+    for (ThingModel m = 0; m < game.conf.crtr_conf.model_count; m++)
+        kmap_str(&b, creature_code_name(m));
+    kmap_i32(&b, game.conf.object_conf.object_types_count);
+    for (ThingModel m = 0; m < game.conf.object_conf.object_types_count; m++)
+        kmap_str(&b, object_code_name(m));
+    TbBool ok = !b.err;
+    if (ok)
+    {
+        char tmp[2048];
+        snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+        FILE *f = fopen(tmp, "wb");
+        ok = (f != NULL) && (fwrite(b.p, 1, b.len, f) == b.len);
+        if (f != NULL)
+            fclose(f);
+        if (ok)
+        {
+            remove(path);
+            ok = (rename(tmp, path) == 0);
+        }
+        if (!ok)
+            remove(tmp);
+    }
+    if (ok)
+        SYNCLOG("World: Keeper Map: %d chunks and %d things written (%lu KB)", (int)chunks, (int)(live_things + things),
+            (unsigned long)(b.len / 1024));
+    else
+        WARNLOG("World: Keeper Map: %s could not be written", path);
+    free(b.p);
+    return ok;
+}
+
+/** Every 10 turns: the Keeper Map app asked for the world (save/keepermap.req). */
+static void kmap_poll(void)
+{
+    if ((game.play_gameturn % 10) != 0)
+        return;
+    char req[2048];
+    snprintf(req, sizeof(req), "%s", prepare_file_path(FGrp_Save, "keepermap.req"));
+    FILE *f = fopen(req, "rb");
+    if (f == NULL)
+        return;
+    fclose(f);
+    remove(req);
+    kmap_write(prepare_file_path(FGrp_Save, "keepermap.dat"));
+}
+
 void world_process_turn(void)
 {
     if (!W.active)
         return;
+    kmap_poll();
     world_autosave_poll(); /* the dawn autosave is written on its own thread: says how it went, once it is written */
     world_spread_abilities();
     sync_camera_after_zoom();
@@ -11192,6 +11684,7 @@ void world_process_turn(void)
     world_open_hook();
     world_testlose_hook();
     world_testheart_hook();
+    world_spawntest_hook();
     world_testportal_hook();
     world_testoutpost_hook();
     world_teststrong_hook();
@@ -11614,6 +12107,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_MIGRATE, world_migrate_save_size, world_migrate_save, world_migrate_load, world_migrate_reset},
     {WORLD_EXTRA_FILL, world_fill_save_size, world_fill_save, world_fill_load, world_fill_reset},
     {WORLD_EXTRA_EXPEDITION, world_expedition_save_size, world_expedition_save, world_expedition_load, world_expedition_reset},
+    {WORLD_EXTRA_SPAWNPORTAL, spawn_portal_save_size, spawn_portal_save, spawn_portal_load, spawn_portal_reset_all},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 

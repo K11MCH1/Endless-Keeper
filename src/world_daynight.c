@@ -468,6 +468,8 @@ static const char *const dn_biome_heroes[WgB_COUNT][2] = {
 #define DN_RETREAT_NIGHTS 1          /* raiders go home at the next dawn (2026-11-11; it was after their third night) */
 #define DN_NIGHT_CLEAR 0 /* (the last two minutes of a day were kept free of raids till 2026-11-19: dn_night_clear) */
 #define DN_RAID_GAP (4 * 60 * 20)    /* turns at least between two raids of a day on a player, where the day has room */
+#define DN_DAY1_CHANCE_FROM (4 * 60 * 20) /* a dungeon's first day: its chance raids not before minute 4 (the user,
+                                             2026-11-22; they came from 36 seconds, the first twentieth of the day) */
 /* A raider whose party's leader died: it goes home at once (the mark is saved and streamed with the creature) */
 #define DN_FLEEING_MARK CHeroTsk_DefendParty
 #define DN_HOME_DIST 2               /* slabs from a landing spot a raider going home leaves at */
@@ -506,7 +508,8 @@ static int dn_raids_on_day(long day)
 
 /** Time of day of raid i of n: one in each part of the day, at a time fixed by the seed. No raid starts in the first
  *  or last twentieth of a day. A dungeon's first day (the user, 2026-11-15): its first raid (the one that always
- *  comes) waits for the second half, and the others (each one time in two) come between morning and midday. */
+ *  comes) waits for the second half, and the others (each one time in two) come between minute 4 (2026-11-22) and
+ *  midday. */
 static uint64_t dn_player_salt(PlayerNumber plyr_idx);
 
 /** Time of raid i for a player: each player's at its own time in the slot (all of them landed in one turn, each
@@ -536,7 +539,10 @@ static GameTurnDelta dn_raid_time_for(long day, int i, int n, PlayerNumber plyr_
             j = 0;
         } else
         {
-            end = midday; /* the others: between morning and midday */
+            end = midday; /* the others: between minute 4 and midday (in a short day, its first third and midday) */
+            start = min(DN_DAY1_CHANCE_FROM, midday * 2 / 3);
+            if (start < edge)
+                start = edge;
             slots = n - 1;
             j = i - 1;
         }
@@ -657,12 +663,11 @@ static int dn_line_blockers(const struct DnArea *a, MapSlabCoord x0, MapSlabCoor
 
 /* The threat budget (the user, 2026-11-18: "Raiders are overperforming. Especially when 3 at a time start to spawn. We
  * need to move away from the based-on-highest-creature-level rule"). A raid is bought with a budget: the army's
- * fighting power (world_threat.c) times a curve of the dungeon's days times an adjustment from how the last raids went,
- * growing at most DN_BUDGET_GROWTH a raid. Each hero costs its own fighting power. */
+ * fighting power (world_threat.c) times a curve of the dungeon's days times an adjustment from how the last raids went
+ * (it grew at most 25% a raid until 2026-11-22). Each hero costs its own fighting power. */
 #define DN_CURVE_DAY1 0.5            /* the budget against the army on a dungeon's first day ... */
 #define DN_CURVE_STEP 0.05           /* ... and each day after ... */
 #define DN_CURVE_TOP 1.2             /* ... up to this (day 15) */
-#define DN_BUDGET_GROWTH 1.25        /* a raid's budget is at most this times the last one's */
 #define DN_ADJUST_MIN 0.6            /* the adjustment from the last raids: between these */
 #define DN_ADJUST_MAX 1.3
 #define DN_ADJUST_UP 1.1             /* a raid crushed with almost no losses: the next one this much stronger */
@@ -823,6 +828,15 @@ static struct DnInvasion dn_inv[PLAYERS_MAX];
 /** The day whose first raid a player is still owed: it couldn't come while the last raid's heroes were on their way
  *  home, and comes when they are gone (that day only; not saved). 0: none. */
 static int32_t dn_owed_day[PLAYERS_MAX];
+/** Raids that waited because the dungeon had no creatures but Imps (the user, 2026-11-22: a raid came at 36 seconds
+ *  on a dungeon of Imps only): they come once it has a creature, the same day, one at a time DN_RAID_GAP apart; at
+ *  nightfall the ones still waiting are dropped. Not saved (a load drops them). */
+struct DnArmyWait {
+    int32_t day;
+    uint32_t mask;      /* the day's raids waiting (bit = raid index) */
+    GameTurn last;      /* when the last of them came */
+};
+static struct DnArmyWait dn_army_wait[PLAYERS_MAX];
 
 TbBool world_raid_hero(const struct Thing *thing);
 
@@ -1680,6 +1694,8 @@ static TbBool rg_send(struct Thing *creatng, struct RaidGuide *g, PlayerNumber t
  *  round. True while it works; when the wall is dug out its line starts again from where it stands and it goes on. */
 static TbBool rg_break_wall(struct Thing *creatng, struct RaidGuide *g, MapSlabCoord hx, MapSlabCoord hy)
 {
+    if (!world_wallbreak_raids())
+        return false; /* (off since 2026-11-22: a raid goes round to a hole or a door) */
     const MapSlabCoord cx = subtile_slab(creatng->mappos.x.stl.num), cy = subtile_slab(creatng->mappos.y.stl.num);
     int64_t wcx, wcy, wgx, wgy;
     world_slab_to_world(cx, cy, &wcx, &wcy);
@@ -2082,6 +2098,24 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
             dn_owed_day[plyr_idx] = (int32_t)day; /* the day's first raid always comes (2026-11-11) */
         return;
     }
+    {
+        struct WorldArmy army;
+        world_threat_army(plyr_idx, &army);
+        if (army.count == 0)
+        {
+            SYNCLOG("World: day %ld raid %d waits for player %d: no creatures but Imps yet (it comes when one is there, today)",
+                day, idx + 1, (int)plyr_idx);
+            if (dn_army_wait[plyr_idx].day != (int32_t)day)
+            {
+                dn_army_wait[plyr_idx].day = (int32_t)day;
+                dn_army_wait[plyr_idx].mask = 0;
+            }
+            dn_army_wait[plyr_idx].mask |= 1u << (idx & 31);
+            if (idx == 0)
+                dn_owed_day[plyr_idx] = 0;
+            return;
+        }
+    }
     if (idx == 0)
         dn_owed_day[plyr_idx] = 0;
     struct DnRng rng = {dn_mix(world_seed() ^ ((uint64_t)day << 8) ^ (uint64_t)idx ^ 0x5A1D5A1D5A1DULL ^
@@ -2192,12 +2226,9 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         curve = DN_CURVE_TOP;
     const double adjust = dn_adjust(plyr_idx);
     double budget = power * curve * adjust;
-    TbBool capped = false;
-    if ((dn_thr[plyr_idx].last_budget > 0.0f) && (budget > (double)dn_thr[plyr_idx].last_budget * DN_BUDGET_GROWTH))
-    {
-        budget = (double)dn_thr[plyr_idx].last_budget * DN_BUDGET_GROWTH;
-        capped = true;
-    }
+    /* (no growth cap any more, 2026-11-22: "at most 25% more than the last raid" kept a fast-growing army's raids
+       far below it - level 3 raiders against level 8 creatures; the curve and the adjustment set the budget) */
+    const TbBool capped = false;
     const int tier = dn_tier_for(upper); /* which heroes may come: by the army's upper quarter */
     int want = (sday < DN_PARTIES_LATE_DAY) ? DN_PARTIES_EARLY : DN_PARTIES_LATE; /* landing spots: the most */
     {
@@ -2461,6 +2492,7 @@ void world_raids_reset(void)
     rg_reset();
     memset(dn_inv, 0, sizeof(dn_inv));
     memset(dn_owed_day, 0, sizeof(dn_owed_day));
+    memset(dn_army_wait, 0, sizeof(dn_army_wait));
 }
 
 /* The RDX1 extra of the world save: what RDS1 has no room for (audit 2026-11-11: after a load or a resync the day's
@@ -2482,6 +2514,7 @@ static TbBool dn_extra_wanted(PlayerNumber p)
 void world_raids_extra_reset(void)
 {
     memset(dn_owed_day, 0, sizeof(dn_owed_day)); /* (the raids themselves were read from RDS1 before this) */
+    memset(dn_army_wait, 0, sizeof(dn_army_wait));
 }
 
 size_t world_raids_extra_save_size(void)
@@ -3104,7 +3137,15 @@ void world_daynight_turn(void)
     world_crusade_turn();
     world_alarm_turn();
     if (t >= dn_light(day))
+    {
+        for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+        {
+            if (dn_army_wait[p].mask != 0)
+                SYNCLOG("World: day %ld's waiting raids don't come for player %d: night fell before it had a creature", day, (int)p);
+            dn_army_wait[p].mask = 0;
+        }
         return;
+    }
     /* a first raid that waited for the last raid's heroes to go: it comes now, if its time has passed */
     if ((game.play_gameturn % 16) == 13)
     {
@@ -3129,6 +3170,35 @@ void world_daynight_turn(void)
             dn_raid(day, 0, p);
             if (!dn_invasion_on(p))
                 dn_owed_day[p] = 0; /* it couldn't land: not again today */
+        }
+    }
+    /* raids that waited for the dungeon's first creature: one now, if it has one (and no raid is on) */
+    if ((game.play_gameturn % 16) == 9)
+    {
+        for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+        {
+            struct DnArmyWait *aw = &dn_army_wait[p];
+            if (aw->mask == 0)
+                continue;
+            if ((aw->day != (int32_t)day) || !world_player_is_human(p) || world_coop_seat_away(p))
+            {
+                aw->mask = 0;
+                continue;
+            }
+            if (dn_invasion_on(p) || ((aw->last != 0) && ((GameTurnDelta)(game.play_gameturn - aw->last) < DN_RAID_GAP)))
+                continue;
+            struct WorldArmy army;
+            world_threat_army(p, &army);
+            if (army.count == 0)
+                continue;
+            int idx = 0;
+            while ((idx < 31) && ((aw->mask & (1u << idx)) == 0))
+                idx++;
+            aw->mask &= ~(1u << idx);
+            aw->last = game.play_gameturn;
+            SYNCLOG("World: day %ld raid %d comes for player %d now: the dungeon has %d creature%s", day, idx + 1, (int)p,
+                army.count, (army.count == 1) ? "" : "s");
+            dn_raid(day, idx, p);
         }
     }
     /* by day, read the raid search box ahead a few chunks at a time (the first raid of a run would otherwise

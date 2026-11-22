@@ -44,7 +44,7 @@ const char *world_next_seed_text(void);
 /** Generator versions: a world keeps the one it was made with (saved with it; older saves are version 6). */
 #define WORLD_GEN_OLDEST 6
 /** The version this build gives a new world (test hook KFX_WORLD_GENVERSION=6 or 7). */
-#define WORLD_NEW_GEN_VERSION 7 /* since 2026-11-12 (6 before) */
+#define WORLD_NEW_GEN_VERSION 8 /* since 2026-11-22 (7 from 2026-11-12, 6 before) */
 int world_new_gen_version(void);
 /** A replay or a network game's host says which version the next new world has (0: this build's). */
 void world_set_next_gen_version(int version);
@@ -151,6 +151,12 @@ int world_biome_at_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 int world_biome_parent(int biome);
 /** Does the player own a portal that stands in one of these biomes (a mask of 1 << biome; a province counts as its
  *  parent)? From the world's portal list, so portals on ground that isn't loaded count too. */
+struct Room;
+/** The portal a keeper's new creatures come from: its first portal; when that is lost, the one nearest its Heart
+ *  (INVALID_ROOM: none of its portals is loaded, or not an endless world). */
+struct Room *world_spawn_portal(PlayerNumber plyr_idx);
+/** A seat begins again: its first portal is chosen again. */
+void world_spawn_portal_reset(PlayerNumber plyr_idx);
 TbBool world_player_owns_portal_in(PlayerNumber plyr_idx, uint32_t biome_mask);
 /** Version 7 worlds: is the land in this box of world slabs fit to build on: no Dead Man's Land and no ocean (nor,
  *  with no_provinces, the river provinces either), its biomes sampled every 8 slabs? Always true in a version 6

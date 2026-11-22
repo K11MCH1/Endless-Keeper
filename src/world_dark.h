@@ -32,6 +32,8 @@ extern "C" {
 
 /** Is this engine slab within the reach of one of the keeper's anchors? */
 TbBool world_dark_anchored(PlayerNumber plyr_idx, MapSlabCoord x, MapSlabCoord y);
+/** Is the Dark taking ground back? Off since 2026-11-22 (test switch KFX_WORLD_DARK=on). */
+TbBool world_dark_on(void);
 /** Each world turn (server or single player): one loaded chunk gone through; the test hook. */
 void world_dark_turn(void);
 

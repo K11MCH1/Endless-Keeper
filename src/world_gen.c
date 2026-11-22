@@ -238,6 +238,16 @@ static const struct Spec specs[WgT_COUNT] = {
     {7, 2, 0.75, 40, 6, 2, 3},     /* portal */
     {4, 1, 0.495, 26, 6, 1, 3},    /* reward: 10% rarer than 0.55 (2026-11-08) */
 };
+/* Version 8: the same structures packed tighter, about 2.5 times as many in the same ground (spacing and chance), and
+   nearer the start: hero fortresses from 40 slabs (90), computer keepers from 80 (150); portals and caves as before.
+   Their sizes, margins and priorities are version 7's. */
+static const struct Spec specs_v8[WgT_COUNT] = {
+    {1, 0, 1.0, 0, 32, 99, 3},     /* start */
+    {15, 6, 0.45, 80, 24, 4, 8},   /* keeper: 24 -> 15 chunks */
+    {9, 3, 0.6, 40, 10, 3, 3},     /* fortress: 14 -> 9 */
+    {4, 1, 0.6, 40, 6, 2, 3},      /* portal: 7 -> 4, chance 0.75 -> 0.6 */
+    {3, 1, 0.7, 26, 6, 1, 3},      /* reward: 4 -> 3, chance 0.495 -> 0.7 */
+};
 /* worldgen.SPECS (highest priority first) is keeper, fortress, portal, reward: the enum order */
 #define PLACED_MASK ((1u << WgT_Keeper) | (1u << WgT_Fortress) | (1u << WgT_Portal) | (1u << WgT_Reward))
 
@@ -315,7 +325,7 @@ struct WgWorld {
     uint64_t s_noise[N_COUNT];
     uint64_t s_gems;
     uint64_t s_seam;
-    int version;                     /* the generator version (6 or 7) */
+    int version;                     /* the generator version (6, 7 or 8) */
     uint64_t s7[V7_COUNT];           /* version 7's noises */
     int dml_start;                   /* version 7: Dead Man's Land round the start (1 seed in 100) */
     double dml_cx, dml_cy, dml_r;
@@ -1278,6 +1288,8 @@ static int cavern7(const struct WgWorld *w, int64_t xi, int64_t yi, int *pillar)
     return 0;
 }
 
+#define V8_ROCK_LIMIT 0.30 /* version 8: the rock threshold (version 7: 0.17 on a smaller, rougher noise) */
+
 /** The ground of land (normal biomes, islands, the land between rivers): each biome's shape, blended at borders;
  *  dry: no lakes or rivers of its own. */
 static uint8_t land7(const struct WgWorld *w, int64_t xi, int64_t yi, const struct Clim7 *c, int dry)
@@ -1305,12 +1317,20 @@ static uint8_t land7(const struct WgWorld *w, int64_t xi, int64_t yi, const stru
     /* rock (version 6's shape, the biome's amount) */
     wx = x + 7.0 * fbm(s[N_WX], x / 48.0, y / 48.0, 2);
     wy = y + 7.0 * fbm(s[N_WY], x / 48.0, y / 48.0, 2);
-    if (fbm(s[N_ROCK], wx / 34.0, wy / 34.0, 3) > 0.17 - 0.12 * perlin(s[N_HARD], x / 300.0, y / 300.0) - 0.30 * hard + p.rock_add)
+    if (w->version >= 8) {
+        /* version 8 (the user, 2026-11-22: rock "so tightly and noisy"): fewer, bigger masses with smooth outlines
+           (a noise three times as large, two octaves, a broad bend of its own), and about half as much */
+        const double rwx = x + 16.0 * fbm(s[N_WX], x / 150.0 + 0.31, y / 150.0 + 0.73, 2);
+        const double rwy = y + 16.0 * fbm(s[N_WY], x / 150.0 + 0.59, y / 150.0 + 0.17, 2);
+        if (fbm(s[N_ROCK], rwx / 100.0 + 0.47, rwy / 100.0 + 0.83, 2) > V8_ROCK_LIMIT - 0.12 * perlin(s[N_HARD], x / 300.0, y / 300.0) - 0.30 * hard + p.rock_add)
+            return WgS_Rock;
+    } else if (fbm(s[N_ROCK], wx / 34.0, wy / 34.0, 3) > 0.17 - 0.12 * perlin(s[N_HARD], x / 300.0, y / 300.0) - 0.30 * hard + p.rock_add)
         return WgS_Rock;
     if (p.ribs > dither && fabs(perlin(s7[V7_RIB], wx / 40.0, wy / 40.0)) < 0.022)
         return WgS_Rock;
-    /* ridges along the borders between biomes, with passes (idea 3) */
-    if (c->d > 140.0 && c->margin < 0.0035 * (0.6 + 0.4 * perlin(s7[V7_RIDGE], x / 60.0, y / 60.0)) &&
+    /* ridges along the borders between biomes, with passes (idea 3); not in version 8: they follow the border, which
+       wiggles at a few slabs, so they broke into specks of rock (most of version 7's small lumps) */
+    if (w->version < 8 && c->d > 140.0 && c->margin < 0.0035 * (0.6 + 0.4 * perlin(s7[V7_RIDGE], x / 60.0, y / 60.0)) &&
             perlin(s7[V7_RIDGEON], x / 520.0, y / 520.0) > -0.15 && perlin(s7[V7_RIDGEP], x / 40.0, y / 40.0) < 0.38)
         return WgS_Rock;
     /* caves: the biome's size and amount, and open or solid stretches (idea 9) */
@@ -3470,22 +3490,28 @@ static int biome_struct_pct(int biome, int type)
     return 100;
 }
 
+/** The placement of a structure type in the world's generator version. */
+static const struct Spec *spec_of(const struct WgWorld *w, int type)
+{
+    return (w->version >= 8) ? &specs_v8[type] : &specs[type];
+}
+
 /** Spec.chance_bound: the highest chance any biome gives the type (a roll at or above it never places one). */
-static double chance_bound(int type)
+static double chance_bound(const struct WgWorld *w, int type)
 {
     int pct = 100, b;
     double bound;
     for (b = 0; b < WgB_COUNT; b++)
         if (biome_struct_pct(b, type) > pct)
             pct = biome_struct_pct(b, type);
-    bound = specs[type].chance * (double)pct / 100.0;
+    bound = spec_of(w, type)->chance * (double)pct / 100.0;
     return bound < 1.0 ? bound : 1.0;
 }
 
 /** World.candidate: the structure start of one region, if any. */
 static int candidate(struct WgWorld *w, int type, int64_t rx, int64_t ry, struct Cand *out)
 {
-    const struct Spec *sp = &specs[type];
+    const struct Spec *sp = spec_of(w, type);
     uint32_t i = key_hash(type, rx, ry) & (CAND_CAP - 1);
     struct CandEntry *e;
     struct Rng rng;
@@ -3514,7 +3540,7 @@ static int candidate(struct WgWorld *w, int type, int64_t rx, int64_t ry, struct
     memset(&c, 0, sizeof c);
     in_range = ccx >= WG_I32_MIN && ccx <= WG_I32_MAX && ccy >= WG_I32_MIN && ccy <= WG_I32_MAX;
     chance = sp->chance;
-    if (in_range && roll < chance_bound(type)) {
+    if (in_range && roll < chance_bound(w, type)) {
         /* never inside impenetrable rock or sealed off by it: other places in the same chunk, else no structure */
         int tries = 1;
         rock = !reachable(w, ox, oy) || (w->version >= 7 && !fits7(w, type, ox, oy));
@@ -3525,7 +3551,7 @@ static int candidate(struct WgWorld *w, int type, int64_t rx, int64_t ry, struct
             tries++;
         }
     }
-    if (in_range && roll < chance_bound(type)) {
+    if (in_range && roll < chance_bound(w, type)) {
         /* chance = min(1.0, spec.chance * pct / 100.0); the biome is a pure function of the origin, so it is
          * only computed where it can matter (BIOME_STRUCTURES has fortress and reward) or is kept */
         int pct = 100;
@@ -3574,7 +3600,7 @@ static int structs_in(struct WgWorld *w, int64_t bx1, int64_t by1, int64_t bx2, 
 {
     int n = 0, t;
     for (t = WgT_Keeper; t < WgT_COUNT; t++) {
-        const struct Spec *sp = &specs[t];
+        const struct Spec *sp = spec_of(w, t);
         int64_t reach = sp->radius, rx, ry, r1x, r1y, r2x, r2y;
         if (!(mask & (1u << t)))
             continue;
@@ -3693,7 +3719,7 @@ struct WgWorld *wg_world_create_version(uint64_t seed, int version)
     w->s_seam = hash2(seed, salt2("feature:", "goldseam", 8));
     for (i = 0; i < WgT_COUNT; i++)
         w->spec_salt[i] = salt2("structure:", type_names[i], strlen(type_names[i]));
-    w->version = version >= 7 ? 7 : 6;
+    w->version = version >= 8 ? 8 : version >= 7 ? 7 : 6;
     if (w->version >= 7)
         w->gmemo = (struct GroundMemo *)calloc(1, sizeof(struct GroundMemo)); /* NULL: it works without */
     if (w->version >= 7) {

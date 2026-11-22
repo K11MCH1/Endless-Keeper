@@ -412,9 +412,19 @@ static void dark_test(void)
         slabmap_block_invalid(w2) ? -1 : (int)w2->kind, (int)SlbT_EARTH);
 }
 
+TbBool world_dark_on(void)
+{
+    /* off since 2026-11-22 (the user: "Disable 'The Dark Takes It Back'"); its anchors still keep wild packs and wall
+       breakers off a keeper's ground. Test switch KFX_WORLD_DARK=on: as before. */
+    static int on = -1;
+    if (on < 0)
+        on = ((getenv("KFX_WORLD_DARK") != NULL) && (strcmp(getenv("KFX_WORLD_DARK"), "on") == 0)) ? 1 : 0;
+    return on != 0;
+}
+
 void world_dark_turn(void)
 {
-    if (!world_mode_active() || (network_is_active() && !netstate_is_server()))
+    if (!world_mode_active() || (network_is_active() && !netstate_is_server()) || !world_dark_on())
         return;
     dark_test();
     /* one loaded chunk a turn: of the chunked world's pages, or of the window */

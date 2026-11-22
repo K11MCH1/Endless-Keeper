@@ -8,7 +8,7 @@
  *     costs 10,000 gold and sends three of the keeper's Imps (held away meanwhile: counted in the creature list, but
  *     they can't be picked up, as Imps an enemy keeps in prison). On the minimap and the full map they show as three
  *     red dots, like raiders: from the dungeon's outermost wall on the line towards the place, then in a straight line
- *     to it; the place itself pings in red (the Alarm Bells' Call to Arms ring). Within 15 slabs of their way they find
+ *     to it; the place itself pings in red (the Alarm Bells' Call to Arms ring). Within 25 slabs of their way they find
  *     hero structures, portals, other keepers, spellbooks, specials and neutral creatures, and mark each with the
  *     query mode's question mark on both maps, nothing else: no fog is lifted, nothing is shown. At the place the
  *     expedition ends and the Imps are back at once. Only its keeper sees the dots, the ping and the marks. See

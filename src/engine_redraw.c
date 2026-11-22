@@ -62,6 +62,7 @@
 #include "config_terrain.h"
 #include "config_players.h"
 #include "config_magic.h"
+#include "world_fill.h"
 #include "config_spritecolors.h"
 #include "magic_powers.h"
 #include "game_merge.h"
@@ -791,6 +792,13 @@ static void process_dungeon_top_pointer_graphic(NetUserId user)
         }
         break;
     case PsPg_BuildRoom:
+        if (world_fill_is_kind(ustate->chosen_room_kind))
+        {
+            /* endless worlds: Fill is a cave-in (2026-11-22): the Cave-In spell's own pointer */
+            const struct PowerConfigStats *cavest = get_power_model_stats(PwrK_CAVEIN);
+            set_pointer_graphic_spell(get_player_colored_pointer_icon_idx(cavest->pointer_sprite_idx, player->id_number), get_gameturn());
+            break;
+        }
         i = get_place_room_pointer_graphics(ustate->chosen_room_kind);
         set_pointer_graphic(i);
         break;

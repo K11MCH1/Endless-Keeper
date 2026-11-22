@@ -234,7 +234,11 @@ int world_circles_wild_level_at_slab(MapSlabCoord slb_x, MapSlabCoord slb_y, int
     /* the army's upper quarter, not its best creature (the threat budget, 2026-11-18: one strong creature brought
        packs and raids far above the rest of the army) */
     const int top = (circle >= 5) ? 0 : world_threat_upper_level(near);
-    const int level = wc_level_for(circle, top, floor_level);
+    /* wild packs (the user, 2026-11-22: level 8 creatures met packs of level 3 at home): the army's upper quarter in
+       circles 1 and 2, a level above in circle 3, two in circle 4 (it was the circles' 50, 75, 100 and 125%); circles
+       5-9 their fixed levels */
+    const int level = (circle >= 5) ? wc_level_for(circle, top, floor_level) :
+        max(1, min(max(floor_level, top + ((circle <= 2) ? 0 : circle - 2)), CREATURE_MAX_LEVEL_LIMIT));
     if (what != NULL)
         SYNCLOG("World circles: %s at world slab (%ld,%ld), circle %d: level %d (nearest keeper %d's army's upper quarter %d,"
             " floor %d)", what, (long)wx, (long)wy, circle, level, (int)near, top, floor_level);

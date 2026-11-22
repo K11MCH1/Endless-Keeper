@@ -12,7 +12,7 @@
  *       hold heroes waiting at an exit door use), and come back there.
  *     - Where the dots set off: walking from the Heart towards the place, the last slab the keeper owns before a gap
  *       of more than 12 slabs that are not theirs (the dungeon's outermost wall that way).
- *     - The finds, within 15 slabs of the leading dot: rooms of the heroes (outposts, fortresses) and hero gates,
+ *     - The finds, within 25 slabs of the leading dot (15 until 2026-11-22): rooms of the heroes (outposts, fortresses) and hero gates,
  *       portals not the keeper's, other keepers' Hearts (not allies'), spellbooks and specials not on the keeper's
  *       ground, neutral creatures; only on ground the keeper hasn't seen (seen ground needs no mark). One mark within
  *       6 slabs. A mark goes when the keeper's view reaches its slab; at most 64 a keeper (the oldest goes).
@@ -82,7 +82,7 @@ extern "C" {
 
 #define WEX_COST_NAME "POWER_EXPEDITION"
 #define WEX_IMPS 3
-#define WEX_RADIUS 15        /* slabs round the leading dot where things are found */
+#define WEX_RADIUS 25        /* slabs round the leading dot where things are found */
 #define WEX_MARK_APART 6     /* slabs: one mark here */
 #define WEX_GAP 12           /* slabs not the keeper's that end the dungeon on the line out */
 #define WEX_SCAN_TURNS 8
@@ -922,7 +922,7 @@ void world_expedition_want_chunks(void (*want)(int64_t wx, int64_t wy, int r))
                 continue;
             double x, y;
             wex_dot_at(e, 0, &x, &y);
-            want((int64_t)floor(x), (int64_t)floor(y), 1);
+            want((int64_t)floor(x), (int64_t)floor(y), 2); /* (two chunks: the finds reach 25 slabs) */
             /* and ahead, so that its ground is there before it */
             const double dx = (double)e->to_x - e->from_x, dy = (double)e->to_y - e->from_y;
             const double len = sqrt(dx * dx + dy * dy);

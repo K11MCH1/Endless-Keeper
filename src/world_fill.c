@@ -2,8 +2,16 @@
 // Free implementation of Bullfrog's Dungeon Keeper strategy game.
 /******************************************************************************/
 /** @file world_fill.c
- *     Endless worlds: the Fill room (Imps fill marked floor with earth).
+ *     Endless worlds: the Fill room (Imps fill marked floor with earth) - since 2026-11-22 a cave-in fill.
  * @par Purpose:
+ *     The user, 2026-11-22: the Fill room becomes a spell-like ability with the Cave-In icon. Its button and highlight are
+ *     the Fill room's, but only the keeper's own claimed floor with nothing on it (no creature, enemy, body, object, trap,
+ *     room) can be chosen: anything else is red. Each slab placed costs 50 gold (terrain.cfg) and fills at once: the
+ *     Cave-In spell's falling rocks, dust, quake and sound on that slab, and dirt rising from the floor (SLAB50's four
+ *     heights, one cube more each step), then earth. Such a fill is a mark with "cave" set (struct Game world_fill[]: a
+ *     thin client sees it; saved in FIL1, owner + 0x100); the Imps leave it alone. Imp marks of older saves are still
+ *     filled by Imps as described below.
+ *
  *     See world_fill.h. FILL is a room kind of terrain.cfg (the panel button, the highlight, the cursor, the big icon
  *     with its price all come with that), but no room is ever built: keeper_build_room hands its slabs here. A placed
  *     slab is a mark (struct Game world_fill[], so a thin client draws it; the world save's FIL1). Marks are world
@@ -79,6 +87,9 @@
 #include "thing_stats.h"
 #include "thing_traps.h"
 #include "creature_states_mood.h"
+#include "config_magic.h"
+#include "thing_objects.h"
+#include "magic_powers.h"
 #include "world_stream.h"
 #include "world_fill_icons.h"
 #include "custom_sprites.h"
@@ -135,6 +146,12 @@ static SubtlCodedCoords wf_center_stl(MapSlabCoord x, MapSlabCoord y)
     return get_subtile_number(slab_subtile_center(x), slab_subtile_center(y));
 }
 
+/** An Imp's mark (not a cave-in fill). */
+#define WF_IMP_MARK(m) ((m)->used && ((m)->cave == 0))
+#define WF_CAVE_STEP 8   /* turns between the dirt's heights (SLAB50 frames 0-3: 1 to 4 cubes) */
+#define WF_CAVE_FRAMES 4
+#define WF_CAVE_WAIT 400 /* turns a finished fill waits for its slab to be clear before it gives up (floor again) */
+
 /** The mark on that engine slab (any keeper's), or -1. */
 static int wf_find(MapSlabCoord x, MapSlabCoord y)
 {
@@ -150,7 +167,7 @@ static int wf_count(PlayerNumber plyr_idx)
 {
     int n = 0;
     for (int i = 0; i < WORLD_FILL_MAX; i++)
-        if (wfm[i].used && (wfm[i].owner == plyr_idx))
+        if (WF_IMP_MARK(&wfm[i]) && (wfm[i].owner == plyr_idx))
             n++;
     return n;
 }
@@ -242,11 +259,13 @@ static TbBool wf_floor_for(PlayerNumber plyr_idx, MapSlabCoord x, MapSlabCoord y
 
 TbBool world_fill_can_mark(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y)
 {
-    if (!wf_floor_for(plyr_idx, slb_x, slb_y))
+    /* the cave-in fill (2026-11-22): the keeper's own claimed floor only, with nothing on it (red otherwise) */
+    const struct SlabMap *slb = get_slabmap_block(slb_x, slb_y);
+    if (slabmap_block_invalid(slb) || (slb->room_index > 0) || (slb->kind != SlbT_CLAIMED) || (slabmap_owner(slb) != plyr_idx))
         return false;
     if (wf_find(slb_x, slb_y) >= 0)
         return false;
-    return !wf_slab_has_things(slb_x, slb_y, WfT_NotCreatures);
+    return !wf_slab_has_things(slb_x, slb_y, WfT_All);
 }
 
 TbBool world_fill_marked_by(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y)
@@ -273,8 +292,7 @@ TbBool world_fill_place(int user, PlayerNumber plyr_idx, MapSlabCoord slb_x, Map
     for (int i = 0; (i < WORLD_FILL_MAX) && (free_at < 0); i++)
         if (!wfm[i].used)
             free_at = i;
-    const int mine = wf_count(plyr_idx);
-    if ((free_at < 0) || (mine >= WF_PLAYER_MARKS))
+    if (free_at < 0)
     {
         if (is_my_player_number(plyr_idx))
             output_message(SMsg_WorkerJobsLimit, 500);
@@ -286,18 +304,14 @@ TbBool world_fill_place(int user, PlayerNumber plyr_idx, MapSlabCoord slb_x, Map
         output_player_message(plyr_idx, SMsg_GoldNotEnough, 0);
         return false;
     }
-    if (mine == 0)
-        game.world_fill_done[plyr_idx] = 0; /* a new batch: the meter starts again */
+    /* a cave-in fill: it begins now (wf_cave_turn) */
     struct WorldFillMark *m = &wfm[free_at];
     memset(m, 0, sizeof(*m));
     wf_world(slb_x, slb_y, &m->x, &m->y);
     m->owner = (uint8_t)plyr_idx;
+    m->cave = 1;
+    m->check_turn = (int32_t)game.play_gameturn;
     m->used = 1;
-    if (!netstate_is_client())
-        wf_send_off_mark(slb_x, slb_y, plyr_idx); /* (told to go at once) */
-    /* the Imps' task list is made again at once, as for a slab tagged to dig: an Imp reinforcing leaves that for it (the
-       2026-11-20 test: a mark placed while the Imps reinforced waited 350 turns) */
-    dungeon->digger_stack_update_turn = 0;
     if (is_my_player_number(plyr_idx))
     {
         play_non_3d_sample(snd_tile_place);
@@ -308,14 +322,14 @@ TbBool world_fill_place(int user, PlayerNumber plyr_idx, MapSlabCoord slb_x, Map
             play_non_3d_sample(snd_larg_tile_up);
         }
     }
-    SYNCDBG(8, "Player %d marked engine slab (%d,%d) to be filled", (int)plyr_idx, (int)slb_x, (int)slb_y);
+    SYNCDBG(8, "Player %d brings the ceiling down on engine slab (%d,%d)", (int)plyr_idx, (int)slb_x, (int)slb_y);
     return true;
 }
 
 TbBool world_fill_unmark(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y)
 {
     const int i = wf_find(slb_x, slb_y);
-    if ((i < 0) || (wfm[i].owner != plyr_idx))
+    if ((i < 0) || (wfm[i].owner != plyr_idx) || wfm[i].cave)
         return false;
     memset(&wfm[i], 0, sizeof(wfm[i])); /* (no gold back; an Imp at it sees it gone and leaves) */
     play_player_sample(plyr_idx, snd_tile_sell); /* (the Sell Room sound, as for a room's slab: the user, 2026-11-20) */
@@ -346,7 +360,7 @@ void world_fill_draw_marks(long cam_x, long cam_y, long cam_z, int frontview, vo
     {
         const struct WorldFillMark *m = &wfm[i];
         MapSlabCoord x, y;
-        if (!m->used || (m->owner != me) || !wf_engine(m, &x, &y))
+        if (!WF_IMP_MARK(m) || (m->owner != me) || !wf_engine(m, &x, &y))
             continue;
         const long bx = subtile_coord(slab_subtile(x, 0), 0), by = subtile_coord(slab_subtile(y, 0), 0);
         if (saved.visible && (bx >= min(saved.beg_x, saved.end_x)) && (bx < max(saved.beg_x, saved.end_x)) &&
@@ -576,7 +590,7 @@ static TbBool wf_fill_safe(PlayerNumber owner, MapSlabCoord fx, MapSlabCoord fy,
     for (int i = 0; i < WORLD_FILL_MAX; i++)
     {
         MapSlabCoord kx, ky;
-        if (wfm[i].used && wf_engine(&wfm[i], &kx, &ky) && (abs(kx - fx) <= WF_BOX) && (abs(ky - fy) <= WF_BOX))
+        if (WF_IMP_MARK(&wfm[i]) && wf_engine(&wfm[i], &kx, &ky) && (abs(kx - fx) <= WF_BOX) && (abs(ky - fy) <= WF_BOX))
             wf_marked[(ky - fy + WF_BOX) * WF_BOX_SIDE + (kx - fx + WF_BOX)] = 1;
     }
     int nlabel = 0;
@@ -808,7 +822,7 @@ int world_fill_add_to_imp_stack(struct Dungeon *dungeon, int max_tasks)
     {
         struct WorldFillMark *m = &wfm[i];
         MapSlabCoord x, y;
-        if (!m->used || (m->owner != p) || !wf_engine(m, &x, &y))
+        if (!WF_IMP_MARK(m) || (m->owner != p) || !wf_engine(m, &x, &y))
             continue;
         if (wf_busy_count(m, x, y) >= WF_WORKERS)
             continue;
@@ -933,7 +947,7 @@ static TbBool wf_take_next(struct Thing *thing)
     {
         struct WorldFillMark *m = &wfm[i];
         MapSlabCoord x, y;
-        if (!m->used || (m->owner != thing->owner) || !wf_engine(m, &x, &y))
+        if (!WF_IMP_MARK(m) || (m->owner != thing->owner) || !wf_engine(m, &x, &y))
             continue;
         const long d = max(abs(x - ix), abs(y - iy));
         if ((d > WF_NEXT_REACH) || (wf_busy_count(m, x, y) >= WF_WORKERS) || (m->blocked && ((long)(game.play_gameturn - m->check_turn) < WF_RECHECK)))
@@ -1176,6 +1190,127 @@ void world_fill_register_icons(void)
 
 static void wf_test_turn(void);
 
+/** Sends the creatures off a slab that is filling (the Cave-In spell's way out); true when none is left on it that
+ *  cannot go (held, possessed, in custody). Bodies, objects and traps on it are counted in *others. */
+static TbBool wf_cave_clear(MapSlabCoord x, MapSlabCoord y, int *others)
+{
+    TbBool clear = true;
+    *others = 0;
+    for (int dy = 0; dy < STL_PER_SLB; dy++)
+        for (int dx = 0; dx < STL_PER_SLB; dx++)
+        {
+            const struct Map *mapblk = get_map_block_at(slab_subtile(x, dx), slab_subtile(y, dy));
+            if (map_block_invalid(mapblk))
+                continue;
+            ThingIndex i = get_mapwho_thing_index(mapblk);
+            int k = 0;
+            while ((i != 0) && (k++ < 256))
+            {
+                struct Thing *thing = thing_get(i);
+                if (thing_is_invalid(thing))
+                    break;
+                i = thing->next_on_mapblk;
+                if (thing_is_picked_up(thing))
+                    continue;
+                if (thing->class_id == TCls_Creature)
+                {
+                    clear = false;
+                    if (((thing->alloc_flags & TAlF_IsControlled) == 0) && !creature_is_kept_in_custody(thing) &&
+                        !creature_is_being_unconscious(thing) && (get_creature_state_besides_interruptions(thing) != CrSt_CreatureEscapingDeath))
+                    {
+                        if (cleanup_current_thing_state(thing) && setup_move_out_of_cave_in(thing))
+                            thing->continue_state = CrSt_CreatureEscapingDeath;
+                    }
+                } else if ((thing->class_id == TCls_Object) && !(get_object_model_stats(thing->model)->model_flags & OMF_DestroyedOnRoomPlace))
+                    (*others)++;
+                else if ((thing->class_id == TCls_DeadCreature) || (thing->class_id == TCls_Trap) || (thing->class_id == TCls_Door))
+                    (*others)++;
+            }
+        }
+    return clear && (*others == 0);
+}
+
+/** The cave-in fills (every turn): the Cave-In spell's rocks and dust over the slab, its quake and sound at the start,
+ *  the dirt rising a cube every WF_CAVE_STEP turns (SLAB50), then earth. */
+static void wf_cave_turn(void)
+{
+    const struct PowerConfigStats *powerst = get_power_model_stats(PwrK_CAVEIN);
+    for (int i = 0; i < WORLD_FILL_MAX; i++)
+    {
+        struct WorldFillMark *m = &wfm[i];
+        if (!m->used || !m->cave)
+            continue;
+        if ((m->owner >= PLAYERS_MAX) || !player_exists(get_player(m->owner)))
+        {
+            memset(m, 0, sizeof(*m));
+            continue;
+        }
+        MapSlabCoord x, y;
+        if (!wf_engine(m, &x, &y))
+            continue; /* (ground not loaded: it waits) */
+        const long t = (long)(game.play_gameturn - (GameTurn)m->check_turn);
+        struct Coord3d mid;
+        mid.x.val = subtile_coord_center(slab_subtile_center(x));
+        mid.y.val = subtile_coord_center(slab_subtile_center(y));
+        mid.z.val = 0;
+        if (t == 0)
+        {
+            /* the start: the quake for its keeper, the dust and the spell's sound */
+            struct Dungeon *dungeon = get_players_num_dungeon(m->owner);
+            if (!dungeon_invalid(dungeon) && (dungeon->camera_deviate_quake < 24))
+                dungeon->camera_deviate_quake = 24;
+            mid.z.val = get_floor_height_at(&mid) + 384;
+            struct Thing *dust = create_effect(&mid, TngEff_HarmlessGas4, m->owner);
+            if (!thing_is_invalid(dust) && (powerst != NULL))
+                thing_play_sample(dust, powerst->select_sound_idx, 25, 0, 3, 0, 2, FULL_LOUDNESS);
+        }
+        if ((t < WF_CAVE_STEP * (WF_CAVE_FRAMES + 1)) && ((t % 6) == 0))
+        {
+            /* rocks falling from the ceiling over the slab */
+            struct Coord3d pos = mid;
+            pos.x.val += GAME_RANDOM(640) - 320;
+            pos.y.val += GAME_RANDOM(640) - 320;
+            pos.z.val = get_ceiling_height(&pos) - 128;
+            struct Thing *rock = create_effect_element(&pos, TngEff_Flash, m->owner);
+            if (!thing_is_invalid(rock) && (powerst != NULL))
+                rock->health = powerst->duration;
+        }
+        if ((t > 0) && ((t % 12) == 0) && (t < WF_CAVE_STEP * (WF_CAVE_FRAMES + 1)))
+        {
+            struct Coord3d pos = mid;
+            pos.z.val = get_floor_height_at(&pos) + 256;
+            create_effect(&pos, TngEff_HarmlessGas4, m->owner);
+        }
+        int others = 0;
+        if ((m->hits < WF_CAVE_FRAMES) && (t >= (long)WF_CAVE_STEP * (m->hits + 1)))
+        {
+            /* the dirt a cube higher; whoever came onto the slab is sent off it */
+            wf_cave_clear(x, y, &others);
+            place_animating_slab_type_on_map(SlbT_SLAB50, (char)m->hits, slab_subtile_center(x), slab_subtile_center(y), game.neutral_player_num);
+            m->hits++;
+            continue;
+        }
+        if ((m->hits >= WF_CAVE_FRAMES) && (t >= (long)WF_CAVE_STEP * (WF_CAVE_FRAMES + 1)))
+        {
+            if (!wf_cave_clear(x, y, &others))
+            {
+                if (++m->wait < WF_CAVE_WAIT)
+                    continue;
+                /* something never left: the slab is floor again (no gold back) */
+                SYNCLOG("World: player %d's cave-in fill at engine slab (%d,%d) gave up: something stayed on it", (int)m->owner, (int)x, (int)y);
+                place_slab_type_on_map(SlbT_CLAIMED, slab_subtile_center(x), slab_subtile_center(y), m->owner, 0);
+                memset(m, 0, sizeof(*m));
+                continue;
+            }
+            place_slab_type_on_map(SlbT_EARTH, slab_subtile_center(x), slab_subtile_center(y), game.neutral_player_num, 0);
+            if (m->owner < PLAYERS_MAX)
+                game.world_fill_done[m->owner]++;
+            SYNCDBG(8, "Player %d's cave-in fill at engine slab (%d,%d) is earth", (int)m->owner, (int)x, (int)y);
+            memset(m, 0, sizeof(*m));
+        }
+    }
+}
+
 /* Walking Imps that do not move (the 2026-11-20 test: an Imp that had just filled the slab beside it and was sent on
    stood still for 300 turns; its way was most likely worked out through the slab it had filled): every 16 turns, one
    that is where it was is given its way again after 48 turns, and gives the mark up after 96. */
@@ -1236,13 +1371,14 @@ void world_fill_turn(void)
                 set_room_available(p, rk, 1, 1);
         }
     }
+    wf_cave_turn();
     if ((game.play_gameturn % 16) != 7)
         return;
     wf_walkers_turn();
     for (int i = 0; i < WORLD_FILL_MAX; i++)
     {
         struct WorldFillMark *m = &wfm[i];
-        if (!m->used)
+        if (!WF_IMP_MARK(m))
             continue;
         if ((m->owner >= PLAYERS_MAX) || !player_exists(get_player(m->owner)))
         {
@@ -1300,7 +1436,7 @@ void world_fill_save(uint8_t *buf)
     {
         if (!wfm[i].used)
             continue;
-        const int32_t v[3] = {wfm[i].x, wfm[i].y, (int32_t)wfm[i].owner};
+        const int32_t v[3] = {wfm[i].x, wfm[i].y, (int32_t)wfm[i].owner | (wfm[i].cave ? 0x100 : 0)}; /* (a cave-in fill: + 0x100) */
         memcpy(at, v, sizeof(v));
         at += sizeof(v);
         n++;
@@ -1321,11 +1457,17 @@ TbBool world_fill_load(const uint8_t *buf, size_t len)
     {
         int32_t v[3];
         memcpy(v, buf + 4 + k * 12, sizeof(v));
-        if ((v[2] < 0) || (v[2] >= PLAYERS_MAX))
+        const int32_t owner = v[2] & 0xFF;
+        if ((v[2] < 0) || (owner >= PLAYERS_MAX))
             continue;
         wfm[k].x = v[0];
         wfm[k].y = v[1];
-        wfm[k].owner = (uint8_t)v[2];
+        wfm[k].owner = (uint8_t)owner;
+        if (v[2] & 0x100)
+        {
+            wfm[k].cave = 1; /* a cave-in fill under way: it begins again (its dirt rises from the frame it had) */
+            wfm[k].check_turn = (int32_t)game.play_gameturn;
+        }
         wfm[k].used = 1;
     }
     return true;

@@ -35,8 +35,8 @@ int world_circle_at_engine_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 int world_circles_level_at_world(int64_t wx, int64_t wy, int floor_level, int *circle_out);
 /** The same for an engine slab, logged ("what": who is levelled; NULL: no log line). */
 int world_circles_level_at_slab(MapSlabCoord slb_x, MapSlabCoord slb_y, int floor_level, const char *what);
-/** The same for a wild pack: from the nearest keeper's army's upper quarter of levels (world_threat.c), not its best
- *  creature (2026-11-18). */
+/** The level of a wild pack: the nearest keeper's army's upper quarter of levels (world_threat.c) in circles 1-2, a level
+ *  above in circle 3, two in circle 4 (2026-11-22; it was the circles' shares); circles 5-9 their fixed levels. */
 int world_circles_wild_level_at_slab(MapSlabCoord slb_x, MapSlabCoord slb_y, int floor_level, const char *what);
 /** The level the generator gives heroes at a place today (by the distance to the nearest start): the floor of the
  *  heroes outposts and fortresses send. */

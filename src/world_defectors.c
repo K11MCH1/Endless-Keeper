@@ -172,7 +172,9 @@ TbBool world_defectors_leaving(struct Thing *creatng)
             (int)from, df_cause_words[cause]);
         return false;
     }
-    struct Room *portal = pick_random_room_of_role(to, RoRoF_CrPoolSpawn);
+    struct Room *portal = world_spawn_portal(to); /* the keeper's first portal, as every new creature (2026-11-22) */
+    if (room_is_invalid(portal))
+        portal = pick_random_room_of_role(to, RoRoF_CrPoolSpawn);
     struct Coord3d pos;
     pos.x.val = subtile_coord_center(slab_subtile_center(slb_num_decode_x(portal->slabs_list)));
     pos.y.val = subtile_coord_center(slab_subtile_center(slb_num_decode_y(portal->slabs_list)));
