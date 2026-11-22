@@ -221,9 +221,10 @@ static bool rightIgnored = false;
 // ---- The hand's rules (2026-11-19), after M3RT1N99's KeeperFX Android port (touch_hand.c, touch_keeper.c;
 // github.com/M3RT1N99/keeperfx, android-v1.1, GPL-2). A tap stays a click: it picks up what is under it. With
 // something in the hand, a finger that rests a quarter second, or travels, on ground that takes a drop lets the hand's
-// things fall there one at a time for as long as it stays down. With an empty hand a quick stroke slaps the own
-// creatures it crosses; it never presses the left button, so the walls it crosses are not marked for digging (theirs
-// turned into a dig drag on a wall). The clicks are right clicks at the finger, a mouse's own, and every click on its
+// things fall there one at a time for as long as it stays down. With an empty hand a quick stroke that starts on an
+// own creature slaps it and the own creatures it crosses after it; one that starts anywhere else moves the camera, as
+// a slow one does (2026-11-22: quick one-finger pans slapped instead). A slap stroke never presses the left button, so
+// the walls it crosses are not marked for digging (theirs turned into a dig drag on a wall). The clicks are right clicks at the finger, a mouse's own, and every click on its
 // way through the input lag counts: a drop goes out only for something that will still be in the hand when it
 // arrives, a slap only when nothing will be.
 namespace hand {
@@ -237,7 +238,8 @@ enum class Click { None, Drop, Slap };
 struct Flight { long long turn; bool pick; };
 struct Slapped { ThingIndex creature; long long ms; };
 enum class Phase { None, Deciding, Today, Armed };
-struct Stroke { Phase phase = Phase::None; bool readStart = false, open = false, moved = false, swipe = false, slappedOnce = false;
+struct Stroke { Phase phase = Phase::None; bool readStart = false, open = false, moved = false, swipe = false, slappedOnce = false,
+                fromCreature = false; // the stroke began on an own creature (read before the finger moved)
                 long long downMs = 0, movedMs = 0; double nextDropTurn = 0; float slapX = 0, slapY = 0; Slapped slapped[SlapMemory]{}; };
 static Flight flights[MaxFlights];
 static int flightCount = 0;
@@ -275,12 +277,15 @@ static Verdict decide(const Sees& s, long long now, float longPressMs) {
     if (!s.known) return Verdict::Wait;
     ageFlights(s.turn, s.lag);
     const int willHold = s.hand - countFlights(false) + countFlights(true);
-    if (!stroke.readStart) { stroke.readStart = true; stroke.open = willHold > 0 ? s.droppable : (!s.wall && !s.door); }
+    if (!stroke.readStart) {
+        stroke.readStart = true; stroke.open = willHold > 0 ? s.droppable : (!s.wall && !s.door);
+        stroke.fromCreature = !stroke.moved && s.creature != 0;
+    }
     if (!stroke.open) { stroke.phase = Phase::Today; return Verdict::Today; }
     if (stroke.moved) {
         if (willHold > 0) return arm(false, static_cast<double>(packetTurn(s)));
-        if (stroke.movedMs - stroke.downMs < SwipeMs) return arm(true, static_cast<double>(packetTurn(s)));
-        stroke.phase = Phase::Today; return Verdict::Today;
+        if (stroke.fromCreature && stroke.movedMs - stroke.downMs < SwipeMs) return arm(true, static_cast<double>(packetTurn(s)));
+        stroke.phase = Phase::Today; return Verdict::Today; // a pan
     }
     const long long held = now - stroke.downMs;
     if (willHold > 0 && s.droppable) return held >= HoldMs ? arm(false, static_cast<double>(packetTurn(s))) : Verdict::Wait;
