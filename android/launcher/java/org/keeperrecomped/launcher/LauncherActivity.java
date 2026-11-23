@@ -2,6 +2,7 @@ package org.keeperrecomped.launcher;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -138,7 +139,8 @@ public final class LauncherActivity extends Activity {
     /**
      * Engineering builds: drive the page from adb, e.g.
      * am start -n org.keeperrecomped.app/org.keeperrecomped.launcher.LauncherActivity --es debug_action tab:news
-     * Actions: tab:NAME, prepare, update, build, version:STABLE|ALPHA_VERSION, play:keeperfx, play:original, cancel.
+     * Actions: tab:NAME, prepare, update, build, version:STABLE|ALPHA_VERSION, play:keeperfx, play:original, cancel,
+     * export_log.
      */
     private void debugAction(Intent intent) {
         if (intent != null && isDebuggable() && intent.getBooleanExtra("debug_tree", false) && intent.getData() != null) {
@@ -165,6 +167,8 @@ public final class LauncherActivity extends Activity {
             js = "document.getElementById('rebuild').click()";
         else if (action.startsWith("version:"))
             js = "startedTask(KR.switchVersion(" + JSONObject.quote(action.equals("version:stable") ? "" : action.substring(8)) + "))";
+        else if (action.equals("export_log"))
+            js = "document.getElementById('exportLog').click()";
         else if (action.startsWith("play:"))
             js = "document.getElementById(" + JSONObject.quote(action.endsWith("original") ? "playOriginal" : "playKfx") + ").click()";
         else
@@ -191,6 +195,21 @@ public final class LauncherActivity extends Activity {
     void send(JSONObject payload, String type) {
         String js = "window.kr && kr.onEvent(" + JSONObject.quote(type) + "," + payload + ")";
         ui.post(() -> web.evaluateJavascript(js, null));
+    }
+
+    /** Opens the share sheet with an exported log zip (Advanced > Maintenance > Export log). */
+    private void shareLog(LogExport.Result r) {
+        Intent send = new Intent(Intent.ACTION_SEND)
+                .setType("application/zip")
+                .putExtra(Intent.EXTRA_STREAM, r.uri)
+                .putExtra(Intent.EXTRA_SUBJECT, r.shown.substring(r.shown.lastIndexOf('/') + 1))
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        send.setClipData(ClipData.newRawUri("", r.uri)); // carries the read grant through the chooser
+        try {
+            startActivity(Intent.createChooser(send, "Send the log"));
+        } catch (Exception e) {
+            AppLog.w("no share sheet: " + e);
+        }
     }
 
     private void openExternal(String url) {
@@ -396,6 +415,27 @@ public final class LauncherActivity extends Activity {
                 return "There is no KeeperFX game data to export yet.";
             askNotifications();
             PrepareService.start(LauncherActivity.this, new Intent().putExtra(PrepareService.EXTRA_TASK, "kfx_export"));
+            return "";
+        }
+
+        /**
+         * Advanced > Maintenance: the game's logs (and newest crash report) as one zip in Download, then the share
+         * sheet with it attached, so a player can send it straight away or later from Download (LogExport).
+         */
+        @JavascriptInterface
+        public String exportLog() {
+            if (!LogExport.hasGameLogs(LauncherActivity.this))
+                return "There is no game log yet. Play once, then export it.";
+            io.execute(() -> {
+                try {
+                    LogExport.Result r = LogExport.write(LauncherActivity.this);
+                    send(err("Saved to " + r.shown), "toast");
+                    ui.post(() -> shareLog(r));
+                } catch (Exception e) {
+                    AppLog.e("log export failed", e);
+                    send(err("Could not export the log: " + e.getMessage()), "toast");
+                }
+            });
             return "";
         }
 

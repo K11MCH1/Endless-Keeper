@@ -432,6 +432,7 @@ $('changeVersion').onclick = async () => {
 $('checkUpdate').onclick = () => { const err = bridge ? bridge.update() : ''; if (err) toast(err); else { toast('Checking for updates…'); showTab('play'); } };
 $('importKfx').onclick = () => { const err = bridge ? bridge.importKfx() : 'Preview'; if (err) toast(err); };
 $('exportKfx').onclick = () => { const err = bridge ? bridge.exportKfx() : 'Preview'; if (err) toast(err); else { startedTask(''); showTab('play'); } };
+$('exportLog').onclick = () => { const err = bridge ? bridge.exportLog() : 'Preview'; if (err) toast(err); else toast('Exporting the log…'); };
 $('resetSettings').onclick = () => { if (bridge) { bridge.resetSettings(); renderForms(); toast('Settings reset to defaults.'); } };
 $('modalClose').onclick = closeModal;
 $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
