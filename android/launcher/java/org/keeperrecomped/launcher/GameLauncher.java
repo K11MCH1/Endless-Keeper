@@ -89,6 +89,8 @@ final class GameLauncher {
         i.putExtra("touch_pan_sensitivity", s.integer("touch_pan_sensitivity_pct") / 100f);
         i.putExtra("second_screen_map", s.bool("second_screen_map"));
         i.putExtra("show_fps", s.bool("show_fps"));
+        i.putExtra("safe_area", s.get("safe_area"));
+        i.putExtra("safe_area_margin", s.integer("safe_area_margin"));
         // Online matchmaking runs over TLS; the engine's libcurl needs the phone's CAs.
         String caBundle = CaBundle.write(c);
         if (caBundle != null)

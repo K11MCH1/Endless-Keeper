@@ -781,9 +781,15 @@ static PossessLayout possessLayout() {
     float panel = local_state.engine_window_x > 0 ? windowPosition(local_state.engine_window_x, 0).x : 0;
     PossessLayout l{static_cast<float>(w), static_cast<float>(h), panel};
     l.stickR = .15f*u; l.attackR = .12f*u; l.exitR = .065f*u;
-    l.stick = {panel + .25f*u, h - .27f*u};
-    l.attack = {w - .2f*u, h - .25f*u};
-    l.exit = {w - .1f*u, .26f*u};
+    // Endless (2026-11-24): inside the screen safe area (rounded corners, the camera hole; GameActivity sets it)
+    SDL_Rect safe{0, 0, w, h};
+    auto* win = static_cast<SDL_Window*>(GetSDLWindowSystem()->GetNativeWindow());
+    if (!win || !SDL_GetWindowSafeArea(win, &safe) || safe.w <= 0 || safe.h <= 0) safe = SDL_Rect{0, 0, w, h};
+    const float sl = static_cast<float>(safe.x), st = static_cast<float>(safe.y);
+    const float sr = static_cast<float>(w - safe.x - safe.w), sb = static_cast<float>(h - safe.y - safe.h);
+    l.stick = {std::max(panel, sl) + .25f*u, h - sb - .27f*u};
+    l.attack = {w - sr - .2f*u, h - sb - .25f*u};
+    l.exit = {w - sr - .1f*u, st + .26f*u};
     return l;
 }
 static float distanceTo(SDL_FPoint a, float x, float y) { return std::hypot(a.x-x, a.y-y); }

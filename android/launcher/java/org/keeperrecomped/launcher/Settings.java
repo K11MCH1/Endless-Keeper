@@ -76,14 +76,21 @@ final class Settings {
                 "Internal rendering size, scaled to fill the screen. Auto keeps the screen's shape at up to 1280 pixels "
                         + "wide on any device; 100% draws every screen pixel (sharper, heavier).",
                 "0|Auto", "1.0|100% (native)", "0.75|75%", "0.5|50%");
-        choice("graphics", "Display", "viewport_mode", "ORIGINAL", "Viewport mode",
-                "How the in-game view shares the screen with the sidebar.",
+        choice("graphics", "Display", "viewport_mode", "FULL", "Viewport mode",
+                "How the in-game view shares the screen with the sidebar. Full (the default): the view runs under the "
+                        + "sidebar, so its cut corners show the game, not black.",
                 "ORIGINAL|Original", "FULL|Full", "FULL_LETTERBOX|Full (letterbox)");
         choice("graphics", "Display", "resize_movies", "FIT", "Resize Movies", null,
                 "FIT|Fit", "STRETCH|Stretch", "CROP|Crop", "PIXELPERFECT|Pixel perfect", "4BY3|4:3", "4BY3PP|4:3 pixel perfect", "OFF|Off");
         bool("graphics", "Display", "show_fps", false, "Show FPS counter", "Android overlay with the measured frame rate.");
         bool("graphics", "Display", "second_screen_map", true, "Map on second screen",
                 "On devices with a second built-in screen (Retroid Pocket Duo): the level map shows there; touch it to move the camera.");
+        choice("graphics", "Interface", "safe_area", "auto", "Screen safe area",
+                "Keeps the side panel, the minimap, the clock and the other buttons clear of rounded screen corners and "
+                        + "the camera hole. The 3D view still fills the whole screen.",
+                "auto|Auto (corners and camera)", "manual|Manual margin", "off|Off (edge to edge)");
+        integer("graphics", "Interface", "safe_area_margin", 16, 0, 96, "Manual safe margin (dp)",
+                "Used when Screen safe area is Manual: the same margin on every side.");
         integer("graphics", "Interface", "creature_status_size", 16, 4, 64, "Creature flower size (px)", null);
         integer("graphics", "Interface", "hand_size", 100, 25, 400, "Hand size (%)", null);
         integer("graphics", "Interface", "line_box_size", 150, 25, 400, "Select box line size (%)", null);

@@ -204,13 +204,20 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
     @Override
     public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
         if (Build.VERSION.SDK_INT >= 30 /* Android 11 (R) */) {
-            Insets combined = insets.getInsets(WindowInsets.Type.systemBars() |
-                                               WindowInsets.Type.systemGestures() |
-                                               WindowInsets.Type.mandatorySystemGestures() |
-                                               WindowInsets.Type.tappableElement() |
-                                               WindowInsets.Type.displayCutout());
+            // Endless Keeper (2026-11-24): the activity may decide the safe area itself (the camera cutout and
+            // the rounded corners, or a margin the player set); SDL's own also counts the gesture areas, far too
+            // wide for a game's buttons. {left, right, top, bottom} in pixels.
+            int[] safe = (SDLActivity.mSingleton != null) ? SDLActivity.mSingleton.safeAreaInsets(insets) : null;
+            if (safe == null) {
+                Insets combined = insets.getInsets(WindowInsets.Type.systemBars() |
+                                                   WindowInsets.Type.systemGestures() |
+                                                   WindowInsets.Type.mandatorySystemGestures() |
+                                                   WindowInsets.Type.tappableElement() |
+                                                   WindowInsets.Type.displayCutout());
+                safe = new int[] { combined.left, combined.right, combined.top, combined.bottom };
+            }
 
-            SDLActivity.onNativeInsetsChanged(combined.left, combined.right, combined.top, combined.bottom);
+            SDLActivity.onNativeInsetsChanged(safe[0], safe[1], safe[2], safe[3]);
 
             if (insets.isVisible(WindowInsets.Type.ime())) {
                 if (!mKeyboardVisible) {

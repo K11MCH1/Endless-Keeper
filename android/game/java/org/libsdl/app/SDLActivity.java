@@ -1089,6 +1089,12 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     public static native void nativeSetNaturalOrientation(int orientation);
     public static native void onNativeRotationChanged(int rotation);
     public static native void onNativeInsetsChanged(int left, int right, int top, int bottom);
+
+    /** Endless Keeper: the window's safe area as {left, right, top, bottom} insets in pixels, or null for SDL's
+     *  own (system bars, gesture areas and the display cutout). See SDLSurface.onApplyWindowInsets. */
+    protected int[] safeAreaInsets(android.view.WindowInsets insets) {
+        return null;
+    }
     public static native void nativeAddTouch(int touchId, String name);
     public static native void nativePermissionResult(int requestCode, boolean result);
     public static native void onNativeLocaleChanged();

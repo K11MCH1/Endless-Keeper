@@ -119,6 +119,46 @@ public final class GameActivity extends SDLActivity {
             getWindow().setAttributes(params);
         }
     }
+    /** The screen safe area for the game's UI (2026-11-24): phones with rounded corners and camera hole punches
+     *  cut the side panel, the minimap and the clock. The 3D view still fills the screen; the engine keeps its UI
+     *  inside these insets ({left, right, top, bottom}, pixels; SDL_GetWindowSafeArea). Launcher setting
+     *  "Screen safe area": auto = the camera cutout's safe insets and, for each rounded corner of radius r,
+     *  r * (1 - 1/sqrt 2) from both edges along it (a square corner that far in clears the curve); manual = the
+     *  player's margin on every side; off = none. */
+    @Override protected int[] safeAreaInsets(WindowInsets insets) {
+        String mode = getIntent().getStringExtra("safe_area");
+        int[] safe = new int[4];
+        if ("off".equals(mode))
+            return safe;
+        if ("manual".equals(mode)) {
+            int px = Math.round(getIntent().getIntExtra("safe_area_margin", 16) * getResources().getDisplayMetrics().density);
+            java.util.Arrays.fill(safe, Math.max(0, px));
+            return safe;
+        }
+        android.view.DisplayCutout cutout = insets.getDisplayCutout();
+        if (cutout != null) {
+            safe[0] = cutout.getSafeInsetLeft();
+            safe[1] = cutout.getSafeInsetRight();
+            safe[2] = cutout.getSafeInsetTop();
+            safe[3] = cutout.getSafeInsetBottom();
+        }
+        final int[][] corners = {   // the corner, then the indices of its two edges in safe[]
+            { android.view.RoundedCorner.POSITION_TOP_LEFT, 0, 2 },
+            { android.view.RoundedCorner.POSITION_TOP_RIGHT, 1, 2 },
+            { android.view.RoundedCorner.POSITION_BOTTOM_RIGHT, 1, 3 },
+            { android.view.RoundedCorner.POSITION_BOTTOM_LEFT, 0, 3 },
+        };
+        for (int[] c : corners) {
+            android.view.RoundedCorner corner = insets.getRoundedCorner(c[0]);
+            if (corner == null)
+                continue;
+            int in = (int) Math.ceil(corner.getRadius() * (1.0 - Math.sqrt(0.5)));
+            safe[c[1]] = Math.max(safe[c[1]], in);
+            safe[c[2]] = Math.max(safe[c[2]], in);
+        }
+        android.util.Log.i("KeeperAndroid", "safe area insets (l,r,t,b): " + safe[0] + "," + safe[1] + "," + safe[2] + "," + safe[3]);
+        return safe;
+    }
     @Override protected void onStart() { super.onStart(); if (secondScreen != null) secondScreen.show(); }
     @Override protected void onStop() { if (secondScreen != null) secondScreen.hide(); super.onStop(); }
     @Override protected void onDestroy() {
