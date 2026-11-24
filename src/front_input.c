@@ -2290,8 +2290,17 @@ static short get_map_action_inputs(void)
 #ifdef KFX_ANDROID
         if (world_mode_active())
         {
-            /* touch: a two-finger tap (the touch layer's right click) takes the map to the heart; the back key or a
-               tap on a place leaves it */
+            /* touch: a two-finger tap (the touch layer's right click) puts away a spell (or another tool) held in the
+               hand, as a right click does in the dungeon (2026-11-24, the user: with a spell in the hand the full map
+               kept the player in it); with nothing held it takes the map to the heart; the back key or a tap on a
+               place leaves it */
+            const struct UserState *held = get_local_user_state_prediction();
+            if (!user_state_invalid(held) && (held->work_state != PSt_CtrlDungeon) && (held->work_state != PSt_HoldInHand)
+                && (held->work_state != PSt_CreatrInfo) && (held->work_state != PSt_CreatrInfoAll))
+            {
+                set_players_packet_action(player, PckA_SetPlyrState, PSt_CtrlDungeon, 0, 0, 0);
+                return true;
+            }
             world_parchment_home();
             return true;
         }
