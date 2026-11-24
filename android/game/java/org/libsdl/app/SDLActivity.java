@@ -1095,6 +1095,11 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     protected int[] safeAreaInsets(android.view.WindowInsets insets) {
         return null;
     }
+    /** Endless Keeper (2026-11-24): black bars ({left, right, top, bottom}, pixels) the game's surface keeps clear of,
+     *  so the whole picture sits inside the screen's rounded corners and camera hole; null for none (edge to edge). */
+    protected int[] safeBarsInsets(android.view.WindowInsets insets) {
+        return null;
+    }
     public static native void nativeAddTouch(int touchId, String name);
     public static native void nativePermissionResult(int requestCode, boolean result);
     public static native void onNativeLocaleChanged();

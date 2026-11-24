@@ -19,6 +19,7 @@
 #if !defined(_WIN32) && !defined(__ANDROID__) && !defined(__APPLE__)
 #include <sys/random.h>
 #endif
+#include "config.h"
 #include "post_inc.h"
 
 TbBool netsec_require_sealed(void)
@@ -39,7 +40,6 @@ __declspec(dllimport) long __stdcall BCryptGenRandom(void *algorithm, unsigned c
 #define NETSEC_BCRYPT_SYSTEM_RNG 0x00000002u
 #endif
 
-#define NETSEC_KEY_FILE "save/world_key.bin"
 #define NETSEC_NONCE_LEN 16
 #define NETSEC_MAC_LEN 16
 #define NETSEC_PW_MAX 255
@@ -102,7 +102,9 @@ void netsec_world_key_set(const uint8_t secret[NETSEC_KEY_LEN])
 void netsec_world_key_install(void)
 {
     uint8_t sec[NETSEC_KEY_LEN];
-    FILE *f = fopen(NETSEC_KEY_FILE, "rb");
+    char key_file[300]; /* (in the saves folder when one is set, see save_folder_file) */
+    save_folder_file("world_key.bin", key_file, sizeof(key_file));
+    FILE *f = fopen(key_file, "rb");
     TbBool have = false;
     if (f != NULL)
     {
@@ -112,11 +114,11 @@ void netsec_world_key_install(void)
     if (!have)
     {
         netsec_random(sec, sizeof(sec));
-        f = fopen(NETSEC_KEY_FILE, "wb");
+        f = fopen(key_file, "wb");
         if ((f == NULL) || (fwrite(sec, 1, sizeof(sec), f) != sizeof(sec)))
-            WARNLOG("World key: can't write %s; this run's worlds get a key of their own", NETSEC_KEY_FILE);
+            WARNLOG("World key: can't write %s; this run's worlds get a key of their own", key_file);
         else
-            SYNCLOG("World key: made this machine's (%s)", NETSEC_KEY_FILE);
+            SYNCLOG("World key: made this machine's (%s)", key_file);
         if (f != NULL)
             fclose(f);
     }

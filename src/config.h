@@ -259,6 +259,14 @@ struct ConfigFileData{
 
 /******************************************************************************/
 extern char keeper_runtime_directory[152];
+/** Endless (2026-11-24, Android launcher, Advanced > Saves folder): when set (command line -savedir <folder>), the
+ *  save files live in this folder instead of <runtime>/save. */
+extern char save_dir_override[256];
+/** Sets the saves folder (made if missing); false, and the saves stay in <runtime>/save, if it can't be written to. */
+TbBool set_save_dir_override(const char *path);
+/** A file of the save folder that is opened by name, not through the save path (the world key, the world index):
+ *  "save/<name>" as before, or in the saves folder when one is set. */
+const char *save_folder_file(const char *name, char *buf, size_t size);
 
 #pragma pack()
 /******************************************************************************/

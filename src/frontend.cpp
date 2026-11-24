@@ -130,7 +130,7 @@ struct GuiButtonInit frontend_main_menu_buttons[] = {
   { LbBtnT_NormalBtn,  BID_MENU_TITLE, 0, 0, NULL,               NULL,        NULL,                 0, 999,  24, 999,  24, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {1},            0, NULL },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_start_new_game,NULL,frontend_over_button,     3, 999,  76, 999,  76, 371, 46, frontend_draw_campaign_menu_button,  0, GUIStr_Empty,  0,       {2},            0, frontend_campaign_menu_button_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_load_continue_game,NULL,frontend_over_button, 0, 999, 118, 999, 118, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {8},            0, frontend_continue_game_maintain },
-  { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_change_state,NULL,frontend_over_button,FeSt_ENDLESS_MENU,999,160,999,160,371,46, world_menu_draw_endless_button,  0, GUIStr_Empty,  0,     {106},            0, world_menu_endless_maintain },
+  { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_change_state,NULL,frontend_over_button,FeSt_ENDLESS_MENU,999,160,999,160,371,46, world_menu_draw_endless_button,  0, GUIStr_Empty,  0,     {118},            0, world_menu_endless_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_load_mappacks,NULL,frontend_over_button,     34, 999, 202, 999, 202, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,     {106},            0, frontend_mappacks_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_change_state,NULL, frontend_over_button,    2, 999, 244,   999, 244, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {3},            0, frontend_main_menu_load_game_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_netservice_change_state,NULL, frontend_over_button,4,999,286,999,286,371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {4},            0, frontend_main_menu_netservice_maintain },
@@ -144,7 +144,7 @@ struct GuiButtonInit frontend_main_menu_buttons[] = {
 struct GuiButtonInit frontend_main_menu_buttons[] = {
   { LbBtnT_NormalBtn,  BID_MENU_TITLE, 0, 0, NULL,               NULL,        NULL,                 0, 999,  26, 999,  26, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {1},            0, NULL },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, world_menu_main_continue,NULL,frontend_over_button, 0, 999, 92, 999, 92, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {8},            0, world_menu_main_continue_maintain },
-  { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_change_state,NULL,frontend_over_button,FeSt_ENDLESS_MENU,999,138,999,138,371,46, world_menu_draw_endless_button,  0, GUIStr_Empty,  0,     {106},            0, world_menu_endless_maintain },
+  { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_change_state,NULL,frontend_over_button,FeSt_ENDLESS_MENU,999,138,999,138,371,46, world_menu_draw_endless_button,  0, GUIStr_Empty,  0,     {118},            0, world_menu_endless_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_change_state,NULL, frontend_over_button,    2, 999, 184,   999, 184, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {3},            0, frontend_main_menu_load_game_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_netservice_change_state,NULL, frontend_over_button,4,999,230,999,230,371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,       {4},            0, frontend_main_menu_netservice_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_change_state,NULL, frontend_over_button,   27, 999, 276,   999, 276, 371, 46, frontend_draw_large_menu_button,  0, GUIStr_Empty,  0,      {97},            0, NULL },
@@ -384,6 +384,7 @@ struct FrontEndButtonData frontend_button_info[FRONTEND_BUTTON_INFO_COUNT] = {
     {GUIStr_MnuContinueCampaign, 1}, // [115]
     {GUIStr_MnuStartNewGame, 1},
     {GUIStr_NetSettings, 2},
+    {GUIStr_Empty, 1}, // [118] Endless Mode (its own, so it doesn't light up with Map Packs; its caption is drawn by world_menu.c)
 };
 
 // bttn_sprite, tooltip_stridx, msg_stridx, lifespan_turns, turns_between_events, replace_event_kind_button;

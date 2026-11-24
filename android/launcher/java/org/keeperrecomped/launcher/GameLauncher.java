@@ -66,6 +66,14 @@ final class GameLauncher {
             }
             args.add("-nomods");
         }
+        // Advanced > Saves folder: Endless Keeper saves straight into the chosen folder (Play Original keeps its own)
+        String saves = SavesFolder.get(c);
+        if (!saves.isEmpty() && !"original".equals(profile)) {
+            if (!SavesFolder.access())
+                return "Endless Keeper can't reach your saves folder: allow \"All files access\" again in Advanced > Saves folder, or choose Use app storage.";
+            args.add("-savedir");
+            args.add(saves);
+        }
         for (String a : s.get("launch_options").trim().split("\\s+"))
             if (!a.isEmpty())
                 args.add(a);
@@ -91,6 +99,7 @@ final class GameLauncher {
         i.putExtra("show_fps", s.bool("show_fps"));
         i.putExtra("safe_area", s.get("safe_area"));
         i.putExtra("safe_area_margin", s.integer("safe_area_margin"));
+        i.putExtra("safe_bars", s.bool("safe_bars"));
         // Online matchmaking runs over TLS; the engine's libcurl needs the phone's CAs.
         String caBundle = CaBundle.write(c);
         if (caBundle != null)

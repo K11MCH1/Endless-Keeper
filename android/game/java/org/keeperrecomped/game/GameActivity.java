@@ -159,6 +159,41 @@ public final class GameActivity extends SDLActivity {
         android.util.Log.i("KeeperAndroid", "safe area insets (l,r,t,b): " + safe[0] + "," + safe[1] + "," + safe[2] + "," + safe[3]);
         return safe;
     }
+    /** Launcher setting "Black bars at the screen edges" (2026-11-24, a player's phone cut the side panel's corners):
+     *  the game's surface keeps clear of the camera cutout's safe insets and, at the ends of the screen's long sides,
+     *  of each rounded corner's whole radius, so the picture's corners sit on the curve, not under it. */
+    @Override protected int[] safeBarsInsets(WindowInsets insets) {
+        if (!getIntent().getBooleanExtra("safe_bars", false))
+            return null;
+        int[] bars = new int[4];
+        android.view.DisplayCutout cutout = insets.getDisplayCutout();
+        if (cutout != null) {
+            bars[0] = cutout.getSafeInsetLeft();
+            bars[1] = cutout.getSafeInsetRight();
+            bars[2] = cutout.getSafeInsetTop();
+            bars[3] = cutout.getSafeInsetBottom();
+        }
+        android.graphics.Rect screen = getWindowManager().getCurrentWindowMetrics().getBounds();
+        final boolean wide = screen.width() >= screen.height();
+        final int[][] corners = {   // the corner, then its edge across the long side: left/right when wide, else top/bottom
+            { android.view.RoundedCorner.POSITION_TOP_LEFT, 0, 2 },
+            { android.view.RoundedCorner.POSITION_TOP_RIGHT, 1, 2 },
+            { android.view.RoundedCorner.POSITION_BOTTOM_RIGHT, 1, 3 },
+            { android.view.RoundedCorner.POSITION_BOTTOM_LEFT, 0, 3 },
+        };
+        for (int[] c : corners) {
+            android.view.RoundedCorner corner = insets.getRoundedCorner(c[0]);
+            if (corner == null)
+                continue;
+            int edge = wide ? c[1] : c[2];
+            bars[edge] = Math.max(bars[edge], corner.getRadius());
+        }
+        // never more than a quarter of the screen from one side (a broken report must not squeeze the game away)
+        int maxX = screen.width() / 4, maxY = screen.height() / 4;
+        bars[0] = Math.min(bars[0], maxX); bars[1] = Math.min(bars[1], maxX);
+        bars[2] = Math.min(bars[2], maxY); bars[3] = Math.min(bars[3], maxY);
+        return bars;
+    }
     @Override protected void onStart() { super.onStart(); if (secondScreen != null) secondScreen.show(); }
     @Override protected void onStop() { if (secondScreen != null) secondScreen.hide(); super.onStop(); }
     @Override protected void onDestroy() {

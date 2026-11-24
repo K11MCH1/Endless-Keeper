@@ -43,6 +43,7 @@
 // Endless Keeper (2026-11-09): the endless world's full-screen map scrolls with one finger and zooms with a pinch
 extern "C" TbBool world_mode_active(void);
 extern "C" void parchment_pinch(float log_scale, long screen_x, long screen_y);
+extern "C" int point_is_over_gui_menu(long x, long y); // gui_frontmenu.c (no header has it)
 extern "C" void world_parchment_magnifier(TbBool held);
 extern "C" TbBool world_parchment_magnifier_icon_at(long x, long y);
 extern "C" TbBool KfxAndroidPointerPlace(struct Coord3d *pos, unsigned char *context, ThingIndex *under); // front_input.c
@@ -143,19 +144,28 @@ static void position(float x, float y) {
 static void button(unsigned action) { TbPoint delta{0,0}; mouseControl(action, &delta); }
 // A tap is a short real click. In a level the button must be seen held for a game turn:
 // digging tags on a held press, so a same-frame press and release tagged nothing.
+// (2026-11-24, the user: every tap came late, icons too.) A tap on a button or menu (they act on release) is let go
+// after two frames, enough for the game to see the press; one on the world is let go once a game turn has seen it,
+// with no time floor.
 static uint64_t clickReleaseAt = 0;
 static GameTurn clickTurn = 0;
+static bool clickQuick = false;
+static uint64_t clickFrame = 0;
+static uint64_t frameCount = 0;
 static void releaseClick() {
     if (!clickReleaseAt) return;
     clickReleaseAt = 0;
     button(MActn_LBUTTONUP);
 }
-static void click() {
+static void click(bool quick = false) {
     releaseClick();
     button(MActn_LBUTTONDOWN);
-    clickReleaseAt = SDL_GetTicks() + 80;
+    clickReleaseAt = SDL_GetTicks() + 1;
     clickTurn = get_gameturn();
+    clickQuick = quick;
+    clickFrame = frameCount;
 }
+static bool pointerOnGui(); // (below)
 // Picking up acts on release, so with a creature under the hand click at once, before it
 // walks away; anything else gets the held click.
 static void tap() {
@@ -163,11 +173,15 @@ static void tap() {
     if (player && get_local_view_type() == PVT_DungeonTop && local_state.local_thing_under_hand > 0) {
         releaseClick();
         button(MActn_LBUTTONDOWN); button(MActn_LBUTTONUP);
-    } else click();
+    } else click(pointerOnGui());
 }
 static void stepClick(uint64_t now) {
-    // Wait for a game turn, but never longer than a quarter second (menus, pause).
-    if (clickReleaseAt && now >= clickReleaseAt && (get_gameturn() != clickTurn || now >= clickReleaseAt + 170)) releaseClick();
+    if (!clickReleaseAt) return;
+    // On a button or menu: two frames (the press is seen whichever side of the game's input it landed on).
+    if (clickQuick) { if (frameCount >= clickFrame + 2) releaseClick(); return; }
+    // On the world: until a game turn has seen it (digging tags on a held press), never longer than a quarter second
+    // (pause). It had a 0.08 s floor on top before 2026-11-24.
+    if (frameCount > clickFrame && (get_gameturn() != clickTurn || now >= clickReleaseAt + 250)) releaseClick();
 }
 static bool inEngineWindow(SDL_FPoint p) {
     return p.x>=local_state.engine_window_x && p.x<local_state.engine_window_x+local_state.engine_window_width
@@ -180,6 +194,10 @@ static GuiButton* buttonAt(int gx, int gy) {
         if (check_if_pos_is_over_button(gbtn, gx, gy)) return gbtn;
     }
     return nullptr;
+}
+/** The pointer is on a button or a menu box (the main menu's, a level's panels, icons and dialogs), not the world. */
+static bool pointerOnGui() {
+    return buttonAt(cursor.x, cursor.y) != nullptr || point_is_over_gui_menu(cursor.x, cursor.y) >= 0;
 }
 
 // Tap and hold on a creature-panel count keeps picking creatures up, one per game
@@ -220,8 +238,9 @@ static bool rightIgnored = false;
 
 // ---- The hand's rules (2026-11-19), after M3RT1N99's KeeperFX Android port (touch_hand.c, touch_keeper.c;
 // github.com/M3RT1N99/keeperfx, android-v1.1, GPL-2). A tap stays a click: it picks up what is under it. With
-// something in the hand, a finger that rests a quarter second, or travels, on ground that takes a drop lets the hand's
-// things fall there one at a time for as long as it stays down. With an empty hand a quick stroke that starts on an
+// something in the hand, a finger that rests a quarter second on ground that takes a drop lets the hand's things fall
+// there one at a time for as long as it stays down (it may travel after that); one that travels sooner moves the camera
+// (2026-11-24: a pan dropped the creature where the swipe began). With an empty hand a quick stroke that starts on an
 // own creature slaps it and the own creatures it crosses after it; one that starts anywhere else moves the camera, as
 // a slow one does (2026-11-22: quick one-finger pans slapped instead). A slap stroke never presses the left button, so
 // the walls it crosses are not marked for digging (theirs turned into a dig drag on a wall). The clicks are right clicks at the finger, a mouse's own, and every click on its
@@ -230,6 +249,8 @@ static bool rightIgnored = false;
 namespace hand {
 constexpr int MaxFlights = 32, SlapMemory = 8;
 constexpr long long SwipeMs = 250;
+// The swipe slap is off for now (the user, 2026-11-24): a quick stroke from an own creature pans like any other.
+constexpr bool SlapsOn = false;
 constexpr float HoldMs = 250, RainMs = 100, SlapMs = 150;
 struct Sees { bool in_force = false, known = false; int hand = 0; bool droppable = false, wall = false, door = false, thing = false;
               ThingIndex creature = 0; long long turn = 0; int lag = 0; float x = 0, y = 0; };
@@ -283,8 +304,11 @@ static Verdict decide(const Sees& s, long long now, float longPressMs) {
     }
     if (!stroke.open) { stroke.phase = Phase::Today; return Verdict::Today; }
     if (stroke.moved) {
-        if (willHold > 0) return arm(false, static_cast<double>(packetTurn(s)));
-        if (stroke.fromCreature && stroke.movedMs - stroke.downMs < SwipeMs) return arm(true, static_cast<double>(packetTurn(s)));
+        if (willHold > 0) { // rested the quarter second first (the decision came late): drops; moved sooner: a pan
+            if (stroke.movedMs - stroke.downMs >= HoldMs && s.droppable) return arm(false, static_cast<double>(packetTurn(s)));
+            stroke.phase = Phase::Today; return Verdict::Today;
+        }
+        if (SlapsOn && stroke.fromCreature && stroke.movedMs - stroke.downMs < SwipeMs) return arm(true, static_cast<double>(packetTurn(s)));
         stroke.phase = Phase::Today; return Verdict::Today; // a pan
     }
     const long long held = now - stroke.downMs;
@@ -340,7 +364,6 @@ struct GestFinger { float x, y; bool world; };
 static std::map<SDL_FingerID, GestFinger> gestFingers; // the fingers the recogniser has
 struct HandFinger { bool active = false, armed = false, movedFar = false; SDL_FingerID id = 0; float x = 0, y = 0, x0 = 0, y0 = 0; };
 static HandFinger handFinger;
-static uint64_t frameCount = 0;
 static bool gripping = false; // two fingers hold the map (below)
 static void endGrip() { gripping = false; }
 constexpr float handLongPressMs = 400; // before the recogniser's hold (450), which would press the left button
@@ -437,7 +460,7 @@ static void stepHand(uint64_t now) {
 // a lone tap waits for the double-tap window, so the first tap of a double tap never
 // tags its tile (the tile under the press decides tag versus untag).
 constexpr uint64_t doubleTapMs = 260;
-struct PendingTap { bool active = false; float x = 0, y = 0; uint64_t at = 0; bool room = false; };
+struct PendingTap { bool active = false; float x = 0, y = 0; uint64_t at = 0; bool room = false; bool sent = false; };
 static PendingTap pendingTap;
 enum class DigDrag { None, Arming, Pressed };
 static DigDrag digDrag = DigDrag::None;
@@ -474,6 +497,7 @@ static void stepDigDrag() {
     const auto* ustate = get_local_user_state_prediction();
     GameTurn turn = get_gameturn();
     if (digDrag == DigDrag::Arming) {
+        if (clickReleaseAt) return; // a click still held (the one putting a double tap's first tap back)
         bool ready = ustate->roomspace_highlight_mode == drag_placement_mode;
         if (!ready && turn > digTurn + 2 && turn <= digTurn + 12 && packetActionFree())
             set_players_packet_action(player, PckA_SetRoomspaceHighlight, drag_placement_mode, 1, 0, 0);
@@ -720,7 +744,9 @@ static void drain() {
         case Kind::LeftClick:
             // A tap on a creature picks it up at once (the hand's rules, below).
             if (handOverThing() && inEngineWindow(gamePosition(a.x,a.y))) { tap(); break; }
-            if (digContext(a.x,a.y)) { pendingTap = {true, a.x, a.y, SDL_GetTicks()}; break; }
+            // A dig tap goes at once (it waited the double-tap window before 2026-11-24); should it be the first of a
+            // double tap, it is taken back when the second one comes (finger down, below), before the dig box starts.
+            if (digContext(a.x,a.y)) { tap(); pendingTap = {true, a.x, a.y, SDL_GetTicks(), false, true}; break; }
             if (roomContext(a.x,a.y)) { pendingTap = {true, a.x, a.y, SDL_GetTicks(), true}; break; }
             textKeyboard(a.x,a.y);
             tap(); break;
@@ -1201,7 +1227,13 @@ extern "C" int KfxAndroidTouchEvent(const SDL_Event* e) {
         if (pendingTap.active && SDL_GetTicks()-pendingTap.at < doubleTapMs
          && std::hypot(x-pendingTap.x, y-pendingTap.y) <= std::max(48.0f, gestures.slop()*3) && gestures.captureAsDrag()) {
             pendingTap.active = false;
-            if (pendingTap.room) startRoomClick(Gkey_BestRoomSpace,false,x,y); else startDigDrag(x,y);
+            if (pendingTap.room) startRoomClick(Gkey_BestRoomSpace,false,x,y);
+            else {
+                // The first tap marked (or unmarked) its wall: the same click again puts it back, so the wall's own
+                // mark decides marking or unmarking for the box, as before. (The box waits for it to be let go.)
+                if (pendingTap.sent) { position(pendingTap.x, pendingTap.y); click(); }
+                startDigDrag(x,y);
+            }
         }
     } else if (e->type == SDL_EVENT_FINGER_UP) {
         gestFingers.erase(e->tfinger.fingerID);
@@ -1219,8 +1251,7 @@ extern "C" void KfxAndroidTouchTick(void) {
     updatePossession();
     if (pendingTap.active && now-pendingTap.at >= doubleTapMs) {
         pendingTap.active = false;
-        position(pendingTap.x, pendingTap.y);
-        tap();
+        if (!pendingTap.sent) { position(pendingTap.x, pendingTap.y); tap(); }
     }
     frameCount++;
     stepHand(now);

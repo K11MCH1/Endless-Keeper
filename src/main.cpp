@@ -2036,6 +2036,11 @@ static short process_command_line(unsigned short argc, char *argv[])
           server_admin_configure(0, pr2str);
           narg++;
       }
+      else if (strcasecmp(parstr,"savedir") == 0) /* (Endless, the Android launcher's saves folder) */
+      {
+          set_save_dir_override(pr2str);
+          narg++;
+      }
       else if (strcasecmp(parstr,"loadslot") == 0)
       {
           netstate_set_startup_load_slot((strcasecmp(pr2str, "continue") == 0) ? -2 : atoi(pr2str));

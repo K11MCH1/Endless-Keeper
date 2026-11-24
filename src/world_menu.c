@@ -1706,7 +1706,8 @@ int world_menu_new_world_state(void)
 void world_menu_write_index(void)
 {
     wm_list_saves();
-    FILE *f = fopen("save/endless_worlds.txt", "w");
+    char index_file[300];
+    FILE *f = fopen(save_folder_file("endless_worlds.txt", index_file, sizeof(index_file)), "w");
     if (f == NULL)
         return;
     fprintf(f, "# slot\tseed\tday\tsaved (unix time)\tname: written by KeeperFX, read by keeperserver.exe\n");

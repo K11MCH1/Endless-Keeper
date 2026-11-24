@@ -105,6 +105,8 @@ const kr = {
     if (s.device) dev.push(`<dt>Device</dt><dd>${esc(s.device)}</dd>`);
     if (s.display) dev.push(`<dt>Display</dt><dd>${esc(s.display)}</dd>`);
     $('deviceFacts').innerHTML = dev.join('');
+    $('savesDir').textContent = s.saves_dir ? s.saves_dir + (s.saves_access ? '' : ' (All files access is off)') : 'Inside the app';
+    $('appSaves').disabled = !s.saves_dir;
   },
 
   onProgress(p) {
@@ -432,6 +434,8 @@ $('changeVersion').onclick = async () => {
 $('checkUpdate').onclick = () => { const err = bridge ? bridge.update() : ''; if (err) toast(err); else { toast('Checking for updates…'); showTab('play'); } };
 $('importKfx').onclick = () => { const err = bridge ? bridge.importKfx() : 'Preview'; if (err) toast(err); };
 $('exportKfx').onclick = () => { const err = bridge ? bridge.exportKfx() : 'Preview'; if (err) toast(err); else { startedTask(''); showTab('play'); } };
+$('pickSaves').onclick = () => { const r = bridge ? bridge.pickSavesFolder() : 'Preview'; if (r) toast(r); };
+$('appSaves').onclick = () => { const r = bridge ? bridge.useAppSaves() : 'Preview'; if (r) toast(r); };
 $('exportLog').onclick = () => { const err = bridge ? bridge.exportLog() : 'Preview'; if (err) toast(err); else toast('Exporting the log…'); };
 $('resetSettings').onclick = () => { if (bridge) { bridge.resetSettings(); renderForms(); toast('Settings reset to defaults.'); } };
 $('modalClose').onclick = closeModal;

@@ -91,6 +91,9 @@ final class Settings {
                 "auto|Auto (corners and camera)", "manual|Manual margin", "off|Off (edge to edge)");
         integer("graphics", "Interface", "safe_area_margin", 16, 0, 96, "Manual safe margin (dp)",
                 "Used when Screen safe area is Manual: the same margin on every side.");
+        bool("graphics", "Interface", "safe_bars", false, "Black bars at the screen edges",
+                "Draws the whole game inside the rounded screen corners and the camera hole, with black bars beside it, "
+                        + "so nothing is cut off. Screen safe area is not needed then.");
         integer("graphics", "Interface", "creature_status_size", 16, 4, 64, "Creature flower size (px)", null);
         integer("graphics", "Interface", "hand_size", 100, 25, 400, "Hand size (%)", null);
         integer("graphics", "Interface", "line_box_size", 150, 25, 400, "Select box line size (%)", null);

@@ -136,6 +136,8 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
             mDisplay.getRealMetrics( realMetrics );
             nDeviceWidth = realMetrics.widthPixels;
             nDeviceHeight = realMetrics.heightPixels;
+            // Endless Keeper (2026-11-24): with black bars the surface is the game's whole screen (its desktop size)
+            if (mBars != null) { nDeviceWidth = width; nDeviceHeight = height; }
             // Use densityDpi instead of density to more closely match what the UI scale is
             density = (float)realMetrics.densityDpi / 160.0f;
         } catch(Exception ignored) {
@@ -200,6 +202,21 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
         SDLActivity.handleNativeState();
     }
 
+    /** The black bars in force ({left, right, top, bottom}), or null. */
+    private int[] mBars = null;
+    private void applyBars(int[] bars) {
+        if (java.util.Arrays.equals(bars, mBars) || !(getLayoutParams() instanceof android.view.ViewGroup.MarginLayoutParams))
+            return;
+        mBars = bars;
+        android.view.ViewGroup.MarginLayoutParams lp = (android.view.ViewGroup.MarginLayoutParams) getLayoutParams();
+        int[] b = bars != null ? bars : new int[4];
+        lp.setMargins(b[0], b[2], b[1], b[3]);
+        setLayoutParams(lp);
+        if (getParent() instanceof View)
+            ((View) getParent()).setBackgroundColor(android.graphics.Color.BLACK);
+        Log.i("KeeperAndroid", "black bars (l,r,t,b): " + b[0] + "," + b[1] + "," + b[2] + "," + b[3]);
+    }
+
     // Window inset
     @Override
     public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
@@ -208,6 +225,11 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
             // the rounded corners, or a margin the player set); SDL's own also counts the gesture areas, far too
             // wide for a game's buttons. {left, right, top, bottom} in pixels.
             int[] safe = (SDLActivity.mSingleton != null) ? SDLActivity.mSingleton.safeAreaInsets(insets) : null;
+            // Endless Keeper (2026-11-24): black bars - the surface itself moves in from the screen's edges, and the
+            // game, now clear of the corners and the camera hole, needs no safe area of its own
+            int[] bars = (SDLActivity.mSingleton != null) ? SDLActivity.mSingleton.safeBarsInsets(insets) : null;
+            applyBars(bars);
+            if (bars != null) safe = new int[4];
             if (safe == null) {
                 Insets combined = insets.getInsets(WindowInsets.Type.systemBars() |
                                                    WindowInsets.Type.systemGestures() |

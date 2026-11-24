@@ -22,6 +22,10 @@
 
 #include <stdarg.h>
 #include <inttypes.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 #include "globals.h"
 #include "bflib_basics.h"
 #include "bflib_math.h"
@@ -1269,6 +1273,48 @@ char *prepare_file_path_buf(char *dst, int dst_size, short fgroup, const char *f
     return prepare_file_path_buf_mod(dst, dst_size, NULL, fgroup, fname);
 }
 
+char save_dir_override[256] = "";
+
+TbBool set_save_dir_override(const char *path)
+{
+    save_dir_override[0] = '\0';
+    if ((path == NULL) || (path[0] == '\0'))
+        return false;
+    char dir[sizeof(save_dir_override)];
+    snprintf(dir, sizeof(dir), "%s", path);
+    size_t n = strlen(dir);
+    while ((n > 1) && ((dir[n - 1] == '/') || (dir[n - 1] == '\\')))
+        dir[--n] = '\0';
+#ifdef _WIN32
+    _mkdir(dir);
+#else
+    mkdir(dir, 0775);
+#endif
+    /* (a folder the game cannot write to would lose every save: then they stay in the game's own folder) */
+    char probe[sizeof(dir) + 32];
+    snprintf(probe, sizeof(probe), "%s/.ek_write_test", dir);
+    FILE *f = fopen(probe, "wb");
+    if (f == NULL)
+    {
+        WARNLOG("Saves folder \"%s\" can't be written to; the saves stay in the game's own folder", dir);
+        return false;
+    }
+    fclose(f);
+    remove(probe);
+    snprintf(save_dir_override, sizeof(save_dir_override), "%s", dir);
+    SYNCLOG("Saves folder: %s", save_dir_override);
+    return true;
+}
+
+const char *save_folder_file(const char *name, char *buf, size_t size)
+{
+    if (save_dir_override[0] != '\0')
+        snprintf(buf, size, "%s/%s", save_dir_override, name);
+    else
+        snprintf(buf, size, "save/%s", name);
+    return buf;
+}
+
 /*
  * @mod_dir insert before fgroup related sdir, set NULL if no mod.
  * @fname insert after fgroup related sdir.
@@ -1313,9 +1359,9 @@ static char *_resolve_file_path_internal(char *dst, size_t dst_size,
       mdir=install_info.inst_path[0] ? install_info.inst_path : keeper_runtime_directory;
       sdir="levels";
       break;
-  case FGrp_Save:
-      mdir=keeper_runtime_directory;
-      sdir="save";
+  case FGrp_Save: /* (Endless: or the saves folder the Android launcher set, -savedir) */
+      mdir=(save_dir_override[0] != '\0') ? save_dir_override : keeper_runtime_directory;
+      sdir=(save_dir_override[0] != '\0') ? NULL : "save";
       break;
   case FGrp_SShots:
       mdir=keeper_runtime_directory;

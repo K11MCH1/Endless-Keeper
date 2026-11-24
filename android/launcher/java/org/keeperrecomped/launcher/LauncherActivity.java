@@ -41,6 +41,8 @@ import java.util.concurrent.Executors;
 public final class LauncherActivity extends Activity {
     private static final int PICK_FOLDER = 1;
     private static final int PICK_KFX = 2; // Advanced > Maintenance > Import KeeperFX data
+    private static final int PICK_SAVES = 3; // Advanced > Saves folder
+    private boolean savesAccessAsked = false; // sent to Android's All files access screen; the picker comes next
     static final String TAG = Prepare.TAG;
 
     private WebView web;
@@ -181,6 +183,23 @@ public final class LauncherActivity extends Activity {
         super.onResume();
         if (pageReady)
             send(stateJson(), "state");
+        if (savesAccessAsked) {
+            savesAccessAsked = false;
+            if (SavesFolder.access())
+                openSavesPicker();
+            else
+                send(err("Without \"All files access\" the saves stay inside the app."), "toast");
+        }
+    }
+
+    /** Advanced > Saves folder: the system folder picker (All files access is already granted). */
+    private void openSavesPicker() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        try {
+            startActivityForResult(i, PICK_SAVES);
+        } catch (Exception e) {
+            send(err("No folder picker is available on this device."), "toast");
+        }
     }
 
     @Override
@@ -273,6 +292,33 @@ public final class LauncherActivity extends Activity {
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == PICK_SAVES) {
+            if (result != RESULT_OK || data == null || data.getData() == null)
+                return;
+            final String path = SavesFolder.pathOf(data.getData());
+            if (path == null) {
+                send(err("Choose a folder on the phone's storage or SD card."), "toast");
+                return;
+            }
+            io.execute(() -> {
+                try {
+                    File dir = new File(path);
+                    if (!dir.isDirectory() && !dir.mkdirs())
+                        throw new java.io.IOException("it can't be made");
+                    if (!dir.canWrite())
+                        throw new java.io.IOException("it can't be written to");
+                    int n = SavesFolder.copyMissing(SavesFolder.appSaves(LauncherActivity.this), dir);
+                    prefs.edit().putString(SavesFolder.PREF, path).apply();
+                    AppLog.i("saves folder " + path + ", " + n + " files copied there");
+                    send(err("Saves now go to " + path + (n > 0 ? " (" + n + " files copied there)" : "") + "."), "toast");
+                    send(stateJson(), "state");
+                } catch (Exception e) {
+                    AppLog.e("saves folder " + path, e);
+                    send(err("Can't use that folder: " + e.getMessage()), "toast");
+                }
+            });
+            return;
+        }
         if (request == PICK_KFX && result == RESULT_OK && data != null && data.getData() != null) {
             if (PrepareService.isRunning()) {
                 send(err("A task is already running."), "toast");
@@ -322,6 +368,8 @@ public final class LauncherActivity extends Activity {
                 o.put("engine_info", new JSONObject(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)));
             } catch (Exception ignored) {
             }
+            o.put("saves_dir", SavesFolder.get(this));
+            o.put("saves_access", SavesFolder.access());
             o.put("kfx_ready", new File(Paths.kfx(this), "fxdata").isDirectory() && new File(Paths.kfx(this), "data/bluepal.dat").isFile());
             // Game data version vs the engine that will run it (phone-built or the app's own).
             JSONObject built = Prepare.activeEngine(s);
@@ -402,6 +450,47 @@ public final class LauncherActivity extends Activity {
                 } catch (Exception e) {
                     send(err("No folder picker is available on this device."), "toast");
                 }
+            });
+            return "";
+        }
+
+        /** Advanced > Saves folder: Android's All files access first (asked once), then the folder picker. */
+        @JavascriptInterface
+        public String pickSavesFolder() {
+            if (!SavesFolder.access()) {
+                savesAccessAsked = true;
+                ui.post(() -> {
+                    try {
+                        startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                Uri.parse("package:" + getPackageName())));
+                    } catch (Exception e) {
+                        startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+                    }
+                });
+                return "Allow \"All files access\" for Endless Keeper, then come back: the folder picker opens next.";
+            }
+            ui.post(LauncherActivity.this::openSavesPicker);
+            return "";
+        }
+
+        /** Advanced > Saves folder: the saves inside the app again (the folder's saves copied back, the folder left as it is). */
+        @JavascriptInterface
+        public String useAppSaves() {
+            final String path = SavesFolder.get(LauncherActivity.this);
+            if (path.isEmpty())
+                return "The saves are already kept inside the app.";
+            io.execute(() -> {
+                int n = 0;
+                try {
+                    if (SavesFolder.access())
+                        n = SavesFolder.copyMissing(new File(path), SavesFolder.appSaves(LauncherActivity.this));
+                } catch (Exception e) {
+                    AppLog.e("saves back from " + path, e);
+                }
+                prefs.edit().remove(SavesFolder.PREF).apply();
+                send(err("Saves are kept inside the app again" + (n > 0 ? " (" + n + " files copied back)" : "")
+                        + ". The folder is left as it is."), "toast");
+                send(stateJson(), "state");
             });
             return "";
         }
