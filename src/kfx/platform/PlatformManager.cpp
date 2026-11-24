@@ -114,6 +114,16 @@ extern "C" unsigned int PlatformManager_GetWindowFlags(void)
     return ws ? ws->GetWindowFlags() : 0;
 }
 
+extern "C" void PlatformManager_GetGameSafeInsets(int* out_l, int* out_t, int* out_r, int* out_b)
+{
+    if (out_l) *out_l = 0;
+    if (out_t) *out_t = 0;
+    if (out_r) *out_r = 0;
+    if (out_b) *out_b = 0;
+    IWindowSystem* ws = GetSDLWindowSystem();
+    if (ws) ws->GetGameSafeInsets(out_l, out_t, out_r, out_b);
+}
+
 extern "C" void PlatformManager_GetWindowSize(int* out_w, int* out_h)
 {
     if (out_w) *out_w = 0;

@@ -104,6 +104,8 @@
 #include "world_caretaker.h"
 #include "world_boss.h"
 #include "world_keeper_panel.h"
+#include "world_level_window.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -255,6 +257,7 @@ struct GuiMenu *menu_list[] = {
     &world_boss_pick_menu, //61
     &world_creature_window_menu, //62
     &world_keeper_panel_menu, //63
+    &world_level_window_menu, //64
     NULL,
 };
 
@@ -2276,35 +2279,36 @@ long compute_menu_position_x(long desired_pos,int menu_width, int units_per_px)
   case POS_MOUSPRV: // Place menu centered over previous mouse position
       pos = old_menu_mouse_x - (scaled_width >> 1);
       break;
-  case POS_SCRCTR:
-      pos = (MyScreenWidth >> 1) - (scaled_width >> 1);
+  case POS_SCRCTR: // (Endless: centred in the safe area, see ui_safe_area.h)
+      pos = ui_safe_left + ((ui_safe_right_edge() - ui_safe_left) >> 1) - (scaled_width >> 1);
       break;
   case POS_SCRBTM:
-      pos = MyScreenWidth - scaled_width;
+      pos = ui_safe_right_edge() - scaled_width;
       break;
   default: // Desired position have direct coordinates
-      pos = ((desired_pos*(long)units_per_pixel)>>4)*((long)pixel_size);
-      if (pos+scaled_width > RendererPhysicalWidth()*((long)pixel_size))
-        pos = RendererPhysicalWidth()*((long)pixel_size)-scaled_width;
+      pos = ((desired_pos*(long)units_per_pixel)>>4)*((long)pixel_size); /* (the side panel: against the edge) */
+      if (pos+scaled_width > ui_safe_right_edge()*((long)pixel_size))
+        pos = ui_safe_right_edge()*((long)pixel_size)-scaled_width;
 /* Helps not to touch left panel - disabling, as needs additional conditions
       if (pos < status_panel_width)
         pos = status_panel_width;
 */
       break;
   }
-  // Clipping position X
+  // Clipping position X (inside the safe area)
   if (desired_pos == POS_GAMECTR)
   {
-    if (pos+scaled_width > MyScreenWidth)
-      pos = MyScreenWidth-scaled_width;
+    if (pos+scaled_width > ui_safe_right_edge())
+      pos = ui_safe_right_edge()-scaled_width;
     if (pos < local_state.engine_window_x)
       pos = local_state.engine_window_x;
   } else
   {
-    if (pos+scaled_width > MyScreenWidth)
-      pos = MyScreenWidth-scaled_width;
-    if (pos < 0)
-      pos = 0;
+    if (pos+scaled_width > ui_safe_right_edge())
+      pos = ui_safe_right_edge()-scaled_width;
+    const long min_x = ((desired_pos == POS_SCRCTR) || (desired_pos == POS_SCRBTM)) ? ui_safe_left : 0;
+    if (pos < min_x)
+      pos = min_x;
   }
   return pos;
 }
@@ -2326,22 +2330,24 @@ long compute_menu_position_y(long desired_pos,int menu_height, int units_per_px)
         pos = old_menu_mouse_y - (scaled_height >> 1);
         break;
     case POS_SCRCTR:
-        pos = (MyScreenHeight >> 1) - (scaled_height >> 1);
+        pos = ui_safe_top + ((ui_safe_bottom_edge() - ui_safe_top) >> 1) - (scaled_height >> 1);
         break;
     case POS_SCRBTM:
-        pos = MyScreenHeight - scaled_height;
+        pos = ui_safe_bottom_edge() - scaled_height;
         break;
     default: // Desired position have direct coordinates
-        pos = ((desired_pos*((long)units_per_pixel))>>4)*((long)pixel_size);
+        pos = ((desired_pos*((long)units_per_pixel))>>4)*((long)pixel_size); /* (the side panel: against the edge) */
         if (pos+scaled_height > lbDisplay.PhysicalScreenHeight*((long)pixel_size))
           pos = lbDisplay.PhysicalScreenHeight*((long)pixel_size)-scaled_height;
         break;
     }
-    // Clipping position Y
-    if (pos+scaled_height > MyScreenHeight)
-      pos = MyScreenHeight-scaled_height;
-    if (pos < 0)
-      pos = 0;
+    // Clipping position Y (centred and bottom-anchored menus: inside the safe area)
+    const TbBool in_safe = (desired_pos == POS_SCRCTR) || (desired_pos == POS_SCRBTM);
+    const long max_y = in_safe ? ui_safe_bottom_edge() : (long)MyScreenHeight;
+    if (pos+scaled_height > max_y)
+      pos = max_y-scaled_height;
+    if (pos < (in_safe ? ui_safe_top : 0))
+      pos = in_safe ? ui_safe_top : 0;
     return pos;
 }
 
@@ -3435,6 +3441,7 @@ void draw_active_menus_buttons(void)
     for (k=0; k < no_of_active_menus; k++)
     {
         if (menu_stack[k] == GMnu_KEEPER_PANEL) continue; /* endless: drawn last, over everything (world_keeper_panel.c) */
+        if (menu_stack[k] == GMnu_LEVEL_WINDOW) continue; /* endless: the same (world_level_window.c) */
         /* (and the message boxes at the foot of the view are left out while it is up: their glass is put on the screen
            after everything else, over the panel) */
         if (((menu_stack[k] == GMnu_TEXT_INFO) || (menu_stack[k] == GMnu_BATTLE) || (menu_stack[k] == GMnu_DUNGEON_SPECIAL)) &&
@@ -4247,7 +4254,7 @@ void frontend_draw_product_version(struct GuiButton *gbtn)
     int h = LbTextLineHeight() * units_per_px / 16;
     /* Endless Keeper (2026-11-09): its own release over the KeeperFX version it is built on, by its full name as the
        release has it (the user, 2026-11-10): "Endless Keeper 1.4.0-6 Alpha" = KeeperFX base - release, stage */
-    LbTextSetWindow(0, gbtn->scr_pos_y - h, gbtn->width, 2 * h);
+    LbTextSetWindow(ui_safe_left, gbtn->scr_pos_y - h, gbtn->width, 2 * h); /* (inside a rounded corner's reach) */
     char text[128];
     snprintf(text, sizeof(text), "Endless Keeper %d.%d.%d-%s %s", VER_MAJOR, VER_MINOR, VER_RELEASE,
         (ENDLESS_RELEASE[0] != '\0') ? ENDLESS_RELEASE : "dev", (ENDLESS_STAGE[0] != '\0') ? ENDLESS_STAGE : "Alpha");

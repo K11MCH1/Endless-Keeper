@@ -83,6 +83,7 @@
 #include "world_creature_window.h"
 #include "vidfade.h"
 #include "world_wallbreak.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -354,7 +355,7 @@ static int dn_draw_day(int x, int y, int size)
     const int edge = max((cap + 8) / 16, 1);
     const int wide = world_window_plain_width(text, cap);
     const int air = edge + max(upp / 16, 1); /* the dark edge, and a unit between it and the screen's edge */
-    const int tx = min(x + size / 2 - wide / 2, MyScreenWidth - air - wide), ty = y + gap;
+    const int tx = min(x + size / 2 - wide / 2, ui_safe_right_edge() - air - wide), ty = y + gap;
     const unsigned char dark = colours[0][0][0];
     /* (the room given is the text's own width and a little: it is never made smaller to fit) */
     for (int dy = -1; dy <= 1; dy++)
@@ -400,8 +401,8 @@ void world_daynight_draw(void)
     const int upp = units_per_pixel;
     const int size = DAYNIGHT_RIM * upp / 16;
     const int margin = 6 * upp / 16;
-    const int x = MyScreenWidth - size - margin;
-    const int y = margin;
+    const int x = ui_safe_right_edge() - size - margin; /* (inside the safe area: rounded corners, cutouts) */
+    const int y = ui_safe_top + margin;
     const int off = ((DAYNIGHT_RIM - DAYNIGHT_DISC) / 2) * upp / 16;
     UIRenderer_SubmitPanelSpriteRaw(x + off, y + off, upp, &dn_frame_spr[k], 0);
     UIRenderer_SubmitPanelSpriteRaw(x, y, upp, &dn_rim_spr, 0);

@@ -39,6 +39,7 @@
 #include "dungeon_data.h"
 #include "game_legacy.h"
 #include "world_pages.h"
+#include "world_keeper_ai.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1002,6 +1003,8 @@ long computer_check_attack_with_filter(struct Computer2 *comp, struct ComputerPr
         struct THate* hate = &hates[i];
         if (hate->pos_near != NULL)
         {
+            if (!world_keeper_ai_may_attack(dungeon->owner, hate->plyr_idx))
+                continue; /* endless worlds: the keeper's brain decides when it marches (world_keeper_ai.c) */
             if (hate_filter(comp, cproc, hate))
             {
                 if (setup_computer_attack(comp, cproc, hate->pos_near, hate->plyr_idx) == 1) {

@@ -32,6 +32,7 @@
 #include "game_legacy.h"
 #include "net_main.h"
 #include "net_exchange_gameplay.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -174,12 +175,12 @@ TbBool draw_onscreen_direct_messages(void)
     {
         if (RendererCanDraw())
         {
-            LbTextDrawResized(scale_value_by_horizontal_resolution(160), 0, tx_units_per_px, onscreen_msg_text);
+            LbTextDrawResized(scale_value_by_horizontal_resolution(160), ui_safe_top, tx_units_per_px, onscreen_msg_text);
         }
         render_onscreen_msg_time -= local_state.delta_time;
     }
     if (is_desync_warning_active() && RendererCanDraw()) {
-        LbTextDrawResized(scale_value_by_horizontal_resolution(160), 0, tx_units_per_px, get_string(GUIStr_NetOutOfSync));
+        LbTextDrawResized(scale_value_by_horizontal_resolution(160), ui_safe_top, tx_units_per_px, get_string(GUIStr_NetOutOfSync));
     }
     unsigned int msg_pos = scale_value_by_vertical_resolution(200);
     if ((local_system_flags & GSF_NetGameNoSync) != 0)

@@ -133,6 +133,8 @@
 #include "world_fill.h"
 #include "world_expedition.h"
 #include "world_keeper_panel.h"
+#include "world_level_window.h"
+#include "world_keeper_ai.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -190,6 +192,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_DEFECTORS 0x31464544u /* "DEF1": each defector's line: the keeper it left, why, the day */
 #define WORLD_EXTRA_CRUSADE 0x31535243u  /* "CRS1": the Crusade roads */
 #define WORLD_EXTRA_ALARM 0x314D4C41u    /* "ALM1": Alarm Bells: each keeper's alarms, the razed fortresses */
+#define WORLD_EXTRA_KEEPERAI 0x3149414Bu /* "KAI1": the enemy keepers' brain (world_keeper_ai.c) */
 #define WORLD_EXTRA_FIRES 0x31524657u    /* "WFR1": the watchfires (world_watchfire.c) */
 #define WORLD_EXTRA_DARK 0x314B5244u     /* "DRK1": untended floor's neglect (world_dark.c) */
 #define WORLD_EXTRA_RECORD 0x32434552u   /* "REC2": the Keeper panel's statistics (world_progress.c) */
@@ -4205,9 +4208,11 @@ static void update_keepers(void)
             wake_all = (getenv("KFX_WORLD_WAKE") != NULL) ? 1 : 0;
         if ((wk->state == WKSt_Passive) && wk->set_up && !wk->heart_frozen && (wake_all || player_near_keeper(wk)))
         {
+            const long days_alone = (keeper_alone_since[k] > 0) ? max(0L, world_day_number() - keeper_alone_since[k]) : 0;
             wk->state = WKSt_Active;
             W.keeper_last_near[k] = game.play_gameturn;
             SYNCLOG("World: keeper@%d,%d (player %d) wakes up", (int)wk->id.start_cx, (int)wk->id.start_cy, (int)wk->slot);
+            world_keeper_ai_woke(wk->slot, days_alone); /* its life while it slept (world_keeper_ai.c) */
         } else
         if ((wk->state == WKSt_Active) && world_paged && !wake_all)
         {
@@ -11322,6 +11327,8 @@ void world_client_turn(void)
     world_respawn_prompt_turn();
     world_boss_local_turn();
     world_sword_local_turn();
+    world_alarm_local_turn(); /* the Alarm Bells' horn, wherever the camera is */
+    world_level_window_turn(); /* (its test hook) */
     chat_box_turn();
     world_shots_hook();
     world_assist_hook();
@@ -11607,7 +11614,10 @@ static void kmap_poll(void)
 void world_process_turn(void)
 {
     if (!W.active)
+    {
+        world_keeper_ai_turn(); /* (a normal level: only with its test switch KFX_KAI_CLASSIC) */
         return;
+    }
     kmap_poll();
     world_autosave_poll(); /* the dawn autosave is written on its own thread: says how it went, once it is written */
     world_spread_abilities();
@@ -11669,6 +11679,8 @@ void world_process_turn(void)
     world_respawn_prompt_turn();
     world_boss_local_turn();
     world_sword_local_turn();
+    world_alarm_local_turn(); /* the Alarm Bells' horn, wherever the camera is */
+    world_level_window_turn(); /* (its test hook) */
     chat_box_turn();
     world_shots_hook();
     world_mapdrag_hook();
@@ -11677,6 +11689,7 @@ void world_process_turn(void)
     world_mapedge_hook();
     world_mapzoom_hook();
     world_progress_turn();
+    world_keeper_ai_turn(); /* the enemy keepers' brain */
     world_caretaker_turn(); /* away players' dungeons: the gold held */
     world_attract_turn(); /* the launcher's background: its battles and camera */
     coop_upkeep(); /* party dungeons: defeats, deleted seats freed, unplayed ones deleted */
@@ -11838,6 +11851,52 @@ unsigned short world_minimap_code(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
         return 0;
     int lx = (int)(wsx - cx * CHUNK_STL), ly = (int)(wsy - cy * CHUNK_STL);
     return last[ly * CHUNK_STL + lx];
+}
+
+/******************************************************************************/
+/* For the keepers' brain (world_keeper_ai.c) */
+
+TbBool world_keeper_of_player(PlayerNumber plyr_idx, struct WorldKeeperInfo *out)
+{
+    if (!W.active)
+        return false;
+    for (int k = 0; k < W.keeper_count; k++)
+    {
+        const struct WorldKeeper *wk = &W.keepers[k];
+        if ((wk->slot != plyr_idx) || (wk->state == WKSt_Destroyed))
+            continue;
+        if (out != NULL)
+        {
+            out->index = k;
+            /* (splitmix64 of its start chunk and the world's seed) */
+            uint64_t h = (uint64_t)world_seed() ^ ((uint64_t)(uint32_t)wk->id.start_cx << 32) ^ (uint64_t)(uint32_t)wk->id.start_cy;
+            h += 0x9E3779B97F4A7C15ULL;
+            h = (h ^ (h >> 30)) * 0xBF58476D1CE4E5B9ULL;
+            h = (h ^ (h >> 27)) * 0x94D049BB133111EBULL;
+            h ^= h >> 31;
+            out->id_hash = (uint32_t)(h >> 32);
+            out->active = (wk->state == WKSt_Active);
+            out->set_up = (wk->set_up != 0);
+            out->heart_x = wk->heart_x;
+            out->heart_y = wk->heart_y;
+            out->threat_radius = wk->threat_radius;
+            out->days_alone = (keeper_alone_since[k] > 0) ? max(0L, world_day_number() - keeper_alone_since[k]) : 0;
+        }
+        return true;
+    }
+    return false;
+}
+
+int world_portals_list(int64_t *x, int64_t *y, int *owner, int max_portals)
+{
+    int n = 0;
+    for (int i = 0; (i < W.portal_count) && (n < max_portals); i++, n++)
+    {
+        x[n] = W.portals[i].x;
+        y[n] = W.portals[i].y;
+        owner[n] = W.portals[i].owner;
+    }
+    return n;
 }
 
 /******************************************************************************/
@@ -12101,6 +12160,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_DEFECTORS, world_defectors_save_size, world_defectors_save, world_defectors_load, world_defectors_reset},
     {WORLD_EXTRA_CRUSADE, world_crusade_save_size, world_crusade_save, world_crusade_load, world_crusade_reset},
     {WORLD_EXTRA_ALARM, world_alarm_save_size, world_alarm_save, world_alarm_load, world_alarm_reset},
+    {WORLD_EXTRA_KEEPERAI, world_keeper_ai_save_size, world_keeper_ai_save, world_keeper_ai_load, world_keeper_ai_reset},
     {WORLD_EXTRA_FIRES, world_watchfire_save_size, world_watchfire_save, world_watchfire_load, world_watchfire_reset},
     {WORLD_EXTRA_DARK, world_dark_save_size, world_dark_save, world_dark_load, world_dark_reset},
     {WORLD_EXTRA_RECORD, world_record_save_size, world_record_save, world_record_load, world_record_reset},

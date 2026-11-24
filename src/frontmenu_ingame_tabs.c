@@ -85,6 +85,7 @@
 #include "world_stream.h"
 #include "world_progress.h"
 #include "world_fill.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 #include "room_workshop.h"
 
@@ -1941,10 +1942,9 @@ void gui_area_experience_button(struct GuiButton *gbtn)
     if (thing_is_creature(ctrltng))
     {
         draw_gui_panel_sprite_left(gbtn->scr_pos_x, gbtn->scr_pos_y, ps_units_per_px, gbtn->sprite_idx);
-        struct CreatureModelConfig* crconf = creature_stats_get_from_thing(ctrltng);
         struct CreatureControl* cctrl = creature_control_get_from_thing(ctrltng);
         long points_progress = cctrl->exp_points;
-        long points_required = (creature_exp_to_next_level(crconf, cctrl->exp_level) << 8);
+        long points_required = (creature_thing_exp_to_next_level(ctrltng) << 8);
         gui_area_progress_bar_med2(gbtn, units_per_px, points_progress, points_required);
         char text[16];
         snprintf(text, sizeof(text), "%d", (int)(cctrl->exp_level + 1));
@@ -2705,6 +2705,90 @@ void draw_gold_total(PlayerNumber plyr_idx, int32_t scr_x, int32_t scr_y, int32_
     RendererSetDrawFlags(flg_mem);
 }
 
+/** One row of the panel art (as LbTiledSpriteDraw draws it: its sprites side by side), each sprite drawn h_num/h_den
+ *  times its height, upside down if flip (x, y relative to the graphics window). */
+static void draw_panel_art_row(long x, long y, int row, int units_per_px, int h_num, int h_den, TbBool flip)
+{
+    const unsigned short flg_mem = RendererGetDrawFlags();
+    if (flip)
+        RendererAddDrawFlags(Lb_SPRITE_FLIP_VERTIC);
+    unsigned short spr_idx = status_panel.spr_idx[row][0];
+    for (int col = 0; col < status_panel.x_num; col++, spr_idx++)
+    {
+        const struct TbSprite *sprite = get_panel_sprite(spr_idx);
+        if ((spr_idx == 0) || (sprite == NULL))
+            continue;
+        const int dx = sprite->SWidth * units_per_px / 16;
+        const int dy = sprite->SHeight * units_per_px / 16;
+        LbSpriteDrawScaled(x, y, sprite, dx, (dy * h_num + h_den / 2) / max(h_den, 1));
+        x += dx;
+    }
+    RendererSetDrawFlags(flg_mem);
+}
+
+/** The panel art, reaching down to the screen's bottom edge (2026-11-24, the user: "expand the main panel towards the
+ *  bottom edge instead" of the placefiller under it; then: no line where it is lengthened, and against the bottom
+ *  edge). The art as it is down to the middle of its bottom row; mirrored copies of that row's plain lower half
+ *  (above its bottom edge) to make up the difference; its bottom edge as it is, on the screen's bottom. At both joins the two
+ *  pieces show the same row of the art, so there is no line. Its size is the art's own (the menu's height can differ
+ *  by a few pixels: the cause of the line and the gap before). */
+static void draw_panel_art_to_bottom(const struct GuiMenu *gmnu, int units_per_px)
+{
+    const int rows = status_panel.y_num;
+    int art_h = 0, last_top = 0;
+    for (int r = 0; r < rows; r++)
+    {
+        if (r == rows - 1)
+            last_top = art_h;
+        art_h += get_panel_sprite(status_panel.spr_idx[r][0])->SHeight * units_per_px / 16;
+    }
+    const int screen_h = MyScreenHeight, screen_w = MyScreenWidth / pixel_size;
+    const int row_h = art_h - last_top;
+    const int extra = screen_h - (gmnu->pos_y + art_h);
+    if ((rows < 1) || (extra <= 0) || (row_h < 8))
+    {
+        LbTiledSpriteDraw(gmnu->pos_x, gmnu->pos_y, units_per_px, &status_panel);
+        return;
+    }
+    const int row_y = gmnu->pos_y + last_top;              /* the bottom row's top on the screen */
+    const int keep_top = row_h / 2;                        /* within the row: drawn as it is above this */
+    const int edge = max(2, row_h / 8);                    /* within the row: its bottom edge, drawn as it is */
+    const int seam = row_y + keep_top;                     /* on the screen: where the stretch starts */
+    const int edge_y = screen_h - edge;                    /* on the screen: where the bottom edge starts */
+    /* the art down to the seam */
+    LbScreenSetGraphicsWindow(0, 0, screen_w, seam);
+    LbTiledSpriteDraw(gmnu->pos_x, gmnu->pos_y, units_per_px, &status_panel);
+    /* [seam, edge_y) is filled with copies of the row's plain part [keep_top, row_h - edge): an odd number of them, every
+       other one upside down, so each join meets its own mirror image, the first copy goes on from the art above and the
+       last one into the bottom edge below; each copy is sized to make them fit, by as little as an odd count allows
+       (2026-11-24: one stretched copy streaked on a 4:3 screen, three times its height; on phones it stays one copy) */
+    const int src = row_h - edge - keep_top, dst = edge_y - seam;
+    if ((src > 0) && (dst > 0))
+    {
+        int n = max(1, (dst + src / 2) / src);
+        if ((n % 2) == 0) /* (the odd count nearer in scale: compare dst/(n-1) and dst/(n+1) against src) */
+            n = ((long)dst * dst >= (long)src * src * (n - 1) * (n + 1)) ? n + 1 : n - 1;
+        for (int k = 0; k < n; k++)
+        {
+            const int y0 = seam + (int)((long)dst * k / n), y1 = seam + (int)((long)dst * (k + 1) / n);
+            const int h = y1 - y0;
+            if (h <= 0)
+                continue;
+            const TbBool flip = ((k % 2) != 0);
+            /* the copy's row, drawn h/src times its height: its plain part lands on [y0, y1); upside down, the part
+               ends where it starts, so its top row is the one above the bottom edge */
+            const int lead = flip ? edge : keep_top;
+            const int top = y0 - (int)(((long)lead * h + src / 2) / src);
+            LbScreenSetGraphicsWindow(0, y0, screen_w, h);
+            draw_panel_art_row(gmnu->pos_x, top - y0, rows - 1, units_per_px, h, src, flip);
+        }
+    }
+    /* the bottom edge, as it is, its last row on the screen's last */
+    LbScreenSetGraphicsWindow(0, edge_y, screen_w, edge);
+    draw_panel_art_row(gmnu->pos_x, (screen_h - row_h) - edge_y, rows - 1, units_per_px, 1, 1, false);
+    LbScreenSetGraphicsWindow(0, 0, screen_w, MyScreenHeight / pixel_size);
+}
+
 void draw_whole_status_panel(void)
 {
     long mmzoom;
@@ -2727,7 +2811,7 @@ void draw_whole_status_panel(void)
     // The world view runs under the sidebar; hide it below the panel art too.
     if (viewport_mode == VpMode_FullLetterbox)
         LbDrawBox(0, 0, gmnu->pos_x + gmnu->width, MyScreenHeight, colours[0][0][0]);
-    LbTiledSpriteDraw(0, 0, fs_units_per_px, &status_panel);
+    draw_panel_art_to_bottom(gmnu, fs_units_per_px);
     // Draws gold amount; note that button_sprite[] is used instead of full font
     draw_gold_total(player->id_number, gmnu->pos_x + gmnu->width/2, gmnu->pos_y + gmnu->height*67/200, fs_units_per_px, dungeon->total_money_owned);
     int32_t basic_zoom = get_local_minimap_zoom();
@@ -2738,11 +2822,7 @@ void draw_whole_status_panel(void)
     panel_map_draw_slabs(local_state.minimap_pos_x, local_state.minimap_pos_y, mm_units_per_px, mmzoom);
     panel_map_draw_overlay_things(mm_units_per_px, mmzoom, basic_zoom);
     panel_map_submit_to_renderer();
-    unsigned char placefill_threshold = (RendererPhysicalHeight() >= 400) ? 80 : 40;
-    if (RendererPhysicalHeight() - gmnu->height >= placefill_threshold)
-    {
-        draw_placefiller(0, gmnu->pos_y + gmnu->height, fs_units_per_px);
-    }
+    /* (no placefiller under the panel: the panel itself reaches the screen's bottom, draw_panel_art_to_bottom) */
 }
 
 void gui_set_button_flashing(long btn_idx, long gameturns)

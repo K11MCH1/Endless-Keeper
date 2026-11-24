@@ -43,6 +43,8 @@ void         PlatformManager_SetGameSurfaceSize(int w, int h);
 int          PlatformManager_GetCursorPosition(int* x, int* y);
 int          PlatformManager_IsCursorInWindow(void);
 int          PlatformManager_GetDisplayRefreshRate(void);
+/** The UI's insets from each edge of the game frame, in its pixels (cutouts, rounded corners; 0 on a desktop). */
+void         PlatformManager_GetGameSafeInsets(int* out_l, int* out_t, int* out_r, int* out_b);
 
 #ifdef __cplusplus
 }

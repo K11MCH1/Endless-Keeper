@@ -50,6 +50,7 @@
 #include "sprites.h"
 #include "vidmode.h"
 #include "world_stream.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -425,7 +426,7 @@ static int cb_menu_units(void)
  *  dialog; the two never show together, see chat_box_turn). */
 static long cb_bottom(void)
 {
-    return MyScreenHeight;
+    return ui_safe_bottom_edge();
 }
 
 /** A message dialog is up: an event's text, a battle, a dungeon special. */
@@ -455,8 +456,8 @@ static void cb_geometry(struct CbGeom *g)
     }
     if (left < 0) /* no side panel: where the message dialogs start */
         left = ((160L * (long)units_per_pixel) >> 4) * (long)pixel_size;
-    g->x = max(0L, min(left, (long)MyScreenWidth - 64));
-    g->w = MyScreenWidth - g->x;
+    g->x = max((long)ui_safe_left, min(left, (long)ui_safe_right_edge() - 64));
+    g->w = ui_safe_right_edge() - g->x;
     g->h = (CB_H * g->units + 8) / 16;
     g->y = max(0L, cb_bottom() - g->h);
 }

@@ -111,6 +111,7 @@
 #include "keeperfx.hpp"
 #include "world_stream.h"
 #include "world_menu.h"
+#include "world_progress.h"
 #include "world_misdeeds.h"
 #include "world_pages.h"
 #include "net_state.h"
@@ -910,6 +911,10 @@ TbBool process_user_global_packet_action(NetUserId user)
   case PckA_WorldExpedition:
       if (!netstate_thin_mode() || network_is_host())
           world_expedition_packet(plyr_idx, (int32_t)pckt->actn_par1, (int32_t)pckt->actn_par2);
+      return 1;
+  case PckA_WorldLevelFocus:
+      if (!netstate_thin_mode() || network_is_host())
+          world_level_focus_packet(plyr_idx, (int)pckt->actn_par1);
       return 1;
   case PckA_WorldKeeperPanel:
       /* the Keeper panel: migrate, call it off, portrait, reset (game state: the server, or every lockstep machine) */

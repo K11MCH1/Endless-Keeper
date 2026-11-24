@@ -87,6 +87,15 @@ public:
         if (out_y) *out_y = 0;
         GetDrawableSize(out_w, out_h);
     }
+    /** How far the UI should keep from each edge of the game's frame, in its pixels: the part of the frame
+     *  outside the window's safe area (camera cutouts, rounded corners). 0 where there is no such area. */
+    virtual void GetGameSafeInsets(int* out_l, int* out_t, int* out_r, int* out_b) const
+    {
+        if (out_l) *out_l = 0;
+        if (out_t) *out_t = 0;
+        if (out_r) *out_r = 0;
+        if (out_b) *out_b = 0;
+    }
     virtual int GetWindowDisplayIndex() const { return -1; }
     virtual int GetNumVideoDisplays() const { return 0; }
     virtual int GetDesktopDisplayMode(int /*display*/, int* out_w, int* out_h) const

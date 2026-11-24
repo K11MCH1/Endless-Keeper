@@ -4,6 +4,8 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include <chrono>
+#include <string>
 #include "game_saves.h"
 
 #include "globals.h"
@@ -377,6 +379,33 @@ struct LoadedSave {
 };
 
 /** Reads and decodes a KFXS save (already known to be loadable by Check) into scratch memory. */
+/** Where a load's time goes (2026-11-24: Continue Game took 2.6 s with OpenGL ES and 4-6 s with Vulkan on a phone
+ *  after a fresh start): one log line at the end, the steps over 20 ms. */
+namespace {
+struct LoadSteps {
+    std::chrono::steady_clock::time_point start, last;
+    std::string text;
+    void Begin() { start = last = std::chrono::steady_clock::now(); text.clear(); }
+    void Mark(const char* step)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        const long ms = (long)std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count();
+        last = now;
+        if (ms >= 20)
+        {
+            char buf[96];
+            snprintf(buf, sizeof(buf), "%s%s %ld ms", text.empty() ? "" : ", ", step, ms);
+            text += buf;
+        }
+    }
+    long Total() const
+    {
+        return (long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    }
+};
+LoadSteps load_steps;
+}
+
 static enum SaveCheckResult read_game_kfxs(const char *fname, struct LoadedSave *loaded_save)
 {
     struct SaveError err;
@@ -428,15 +457,20 @@ static TbBool apply_game_kfxs(const char *fname, struct LoadedSave *loaded_save,
     }
     free_level_strings_data();
     load_map_string_data(&campaign, centry->level_num, get_level_fgroup(centry->level_num));
+    load_steps.Mark("campaign + strings");
     // Load configs which may have per-campaign part, and can even be modified within a level
     recheck_all_mod_exist();
+    load_steps.Mark("mods");
     init_custom_sprites(centry->level_num);
+    load_steps.Mark("custom sprites");
     load_stats_files();
+    load_steps.Mark("config files");
     snprintf(high_score_entry, PLAYER_NAME_LENGTH, "%s", centry->player_name);
     check_and_auto_fix_stats();
     // Same point as at a level start: the baseline the next save's config overlay is diffed against is the
     // config as loaded from files, without this save's own changes.
     take_conf_baseline();
+    load_steps.Mark("config baseline");
     // The save replaces the game; the config just loaded and the process's own fields (timing, seeds, ...) stay.
     save_copy_runtime(&save_desc_Game, loaded_save->game.get(), &game);
     memcpy(&game, loaded_save->game.get(), sizeof(game));
@@ -463,6 +497,7 @@ static TbBool apply_game_kfxs(const char *fname, struct LoadedSave *loaded_save,
             return false;
         }
     }
+    load_steps.Mark("game state + Lua");
     if (read_result->world_len > 0)
     {
         if (!world_load_blob(read_result->world_data, read_result->world_len))
@@ -480,15 +515,19 @@ static TbBool apply_game_kfxs(const char *fname, struct LoadedSave *loaded_save,
         }
         world_load_none();
     }
+    load_steps.Mark("world");
     rebuild_derived_game_state();
     update_trap_tab_to_config();
     update_room_tab_to_config();
+    load_steps.Mark("derived state");
     return true;
 }
 
 enum SaveLoadOutcome SaveManager::Load(int slot_num, enum SaveCheckResult *why)
 {
+    load_steps.Begin();
     BackgroundWait(); /* (a save still being written on its own thread may be this very slot's) */
+    load_steps.Mark("waiting for a save");
     *why = SvChk_Loadable;
     if (!EnsureSlot(slot_num))
     {
@@ -515,10 +554,13 @@ enum SaveLoadOutcome SaveManager::Load(int slot_num, enum SaveCheckResult *why)
         return SvLoad_Refused;
     }
     struct LoadedSave loaded_save;
+    load_steps.Mark("checking the slot");
     *why = read_game_kfxs(fname, &loaded_save);
     if (*why != SvChk_Loadable)
         return SvLoad_Refused;
+    load_steps.Mark("reading the file");
     reset_eye_lenses();
+    load_steps.Mark("eye lenses");
     struct CatalogueEntry* centry = &catalogue_[slot_num];
 
         // Check if the game version is compatible
@@ -550,8 +592,11 @@ enum SaveLoadOutcome SaveManager::Load(int slot_num, enum SaveCheckResult *why)
     sound_manager_reapply_creature_sounds();
     snprintf(game.campaign_fname, sizeof(game.campaign_fname), "%s", campaign.fname);
     local_state.show_gui = true;
+    load_steps.Mark("sounds");
     init_navigation();
+    load_steps.Mark("navigation");
     reinit_level_after_load();
+    load_steps.Mark("level after load");
     take_game_timestamp();
     reinit_packets_after_load();
     initialize_packet_history();
@@ -581,8 +626,10 @@ enum SaveLoadOutcome SaveManager::Load(int slot_num, enum SaveCheckResult *why)
     apply_local_user_preferences(get_local_user(), UPF_ApplyOnLoad);
     init_local_cameras(player);
     // Update the lights system state
+    load_steps.Mark("packets + state");
     light_import_system_state(&game.lightst);
     light_rebuild_after_load();
+    load_steps.Mark("lights");
     // Victory state
     if (player->victory_state != VicS_Undecided)
     {
@@ -593,6 +640,7 @@ enum SaveLoadOutcome SaveManager::Load(int slot_num, enum SaveCheckResult *why)
     }
     game.loaded_swipe_idx = -1;
     SAVELOG("loaded level %d of %s", game.continue_level_number, campaign.name);
+    SYNCLOG("Save load timing: %ld ms; %s", load_steps.Total(), load_steps.text.empty() ? "no step over 20 ms" : load_steps.text.c_str());
 
     api_event("GAME_LOADED");
 

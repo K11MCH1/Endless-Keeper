@@ -1654,6 +1654,14 @@ void redetect_screen_refresh_rate_for_draw()
     } else if (fps_limit_main > 0) {
         fps_limit_current = fps_limit_main;
     }
+    // Endless (2026-11-24): a renderer that waits for the screen itself needs no limiter on top; the limiter's 1 ms
+    // sleeps kept Android Vulkan at ~136 FPS on a 144 Hz panel where OpenGL ES (its swap waits) held 144
+    // (a limit at or above the screen's rate is redundant then; a lower cap the player chose stays)
+    if (RendererPacesFramesItself()) {
+        const int screen_rate = PlatformManager_GetDisplayRefreshRate();
+        if (fps_limit_main == -1 || (screen_rate > 0 && fps_limit_current >= screen_rate))
+            fps_limit_current = 0;
+    }
 }
 
 bool use_delta_time()

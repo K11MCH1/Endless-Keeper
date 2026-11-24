@@ -67,6 +67,10 @@
 #include "thing_physics.h"
 #include "map_utils.h"
 #include "bflib_planar.h"
+#include "bflib_sound.h"
+#include "net_state.h"
+#include "power_hand.h"
+#include "gui_parchment.h"
 #include "post_inc.h"
 
 static int al_reach = 200;           /* slabs from a fortress's middle its bell hears */
@@ -414,9 +418,7 @@ static void al_raise_flag(MapSlabCoord x, MapSlabCoord y)
     set_call_to_arms_as_birthing(flag);
     al_flag_idx = flag->index;
     al_flag_until = game.play_gameturn + AL_FLAG_TURNS;
-    struct PowerConfigStats *powerst = get_power_model_stats(PwrK_CALL2ARMS);
-    if (powerst != NULL)
-        thing_play_sample(flag, powerst->select_sound_idx, NORMAL_PITCH, 0, 3, 0, 6, FULL_LOUDNESS);
+    /* (the horn: world_alarm_local_turn, on every machine, wherever its camera is) */
     SYNCLOG("World alarm: the heroes' flag (thing %d) flies over the seam at engine slab (%d,%d)", (int)flag->index,
         (int)x, (int)y);
 }
@@ -609,10 +611,34 @@ static void al_check_razed(void)
     }
 }
 
+/** Test switch KFX_WORLD_ALARMFLAG=T: at T the heroes' flag flies 14 slabs east of player 0's Heart (as an alarm's warning
+ *  raises it): its horn, its rings on the minimap; the full map opens at T+40. */
+static void al_flag_test(void)
+{
+    static long at = -2;
+    if (at == -2)
+    {
+        const char *v = getenv("KFX_WORLD_ALARMFLAG");
+        at = (v != NULL) ? atol(v) : -1;
+        if (at >= 0)
+            SYNCLOG("World alarm: test switch KFX_WORLD_ALARMFLAG=%ld", at);
+    }
+    if (at < 0)
+        return;
+    if ((long)game.play_gameturn == at)
+    {
+        const struct Thing *heart = find_players_dungeon_heart(PLAYER0);
+        if (thing_exists(heart))
+            al_raise_flag(subtile_slab(heart->mappos.x.stl.num) + 14, subtile_slab(heart->mappos.y.stl.num));
+    } else if (((long)game.play_gameturn == at + 40) && !netstate_dedicated())
+        zoom_to_parchment_map();
+}
+
 void world_alarm_turn(void)
 {
     if (!world_mode_active())
         return;
+    al_flag_test();
     if ((al_flag_idx > 0) && ((GameTurnDelta)(game.play_gameturn - al_flag_until) >= 0))
     {
         struct Thing *flag = thing_get(al_flag_idx);
@@ -651,6 +677,77 @@ void world_alarm_turn(void)
         al_check_razed();
     if ((game.play_gameturn % 64) == 45)
         al_heroes_leave();
+}
+
+/** The heroes' flag of an Alarm Bell: heroes have no Call to Arms of their own in endless worlds, so a Call to Arms
+ *  flag of theirs is always an alarm's. */
+TbBool world_alarm_flag(const struct Thing *thing)
+{
+    return world_mode_active() && thing_is_object(thing) && (thing->model == ObjMdl_CTAEnsign) &&
+        (thing->owner == PLAYER_GOOD) && !thing_is_picked_up(thing);
+}
+
+int world_alarm_flags(MapCoord *x, MapCoord *y, int max_flags)
+{
+    int n = 0;
+    if (!world_mode_active())
+        return 0;
+    const struct StructureList *slist = get_list_for_thing_class(TCls_Object);
+    uint32_t k = 0;
+    for (int i = slist->index; (i != 0) && (n < max_flags) && (k <= slist->count); k++)
+    {
+        const struct Thing *thing = thing_get(i);
+        if (thing_is_invalid(thing))
+            break;
+        i = thing->next_of_class;
+        if (!world_alarm_flag(thing))
+            continue;
+        x[n] = thing->mappos.x.val;
+        y[n] = thing->mappos.y.val;
+        n++;
+    }
+    return n;
+}
+
+/** Each turn on every machine but a dedicated server (thin clients too: they see the flag come with the world's
+ *  things): a new alarm flag near this machine's keeper sounds the Call to Arms horn as a plain sound, wherever the
+ *  camera is (the user, 2026-11-22; it was a sound at the flag, heard only with the camera near it). */
+void world_alarm_local_turn(void)
+{
+    static ThingIndex heard_idx;
+    static GameTurn heard_birth;
+    if (!world_mode_active() || netstate_dedicated() || ((game.play_gameturn & 3) != 1))
+        return;
+    const struct StructureList *slist = get_list_for_thing_class(TCls_Object);
+    const struct Thing *newest = INVALID_THING;
+    uint32_t k = 0;
+    for (int i = slist->index; (i != 0) && (k <= slist->count); k++)
+    {
+        const struct Thing *thing = thing_get(i);
+        if (thing_is_invalid(thing))
+            break;
+        i = thing->next_of_class;
+        if (world_alarm_flag(thing) && (thing_is_invalid(newest) || (thing->creation_turn > newest->creation_turn)))
+            newest = thing;
+    }
+    if (thing_is_invalid(newest) || ((newest->index == heard_idx) && (newest->creation_turn == heard_birth)))
+        return;
+    heard_idx = newest->index;
+    heard_birth = newest->creation_turn;
+    if ((GameTurnDelta)(game.play_gameturn - newest->creation_turn) > 5 * 20)
+        return; /* a flag already flying (a load, a join): no horn */
+    const struct Thing *heart = find_players_dungeon_heart(my_player_number);
+    if (thing_exists(heart))
+    {
+        const long dx = abs((long)subtile_slab(heart->mappos.x.stl.num) - (long)subtile_slab(newest->mappos.x.stl.num));
+        const long dy = abs((long)subtile_slab(heart->mappos.y.stl.num) - (long)subtile_slab(newest->mappos.y.stl.num));
+        if (max(dx, dy) > AL_REACH + AL_LAND_MAX)
+            return; /* another keeper's alarm, far off */
+    }
+    const struct PowerConfigStats *powerst = get_power_model_stats(PwrK_CALL2ARMS);
+    if (powerst != NULL)
+        play_non_3d_sample(powerst->select_sound_idx);
+    SYNCLOG("World alarm: the horn sounds on this machine (flag %d)", (int)newest->index);
 }
 
 void world_alarm_seat_started(PlayerNumber plyr_idx)

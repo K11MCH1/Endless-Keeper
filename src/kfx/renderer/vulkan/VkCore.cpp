@@ -16,10 +16,18 @@
 #include "globals.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
+#include "kfx/renderer/vulkan/VkPrerotate_gen.h"
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include "post_inc.h"
+
+static inline uint64_t vk_now_ns()
+{
+    return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 static const VkDeviceSize kRingSize = 8u * 1024u * 1024u;
 
@@ -496,6 +504,7 @@ void VkCore::Shutdown()
         for (auto& fn : m_pending_init_garbage) fn();
         m_pending_init_garbage.clear();
         DestroySwapchain();
+        DestroyRotatePipeline();
         for (Frame& f : m_frames)
         {
             RunGarbage(f);
@@ -890,7 +899,17 @@ bool VkCore::BeginFrame()
     Frame& f = m_frames[m_frame];
     if (f.submitted)
     {
+#ifdef __ANDROID__
+        const uint64_t t0 = vk_now_ns();
+#endif
         VkResult r = vkWaitForFences(device, 1, &f.fence, VK_TRUE, UINT64_MAX);
+#ifdef __ANDROID__
+        {
+            const uint64_t d = vk_now_ns() - t0;
+            wait_fence_ns += d;
+            wait_total_ns += d;
+        }
+#endif
         if (r == VK_ERROR_DEVICE_LOST)
         {
             ERRORLOG("Vulkan: device lost (last pass '%s')", last_pass);
@@ -942,7 +961,12 @@ void VkCore::SubmitFrame()
     VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
     si.commandBufferCount = 2;
     si.pCommandBuffers = cmds;
+#ifdef __ANDROID__
+    // (pre-rotated, the image is first written as a colour attachment, not by a copy)
+    const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+#else
     const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+#endif
     if (m_swap_index != UINT32_MAX)
     {
         si.waitSemaphoreCount = 1;
@@ -995,12 +1019,21 @@ void VkCore::Present()
         pi.swapchainCount = 1;
         pi.pSwapchains = &m_swapchain;
         pi.pImageIndices = &m_swap_index;
+#ifdef __ANDROID__
+        const uint64_t t0 = vk_now_ns();
+#endif
         VkResult r = vkQueuePresentKHR(queue, &pi);
+#ifdef __ANDROID__
+        wait_present_ns += vk_now_ns() - t0;
+#endif
         if (r == VK_ERROR_OUT_OF_DATE_KHR)
             m_swap_dirty = true;
 #ifndef __ANDROID__
         else if (r == VK_SUBOPTIMAL_KHR)
             m_swap_dirty = true;
+#else
+        else if (r == VK_SUBOPTIMAL_KHR)
+            CheckTransformChanged();
 #endif
         else if (r == VK_ERROR_DEVICE_LOST)
         {
@@ -1386,10 +1419,32 @@ void VkCore::SetScissor(int32_t x, int32_t y, int32_t w, int32_t h)
 /* swapchain                                                                  */
 /******************************************************************************/
 
+void VkCore::DestroySwapViews()
+{
+    for (VkImageView v : m_swap_views)
+        if (v != VK_NULL_HANDLE)
+            vkDestroyImageView(device, v, nullptr);
+    m_swap_views.clear();
+}
+
+void VkCore::DestroyRotatePipeline()
+{
+    if (device == VK_NULL_HANDLE)
+        return;
+    if (m_rot_pipe != VK_NULL_HANDLE) vkDestroyPipeline(device, m_rot_pipe, nullptr);
+    if (m_rot_layout != VK_NULL_HANDLE) vkDestroyPipelineLayout(device, m_rot_layout, nullptr);
+    if (m_rot_set_layout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(device, m_rot_set_layout, nullptr);
+    m_rot_pipe = VK_NULL_HANDLE;
+    m_rot_layout = VK_NULL_HANDLE;
+    m_rot_set_layout = VK_NULL_HANDLE;
+    m_rot_format = VK_FORMAT_UNDEFINED;
+}
+
 void VkCore::DestroySwapchain()
 {
     if (device == VK_NULL_HANDLE)
         return;
+    DestroySwapViews();
     for (VkSemaphore s : m_swap_done)
         vkDestroySemaphore(device, s, nullptr);
     m_swap_done.clear();
@@ -1435,9 +1490,28 @@ bool VkCore::CreateSwapchain(int32_t w, int32_t h, bool vsync)
         extent.height = std::min(std::max(extent.height, caps.minImageExtent.height), caps.maxImageExtent.height);
     }
 #ifdef __ANDROID__
-    // without pre-rotation (IDENTITY below) the swapchain has the window's orientation, not the panel's
+    // the extent in the window's orientation (Android may give it in the panel's)
     if (extent.width != 0xFFFFFFFFu && ((extent.width > extent.height) != (w > h)))
         std::swap(extent.width, extent.height);
+#endif
+    VkSurfaceTransformFlagBitsKHR transform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+                                            ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : caps.currentTransform;
+    VkExtent2D image_extent = extent;
+    bool draw_rotated = false;
+#ifdef __ANDROID__
+    // Pre-rotation (2026-11-24: a phone showed Vulkan at 36 FPS where OpenGL ES ran at 120): the images get the
+    // panel's own orientation and the frame is drawn into them turned (DrawRotated), so the compositor shows them as
+    // they are instead of turning every frame itself, which some phones do with the GPU, at a cost.
+    if (allow_prerotate
+        && (caps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR || caps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR
+         || caps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR)
+        && (caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+    {
+        transform = caps.currentTransform;
+        draw_rotated = true;
+        if (transform != VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR)
+            std::swap(image_extent.width, image_extent.height);
+    }
 #endif
     if (extent.width == 0 || extent.height == 0)
         return false; // minimised
@@ -1471,6 +1545,11 @@ bool VkCore::CreateSwapchain(int32_t w, int32_t h, bool vsync)
             mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
     }
     uint32_t count = std::max(caps.minImageCount + 1, 3u);
+#ifdef __ANDROID__
+    // paced by vsync: no spare image beyond what the screen needs, so a frame made early waits for the screen
+    if (vsync_pacing && mode == VK_PRESENT_MODE_FIFO_KHR)
+        count = std::max(caps.minImageCount, 2u);
+#endif
     if (caps.maxImageCount > 0 && count > caps.maxImageCount)
         count = caps.maxImageCount;
 
@@ -1479,12 +1558,11 @@ bool VkCore::CreateSwapchain(int32_t w, int32_t h, bool vsync)
     sci.minImageCount = count;
     sci.imageFormat = chosen.format;
     sci.imageColorSpace = chosen.colorSpace;
-    sci.imageExtent = extent;
+    sci.imageExtent = image_extent;
     sci.imageArrayLayers = 1;
-    sci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    sci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | (draw_rotated ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0);
     sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    sci.preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
-                     ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : caps.currentTransform;
+    sci.preTransform = transform;
     sci.compositeAlpha = (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
                        ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR : (VkCompositeAlphaFlagBitsKHR)(caps.supportedCompositeAlpha & -(int)caps.supportedCompositeAlpha);
     sci.presentMode = mode;
@@ -1494,6 +1572,7 @@ bool VkCore::CreateSwapchain(int32_t w, int32_t h, bool vsync)
     VkResult r = vkCreateSwapchainKHR(device, &sci, nullptr, &sc);
     if (m_swapchain != VK_NULL_HANDLE)
     {
+        DestroySwapViews();
         for (VkSemaphore s : m_swap_done) vkDestroySemaphore(device, s, nullptr);
         m_swap_done.clear();
         vkDestroySwapchainKHR(device, m_swapchain, nullptr);
@@ -1515,12 +1594,35 @@ bool VkCore::CreateSwapchain(int32_t w, int32_t h, bool vsync)
         VkSemaphoreCreateInfo sei = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
         vkCreateSemaphore(device, &sei, nullptr, &m_swap_done[i]);
     }
+    if (draw_rotated)
+    {
+        m_swap_views.resize(ic, VK_NULL_HANDLE);
+        for (uint32_t i = 0; i < ic; i++)
+        {
+            VkImageViewCreateInfo vci = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+            vci.image = m_swap_images[i];
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format = chosen.format;
+            vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+            if (vkCreateImageView(device, &vci, nullptr, &m_swap_views[i]) != VK_SUCCESS)
+                m_swap_views[i] = VK_NULL_HANDLE; // (that image is shown unturned: BlitToSwapchain's copy)
+        }
+    }
     m_swap_format = chosen.format;
     m_swap_extent = extent;
+    m_swap_image_extent = image_extent;
+    m_swap_transform = draw_rotated ? transform : VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    m_swap_seen_transform = caps.currentTransform;
     m_swap_vsync = vsync;
     m_swap_dirty = false;
-    SYNCLOG("Vulkan: swapchain %ux%u, %u images, format %d, present mode %d", extent.width, extent.height, ic,
-            (int)chosen.format, (int)mode);
+    const int turns = !draw_rotated ? 0 : transform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ? 1
+                    : transform == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR ? 2 : 3;
+    swap_rotation = turns;
+    swapchain_serial++;
+    SYNCLOG("Vulkan: swapchain %ux%u, %u images (least %u), format %d, present mode %d, surface transform %d, %s (images %ux%u)",
+            extent.width, extent.height, ic, caps.minImageCount, (int)chosen.format, (int)mode, (int)caps.currentTransform,
+            draw_rotated ? (turns == 1 ? "pre-rotated 90" : turns == 2 ? "pre-rotated 180" : "pre-rotated 270") : "not pre-rotated",
+            image_extent.width, image_extent.height);
     return true;
 }
 
@@ -1551,7 +1653,17 @@ bool VkCore::BlitToSwapchain(VkImageObj& src, int32_t px, int32_t py, int32_t pw
     }
     Frame& f = m_frames[m_frame];
     uint32_t index = 0;
+#ifdef __ANDROID__
+    const uint64_t t0 = vk_now_ns();
+#endif
     VkResult r = vkAcquireNextImageKHR(device, m_swapchain, 1000000000ull, f.acquired, VK_NULL_HANDLE, &index);
+#ifdef __ANDROID__
+    {
+        const uint64_t d = vk_now_ns() - t0;
+        wait_acquire_ns += d;
+        wait_total_ns += d;
+    }
+#endif
     if (r == VK_ERROR_OUT_OF_DATE_KHR)
     {
         vkDeviceWaitIdle(device);
@@ -1562,8 +1674,10 @@ bool VkCore::BlitToSwapchain(VkImageObj& src, int32_t px, int32_t py, int32_t pw
     if (r == VK_SUBOPTIMAL_KHR)
     {
 #ifndef __ANDROID__
-        // (Android says suboptimal for every frame not pre-rotated: the compositor turns it, nothing to remake)
         m_swap_dirty = true;
+#else
+        // (Android also says suboptimal for every frame not pre-rotated: only a turned phone makes a new swapchain)
+        CheckTransformChanged();
 #endif
     }
     else if (r != VK_SUCCESS)
@@ -1578,6 +1692,11 @@ bool VkCore::BlitToSwapchain(VkImageObj& src, int32_t px, int32_t py, int32_t pw
 
     EndPass();
     VkCommandBuffer cmd = Cmd();
+#ifdef __ANDROID__
+    if (m_swap_transform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+        && DrawRotated(cmd, src, index, px, py, pw, ph, drawable_w, drawable_h))
+        return true;
+#endif
     last_pass = "present blit";
     VkImageObj dst;
     dst.image = m_swap_images[index];
@@ -1605,7 +1724,7 @@ bool VkCore::BlitToSwapchain(VkImageObj& src, int32_t px, int32_t py, int32_t pw
     int32_t x0 = (int32_t)(px * sx), y0 = (int32_t)(py * sy);
     int32_t x1 = (int32_t)((px + pw) * sx), y1 = (int32_t)((py + ph) * sy);
     x0 = std::max<int32_t>(0, x0); y0 = std::max<int32_t>(0, y0);
-    x1 = std::min<int32_t>((int32_t)m_swap_extent.width, x1); y1 = std::min<int32_t>((int32_t)m_swap_extent.height, y1);
+    x1 = std::min<int32_t>((int32_t)m_swap_image_extent.width, x1); y1 = std::min<int32_t>((int32_t)m_swap_image_extent.height, y1);
     if (x1 > x0 && y1 > y0)
     {
         b.dstOffsets[0] = { x0, y0, 0 };
@@ -1615,6 +1734,131 @@ bool VkCore::BlitToSwapchain(VkImageObj& src, int32_t px, int32_t py, int32_t pw
     }
     barrier_auto(cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     return true;
+}
+
+/** Android pre-rotation: draws src (bottom row first) into the acquired image turned to the panel, black round the
+ *  present rect. False (nothing recorded) if it cannot: the caller then copies it unturned. */
+bool VkCore::DrawRotated(VkCommandBuffer cmd, VkImageObj& src, uint32_t index, int32_t px, int32_t py, int32_t pw, int32_t ph,
+                         int32_t drawable_w, int32_t drawable_h)
+{
+    if (index >= m_swap_views.size() || m_swap_views[index] == VK_NULL_HANDLE || src.view == VK_NULL_HANDLE)
+        return false;
+    if (m_rot_format != m_swap_format)
+    {
+        m_rot_format = m_swap_format; // tried once per format
+        if (m_rot_set_layout == VK_NULL_HANDLE)
+        {
+            VkDescriptorSetLayoutBinding b = {};
+            b.binding = 0;
+            b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b.descriptorCount = 1;
+            b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            m_rot_set_layout = CreateSetLayout({ b });
+        }
+        if (m_rot_layout == VK_NULL_HANDLE && m_rot_set_layout != VK_NULL_HANDLE)
+        {
+            VkPushConstantRange pr = { VK_SHADER_STAGE_VERTEX_BIT, 0, 5 * sizeof(float) };
+            VkPipelineLayoutCreateInfo lci = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+            lci.setLayoutCount = 1;
+            lci.pSetLayouts = &m_rot_set_layout;
+            lci.pushConstantRangeCount = 1;
+            lci.pPushConstantRanges = &pr;
+            if (vkCreatePipelineLayout(device, &lci, nullptr, &m_rot_layout) != VK_SUCCESS)
+                m_rot_layout = VK_NULL_HANDLE;
+        }
+        if (m_rot_pipe != VK_NULL_HANDLE)
+        {
+            VkDevice dev = device;
+            VkPipeline old = m_rot_pipe;
+            Defer([dev, old]() { vkDestroyPipeline(dev, old, nullptr); });
+            m_rot_pipe = VK_NULL_HANDLE;
+        }
+        if (m_rot_layout != VK_NULL_HANDLE)
+        {
+            VkPipelineDesc d;
+            d.vs_code = kfx_vk_prerotate_vs; d.vs_size = sizeof(kfx_vk_prerotate_vs);
+            d.fs_code = kfx_vk_prerotate_fs; d.fs_size = sizeof(kfx_vk_prerotate_fs);
+            d.layout = m_rot_layout;
+            d.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+            d.color_format = m_swap_format;
+            d.has_depth = false;
+            d.debug_name = "present pre-rotated";
+            m_rot_pipe = CreatePipeline(d);
+        }
+        if (m_rot_pipe == VK_NULL_HANDLE)
+            ERRORLOG("Vulkan: no pre-rotation pipeline for format %d: frames are shown unturned", (int)m_swap_format);
+    }
+    if (m_rot_pipe == VK_NULL_HANDLE || drawable_w <= 0 || drawable_h <= 0)
+        return false;
+    VkDescriptorSet set = AllocSet(m_rot_set_layout);
+    if (set == VK_NULL_HANDLE)
+        return false;
+    VkDescriptorImageInfo ii = { GetSampler(false, false), src.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkWriteDescriptorSet wr = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+    wr.dstSet = set;
+    wr.dstBinding = 0;
+    wr.descriptorCount = 1;
+    wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wr.pImageInfo = &ii;
+    vkUpdateDescriptorSets(device, 1, &wr, 0, nullptr);
+
+    last_pass = "present pre-rotated";
+    if (src.layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+    {
+        barrier_auto(cmd, src, src.layout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        src.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    VkImageObj dst;
+    dst.image = m_swap_images[index];
+    dst.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+    dst.layers = 1;
+    // (the acquire semaphore is waited at the colour output stage: the layout change waits for it there)
+    VkCore_ImageBarrier(cmd, dst, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    VkRenderingAttachmentInfoKHR ca = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR };
+    ca.imageView = m_swap_views[index];
+    ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    ca.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    ca.clearValue.color.float32[3] = 1.0f;
+    VkRenderingInfoKHR ri = { VK_STRUCTURE_TYPE_RENDERING_INFO_KHR };
+    ri.renderArea.extent = m_swap_image_extent;
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &ca;
+    kfx_vkCmdBeginRendering(cmd, &ri);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rot_pipe);
+    const VkViewport vp = { 0.0f, 0.0f, (float)m_swap_image_extent.width, (float)m_swap_image_extent.height, 0.0f, 1.0f };
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    const VkRect2D sc = { { 0, 0 }, m_swap_image_extent };
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_rot_layout, 0, 1, &set, 0, nullptr);
+    struct { float rect[4]; int32_t rot; } pc;
+    // the present rect (drawable pixels, top-left origin) in the window's clip space
+    pc.rect[0] = 2.0f * (float)px / (float)drawable_w - 1.0f;
+    pc.rect[1] = 2.0f * (float)py / (float)drawable_h - 1.0f;
+    pc.rect[2] = 2.0f * (float)(px + pw) / (float)drawable_w - 1.0f;
+    pc.rect[3] = 2.0f * (float)(py + ph) / (float)drawable_h - 1.0f;
+    pc.rot = m_swap_transform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ? 1
+           : m_swap_transform == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR ? 2 : 3;
+    static_assert(sizeof(pc) == 5 * sizeof(float), "push constants as the shader has them");
+    vkCmdPushConstants(cmd, m_rot_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 4, 1, 0, 0);
+    kfx_vkCmdEndRendering(cmd);
+    barrier_auto(cmd, dst, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    bind_serial++;
+    return true;
+}
+
+/** Android: a suboptimal answer means a new swapchain only when the phone was turned since the last one was made. */
+void VkCore::CheckTransformChanged()
+{
+    VkSurfaceCapabilitiesKHR c;
+    if (m_surface != VK_NULL_HANDLE && vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, m_surface, &c) == VK_SUCCESS
+        && c.currentTransform != m_swap_seen_transform)
+        m_swap_dirty = true;
 }
 
 /******************************************************************************/

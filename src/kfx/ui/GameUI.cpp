@@ -25,6 +25,7 @@
 #include "chat_box.h"
 #include "world_creature_window.h"
 #include "world_keeper_panel.h"
+#include "world_level_window.h"
 #include "gui_frontmenu.h"         /* menu_is_active */
 
 #include "post_inc.h"
@@ -80,6 +81,8 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
     world_circles_draw(); /* endless worlds: a breached circle's name */
     chat_box_draw_faded();
     world_keeper_panel_draw_last(); /* endless: the Keeper panel over everything but the Hand */
+    world_level_window_draw_last(); /* endless: Rooms & Spells To Level, the same */
+    world_level_book_draw(); /* endless: the spellbook over the Library the Hand is on, under the Hand */
     draw_power_hand();
     gui_draw_all_boxes();
 }

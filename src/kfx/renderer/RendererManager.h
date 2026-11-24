@@ -169,6 +169,10 @@ TbBool RendererCompositesMinimapBackground(void);
  *  is locked, or the backend records draws to render later. */
 TbBool RendererCanDraw(void);
 TbBool RendererCanPresent(void);
+/** True when the renderer itself holds each frame to the screen's refresh (Android Vulkan with vsync: its swapchain
+ *  waits for a free image, as an OpenGL swap does); the game's own frame-rate limiter then stays off. */
+TbBool RendererPacesFramesItself(void);
+void   RendererSetPacesFramesItself(TbBool on);
 
 /** Tell the GPU renderer to preserve the last real frame's content across
  *  PresentFrame() (world/UI/image-present buffers not flipped, only the

@@ -33,6 +33,7 @@ public:
     void GetDrawableSize(int* out_w, int* out_h) const override;
     void SetGameSurfaceSize(int w, int h) override;
     void GetPresentRect(int* out_x, int* out_y, int* out_w, int* out_h) const override;
+    void GetGameSafeInsets(int* out_l, int* out_t, int* out_r, int* out_b) const override;
     int GetWindowDisplayIndex() const override;
     int GetNumVideoDisplays() const override;
     int GetDesktopDisplayMode(int display, int* out_w, int* out_h) const override;

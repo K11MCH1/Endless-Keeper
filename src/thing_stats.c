@@ -43,6 +43,7 @@
 #include "vidfade.h"
 #include "lua_triggers.h"
 
+#include "thing_creature.h"
 #include "world_progress.h"
 #include "world_stream.h"
 #include "world_misdeeds.h"
@@ -401,6 +402,36 @@ long creature_exp_to_next_level(const struct CreatureModelConfig *crconf, CrtrEx
     if (need > 0x7FFFFF)
         need = 0x7FFFFF;
     return (long)need;
+}
+
+/** Experience a creature needs for its next level (without the <<8 scaling). Endless worlds: three times the config's
+ *  for every creature but diggers (Imps; the user, 2026-11-22: "Make leveling 3x take more time for Creatures"). */
+long creature_thing_exp_to_next_level(const struct Thing *thing)
+{
+    const struct CreatureModelConfig *crconf = creature_stats_get_from_thing(thing);
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    long need = creature_exp_to_next_level(crconf, cctrl->exp_level);
+    if (world_mode_active() && !thing_is_creature_digger(thing))
+        need = min(need * 3L, 0x7FFFFFL);
+    return need;
+}
+
+/** Endless worlds: how many levels a keeper's creature may reach now: 5 for each Training Room level (the user,
+ *  2026-11-22: 5 levels free, the Training Room's 20 levels open the rest, up to 100). Computer keepers too (2026-11-23:
+ *  "Enemy Keepers operate under the same rules as the Player"). Imps, heroes and the wild have no such cap. A creature
+ *  already above it keeps its level. */
+CrtrExpLevel creature_level_cap(const struct Thing *thing)
+{
+    if (!world_mode_active() || thing_is_creature_digger(thing) || !player_is_keeper(thing->owner))
+        return CREATURE_MAX_LEVEL_LIMIT; /* (computer keepers too: the same rules as the player, 2026-11-23) */
+    return (CrtrExpLevel)world_creature_level_cap(thing->owner);
+}
+
+/** The creature is at its keeper's level cap (creature_level_cap): no more levels, no experience. */
+TbBool creature_at_level_cap(const struct Thing *thing)
+{
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    return (int)cctrl->exp_level + 1 >= (int)creature_level_cap(thing);
 }
 
 /** Creatures grow in size with their level up to level 10, not further. */

@@ -29,6 +29,12 @@ void world_alarm_gold_mined(const struct Thing *creatng, MapSubtlCoord stl_x, Ma
 void world_alarm_turn(void);
 /** A hero an alarm sent (its own mark): it keeps the chunks round it loaded, as raid heroes do. */
 TbBool world_alarm_hero(const struct Thing *thing);
+/** A heroes' Call to Arms flag, which in endless worlds only the Alarm Bells raise. */
+TbBool world_alarm_flag(const struct Thing *thing);
+/** The alarm flags on the map (map coordinates), at most max_flags: for the full map. */
+int world_alarm_flags(MapCoord *x, MapCoord *y, int max_flags);
+/** Each turn on every machine but a dedicated server: the horn of a new alarm flag near this keeper. */
+void world_alarm_local_turn(void);
 /** A keeper's dungeon (re)starts: their alarms go quiet. */
 void world_alarm_seat_started(PlayerNumber plyr_idx);
 

@@ -202,6 +202,18 @@ int world_stamp_count(void);
 TbBool world_stamps_overlap(int64_t x1, int64_t y1, int64_t x2, int64_t y2);
 /** The engine slab of a world slab, when it is on the map now (a loaded page, or inside the window). */
 TbBool world_engine_slab(int64_t wx, int64_t wy, MapSlabCoord *ex, MapSlabCoord *ey);
+/** A computer keeper of the world (world_keeper_ai.c): its record, by its player slot. */
+struct WorldKeeperInfo {
+    int index;
+    uint32_t id_hash;      /* the same for this keeper in every load of the world (its personality comes from it) */
+    TbBool active, set_up;
+    int64_t heart_x, heart_y;
+    int32_t threat_radius;
+    long days_alone;       /* world days since a human was last near it (0: not known) */
+};
+TbBool world_keeper_of_player(PlayerNumber plyr_idx, struct WorldKeeperInfo *out);
+/** The portals the world knows (world slabs, owner or -1); returns how many were written. */
+int world_portals_list(int64_t *x, int64_t *y, int *owner, int max_portals);
 /** The world apart (2026-11-14, chunked worlds): the far corner of the world plane, from world slab WORLD_APART_MIN
  *  on in both x and y, is nobody's ground. The generator is never asked for its chunks: they load as plain rock with
  *  nothing in them. They are never stored and never remembered on the map when they freeze, so the next time they

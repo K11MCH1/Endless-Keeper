@@ -40,6 +40,7 @@
 #include <SDL3/SDL.h>
 #include "kfx/renderer/RendererManager.h" // RendererPhysicalWidth
 #include "world_attract.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 
 using namespace std;
@@ -514,6 +515,10 @@ static void process_event(const SDL_Event *ev)
          // todo (allow window to be freely scaled): add window resize function that does what is needed, and call this new function from window init function too
     } */
     case SDL_EVENT_WINDOW_RESIZED:
+        break;
+
+    case SDL_EVENT_WINDOW_SAFE_AREA_CHANGED:
+        ui_safe_area_changed(); // (Android: the phone was turned and its camera cutout moved, or the margin changed)
         break;
 
     case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:

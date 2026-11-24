@@ -271,6 +271,36 @@ void WindowSystemSDL::GetPresentRect(int* out_x, int* out_y, int* out_w, int* ou
     if (out_h) *out_h = h;
 }
 
+// The part of the game frame outside SDL's safe area, in game pixels (2026-11-24, phones' rounded corners and
+// camera cutouts: on Android the game's activity sets that area; on a desktop it is the whole window: 0).
+void WindowSystemSDL::GetGameSafeInsets(int* out_l, int* out_t, int* out_r, int* out_b) const
+{
+    int l = 0, t = 0, r = 0, b = 0;
+    SDL_Rect safe = {0, 0, 0, 0};
+    if (m_window != nullptr && m_gameW > 0 && m_gameH > 0 && SDL_GetWindowSafeArea(m_window, &safe)
+        && safe.w > 0 && safe.h > 0)
+    {
+        float ux = 1.0f, uy = 1.0f;
+        GetPixelsPerWindowUnit(&ux, &uy);
+        int px = 0, py = 0, pw = 0, ph = 0;
+        GetPresentRect(&px, &py, &pw, &ph);
+        if (pw > 0 && ph > 0)
+        {
+            // the safe rect in drawable pixels, then how far the frame reaches past it on each side
+            const float sl = safe.x * ux, st = safe.y * uy;
+            const float sr = (safe.x + safe.w) * ux, sb = (safe.y + safe.h) * uy;
+            l = (int)SDL_ceilf(SDL_max(0.0f, sl - px) * m_gameW / pw);
+            t = (int)SDL_ceilf(SDL_max(0.0f, st - py) * m_gameH / ph);
+            r = (int)SDL_ceilf(SDL_max(0.0f, (px + pw) - sr) * m_gameW / pw);
+            b = (int)SDL_ceilf(SDL_max(0.0f, (py + ph) - sb) * m_gameH / ph);
+        }
+    }
+    if (out_l) *out_l = l;
+    if (out_t) *out_t = t;
+    if (out_r) *out_r = r;
+    if (out_b) *out_b = b;
+}
+
 // Drawable pixels per window coordinate unit (cursor positions are in window units).
 void WindowSystemSDL::GetPixelsPerWindowUnit(float* out_sx, float* out_sy) const
 {

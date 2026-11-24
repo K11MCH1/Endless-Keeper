@@ -76,6 +76,7 @@
 #include "world_expedition.h"
 #include "world_curtain.h"
 #include "world_stream.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -141,7 +142,7 @@ static void draw_creature_view_icons(struct Thing* creatng)
     {
         spr = get_panel_sprite(488);
         ps_units_per_px = (22 * units_per_pixel) / spr->SHeight;
-        y = MyScreenHeight - scale_ui_value_lofi(spr->SHeight * 2);
+        y = ui_safe_bottom_edge() - scale_ui_value_lofi(spr->SHeight * 2);
     }
     struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
     for (SpellKind spell_idx = 0; spell_idx < CREATURE_MAX_SPELLS_CASTED_AT; spell_idx++)
@@ -187,7 +188,7 @@ static void draw_creature_view_icons(struct Thing* creatng)
     {
         struct Thing* dragtng = thing_get(cctrl->dragtng_idx);
         unsigned long spr_idx;
-        x = MyScreenWidth - (scale_value_by_horizontal_resolution(148) / 4);
+        x = ui_safe_right_edge() - (scale_value_by_horizontal_resolution(148) / 4);
         switch(dragtng->class_id)
         {
             case TCls_Object:
@@ -232,7 +233,7 @@ static void draw_creature_view_icons(struct Thing* creatng)
             const CrInstance active_inst_id = get_local_creature_control(creatng)->active_instance_id;
             if (!creature_instance_is_available(creatng, active_inst_id))
             {
-                x = MyScreenWidth - (scale_value_by_horizontal_resolution(148) / 4);
+                x = ui_safe_right_edge() - (scale_value_by_horizontal_resolution(148) / 4);
                 struct InstanceInfo* inst_inf = creature_instance_info_get(active_inst_id % game.conf.crtr_conf.instances_count);
                 draw_gui_panel_sprite_left(x, y, ps_units_per_px, inst_inf->symbol_spridx);
             }
@@ -1043,8 +1044,8 @@ void redraw_display(void)
             w *= 2;
             h *= 2;
         }
-        long pos_x = MyScreenWidth - w - 16 * units_per_pixel / 16;
-        long pos_y = 16 * units_per_pixel / 16;
+        long pos_x = ui_safe_right_edge() - w - 16 * units_per_pixel / 16;
+        long pos_y = ui_safe_top + 16 * units_per_pixel / 16;
         LbTextSetWindow(pos_x, pos_y, w, h);
         draw_slab64k(pos_x, pos_y, units_per_pixel, w, h);
         LbTextDrawResized(0/pixel_size, 0/pixel_size, tx_units_per_px, text);

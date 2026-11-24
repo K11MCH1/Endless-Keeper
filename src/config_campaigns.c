@@ -468,6 +468,12 @@ short parse_campaign_common_blocks(struct GameCampaign *campgn,char *buf,long le
           }
           else
           {
+              /* Endless Mode's map pack is named "Endless Mode (needs Endless Keeper)" for KeeperFX's own game, which
+                 lists it but can't play it (GitHub issue 2): this game, which can, leaves the note out */
+              static const char endless_note[] = " (needs Endless Keeper)";
+              const size_t name_len = strlen(campgn->name), note_len = sizeof(endless_note) - 1;
+              if ((name_len > note_len) && (strcmp(campgn->name + name_len - note_len, endless_note) == 0))
+                  campgn->name[name_len - note_len] = '\0';
               snprintf(campgn->display_name, LINEMSG_SIZE, "%s", campgn->name);
           }
           break;

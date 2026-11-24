@@ -25,6 +25,7 @@
 #include "kfx/renderer/RendererManager.h"
 #include "bflib_crash.h"
 #include "replay.h"
+#include "lag_watch.h"
 #include <signal.h>
 #include <stdarg.h>
 #if !defined(_WIN32)
@@ -116,6 +117,24 @@ static void log_replay_crashlog(void)
         LbErrorLog("packetfile:{\"turn\":%u, \"playback\":%s}\n", (unsigned)replay_crashlog_turn, playback);
     else
         LbErrorLog("packetfile:{\"turn\":%u, \"playback\":%s, \"path\":\"%s\"}\n", (unsigned)replay_crashlog_turn, playback, replay_crashlog_fname);
+}
+
+/* Out of memory (2026-11-23, after GitHub issue 3): every crash log says what the memory was, and when it had nearly
+   run out the log and the crash box say so: a crash for want of memory looks like any other fault (a failed allocation
+   is used as if it had worked). Linux's and Android's out-of-memory killer ends the game with a signal no program can
+   catch; the lag watch's "memory is running out" line is what such a game leaves behind. */
+static char crash_low_memory[192];
+
+static void crash_log_memory(void)
+{
+    char mem[192];
+    lag_watch_memory_text(mem, sizeof(mem));
+    if (mem[0] != '\0')
+        LbErrorLog("At the crash, %s.\n", mem + 2);
+    if (lag_watch_memory_short(crash_low_memory, sizeof(crash_low_memory)))
+        LbErrorLog("The game probably crashed because memory ran out: %s.\n", crash_low_memory);
+    else
+        crash_low_memory[0] = '\0';
 }
 
 void exit_handler(void)
@@ -243,6 +262,9 @@ static void crash_tell_user(const char *what, const void *addr)
         what, where);
     if (replay_crashlog_state != 0)
         n += snprintf(text + n, sizeof(text) - n, "Game turn: %u\n", (unsigned)replay_crashlog_turn);
+    if (crash_low_memory[0] != '\0')
+        n += snprintf(text + n, sizeof(text) - n, "\nMemory had nearly run out: %s. Closing other programs before "
+            "playing may help.\n", crash_low_memory);
     if (in_driver)
         n += snprintf(text + n, sizeof(text) - n, "\nThis happened inside the graphics card's driver. Installing the newest "
             "driver for your graphics card often fixes this.\n");
@@ -304,6 +326,7 @@ static DWORD WINAPI crash_job_run(LPVOID param)
         crash_describe(EXCEPTION_STACK_OVERFLOW, what, sizeof(what));
         job->what = what;
     }
+    crash_log_memory();
     crash_write_dump(job->info, job->thread);
     LbErrorLogClose();
     crash_tell_user(job->what, job->addr);
@@ -874,6 +897,8 @@ static void ctrl_handler_posix(int sig_id, siginfo_t *info, void *context)
     }
     LbErrorLog("Fault address: %p.\n", fault_addr);
     log_replay_crashlog();
+    if ((sig_id != SIGINT) && (sig_id != SIGTERM) && (sig_id != SIGHUP) && (sig_id != SIGQUIT))
+        crash_log_memory();
     log_posix_context(context);
     _backtrace_posix(16);
 
@@ -890,7 +915,7 @@ static void install_posix_handler(int sig_id)
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = ctrl_handler_posix;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    sa.sa_flags = SA_SIGINFO | SA_RESETHAND | SA_ONSTACK; /* on its own stack: a stack overflow is reported too */
     {
         int rc = sigaction(sig_id, &sa, NULL);
         if (rc != 0)
@@ -910,6 +935,17 @@ static void install_posix_handler(int sig_id)
 void LbErrorParachuteInstall(void)
 {
 #if defined(BF_POSIX_CRASH)
+    /* the handler's own stack (2026-11-23): after a stack overflow the faulting thread has none left, and the handler
+       died with the game, reporting nothing (the main thread's; other threads' faults run on their own stacks) */
+    {
+        static char crash_stack[128 * 1024];
+        stack_t ss;
+        memset(&ss, 0, sizeof(ss));
+        ss.ss_sp = crash_stack;
+        ss.ss_size = sizeof(crash_stack);
+        if (sigaltstack(&ss, NULL) != 0)
+            fprintf(stderr, "LbErrorParachuteInstall: sigaltstack failed; a stack overflow will not be reported.\n");
+    }
     install_posix_handler(SIGINT);
     install_posix_handler(SIGILL);
     install_posix_handler(SIGABRT);

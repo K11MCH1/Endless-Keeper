@@ -77,6 +77,7 @@
 #include "world_migrate.h"
 #include "world_dark.h"
 #include "world_expedition.h"
+#include "world_alarm.h"
 #include "front_simple.h"
 #include "post_inc.h"
 
@@ -1117,6 +1118,26 @@ static void draw_overhead_expeditions(const struct TbRect *map_area, long block_
     }
 }
 
+/* Endless worlds: an Alarm Bell's flag (world_alarm.c) rings on the full map too, out to 18 slabs, three pixels thick,
+   in the heroes' colour (the user, 2026-11-22) */
+static void draw_overhead_alarms(const struct TbRect *map_area, long block_size)
+{
+    MapCoord fx[8], fy[8];
+    const int n = world_alarm_flags(fx, fy, 8);
+    const long slab = COORD_PER_STL * STL_PER_SLB;
+    const unsigned char col = player_room_colours[world_display_colour(PLAYER_GOOD)];
+    for (int i = 0; i < n; i++)
+    {
+        const long pos_x = map_area->left + (long)((int64_t)block_size * fx[i] / slab);
+        const long pos_y = map_area->top + (long)((int64_t)block_size * fy[i] / slab);
+        if (parchment_point_hidden((int)pos_x, (int)pos_y))
+            continue;
+        const long radius = max(3L, block_size * (1 + (long)(get_gameturn() & 7)) * 9 / 4);
+        for (int t = 0; t < 3; t++)
+            UIRenderer_SubmitCircleOutline(pos_x, pos_y, radius + t, col);
+    }
+}
+
 int draw_overhead_call_to_arms(const struct TbRect *map_area, long block_size, PlayerNumber plyr_idx)
 {
     int n = 0;
@@ -1401,6 +1422,7 @@ void draw_2d_map(void)
         draw_overhead_things(&view_area, block_size, player->id_number);
         draw_overhead_room_icons(&view_area, block_size, player->id_number);
         draw_overhead_expeditions(&view_area, block_size, player->id_number); /* endless worlds: the Expedition spell */
+        draw_overhead_alarms(&view_area, block_size); /* endless worlds: the Alarm Bells' flags */
         MapSlabCoord heart_x, heart_y;
         if (world_parchment_heart(&heart_x, &heart_y))
         {

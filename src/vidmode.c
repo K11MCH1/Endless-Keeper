@@ -51,6 +51,7 @@
 #include "custom_sprites.h"
 #include "sprites.h"
 #include "world_expedition.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -787,6 +788,7 @@ TbBool update_screen_mode_data(long width, long height)
   LbScreenSetGraphicsWindow(0, 0, MyScreenWidth/pixel_size, MyScreenHeight/pixel_size);
   LbTextSetWindow(0, 0, MyScreenWidth/pixel_size, MyScreenHeight/pixel_size);
   LbMouseSetup(NULL);
+  ui_safe_area_refresh();
   return true;
 }
 

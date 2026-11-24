@@ -70,6 +70,8 @@
 #include "world_migrate.h"
 #include "world_fill.h"
 #include "world_expedition.h"
+#include "world_caretaker.h"
+#include "creature_states.h"
 #include "front_simple.h"
 #include "vidmode.h"
 #include "engine_render.h"
@@ -184,7 +186,8 @@ static int wpr_ids[WPR_ITEMS];  /* the item's room, power, trap or door kind (<=
 static ThingModel book_model, lore_model;
 
 #define WPR_SAVE_MAGIC 0x31475250u /* "PRG1" */
-#define WPR_SAVE_VERSION 6 /* 2: the seats that had the kit, after the players (16 bits); 3: as a player set (u8 words, the
+#define WPR_SAVE_VERSION 7 /* 7: levels by work (2026-11-22): the allowed levels' bytes hold the bars' top bits, the entry
+                              researched now is the chosen one; */ /* 2: the seats that had the kit, after the players (16 bits); 3: as a player set (u8 words, the
                               words); 4: then the room levels (count, then per player 4 levels, 4 allowed, the room
                               researched now, the turn its level began waiting); 5: rooms and spells (players, entries,
                               then per player the levels, the allowed levels, the entry researched now, the turn); 6: the book kinds' chances and row, after the levels */
@@ -276,6 +279,15 @@ static const struct WrlNumbers *wrl_numbers(void)
 }
 #define wrl_top (wrl_numbers()->top)
 #define wrl_need (wrl_numbers()->need)
+/* Levels by work (the user, 2026-11-22): the Library's work fills the bar of the room or spell the keeper chose (the
+   Library's spellbook window, world_level_window.c), the Workshop's the bar of the trap it makes, by time (wrl_need_of);
+   duplicate books give no levels any more. The Training Room has 20 levels: each opens 5 more creature levels (5 x its
+   level, up to 100). */
+#define WRL_TRAINING_ENTRY 3
+#define WRL_TRAINING_TOP 20
+#define WRL_TOP_MAX WRL_TRAINING_TOP
+#define WRL_BAR_MAX 0xFFFFFFL /* a bar is 24 bits: world_room_xp (16) and world_room_allowed (8, unused since levels
+                                 come by work) together, both in the game's state so that thin clients get it */
 #define WRL_XP_PER_CIRCLE (wrl_numbers()->misc[WRLN_XpPerCircle])
 #define wrl_xp game.world_room_xp                 /* each entry's bar (saved: the AMX1 extra; in the game's state, so
                                                      that it reaches thin clients with the levels) */
@@ -996,10 +1008,27 @@ static int wrl_level(PlayerNumber p, int r)
     return (v < 1) ? 1 : v;
 }
 
+/** (Levels used to be allowed by books first, then researched; since 2026-11-22 a full bar is the level itself.) */
 static int wrl_allowed(PlayerNumber p, int r)
 {
-    const int v = game.world_room_allowed[p][r];
-    return max(wrl_level(p, r), (v < 1) ? 1 : v);
+    return wrl_level(p, r);
+}
+
+static int wrl_top_of(int r)
+{
+    return (r == WRL_TRAINING_ENTRY) ? WRL_TRAINING_TOP : wrl_top[r];
+}
+
+static long wrl_bar(PlayerNumber p, int r)
+{
+    return (long)wrl_xp[p][r] | ((long)game.world_room_allowed[p][r] << 16);
+}
+
+static void wrl_set_bar(PlayerNumber p, int r, long v)
+{
+    v = max(0L, min(v, WRL_BAR_MAX));
+    wrl_xp[p][r] = (uint16_t)(v & 0xFFFF);
+    game.world_room_allowed[p][r] = (uint8_t)(v >> 16);
 }
 
 static int wrl_of_kind(int rkind)
@@ -1047,73 +1076,290 @@ static TbBool wrl_owned(PlayerNumber p, int r)
     return WRL_IS_POWER(r) ? (dungeon->magic_level[wrl_ids[r]] > 0) : ((dungeon->room_buildable[wrl_ids[r]] & 1) != 0);
 }
 
-/** A duplicate still has something to give: the entry is the keeper's and not allowed its top level yet. */
-static TbBool wrl_can_raise(PlayerNumber p, int r)
-{
-    return wrl_owned(p, r) && (wrl_allowed(p, r) < wrl_top[r]);
-}
 
 static const char *opt_label(int i)
 {
     return (i >= WPR_ITEMS) ? wrl_labels[i - WPR_ITEMS] : wpr_items[i].label;
 }
 
-/** A duplicate: `xp` goes into the entry's bar, and each time the bar is full the entry may reach one more level
- *  (researched in the Library, or built in the Workshop for a trap). The bar starts again after a level, keeping
- *  what was over. A duplicate of something that is allowed its top level is spent for nothing. */
-static void room_level_xp(PlayerNumber p, int r, int xp, const struct Coord3d *where)
+/* Levels by time (the user, 2026-11-22, after research points made a late Library level the Training Room in a minute):
+   level n takes n x 29 minutes of the Library's work (a trap's: the Workshop making it), at 1x; each creature working
+   there makes it faster: +0.2x a Warlock, Vampire or Ghost, +0.5x a Dragon, Wizard, Monk or Fairy, +0.1x any other.
+   Nobody working: it waits. (The user: all 20 Training Room levels in about 3.5 days with one Warlock, 1.5 with ten.)
+   A bar counts tenths of a turn at 1x (level 20: under 7 million, the bar holds 16.7). */
+#define WRL_MINUTES_PER_LEVEL 29
+#define WRL_UNITS_PER_MINUTE (60 * 20 * 10)
+
+/** The time level `to` takes, in bar units. */
+static long wrl_need_of(PlayerNumber p, int r, int to)
 {
-    if (!wrl_owned(p, r))
+    (void)p; (void)r;
+    if (to < 2)
+        return 0;
+    return min((long)to * WRL_MINUTES_PER_LEVEL * WRL_UNITS_PER_MINUTE, WRL_BAR_MAX);
+}
+
+/** Time goes into an entry's bar; each full bar is a level, the bar starts again with what was over. */
+static void wrl_add_xp(PlayerNumber p, int r, long xp)
+{
+    if ((xp <= 0) || !wrl_owned(p, r))
         return;
-    create_effect(where, TngEff_ResearchComplete, p);
-    if (wrl_allowed(p, r) >= wrl_top[r])
-    {
-        SYNCLOG("World progress: player %d's book is the %s, at its top level: nothing left to learn, the book is spent",
-            (int)p, wrl_labels[r]);
+    const int top = wrl_top_of(r);
+    if (wrl_level(p, r) >= top)
         return;
-    }
-    long bar = (long)wrl_xp[p][r] + max(xp, 0);
-    while (wrl_allowed(p, r) < wrl_top[r])
+    long bar = wrl_bar(p, r) + xp;
+    while (wrl_level(p, r) < top)
     {
-        const int to = wrl_allowed(p, r) + 1;
-        const long need = wrl_need[r][to - 2];
+        const int to = wrl_level(p, r) + 1;
+        const long need = wrl_need_of(p, r, to);
         if ((need <= 0) || (bar < need))
             break;
         bar -= need;
-        game.world_room_allowed[p][r] = (uint8_t)to;
-        if (!WRL_IS_TRAP(r) && (game.world_room_researching[p] == 0))
-            wpr_players[p].lvl_pending_since = game.play_gameturn;
-        SYNCLOG("World progress: player %d's %s has a full bar: it may be %s to level %d", (int)p, wrl_labels[r],
-            WRL_IS_TRAP(r) ? "built" : "researched", to);
+        game.world_room_level[p][r] = (uint8_t)to;
+        output_player_message(p, WRL_IS_TRAP(r) ? SMsg_ManufacturedTrap : WRL_IS_POWER(r) ? SMsg_ResearchedSpell :
+            SMsg_ResearchedRoom, 0);
+        SYNCLOG("World progress: player %d's %s is now level %d", (int)p, wrl_labels[r], to);
     }
-    if (wrl_allowed(p, r) >= wrl_top[r])
-        bar = 0;
-    wrl_xp[p][r] = (uint16_t)min(bar, 65535L);
-    const int next = wrl_allowed(p, r) + 1;
-    SYNCLOG("World progress: player %d's %s gains %d XP: %d of %d for level %d", (int)p, wrl_labels[r], xp, (int)wrl_xp[p][r],
-        (next <= wrl_top[r]) ? (int)wrl_need[r][next - 2] : 0, next);
+    wrl_set_bar(p, r, (wrl_level(p, r) >= top) ? 0 : bar);
 }
 
-/** A duplicate found in a circle (1-9; 0 or unknown counts as the first). */
-static void room_level_allow(PlayerNumber p, int r, const struct Coord3d *where, int circle)
+static TbBool wrl_levels_for(PlayerNumber p);
+static ThingModel wrl_fast_kinds[8];  /* +0.5x */
+static ThingModel wrl_quick_kinds[8]; /* +0.2x */
+
+static void wrl_resolve_workers(void)
 {
-    room_level_xp(p, r, WRL_XP_PER_CIRCLE * max(1, min(circle, 9)), where);
+    static const char *const fast[] = {"DRAGON", "WIZARD", "MONK", "FAIRY"};
+    static const char *const quick[] = {"SORCEROR", "VAMPIRE", "GHOST"};
+    memset(wrl_fast_kinds, 0, sizeof(wrl_fast_kinds));
+    memset(wrl_quick_kinds, 0, sizeof(wrl_quick_kinds));
+    for (int k = 0; k < 4; k++)
+        wrl_fast_kinds[k] = (ThingModel)max(0L, (long)get_id(creature_desc, fast[k]));
+    for (int k = 0; k < 3; k++)
+        wrl_quick_kinds[k] = (ThingModel)max(0L, (long)get_id(creature_desc, quick[k]));
 }
 
-/** The research of a next level: a multiple of the room's or spell's own research. A trap's level is built in the
- *  Workshop: a multiple of its manufacture. */
-static long wrl_cost(const struct Dungeon *dungeon, int r, int to)
+/** What a creature working adds to the speed, in hundredths. */
+static int wrl_worker_bonus(ThingModel model)
+{
+    for (int k = 0; k < 8; k++)
+        if ((wrl_fast_kinds[k] > 0) && (wrl_fast_kinds[k] == model))
+            return 50;
+    for (int k = 0; k < 8; k++)
+        if ((wrl_quick_kinds[k] > 0) && (wrl_quick_kinds[k] == model))
+            return 20;
+    return 10;
+}
+
+int world_level_speed(PlayerNumber p, int where, int *workers)
+{
+    int n = 0, speed = 0;
+    const struct Dungeon *dungeon = get_players_num_dungeon(p);
+    if ((p >= 0) && (p < PLAYERS_COUNT) && !dungeon_invalid(dungeon))
+    {
+        if (wrl_fast_kinds[0] == 0)
+            wrl_resolve_workers();
+        const CrtrStateId want = (where == 0) ? CrSt_Researching : CrSt_Manufacturing;
+        for (ThingIndex i = dungeon->creatr_list_start, guard = 0; (i > 0) && (guard < CREATURES_COUNT); guard++)
+        {
+            const struct Thing *t = thing_get(i);
+            const struct CreatureControl *c = creature_control_get_from_thing(t);
+            if (thing_is_invalid(t) || creature_control_invalid(c))
+                break;
+            i = c->players_next_creature_idx;
+            if (get_creature_state_besides_interruptions(t) != want)
+                continue;
+            n++;
+            speed += wrl_worker_bonus(t->model);
+        }
+    }
+    if (workers != NULL)
+        *workers = n;
+    return (n > 0) ? (100 + speed) : 0;
+}
+
+/** Every 4 turns (the simulation): the time the Library and the Workshop worked goes into their bars. */
+static void wrl_time_turn(void)
+{
+    if ((game.play_gameturn % 4) != 1)
+        return;
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+    {
+        if (!wrl_levels_for(p) || world_caretaker_active(p) || world_coop_seat_away(p))
+            continue;
+        const struct Dungeon *dungeon = get_players_num_dungeon(p);
+        if (dungeon_invalid(dungeon))
+            continue;
+        const int r = world_level_focus(p);
+        if (r >= 0)
+        {
+            const int sp = world_level_speed(p, 0, NULL);
+            if (sp > 0)
+                wrl_add_xp(p, r, 4L * sp / 10); /* (speeds are whole tenths) */
+        }
+        if (dungeon->manufacture_class == TCls_Trap)
+        {
+            const int t = wrl_of_trap(dungeon->manufacture_kind);
+            const int sp = (t >= 0) ? world_level_speed(p, 1, NULL) : 0;
+            if (sp > 0)
+                wrl_add_xp(p, t, 4L * sp / 10);
+        }
+    }
+}
+
+/** Whose rooms and spells level by time: human keepers and computer keepers alike (the same rules, 2026-11-23). */
+static TbBool wrl_levels_for(PlayerNumber p)
+{
+    if ((p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX) || (p == PLAYER_GOOD) || (p == game.neutral_player_num))
+        return false;
+    return world_player_is_human(p) || player_is_keeper(p);
+}
+
+TbBool world_level_set_focus(PlayerNumber p, int entry)
+{
+    if (!world_mode_active() || !wrl_levels_for(p) || (entry < 0) || (entry >= WRL_FIRST_TRAP) || !wrl_owned(p, entry) ||
+        (wrl_level(p, entry) >= wrl_top_of(entry)))
+        return false;
+    if (game.world_room_researching[p] != (uint8_t)(entry + 1))
+    {
+        game.world_room_researching[p] = (uint8_t)(entry + 1);
+        SYNCLOG("World progress: player %d's Library now works on the %s's levels", (int)p, wrl_labels[entry]);
+    }
+    return true;
+}
+
+void world_level_test_time(PlayerNumber p, long seconds)
+{
+    const int r = world_level_focus(p);
+    if (r >= 0)
+        wrl_add_xp(p, r, seconds * 20 * 10);
+}
+
+int world_level_focus(PlayerNumber p)
+{
+    if (!world_mode_active() || (p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX))
+        return -1;
+    const int chosen = (int)game.world_room_researching[p] - 1;
+    if ((chosen >= 0) && (chosen < WRL_FIRST_TRAP) && wrl_owned(p, chosen) && (wrl_level(p, chosen) < wrl_top_of(chosen)))
+        return chosen;
+    /* none chosen (or it is at its top): the Training Room, then the first room or spell that can still grow */
+    if (wrl_owned(p, WRL_TRAINING_ENTRY) && (wrl_level(p, WRL_TRAINING_ENTRY) < WRL_TRAINING_TOP))
+        return WRL_TRAINING_ENTRY;
+    for (int r = 0; r < WRL_FIRST_TRAP; r++)
+        if (wrl_owned(p, r) && (wrl_level(p, r) < wrl_top_of(r)))
+            return r;
+    return -1;
+}
+
+void world_level_focus_packet(PlayerNumber p, int r)
+{
+    if (!world_mode_active() || (p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX) || (r < 0) || (r >= WRL_FIRST_TRAP) ||
+        !wrl_owned(p, r))
+        return;
+    game.world_room_researching[p] = (uint8_t)(r + 1);
+    SYNCLOG("World progress: player %d's Library now works on the %s's levels", (int)p, wrl_labels[r]);
+}
+
+/* The Library's leveling window (world_level_window.c): the rooms, then the spells, in the window's order */
+static const int wrl_window_rooms[] = {0, 1, 2, 3, 11, 12, 13, 14, 15, 16};
+static const int wrl_window_spells[] = {4, 5, 6, 7, 8, 9, 10};
+
+int world_level_entries(PlayerNumber p, int which, struct WorldLevelEntry *out, int max_entries)
+{
+    const int *list = (which == 0) ? wrl_window_rooms : wrl_window_spells;
+    const int n = (which == 0) ? (int)(sizeof(wrl_window_rooms) / sizeof(wrl_window_rooms[0])) :
+        (int)(sizeof(wrl_window_spells) / sizeof(wrl_window_spells[0]));
+    if ((p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX))
+        return 0;
+    const int focus = world_level_focus(p);
+    int k = 0;
+    for (int i = 0; (i < n) && (k < max_entries); i++)
+    {
+        const int r = list[i];
+        if (wrl_ids[r] <= 0)
+            continue;
+        struct WorldLevelEntry *e = &out[k++];
+        e->entry = r;
+        e->kind_class = WRL_IS_POWER(r) ? 1 : 0;
+        e->kind = wrl_ids[r];
+        e->label = wrl_labels[r];
+        e->owned = wrl_owned(p, r);
+        e->level = wrl_level(p, r);
+        e->top = wrl_top_of(r);
+        e->bar = wrl_bar(p, r);
+        e->need = (e->level < e->top) ? wrl_need_of(p, r, e->level + 1) : 0;
+        e->focus = (r == focus);
+        e->chosen = ((int)game.world_room_researching[p] - 1 == r);
+    }
+    return k;
+}
+
+/** What level n of entry r gives, in words (the numbers read from Amenity Mastery's table). */
+static void wrl_effect_text(int r, int n, char *out, size_t size)
 {
     const struct WrlNumbers *num = wrl_numbers();
-    const int lv = max(0, min(to, WRL_MAX));
-    if (WRL_IS_TRAP(r))
-        return (long)manufacture_points_required(TCls_Trap, wrl_ids[r]) * num->times[2][lv] * num->misc[WRLN_CostPercent] / 100;
-    long base = 1000;
-    const int category = WRL_IS_POWER(r) ? RsCat_Power : RsCat_Room;
-    for (int k = 0; k < dungeon->research_num; k++)
-        if ((dungeon->research[k].rtyp == category) && (dungeon->research[k].rkind == wrl_ids[r]))
-            base = max(1L, (long)dungeon->research[k].req_amount);
-    return base * num->times[WRL_IS_POWER(r) ? 1 : 0][lv] * num->misc[WRLN_CostPercent] / 100;
+    const int rl = max(0, min(n, 3)), pl = max(0, min(n, WRL_MAX));
+    switch (r)
+    {
+    case 0: snprintf(out, size, "creatures heal %d%% faster in the Lair", num->room[WRB_LairHeal][rl]); break;
+    case 1: snprintf(out, size, "creatures stay fed %d%% longer, chickens heal %d%% more", num->room[WRB_HatcheryHunger][rl],
+        num->room[WRB_HatcheryHeal][rl]); break;
+    case 2: snprintf(out, size, "research %d%% faster", num->room[WRB_LibraryResearch][rl]); break;
+    case 11: snprintf(out, size, "creatures' pay %d%% lower", num->room[WRB_TreasuryPay][rl]); break;
+    case 12: snprintf(out, size, "manufacture %d%% faster", num->room[WRB_WorkshopSpeed][rl]); break;
+    case 13: snprintf(out, size, "prisoners starve and turn to skeletons %d%% sooner", num->room[WRB_PrisonSkeleton][rl]); break;
+    case 14: snprintf(out, size, "tortured creatures convert %d%% sooner", num->room[WRB_TortureConvert][rl]); break;
+    case 15:
+        snprintf(out, size, "%s", (num->room[WRB_BarracksMixed][rl] >= 2) ? "the Horned Reaper groups with anyone" :
+            (num->room[WRB_BarracksMixed][rl] >= 1) ? "creatures that dislike each other group together" : "no change");
+        break;
+    case 16: snprintf(out, size, "Vampires need %d corpse%s fewer", num->room[WRB_GraveyardCorpses][rl],
+        (num->room[WRB_GraveyardCorpses][rl] == 1) ? "" : "s"); break;
+    case 4: snprintf(out, size, "new Imps come %d level%s higher", num->power[WPB_ImpLevels][pl],
+        (num->power[WPB_ImpLevels][pl] == 1) ? "" : "s"); break;
+    case 5: snprintf(out, size, "sees %d%% wider", num->power[WPB_SightRadius][pl]); break;
+    case 6: snprintf(out, size, "creatures move %d%% faster", num->power[WPB_SpeedEffect][pl]); break;
+    case 7: snprintf(out, size, "lasts %d seconds longer", num->power[WPB_ConcealTurns][pl] / 20); break;
+    case 8: snprintf(out, size, "heals up to %d health", num->power[WPB_HealTop][pl]); break;
+    case 9: snprintf(out, size, "%d%% more damage", num->power[WPB_LightningDamage][pl]); break;
+    case 10:
+        if (num->power[WPB_ProtectTurns][pl] > 0)
+            snprintf(out, size, "%d%% more armour, lasts %d seconds longer", num->power[WPB_ProtectArmour][pl],
+                num->power[WPB_ProtectTurns][pl] / 20);
+        else
+            snprintf(out, size, "%d%% more armour", num->power[WPB_ProtectArmour][pl]);
+        break;
+    default: snprintf(out, size, "stronger"); break;
+    }
+}
+
+int world_level_entry_lines(PlayerNumber p, int r, char (*lines)[WORLD_LEVEL_LINE], int max_lines)
+{
+    if ((r < 0) || (r >= WRL_ROOMS) || (max_lines <= 0))
+        return 0;
+    if (r == WRL_TRAINING_ENTRY)
+    {
+        int k = 0;
+        snprintf(lines[k++], WORLD_LEVEL_LINE, "Each level increases the max Level cap of creatures by 5");
+        if (k < max_lines)
+            snprintf(lines[k++], WORLD_LEVEL_LINE, "Your creatures can reach level %d now", world_creature_level_cap(p));
+        return k;
+    }
+    int k = 0;
+    for (int n = 2; (n <= wrl_top_of(r)) && (k < max_lines); n++)
+    {
+        char what[WORLD_LEVEL_LINE];
+        wrl_effect_text(r, n, what, sizeof(what));
+        snprintf(lines[k++], WORLD_LEVEL_LINE, "Level %d: %s", n, what);
+    }
+    return k;
+}
+
+int world_creature_level_cap(PlayerNumber p)
+{
+    if (!world_mode_active() || (p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX))
+        return CREATURE_MAX_LEVEL_LIMIT;
+    return min(CREATURE_MAX_LEVEL_LIMIT, 5 * max(1, wrl_level(p, WRL_TRAINING_ENTRY)));
 }
 
 int world_room_bonus(PlayerNumber plyr_idx, enum WorldRoomBonus what)
@@ -1122,6 +1368,8 @@ int world_room_bonus(PlayerNumber plyr_idx, enum WorldRoomBonus what)
     if (!world_mode_active() || (plyr_idx < 0) || (plyr_idx >= PLAYERS_COUNT) || (plyr_idx >= PLAYERS_MAX) ||
         ((int)what < 0) || ((int)what >= WRB_COUNT))
         return 0;
+    if (what == WRB_TrainingXp)
+        return 0; /* the Training Room's levels open creature levels instead (2026-11-22) */
     return wrl_numbers()->room[what][min(wrl_level(plyr_idx, room_of[what]), 3)];
 }
 
@@ -1150,10 +1398,10 @@ TbBool world_amenity_bar(PlayerNumber plyr_idx, int kind_class, int kind, int *x
     if (!world_mode_active() || (plyr_idx < 0) || (plyr_idx >= PLAYERS_COUNT) || (plyr_idx >= PLAYERS_MAX))
         return false;
     const int r = (kind_class == 0) ? wrl_of_kind(kind) : (kind_class == 1) ? wrl_of_power(kind) : wrl_of_trap(kind);
-    if ((r < 0) || !wrl_owned(plyr_idx, r) || (wrl_allowed(plyr_idx, r) >= wrl_top[r]))
+    if ((r < 0) || !wrl_owned(plyr_idx, r) || (wrl_level(plyr_idx, r) >= wrl_top_of(r)))
         return false;
-    *xp = wrl_xp[plyr_idx][r];
-    *need = wrl_need[r][wrl_allowed(plyr_idx, r) + 1 - 2];
+    *xp = (int)wrl_bar(plyr_idx, r);
+    *need = (int)wrl_need_of(plyr_idx, r, wrl_level(plyr_idx, r) + 1);
     return (*need > 0);
 }
 
@@ -1174,7 +1422,7 @@ size_t world_amenity_save_size(void)
 void world_amenity_save(uint8_t *buf)
 {
     *buf++ = (uint8_t)PLAYERS_COUNT;
-    *buf++ = (uint8_t)WRL_ROOMS;
+    *buf++ = (uint8_t)(WRL_ROOMS | 0x80); /* 0x80: bars of levels by work (2026-11-22) */
     for (int p = 0; p < PLAYERS_COUNT; p++)
     {
         memcpy(buf, wrl_xp[p], 2 * WRL_ROOMS);
@@ -1188,7 +1436,8 @@ TbBool world_amenity_load(const uint8_t *buf, size_t len)
     world_amenity_reset();
     if (len < 2)
         return false;
-    const int players = buf[0], entries = buf[1];
+    const int players = buf[0], entries = buf[1] & 0x7F;
+    const TbBool by_work = (buf[1] & 0x80) != 0;
     if (len < 2 + (size_t)players * (2 * (size_t)entries + 1))
         return false;
     buf += 2;
@@ -1196,7 +1445,8 @@ TbBool world_amenity_load(const uint8_t *buf, size_t len)
     {
         if (p < PLAYERS_MAX)
         {
-            memcpy(wrl_xp[p], buf, 2 * (size_t)min(entries, WRL_ROOMS));
+            if (by_work)
+                memcpy(wrl_xp[p], buf, 2 * (size_t)min(entries, WRL_ROOMS)); /* (an older run's book bars start again) */
             wpr_offer_circle[p] = buf[2 * entries];
         }
         buf += 2 * entries + 1;
@@ -1232,49 +1482,15 @@ void world_progress_book_thawed(struct Thing *thing)
  *  true while the Workshop's work goes into a trap's level. */
 TbBool world_trap_level_manufacture(PlayerNumber p)
 {
-    if (!world_mode_active() || !world_progress_active() || (p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX) ||
-        !world_player_is_human(p))
-        return false;
-    struct Dungeon *dungeon = get_players_num_dungeon(p);
-    if (dungeon_invalid(dungeon))
-        return false;
-    int r = -1;
-    for (int k = WRL_FIRST_TRAP; (k < WRL_ROOMS) && (r < 0); k++)
-        if (wrl_owned(p, k) && (wrl_allowed(p, k) > wrl_level(p, k)))
-            r = k;
-    if (r < 0)
-        return false;
-    const int to = wrl_level(p, r) + 1;
-    const long cost = wrl_cost(dungeon, r, to);
-    if ((dungeon->manufacture_class != TCls_Trap) || (dungeon->manufacture_kind != wrl_ids[r]))
-    {
-        /* the Workshop's creatures only work while something is being made: the trap itself stands in */
-        dungeon->manufacture_class = TCls_Trap;
-        dungeon->manufacture_kind = wrl_ids[r];
-        SYNCLOG("World progress: player %d's Workshop builds the %s's level %d (%ld)", (int)p, wrl_labels[r], to, cost);
-    }
-    if ((cost << 8) > dungeon->manufacture_progress)
-        return true;
-    dungeon->manufacture_progress -= (cost << 8);
-    game.world_room_level[p][r] = (uint8_t)to;
-    dungeon->manufacture_class = TCls_Empty;
-    dungeon->manufacture_kind = 0;
-    output_player_message(p, SMsg_ManufacturedTrap, 0);
-    SYNCLOG("World progress: player %d's %s is now level %d", (int)p, wrl_labels[r], to);
-    return true;
+    (void)p; /* trap levels come from the Workshop's work on the trap itself (wrl_time_turn, 2026-11-22) */
+    return false;
 }
 
 static TbBool level_badge(PlayerNumber plyr_idx, int r, int *number, TbBool *reached)
 {
     if (!world_mode_active() || (plyr_idx < 0) || (plyr_idx >= PLAYERS_COUNT) || (plyr_idx >= PLAYERS_MAX) || (r < 0))
         return false;
-    const int level = wrl_level(plyr_idx, r), allowed = wrl_allowed(plyr_idx, r);
-    if (allowed > level)
-    {
-        *number = level + 1; /* grey: the next level, to research */
-        *reached = false;
-        return true;
-    }
+    const int level = wrl_level(plyr_idx, r);
     if (level >= 2)
     {
         *number = level; /* white: reached, nothing more allowed yet */
@@ -1337,100 +1553,34 @@ long world_heal_amount(PlayerNumber plyr_idx, long configured, const int32_t *st
 
 TbBool world_room_level_research_bar(PlayerNumber p, int *required, int *progress)
 {
-    if (!world_mode_active() || (p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX) || (game.world_room_researching[p] == 0))
-        return false;
-    const struct Dungeon *dungeon = get_players_num_dungeon(p);
-    const int r = game.world_room_researching[p] - 1;
-    if (dungeon_invalid(dungeon) || (r < 0) || (r >= WRL_ROOMS))
-        return false;
-    *required = (int)wrl_cost(dungeon, r, wrl_level(p, r) + 1);
-    *progress = (int)(dungeon->research_progress >> 8);
-    return true;
+    (void)p; (void)required; (void)progress; /* (levels have their own bars since 2026-11-22) */
+    return false;
 }
 
+/** The Library's work fills the chosen entry's bar by time alongside the "?" research (wrl_time_turn). With no "?"
+ *  research left, the Library keeps working for the levels: true then, and the stock code stays off its job. */
 TbBool world_room_level_research(PlayerNumber p)
 {
     if (!world_mode_active() || !world_progress_active() || (p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX) ||
         !world_player_is_human(p))
         return false;
     struct Dungeon *dungeon = get_players_num_dungeon(p);
-    if (dungeon_invalid(dungeon))
+    if (dungeon_invalid(dungeon) || (dungeon->research_num <= 0))
         return false;
-    struct WprPlayer *wp = &wpr_players[p];
-    if (game.world_room_researching[p] == 0)
-    {
-        int r = -1;
-        for (int k = 0; (k < WRL_FIRST_TRAP) && (r < 0); k++)
-            if (wrl_owned(p, k) && (wrl_allowed(p, k) > wrl_level(p, k)))
-                r = k;
-        if (r < 0)
-            return false;
-        /* next in line: once the research in progress is done (or there is none). Levels and "?" items take turns:
-           after a level, a needed "?" item is researched before the next level (audit 2026-11-09: queued levels ran
-           back to back and held every "?" item up) */
-        const TbBool stock_needed = (dungeon->current_research_idx >= 0) && (dungeon->current_research_idx < dungeon->research_num) &&
-            research_needed(&dungeon->research[dungeon->current_research_idx], dungeon);
-        const TbBool busy = stock_needed && (((dungeon->research_progress >= 256) &&
-            (dungeon->last_research_complete_gameturn < wp->lvl_pending_since)) ||
-            ((wp->lvl_done_turn != 0) && (dungeon->last_research_complete_gameturn <= wp->lvl_done_turn)));
-        if (busy)
-            return false;
-        game.world_room_researching[p] = (uint8_t)(r + 1);
-        if ((dungeon->current_research_idx < 0) && (dungeon->research_num > 0))
-            dungeon->current_research_idx = 0; /* the Library's job stays open (creatures research only while
-                                                  something is being researched); the hook keeps the stock code off it */
-        SYNCLOG("World progress: player %d's Library researches the %s's level %d (%ld)", (int)p, wrl_labels[r],
-            wrl_level(p, r) + 1, wrl_cost(dungeon, r, wrl_level(p, r) + 1));
-    }
-    const int r = game.world_room_researching[p] - 1;
-    if ((r < 0) || (r >= WRL_FIRST_TRAP) || !wrl_owned(p, r) || (wrl_allowed(p, r) <= wrl_level(p, r)))
-    {
-        game.world_room_researching[p] = 0;
+    const struct ResearchVal *rsrchval = get_players_current_research_val(p);
+    if (((rsrchval != NULL) && research_needed(rsrchval, dungeon)) || (get_next_research_item(dungeon) >= 0))
+        return false; /* "?" research to do: the stock code works on it */
+    if (world_level_focus(p) < 0)
         return false;
-    }
-    const int to = wrl_level(p, r) + 1;
-    const long cost = wrl_cost(dungeon, r, to);
-    if ((dungeon->current_research_idx < 0) && (dungeon->research_num > 0))
-        dungeon->current_research_idx = 0; /* the job stays open (a Temple sacrifice with nothing else left to research
-                                              closed it, and the Library stopped for good; audit 2026-11-09) */
-    if ((cost << 8) > dungeon->research_progress)
-        return true; /* the Library's work goes into the level */
-    dungeon->research_progress -= (cost << 8);
-    game.world_room_level[p][r] = (uint8_t)to;
-    game.world_room_researching[p] = 0;
-    wp->lvl_pending_since = game.play_gameturn; /* a further level waits for the next research */
-    wp->lvl_done_turn = game.play_gameturn;
-    dungeon->last_research_complete_gameturn = get_gameturn();
-    dungeon->lvstats.things_researched++;
-    dungeon->current_research_idx = get_next_research_item(dungeon);
-    for (int k = 0; (k < WRL_FIRST_TRAP) && (dungeon->current_research_idx < 0) && (dungeon->research_num > 0); k++)
-        if (wrl_owned(p, k) && (wrl_allowed(p, k) > wrl_level(p, k)))
-            dungeon->current_research_idx = 0; /* the next level comes straight after: the job stays open */
-    output_player_message(p, WRL_IS_POWER(r) ? SMsg_ResearchedSpell : SMsg_ResearchedRoom, 0);
-    struct Room *room = find_room_of_role_with_spare_room_item_capacity(p, RoRoF_PowersStorage);
-    if (!room_is_invalid(room))
-    {
-        struct Coord3d pos;
-        pos.x.val = subtile_coord_center(room->central_stl_x);
-        pos.y.val = subtile_coord_center(room->central_stl_y);
-        pos.z.val = get_floor_height_at(&pos);
-        create_effect(&pos, TngEff_ResearchComplete, p);
-    }
-    SYNCLOG("World progress: player %d's %s is now level %d", (int)p, wrl_labels[r], to);
+    dungeon->current_research_idx = 0; /* the job stays open (creatures research only while something is researched) */
+    dungeon->research_progress = 0;
     return true;
 }
 
 TbBool world_room_level_sacrifice(PlayerNumber p)
 {
-    if (!world_progress_active() || (p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX) || (game.world_room_researching[p] == 0))
-        return false;
-    struct Dungeon *dungeon = get_players_num_dungeon(p);
-    const int r = game.world_room_researching[p] - 1;
-    if (dungeon_invalid(dungeon) || (r < 0) || (r >= WRL_ROOMS) || !wrl_owned(p, r) || (wrl_allowed(p, r) <= wrl_level(p, r)))
-        return false;
-    dungeon->research_progress = max(dungeon->research_progress, (int32_t)(wrl_cost(dungeon, r, wrl_level(p, r) + 1) << 8));
-    SYNCLOG("World progress: player %d's sacrifice completes the %s's level research", (int)p, wrl_labels[r]);
-    return true;
+    (void)p;
+    return false;
 }
 
 static int open_set(PlayerNumber plyr_idx, int grade, int *out)
@@ -1457,11 +1607,7 @@ static int open_set(PlayerNumber plyr_idx, int grade, int *out)
             continue; /* the Prison first, from a book or the Library (audit 2026-11-09) */
         out[n++] = i;
     }
-    /* a room the keeper has, whose next level a book can allow: a duplicate */
-    for (int r = 0; r < WRL_ROOMS; r++)
-        if (wrl_can_raise(plyr_idx, r))
-            out[n++] = WRL_ITEM(r);
-    return n;
+    return n; /* (no duplicates: levels come from the Library's and the Workshop's work, 2026-11-22) */
 }
 
 /** A book's chosen item after the Library and Training Room (the user, 2026-11-22): not learnt outright, its research
@@ -1477,8 +1623,9 @@ static void research_item(PlayerNumber plyr_idx, int i, const struct Coord3d *wh
 /** A book's chosen item: its research opened, or a room the keeper has raised a level. */
 static void take_option(PlayerNumber plyr_idx, int i, const struct Coord3d *where, int circle)
 {
+    (void)circle;
     if (i >= WPR_ITEMS)
-        room_level_allow(plyr_idx, i - WPR_ITEMS, where, circle);
+        SYNCLOG("World progress: player %d's %s level-up book: levels come from work now", (int)plyr_idx, opt_label(i));
     else
         research_item(plyr_idx, i, where);
 }
@@ -1543,7 +1690,7 @@ void world_progress_book_shelved(struct Thing *thing, struct Room *room)
     struct Coord3d pos = thing->mappos;
     const uint64_t roll = wpr_mix(world_seed() ^ ((uint64_t)plyr_idx << 56) ^ ((uint64_t)thing->index << 32) ^
         (uint64_t)(uint32_t)thing->creation_turn ^ 0x4F504249ULL);
-    const int circle = book_circle(thing);
+    book_circle(thing); /* (stamped; what a duplicate was worth, before 2026-11-22) */
     destroy_book(thing);
     if (item_usable(WPR_LIBRARY) && !library_buildable(plyr_idx))
     {
@@ -1567,12 +1714,9 @@ void world_progress_book_shelved(struct Thing *thing, struct Room *room)
         if (!item_usable(i) || wpr_item_disabled(i))
             continue;
         const int wr = wrl_of_item(i);
-        if (((wr >= 0) && wrl_owned(plyr_idx, wr)) ? wrl_can_raise(plyr_idx, wr) : !item_known(plyr_idx, i))
-            pool[n++] = i;
+        if (!((wr >= 0) && wrl_owned(plyr_idx, wr)) && !item_known(plyr_idx, i))
+            pool[n++] = i; /* (no duplicates since 2026-11-22) */
     }
-    for (int r = 0; r < WRL_ROOMS; r++)
-        if ((wrl_items[r] < 0) && (wrl_ids[r] > 0) && wrl_can_raise(plyr_idx, r))
-            pool[n++] = WRL_ITEM(r);
     if (n == 0)
     {
         SYNCLOG("World progress: player %d's heroes' spellbook has nothing left to teach: a boon", (int)plyr_idx);
@@ -1585,11 +1729,7 @@ void world_progress_book_shelved(struct Thing *thing, struct Room *room)
     const int wr = wrl_of_item(i);
     if ((wr >= 0) && wrl_owned(plyr_idx, wr))
     {
-        /* a duplicate of a room with levels: mastery */
-        if (wrl_can_raise(plyr_idx, wr))
-            room_level_allow(plyr_idx, wr, &pos, circle);
-        else
-            SYNCLOG("World progress: player %d's heroes' spellbook is the %s, at its top level already", (int)plyr_idx, wrl_labels[wr]);
+        SYNCLOG("World progress: player %d's heroes' spellbook is the %s, theirs already", (int)plyr_idx, wrl_labels[wr]);
         return;
     }
     if (i >= WPR_ITEMS)
@@ -1882,8 +2022,8 @@ TbBool world_progress_activate(struct Thing *thing, struct PlayerInfo *player)
         const int item = is_levelup ? WRL_ITEM(wrl_of_levelup_kind(kind)) : (kind - WORLD_LORE_KIND_FIRST);
         if ((item >= WPR_ITEMS) && (item < WPR_OPTIONS))
         {
-            room_level_allow(plyr_idx, item - WPR_ITEMS, &pos, wpr_offer_circle[plyr_idx]);
-            wbk_learned(plyr_idx, item);
+            SYNCLOG("World progress: player %d's %s level-up book: levels come from work now", (int)plyr_idx,
+                opt_label(item));
         } else
         if (item_usable(item) && !wpr_item_disabled(item) && !(wp->unlocked & ((uint64_t)1 << item)) && !item_known(plyr_idx, item))
         {
@@ -2186,7 +2326,8 @@ static void test_room_levels(void)
                 continue;
             }
             /* every bar full, to the top (with ",traps", the Lightning Trap's only a little) */
-            room_level_xp(p, r, (traps && (r == WRL_FIRST_TRAP + 1)) ? 10 : 30000, &pos);
+            wrl_add_xp(p, r, (traps && (r == WRL_FIRST_TRAP + 1)) ? 10 : WRL_BAR_MAX);
+            (void)pos;
         }
         if (traps)
             set_menu_mode(GMnu_TRAP);
@@ -2214,7 +2355,7 @@ static void test_room_levels(void)
     {
         TbBool all = true;
         for (int r = WRL_FIRST_POWER; r < WRL_FIRST_ROOM2; r++)
-            all = all && (wrl_level(p, r) >= wrl_top[r]);
+            all = all && (wrl_level(p, r) >= wrl_top_of(r));
         if (all)
         {
             spells_measured = true;
@@ -2543,8 +2684,8 @@ static void test_traps(void)
         if (!thing_is_invalid(crt[i]))
             delete_thing_structure(crt[i], 0);
     /* the traps */
-    game.world_room_level[p][WRL_FIRST_TRAP + 0] = (uint8_t)wrl_top[WRL_FIRST_TRAP + 0];
-    game.world_room_level[p][WRL_FIRST_TRAP + 1] = (uint8_t)wrl_top[WRL_FIRST_TRAP + 1];
+    game.world_room_level[p][WRL_FIRST_TRAP + 0] = (uint8_t)wrl_top_of(WRL_FIRST_TRAP + 0);
+    game.world_room_level[p][WRL_FIRST_TRAP + 1] = (uint8_t)wrl_top_of(WRL_FIRST_TRAP + 1);
     const MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
     static const char *const traps[2] = {"LIGHTNING", "POISON_GAS"};
     for (int t = 0; t < 2; t++)
@@ -2794,6 +2935,7 @@ void world_progress_turn(void)
     test_books();
     test_read_books();
     test_room_levels();
+    wrl_time_turn(); /* levels by time (2026-11-22) */
 }
 
 void world_progress_client_turn(void)
@@ -2933,10 +3075,10 @@ TbBool world_progress_load(const uint8_t *buf, size_t len)
                 const uint8_t *e = lv + 2 + (size_t)pl * stride;
                 for (int r = 0; r < n; r++)
                 {
-                    game.world_room_level[pl][r] = (uint8_t)min((int)e[r], WRL_MAX);
-                    game.world_room_allowed[pl][r] = (uint8_t)min((int)e[n + r], WRL_MAX);
+                    game.world_room_level[pl][r] = (uint8_t)min((int)e[r], WRL_TOP_MAX);
+                    game.world_room_allowed[pl][r] = (version >= 7) ? e[n + r] : 0; /* (an older run's bars start again) */
                 }
-                game.world_room_researching[pl] = (e[2 * n] <= WRL_ROOMS) ? e[2 * n] : 0;
+                game.world_room_researching[pl] = ((version >= 7) && (e[2 * n] <= WRL_FIRST_TRAP)) ? e[2 * n] : 0;
                 memcpy(&wpr_players[pl].lvl_pending_since, e + 2 * n + 1, 4);
             }
             const uint8_t *kw = lv + 2 + (size_t)lv[0] * stride;
@@ -2960,9 +3102,9 @@ TbBool world_progress_load(const uint8_t *buf, size_t len)
                 for (int r = 0; r < 4; r++)
                 {
                     game.world_room_level[pl][r] = (uint8_t)min((int)e[r], WRL_MAX);
-                    game.world_room_allowed[pl][r] = (uint8_t)min((int)e[4 + r], WRL_MAX);
+                    game.world_room_allowed[pl][r] = 0;
                 }
-                game.world_room_researching[pl] = (e[8] <= 4) ? e[8] : 0;
+                game.world_room_researching[pl] = 0;
                 memcpy(&wpr_players[pl].lvl_pending_since, e + 9, 4);
             }
         }
@@ -3481,9 +3623,6 @@ void world_progress_present(void)
             const int level = wrl_level(my_player_number, r), allowed = wrl_allowed(my_player_number, r);
             const int msg_type = WRL_IS_POWER(r) ? MsgType_KeeperSpell : WRL_IS_TRAP(r) ? MsgType_Blank : MsgType_Room;
             const char *what = WRL_IS_POWER(r) ? " spell" : "";
-            if (news && (wrl_seen_allowed[r] != 0) && (allowed > wrl_seen_allowed[r]))
-                message_add_fmt(msg_type, WRL_IS_TRAP(r) ? 0 : wrl_ids[r], "Your %s%s can be %s to level %d", wrl_labels[r], what,
-                    WRL_IS_TRAP(r) ? "built" : "researched", allowed);
             if (news && (wrl_seen_level[r] != 0) && (level > wrl_seen_level[r]))
                 message_add_fmt(msg_type, WRL_IS_TRAP(r) ? 0 : wrl_ids[r], "Your %s%s is now level %d", wrl_labels[r], what, level);
             wrl_seen_level[r] = (uint8_t)level;

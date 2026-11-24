@@ -46,6 +46,7 @@
 #include "world_attract.h"
 #include "chat_box.h"
 #include "player_data.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -131,11 +132,11 @@ void message_world_place(long *x, long *y, int *tx, int *upp)
     const int small = max(16, full * WORLD_MSG_SIZE / 16); /* never smaller than the font itself */
     const int u = (int)((long)units_per_pixel * small / max(full, 1));
     const int margin = 6 * units_per_pixel / 16; /* the day's dial stands as far from the top */
-    const long left = local_state.show_gui ? status_panel_width : 0;
+    const long left = local_state.show_gui ? status_panel_width : ui_safe_left; /* (the panel is against the edge) */
     /* the icons stand left of and above their line's text: up to 10 units left, 20 up (a creature's hand symbol) */
     *x = left + margin + 10 * u / 16;
     /* 10 pixels higher on a 2560 x 1440 screen (the user, 2026-11-15), the same share of the height on any other */
-    *y = max(0, margin + 20 * u / 16 - 28 * units_per_pixel / 160);
+    *y = ui_safe_top + max(0, margin + 20 * u / 16 - 28 * units_per_pixel / 160);
     *tx = small;
     *upp = u;
 }

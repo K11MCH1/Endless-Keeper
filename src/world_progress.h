@@ -115,6 +115,36 @@ void world_trap_gas_hit(const struct Thing *efftng, struct Thing *creatng, HitPo
 void world_trap_lightning_extras(struct Thing *shotng, struct Thing *first, HitPoints damage, long range, long spacing, long effect_id);
 /** The Workshop's work goes into a trap's next level (true while it does). */
 TbBool world_trap_level_manufacture(PlayerNumber plyr_idx);
+/** Levels by time (2026-11-22): the speed the Library (where 0) or the Workshop (1) works at now, in hundredths (100 =
+ *  1x, 0: nobody working), and how many work there. */
+int world_level_speed(PlayerNumber plyr_idx, int where, int *workers);
+/** Test hooks: `seconds` of 1x work into the entry the Library levels now. */
+void world_level_test_time(PlayerNumber plyr_idx, long seconds);
+/** The entry the Library's research levels now (the keeper's choice, else the Training Room, else the first that can
+ *  still grow); -1 none. */
+int world_level_focus(PlayerNumber plyr_idx);
+/** Game state: what a keeper's Library levels (a computer keeper's choice); false if the entry can't grow now. */
+TbBool world_level_set_focus(PlayerNumber plyr_idx, int entry);
+/** Game state: the keeper chose the entry the Library levels (packets.c, PckA_WorldLevelFocus). */
+void world_level_focus_packet(PlayerNumber plyr_idx, int entry);
+/** The Library's leveling window (world_level_window.c): the rooms (which 0) or spells (1) with levels. */
+struct WorldLevelEntry {
+    int entry;       /* the Amenity Mastery entry */
+    int kind_class;  /* 0 a room, 1 a spell */
+    int kind;        /* its room or power kind */
+    const char *label;
+    TbBool owned;
+    int level, top;
+    long bar, need;  /* the bar towards the next level (need 0 at the top) */
+    TbBool focus;    /* the Library's research levels it now */
+    TbBool chosen;   /* the keeper chose it */
+};
+int world_level_entries(PlayerNumber plyr_idx, int which, struct WorldLevelEntry *out, int max_entries);
+#define WORLD_LEVEL_LINE 96
+/** What each level of an entry gives, a line each (line i is level i + 2, but for the Training Room's two lines). */
+int world_level_entry_lines(PlayerNumber plyr_idx, int entry, char (*lines)[WORLD_LEVEL_LINE], int max_lines);
+/** The creature levels a keeper's creatures may reach: 5 x the Training Room's level, up to 100. */
+int world_creature_level_cap(PlayerNumber plyr_idx);
 /** A room's (class 0), spell's (1) or trap's (2) mastery bar for the panel: false when it has none to show. */
 TbBool world_amenity_bar(PlayerNumber plyr_idx, int kind_class, int kind, int *xp, int *need);
 /** A book came out of a frozen chunk: it is stamped with the circle it lies in, if it has none. */

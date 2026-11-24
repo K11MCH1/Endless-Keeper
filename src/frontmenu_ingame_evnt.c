@@ -58,6 +58,7 @@
 
 #include "keeperfx.hpp"
 #include "world_colours.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 
 #define HIGHLIGHTED_TEXT_FADE_LEVEL 48
@@ -430,8 +431,8 @@ void draw_bonus_timer(void)
         }
     }
     RendererSetDrawFlags(Lb_TEXT_HALIGN_CENTER);
-    long scr_x = MyScreenWidth - width - 16 * units_per_pixel / 16;
-    long scr_y = 16 * units_per_pixel / 16;
+    long scr_x = ui_safe_right_edge() - width - 16 * units_per_pixel / 16;
+    long scr_y = ui_safe_top + 16 * units_per_pixel / 16;
     if (game.armageddon_cast_turn != 0)
     {
         struct GuiMenu *gmnu = get_active_menu(menu_id_to_number(GMnu_MAIN));
@@ -506,8 +507,8 @@ void draw_timer(void)
         }
     }
     RendererSetDrawFlags(Lb_TEXT_HALIGN_CENTER);
-    long scr_x = MyScreenWidth - width - 16 * units_per_pixel / 16;
-    long scr_y = 16 * units_per_pixel / 16;
+    long scr_x = ui_safe_right_edge() - width - 16 * units_per_pixel / 16;
+    long scr_y = ui_safe_top + 16 * units_per_pixel / 16;
     if ( (bonus_timer_enabled()) || (script_timer_enabled()) || (display_variable_enabled()) || (game.armageddon_cast_turn != 0) )
     {
         scr_y <<= 2;
@@ -561,14 +562,14 @@ static void get_bottom_right_text_layout(const char *text, int line, TbBool play
             layout->width += (layout->width / 8);
         }
     }
-    layout->scr_x = MyScreenWidth - layout->width - 16 * units_per_pixel / 16;
+    layout->scr_x = ui_safe_right_edge() - layout->width - 16 * units_per_pixel / 16;
     layout->icon_scale = 0;
     if (player_icon) {
         const struct TbSprite *icon = get_panel_sprite(GPS_plyrsym_symbol_room_red_std_a);
         layout->icon_scale = calculate_relative_upp(22 * units_per_pixel / 16, 16, icon->SHeight);
         layout->scr_x -= icon->SWidth * layout->icon_scale / 16 + 4 * units_per_pixel / 16;
     }
-    layout->scr_y = MyScreenHeight - (line + 1) * layout->height - 16 * units_per_pixel / 16;
+    layout->scr_y = ui_safe_bottom_edge() - (line + 1) * layout->height - 16 * units_per_pixel / 16;
 }
 
 static void draw_bottom_right_text(const char *text, const struct TextBoxLayout *layout, TbBool highlighted)
@@ -696,7 +697,7 @@ static TbBool get_paused_message_layout(struct TextBoxLayout *layout)
     } else {
         layout->scr_x = (MyScreenWidth - layout->width) / 2;
     }
-    layout->scr_y = 16 * units_per_pixel / 16;
+    layout->scr_y = ui_safe_top + 16 * units_per_pixel / 16;
     layout->icon_scale = 0;
     if (MyScreenHeight < 400) {
         layout->width *= 2;
@@ -811,8 +812,8 @@ void draw_script_timer(PlayerNumber plyr_idx, unsigned char timer_id, unsigned l
         width *= 2;
     }
     RendererSetDrawFlags(Lb_TEXT_HALIGN_CENTER);
-    long scr_x = MyScreenWidth - width - 16 * units_per_pixel / 16;
-    long scr_y = 16 * units_per_pixel / 16;
+    long scr_x = ui_safe_right_edge() - width - 16 * units_per_pixel / 16;
+    long scr_y = ui_safe_top + 16 * units_per_pixel / 16;
     if (game.armageddon_cast_turn != 0)
     {
         struct GuiMenu *gmnu = get_active_menu(menu_id_to_number(GMnu_MAIN));
@@ -860,8 +861,8 @@ void draw_script_variable_list(void)
             }
         }
         RendererSetDrawFlags(Lb_TEXT_HALIGN_CENTER);
-        long scr_x = MyScreenWidth - width - 16 * units_per_pixel / 16;
-        long scr_y = 16 * units_per_pixel / 16;
+        long scr_x = ui_safe_right_edge() - width - 16 * units_per_pixel / 16;
+        long scr_y = ui_safe_top + 16 * units_per_pixel / 16;
         if (game.armageddon_cast_turn != 0)
         {
             struct GuiMenu *gmnu = get_active_menu(menu_id_to_number(GMnu_MAIN));
@@ -994,8 +995,8 @@ void draw_script_variable(PlayerNumber plyr_idx, unsigned char valtype, unsigned
         }
     }
     RendererSetDrawFlags(Lb_TEXT_HALIGN_CENTER);
-    long scr_x = MyScreenWidth - width - 16 * units_per_pixel / 16;
-    long scr_y = 16 * units_per_pixel / 16;
+    long scr_x = ui_safe_right_edge() - width - 16 * units_per_pixel / 16;
+    long scr_y = ui_safe_top + 16 * units_per_pixel / 16;
     if (game.armageddon_cast_turn != 0)
     {
         struct GuiMenu *gmnu = get_active_menu(menu_id_to_number(GMnu_MAIN));

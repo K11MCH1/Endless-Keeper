@@ -5148,7 +5148,7 @@ TbBool creature_increase_level(struct Thing *thing)
         return false;
     }
     struct Dungeon *dungeon = get_dungeon(thing->owner);
-    if (dungeon->creature_max_level[thing->model] > cctrl->exp_level)
+    if ((dungeon->creature_max_level[thing->model] > cctrl->exp_level) && !creature_at_level_cap(thing))
     {
         struct CreatureModelConfig *crconf = creature_stats_get_from_thing(thing);
         if ((cctrl->exp_level < creature_levels_count(thing) - 1) || (crconf->grow_up != 0))
@@ -5176,7 +5176,7 @@ TbBool creature_change_multiple_levels(struct Thing *thing, int count)
     {
         for (int i = 0; i < count; i++)
         {
-            if (dungeon->creature_max_level[thing->model] > cctrl->exp_level)
+            if ((dungeon->creature_max_level[thing->model] > cctrl->exp_level) && !creature_at_level_cap(thing))
             {
                 struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
                 if ((cctrl->exp_level < creature_levels_count(thing) - 1) || (crconf->grow_up != 0))

@@ -145,6 +145,7 @@
 #include "world_misdeeds.h"
 #include "config_crtrstates.h"
 #include "world_curtain.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 
 #define WB_EVERY_DEFAULT (24L * 60 * 60 * 20)  /* turns between two fights: 24 hours of game time */
@@ -2530,11 +2531,11 @@ static void wb_draw_health_bar(void)
     const int upp = units_per_pixel;
     const int u = max(1, upp / 16);
     const int view_x = engine_window_reserved_left();
-    const int view_w = MyScreenWidth - view_x;
+    const int view_w = ui_safe_right_edge() - view_x;
     const int bar_w = view_w * 56 / 100;
     const int bar_x = view_x + (view_w - bar_w) / 2;
     const int px = 7 * upp / 16;                 /* the lettering's size */
-    const int name_y = 5 * upp / 16;
+    const int name_y = ui_safe_top + 5 * upp / 16;
     const int bar_y = name_y + 17 * upp / 16;
     const int bar_h = max(3 * u, 6 * upp / 16);
     const TbPixel black = colours[0][0][0], gold = colours[11][8][3], gold_dim = colours[6][4][2];
@@ -2587,7 +2588,7 @@ static void wb_sparkle(int bx, int by, int bw, int bh, long t)
     const int sw = spr->SWidth * units / 16, sh = spr->SHeight * units / 16;
     const int cy = by + bh / 2 - sh / 2;
     LbSpriteDrawResized(bx - sw / 2, cy, units, spr);          /* centred on the left edge ... */
-    LbSpriteDrawResized(min(bx + bw - sw / 2, MyScreenWidth - sw), cy, units, spr); /* ... and on the right edge (inside the screen) */
+    LbSpriteDrawResized(min(bx + bw - sw / 2, ui_safe_right_edge() - sw), cy, units, spr); /* ... and on the right edge (inside the safe area) */
 }
 
 /** Half of the game's button bar: its left end piece at (x, y), then its middle piece again and again up to the
@@ -2602,7 +2603,7 @@ static int wb_half_bar(int x, int y, int units, TbBool lit)
     LbSpriteDrawResized(x, y, units, left);
     const int cap = (left->SWidth * units + 8) / 16;
     const int step = max(mid->SWidth * units / 16, 1);
-    for (int at = x + cap; at < MyScreenWidth; at += step)
+    for (int at = x + cap; at < ui_safe_right_edge(); at += step) /* (up to the safe area's edge) */
         LbSpriteDrawResized(at, y, units, mid);
     return cap;
 }
@@ -2665,7 +2666,7 @@ void world_boss_draw(int x, int y, int w)
     const struct TbSprite *body = get_button_sprite(GBS_frontend_button_std_c);
     const int bu = ((body != NULL) && (body->SHeight > 0)) ? max((bh * 16 + body->SHeight / 2) / body->SHeight, 1) : 16;
     const int tw = max(w, 128 * upp / 16);
-    const int tx = MyScreenWidth - tw;
+    const int tx = ui_safe_right_edge() - tw;
     const TbBool clickable = wb_strip_clickable();
     wb_strip_box[0] = tx; wb_strip_box[1] = y; wb_strip_box[2] = tw; wb_strip_box[3] = bh;
     const int cap = wb_half_bar(tx, y, bu, false);

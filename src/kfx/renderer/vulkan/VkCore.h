@@ -16,6 +16,7 @@
 #define RENDERER_VULKAN_VKCORE_H
 
 #include "kfx/renderer/vulkan/VkLoader.h"
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -178,6 +179,18 @@ public:
     const char* last_pass = "";
     bool device_lost = false;
 
+    /** Bumped each time a swapchain is made (Android: the app asks for the panel's refresh rate again then). */
+    std::atomic<uint32_t> swapchain_serial{0};
+    /** Android, render thread: nanoseconds spent waiting (frame fence, image acquire, present) since the game thread
+     *  last read and zeroed them; quarter turns the frame is drawn turned by (-1 before the first swapchain). */
+    std::atomic<uint64_t> wait_fence_ns{0}, wait_acquire_ns{0}, wait_present_ns{0};
+    std::atomic<uint64_t> wait_total_ns{0};   // frame fence + image acquire waits since start (never zeroed)
+    std::atomic<int> swap_rotation{-1};
+    /** Android, set before the render thread starts: draw the frame pre-rotated; pace by vsync (FIFO with no spare
+     *  image, so a frame waits for the screen as an OpenGL swap does). Test switches can turn either off. */
+    bool allow_prerotate = true;
+    bool vsync_pacing = false;
+
 private:
     struct Frame {
         VkCommandPool   pool = VK_NULL_HANDLE;
@@ -222,6 +235,20 @@ private:
     std::vector<VkSemaphore> m_swap_done;   // one per image: rendering done -> present
     uint32_t       m_swap_index = UINT32_MAX;
     bool           m_swap_dirty = false;
+    // Android pre-rotation: the images have the panel's orientation and the frame is drawn into them turned
+    VkSurfaceTransformFlagBitsKHR m_swap_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;      // drawn turned for
+    VkSurfaceTransformFlagBitsKHR m_swap_seen_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR; // the surface's then
+    VkExtent2D     m_swap_image_extent = {0, 0};   // the images' own size (m_swap_extent: the window's orientation)
+    std::vector<VkImageView> m_swap_views;
+    VkDescriptorSetLayout m_rot_set_layout = VK_NULL_HANDLE;
+    VkPipelineLayout m_rot_layout = VK_NULL_HANDLE;
+    VkPipeline     m_rot_pipe = VK_NULL_HANDLE;
+    VkFormat       m_rot_format = VK_FORMAT_UNDEFINED;   // the format the pipeline was tried for
+    bool DrawRotated(VkCommandBuffer cmd, VkImageObj& src, uint32_t index, int32_t px, int32_t py, int32_t pw, int32_t ph,
+                     int32_t drawable_w, int32_t drawable_h);
+    void CheckTransformChanged();
+    void DestroySwapViews();
+    void DestroyRotatePipeline();
     bool CreateSwapchain(int32_t w, int32_t h, bool vsync);
     void DestroySwapchain();
     // Android: the window's ANativeWindow goes away in the background and comes back new

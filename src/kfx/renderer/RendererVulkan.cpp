@@ -38,12 +38,19 @@
 #include "engine_textures.h"
 #include "vidmode.h"
 #include "front_simple.h"
+#include "game_legacy.h"
+#include "keeperfx.hpp"
 #include "bflib_mouse.h"
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 #ifdef KFX_ANDROID
 #include "AndroidRuntime.hpp" // the Android app's hooks (engine kit)
+#include <dlfcn.h>
+#include <unistd.h>
 #endif
+#include <algorithm>
+#include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -81,8 +88,10 @@ struct VkFrameData {
     GLCursorSnapshot cursor_snapshot;
 
     // Android: the touch overlay / FPS counter, drawn by SDL's software renderer over transparent black
-    // (premultiplied), screen_w x screen_h RGBA, top row first
+    // (premultiplied), RGBA, top row first: only the band of rows [overlay_y0, overlay_y0 + overlay_rows) that changed
     bool overlay_on = false;
+    int32_t overlay_y0 = 0;
+    int32_t overlay_rows = 0;
     std::vector<unsigned char> overlay_rgba;
 };
 
@@ -147,6 +156,30 @@ struct RendererVulkan::Impl {
     VkProgram     overlay_prog;
     uint8_t       overlay_layout = 0;
     VkImageObj    overlay_img;
+    int32_t overlay_drawn_y0 = 0, overlay_drawn_y1 = 0;   // the surface's rows drawn on last time (cleared next)
+    int32_t overlay_img_y0 = 0, overlay_img_y1 = 0;       // the image's rows that may not be empty
+
+    // Android: what a frame costs, logged every 5 s; the refresh rate asked again for each new swapchain
+    uint32_t refresh_serial = 0;
+    uint64_t t_start = 0, t_frames = 0, t_wait_ns = 0, t_overlay_ns = 0, t_pace_ns = 0;
+    uint64_t t_busy_polls = 0;                 // the game loop found the render thread busy (it sleeps 1 ms each)
+
+    // Android performance hint (ADPF, 2026-11-24): the game and render threads take turns on each frame, so neither
+    // looks busy and the phone kept their cores at 0.8-1.5 GHz until a touch raised them (Vulkan fell to 60-90 FPS
+    // on a 144 Hz RedMagic). A hint session tells Android the frame's deadline and how long each frame really took.
+    int32_t render_tid = 0;
+    bool hint_wanted = false;     // the phone has the API and no test switch turned it off
+    int hint_quiet_frames = 0;    // frames in a row without the world (menus): the session closes after a few
+    void* hint_session = nullptr;
+    int64_t hint_target_ns = 0;
+    uint64_t hint_last_ns = 0, hint_last_wait_ns = 0;
+    uint64_t t_hint_work_ns = 0;
+    void AndroidHintStart();
+    bool AndroidHintOpen();
+    void AndroidHintFrame(bool world_drawn);
+    void AndroidHintStop();
+    std::atomic<uint64_t> t_render_ns{0};      // render thread: building and submitting the frames (not presenting)
+    void AndroidTiming();
 
     void EnsureScreenTarget(int32_t w, int32_t h);
     void DrawAndroidOverlay(VkFrameData& fd);
@@ -176,30 +209,53 @@ void RendererVulkan::Impl::DrawAndroidOverlay(VkFrameData& fd)
             if (!warned) { warned = true; WARNLOG("RendererVulkan: no overlay renderer: %s", SDL_GetError()); }
             return;
         }
+        SDL_SetRenderDrawBlendMode(overlay_renderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(overlay_renderer, 0, 0, 0, 0);
+        SDL_RenderClear(overlay_renderer);
+        SDL_FlushRenderer(overlay_renderer);
+        overlay_drawn_y0 = overlay_drawn_y1 = 0;
+        overlay_img_y0 = overlay_img_y1 = 0; // (the render thread makes a new, empty image of this size)
     }
-    SDL_SetRenderDrawBlendMode(overlay_renderer, SDL_BLENDMODE_NONE);
-    SDL_SetRenderDrawColor(overlay_renderer, 0, 0, 0, 0);
-    SDL_RenderClear(overlay_renderer);
+    unsigned char* px = (unsigned char*)overlay_surface->pixels;
+    const size_t pitch = (size_t)overlay_surface->pitch;
+    // 2026-11-24: only the rows drawn on last time are cleared and only the changed rows go to the GPU (before: the
+    // whole screen, 12 MB at 2608x1200, cleared, copied and uploaded every frame the FPS counter was on)
+    if (overlay_drawn_y1 > overlay_drawn_y0)
+        memset(px + (size_t)overlay_drawn_y0 * pitch, 0, (size_t)(overlay_drawn_y1 - overlay_drawn_y0) * pitch);
     SDL_SetRenderDrawBlendMode(overlay_renderer, SDL_BLENDMODE_BLEND);
     KfxAndroidDrawOverlay(overlay_renderer);
     SDL_FlushRenderer(overlay_renderer);
-    // only a picture with something on it is handed over (the overlay is there while possessing or with the FPS)
-    const unsigned char* px = (const unsigned char*)overlay_surface->pixels;
-    bool any = false;
-    for (int y = 0; y < h && !any; y++)
-    {
-        const uint32_t* row = (const uint32_t*)(px + (size_t)y * overlay_surface->pitch);
-        for (int x = 0; x < w; x++)
-            if (row[x] != 0) { any = true; break; }
-    }
-    if (!any)
-        return;
-    fd.overlay_rgba.resize((size_t)w * h * 4);
+    int y0 = -1, y1 = -1;
     for (int y = 0; y < h; y++)
-        memcpy(fd.overlay_rgba.data() + (size_t)y * w * 4, px + (size_t)y * overlay_surface->pitch, (size_t)w * 4);
+    {
+        const uint32_t* row = (const uint32_t*)(px + (size_t)y * pitch);
+        uint32_t any = 0;
+        for (int x = 0; x < w; x++)
+            any |= row[x];
+        if (any != 0)
+        {
+            if (y0 < 0) y0 = y;
+            y1 = y + 1;
+        }
+    }
+    if (y0 < 0)
+    {
+        overlay_drawn_y0 = overlay_drawn_y1 = 0;
+        return; // nothing on it (the overlay is there while possessing or with the FPS counter on)
+    }
+    overlay_drawn_y0 = y0;
+    overlay_drawn_y1 = y1;
+    // the band uploaded also wipes what the image still holds from before
+    const int b0 = (overlay_img_y1 > overlay_img_y0) ? std::min(y0, overlay_img_y0) : y0;
+    const int b1 = (overlay_img_y1 > overlay_img_y0) ? std::max(y1, overlay_img_y1) : y1;
+    fd.overlay_rgba.resize((size_t)w * (b1 - b0) * 4);
+    for (int y = b0; y < b1; y++)
+        memcpy(fd.overlay_rgba.data() + (size_t)(y - b0) * w * 4, px + (size_t)y * pitch, (size_t)w * 4);
+    fd.overlay_y0 = b0;
+    fd.overlay_rows = b1 - b0;
+    overlay_img_y0 = y0;
+    overlay_img_y1 = y1;
     fd.overlay_on = true;
-#else
-    (void)fd;
 #endif
 }
 
@@ -252,6 +308,16 @@ bool RendererVulkan::Init()
 #ifdef KFX_ANDROID
     if (m_impl->window != nullptr)
         KfxAndroidConfigureWindow(m_impl->window); // the panel's refresh rate, as the software path asks for it
+    {
+        // test switches (2026-11-24): an empty file of that name in the game folder brings the old way back
+        auto has = [](const char* name) { FILE* f = fopen(name, "rb"); if (f) fclose(f); return f != nullptr; };
+        const bool legacy_rotation = has("vk_test_no_prerotate");
+        const bool legacy_pacing = has("vk_test_game_limiter");
+        m_impl->core.allow_prerotate = !legacy_rotation;
+        m_impl->core.vsync_pacing = !legacy_pacing && KfxAndroidVsync() != 0;
+        SYNCLOG("RendererVulkan: Android pre-rotation %s, frames paced by %s", legacy_rotation ? "off (test switch)" : "on",
+                m_impl->core.vsync_pacing ? "the screen (vsync)" : legacy_pacing ? "the game's limiter (test switch)" : "the game's limiter (no vsync)");
+    }
 #endif
     // the launcher's background is never shown: no swapchain, its frames are read back
     m_impl->want_present = !world_attract_active();
@@ -272,11 +338,36 @@ bool RendererVulkan::Init()
     }
     if (!world_attract_active())
         ws->ShowWindow();
+#ifdef KFX_ANDROID
+    if (m_impl->core.vsync_pacing && m_impl->want_present)
+    {
+        RendererSetPacesFramesItself(1);
+        redetect_screen_refresh_rate_for_draw();
+    }
+    if (m_impl->want_present)
+    {
+        FILE* off = fopen("vk_test_no_hint", "rb"); // (test switch: an empty file of that name)
+        if (off != nullptr)
+        {
+            fclose(off);
+            SYNCLOG("RendererVulkan: Android performance hint off (test switch)");
+        }
+        else
+            m_impl->AndroidHintStart();
+    }
+#endif
     return true;
 }
 
 void RendererVulkan::Shutdown()
 {
+    if (m_impl != nullptr)
+        m_impl->AndroidHintStop();
+    if (RendererPacesFramesItself())
+    {
+        RendererSetPacesFramesItself(0);
+        redetect_screen_refresh_rate_for_draw();
+    }
     if (m_impl != nullptr)
     {
         m_impl->thread_mgr.Stop();
@@ -291,6 +382,9 @@ void RendererVulkan::Shutdown()
 void RendererVulkan::render_thread_init()
 {
     Impl& im = *m_impl;
+#ifdef KFX_ANDROID
+    im.render_tid = (int32_t)gettid();
+#endif
     if (!im.core.Init(im.window, im.want_present, im.fail_reason))
     {
         im.init_ok = false;
@@ -425,6 +519,18 @@ void RendererVulkan::render_thread_work()
     KFX_ZONE_COLOR("RendererVulkan::render_thread_work", KFX_COLOR_RENDER_GPU);
     Impl& im = *m_impl;
     VkFrameData& fd = im.frames[im.render_idx];
+#ifdef KFX_ANDROID
+    struct WorkTimer {
+        std::atomic<uint64_t>& sum; uint64_t t0; VkCore& core; uint64_t w0;
+        WorkTimer(std::atomic<uint64_t>& s, VkCore& c) : sum(s), t0(SDL_GetTicksNS()), core(c),
+            w0(c.wait_fence_ns.load() + c.wait_acquire_ns.load()) {}
+        ~WorkTimer() { // (the fence and acquire waits are counted apart)
+            const uint64_t waited = core.wait_fence_ns.load() + core.wait_acquire_ns.load() - w0;
+            const uint64_t spent = SDL_GetTicksNS() - t0;
+            sum += spent > waited ? spent - waited : 0;
+        }
+    } work_timer(im.t_render_ns, im.core);
+#endif
 
     if (!im.core.BeginFrame())
     {
@@ -658,7 +764,8 @@ void RendererVulkan::FGDrawDevToolsOverlay()
     VkFrameData& fd = im.frames[im.render_idx];
     if (!fd.overlay_on || !im.overlay_prog.Valid() || fd.screen_w <= 0 || fd.screen_h <= 0)
         return;
-    if (fd.overlay_rgba.size() != (size_t)fd.screen_w * fd.screen_h * 4)
+    if (fd.overlay_rows <= 0 || fd.overlay_y0 < 0 || fd.overlay_y0 + fd.overlay_rows > fd.screen_h
+        || fd.overlay_rgba.size() != (size_t)fd.screen_w * fd.overlay_rows * 4)
         return;
     im.core.last_pass = "android overlay";
     if (im.overlay_img.image == VK_NULL_HANDLE || im.overlay_img.width != fd.screen_w || im.overlay_img.height != fd.screen_h)
@@ -671,7 +778,8 @@ void RendererVulkan::FGDrawDevToolsOverlay()
         im.core.InitSampledImage(im.overlay_img);
     }
     // one a frame, drawn after this: its upload can go before the frame's draws
-    im.core.UploadImage(im.overlay_img, 0, 0, 0, fd.screen_w, fd.screen_h, fd.overlay_rgba.data(), (uint32_t)fd.screen_w * 4, 4);
+    im.core.UploadImage(im.overlay_img, 0, fd.overlay_y0, 0, fd.screen_w, fd.overlay_rows, fd.overlay_rgba.data(),
+                        (uint32_t)fd.screen_w * 4, 4);
     im.resource_mapper.BindScreen();
     im.core.SetViewport(0.0f, 0.0f, (float)fd.screen_w, (float)fd.screen_h);
     im.core.SetScissorEnabled(false);
@@ -775,7 +883,13 @@ void RendererVulkan::PresentFrame()
     Impl& im = *m_impl;
 
     RenderTaskProducerRegistry_ProduceAll(RendererFrameCounter_Current());
+#ifdef KFX_ANDROID
+    const uint64_t t_wait0 = SDL_GetTicksNS();
     im.thread_mgr.WaitForCompletion();
+    im.t_wait_ns += SDL_GetTicksNS() - t_wait0;
+#else
+    im.thread_mgr.WaitForCompletion();
+#endif
 
     if (RendererIsFadeCachePreserved() && !RendererConsumeForceUIFlip())
     {
@@ -810,6 +924,7 @@ void RendererVulkan::PresentFrame()
     memcpy(next_fd.palette_rgba, im.frames[filled].palette_rgba, sizeof(next_fd.palette_rgba));
     next_fd.clear_index = im.frames[filled].clear_index;
 
+    [[maybe_unused]] const bool world_drawn = im.world.HasPendingCommands(); // (the level's 3D view this frame; menus have none)
     im.world.FlipBuffers();
     im.mapfade.FlipBuffers();
     im.imgpresent.FlipBuffers();
@@ -837,7 +952,13 @@ void RendererVulkan::PresentFrame()
         filled_fd.present_h = ph;
     }
     filled_fd.sealed_frame_number = RendererFrameCounter_Current();
+#ifdef KFX_ANDROID
+    const uint64_t t_ov0 = SDL_GetTicksNS();
     im.DrawAndroidOverlay(filled_fd);
+    im.t_overlay_ns += SDL_GetTicksNS() - t_ov0;
+#else
+    im.DrawAndroidOverlay(filled_fd);
+#endif
 
     LbMouseOnBeginSwap();
     filled_fd.cursor_snapshot = im.cursor.Snapshot();
@@ -848,7 +969,222 @@ void RendererVulkan::PresentFrame()
     RendererFrameCounter_Advance();
     im.thread_mgr.Signal();
 #ifdef KFX_ANDROID
+    // a new swapchain (the first one too: Init asked before there was one) may lose the refresh rate asked for
+    const uint32_t serial = im.core.swapchain_serial.load();
+    if (serial != im.refresh_serial && im.window != nullptr)
+    {
+        im.refresh_serial = serial;
+        KfxAndroidConfigureWindow(im.window);
+    }
+    const uint64_t t_pace0 = SDL_GetTicksNS();
     KfxAndroidFramePresented(); // frame pacing without vsync, the FPS counter, the second screen
+    im.t_pace_ns += SDL_GetTicksNS() - t_pace0;
+    im.AndroidHintFrame(world_drawn);
+    im.AndroidTiming();
+#endif
+}
+
+
+#ifdef KFX_ANDROID
+namespace {
+// libandroid's APerformanceHint_* (API 33+), looked up at run time so the engine needs no newer API level to build
+struct HintApi {
+    void* (*getManager)() = nullptr;
+    void* (*createSession)(void*, const int32_t*, size_t, int64_t) = nullptr;
+    int (*updateTarget)(void*, int64_t) = nullptr;
+    int (*reportActual)(void*, int64_t) = nullptr;
+    void (*closeSession)(void*) = nullptr;
+    bool ok = false;
+};
+const HintApi& hint_api()
+{
+    static HintApi api;
+    static bool tried = false;
+    if (!tried)
+    {
+        tried = true;
+        void* lib = dlopen("libandroid.so", RTLD_NOW);
+        if (lib != nullptr)
+        {
+            api.getManager = (void* (*)())dlsym(lib, "APerformanceHint_getManager");
+            api.createSession = (void* (*)(void*, const int32_t*, size_t, int64_t))dlsym(lib, "APerformanceHint_createSession");
+            api.updateTarget = (int (*)(void*, int64_t))dlsym(lib, "APerformanceHint_updateTargetWorkDuration");
+            api.reportActual = (int (*)(void*, int64_t))dlsym(lib, "APerformanceHint_reportActualWorkDuration");
+            api.closeSession = (void (*)(void*))dlsym(lib, "APerformanceHint_closeSession");
+            api.ok = api.getManager && api.createSession && api.updateTarget && api.reportActual && api.closeSession;
+        }
+    }
+    return api;
+}
+/** The frame's deadline: a bit under the screen's refresh (or the player's lower cap). */
+int64_t hint_target_for(SDL_Window* window)
+{
+    float hz = 0.0f;
+    const SDL_DisplayMode* mode = window ? SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window)) : nullptr;
+    if (mode != nullptr)
+        hz = mode->refresh_rate;
+    if (fps_limit_current > 0 && (hz <= 0.0f || fps_limit_current < hz))
+        hz = (float)fps_limit_current;
+    if (hz < 20.0f)
+        hz = 60.0f;
+    // 85% of the frame: with the target at the full frame Android kept the clocks where frames took 7.0-7.3 ms of
+    // 6.94 (135-138 FPS at 144 Hz); a margin lets it raise them enough for every refresh
+    return (int64_t)(0.85e9 / hz);
+}
+/** The cores' clocks now, "little/mid prime" in MHz (empty where Android does not let an app read them). */
+std::string cpu_clocks()
+{
+    std::string out;
+    for (int policy = 0; policy < 12; policy++)
+    {
+        char path[96];
+        snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpufreq/policy%d/scaling_cur_freq", policy);
+        FILE* f = fopen(path, "r");
+        if (f == nullptr)
+            continue;
+        long khz = 0;
+        if (fscanf(f, "%ld", &khz) == 1)
+        {
+            if (!out.empty()) out += "/";
+            out += std::to_string(khz / 1000);
+        }
+        fclose(f);
+    }
+    return out.empty() ? std::string("not readable") : out + " MHz";
+}
+}
+#endif
+
+void RendererVulkan::Impl::AndroidHintStart()
+{
+#ifdef KFX_ANDROID
+    if (!hint_api().ok)
+    {
+        SYNCLOG("RendererVulkan: no Android performance hint (libandroid has no APerformanceHint)");
+        return;
+    }
+    hint_wanted = true;
+    SYNCLOG("RendererVulkan: Android performance hint while a level is drawn (game thread %d, render thread %d)",
+            (int)gettid(), (int)render_tid);
+#endif
+}
+
+/** Only while the world is drawn (2026-11-24): in the menus the frames are far below the target, Android then holds
+ *  the threads' cores down, and a Continue Game started from there loaded in 5.4 s instead of 0.7-1.6 s. */
+bool RendererVulkan::Impl::AndroidHintOpen()
+{
+#ifdef KFX_ANDROID
+    const HintApi& api = hint_api();
+    void* manager = api.getManager();
+    const int32_t tids[2] = { (int32_t)gettid(), render_tid };
+    hint_target_ns = hint_target_for(window);
+    if (manager != nullptr && render_tid > 0)
+        hint_session = api.createSession(manager, tids, 2, hint_target_ns);
+    if (hint_session == nullptr)
+    {
+        SYNCLOG("RendererVulkan: Android performance hint not given (this phone made no session)");
+        hint_wanted = false;
+        return false;
+    }
+    hint_last_ns = 0;
+    return true;
+#else
+    return false;
+#endif
+}
+
+/** Game thread, once a frame: how long the frame took, less the time the render thread only waited (for the GPU, or
+ *  for a free image when the screen sets the pace). Taking turns, both threads' work lies on the frame's path. */
+void RendererVulkan::Impl::AndroidHintFrame(bool world_drawn)
+{
+#ifdef KFX_ANDROID
+    if (!hint_wanted)
+        return;
+    if (world_drawn)
+    {
+        hint_quiet_frames = 0;
+        if (hint_session == nullptr && !AndroidHintOpen())
+            return;
+    }
+    else if (hint_session != nullptr && ++hint_quiet_frames >= 10)
+    {
+        AndroidHintStop();
+        return;
+    }
+    if (hint_session == nullptr)
+        return;
+    const uint64_t now = SDL_GetTicksNS();
+    const uint64_t waited = core.wait_total_ns.load();
+    if (hint_last_ns != 0)
+    {
+        const uint64_t span = now - hint_last_ns;
+        const uint64_t idle = waited - hint_last_wait_ns;
+        int64_t work = (int64_t)(span > idle ? span - idle : 0);
+        if (work < 100000) work = 100000; // (a report must be above zero)
+        hint_api().reportActual(hint_session, work);
+        t_hint_work_ns += (uint64_t)work;
+    }
+    hint_last_ns = now;
+    hint_last_wait_ns = waited;
+    if ((t_frames & 63) == 0)
+    {
+        const int64_t target = hint_target_for(window);
+        if (target != hint_target_ns)
+        {
+            hint_target_ns = target;
+            hint_api().updateTarget(hint_session, target);
+        }
+    }
+#endif
+}
+
+void RendererVulkan::Impl::AndroidHintStop()
+{
+#ifdef KFX_ANDROID
+    if (hint_session != nullptr)
+        hint_api().closeSession(hint_session);
+    hint_session = nullptr;
+#endif
+}
+
+/** Android (2026-11-24, Vulkan slower than OpenGL ES on one phone): every 5 s, where a frame's time went. */
+void RendererVulkan::Impl::AndroidTiming()
+{
+#ifdef KFX_ANDROID
+    const uint64_t now = SDL_GetTicksNS();
+    if (t_start == 0)
+    {
+        t_start = now;
+        core.wait_fence_ns = 0; core.wait_acquire_ns = 0; core.wait_present_ns = 0;
+        return;
+    }
+    t_frames++;
+    if (now - t_start < 5000000000ull)
+        return;
+    const double n = (double)t_frames, ms = 1e-6 / n;
+    float hz = 0.0f;
+    const SDL_DisplayMode* mode = window ? SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window)) : nullptr;
+    if (mode != nullptr)
+        hz = mode->refresh_rate;
+    const int turns = core.swap_rotation.load();
+    char hint_buf[64];
+    if (hint_session != nullptr)
+        snprintf(hint_buf, sizeof(hint_buf), "work %.2f of %.2f ms", t_hint_work_ns * ms, hint_target_ns * 1e-6);
+    else
+        snprintf(hint_buf, sizeof(hint_buf), hint_wanted ? "off (no level drawn)" : "none");
+    const std::string hint_line = hint_buf;
+    SYNCLOG("Vulkan timing: %.1f FPS over %.1f s; ms a frame: waiting for the render thread %.2f, overlay %.2f, app pacing %.2f;"
+            " render thread busy %.2f, waits: frame fence %.2f, image acquire %.2f, present %.2f; render thread found busy %.2f"
+            " times a frame; display %.1f Hz, draw limit %d; %s; hint %s; CPU %s",
+            n * 1e9 / (double)(now - t_start), (now - t_start) * 1e-9, t_wait_ns * ms, t_overlay_ns * ms, t_pace_ns * ms,
+            t_render_ns.exchange(0) * ms,
+            core.wait_fence_ns.exchange(0) * ms, core.wait_acquire_ns.exchange(0) * ms, core.wait_present_ns.exchange(0) * ms,
+            t_busy_polls / n, hz, (int)fps_limit_current,
+            turns < 0 ? "no swapchain" : turns == 0 ? "not pre-rotated" : turns == 1 ? "pre-rotated 90"
+            : turns == 2 ? "pre-rotated 180" : "pre-rotated 270",
+            hint_line.c_str(), cpu_clocks().c_str());
+    t_start = now;
+    t_frames = t_wait_ns = t_overlay_ns = t_pace_ns = t_busy_polls = t_hint_work_ns = 0;
 #endif
 }
 
@@ -859,7 +1195,14 @@ bool RendererVulkan::BeginFrame()
 
 bool RendererVulkan::CanPresent() const
 {
-    return m_impl != nullptr && m_impl->thread_mgr.IsWorkDone();
+    if (m_impl == nullptr)
+        return false;
+    const bool done = m_impl->thread_mgr.IsWorkDone();
+#ifdef KFX_ANDROID
+    if (!done)
+        m_impl->t_busy_polls++;
+#endif
+    return done;
 }
 
 void RendererVulkan::EndFrame()

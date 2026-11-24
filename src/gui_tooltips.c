@@ -47,6 +47,7 @@
 #include "local_camera.h"
 #include "keeperfx.hpp"
 #include "world_progress.h"
+#include "ui_safe_area.h"
 #include "post_inc.h"
 #include <math.h>
 
@@ -578,18 +579,18 @@ void draw_tooltip_slab64k(char *tttext, long pos_x, long pos_y, long ttwidth, lo
         long x = pos_x + scale_ui_value(26);
         RendererClearDrawFlags(Lb_TEXT_ONE_COLOR);
         long y = pos_y - scale_ui_value(ttheight + 28);
-        if (x > MyScreenWidth)
-          x = MyScreenWidth;
-        if (x < scale_ui_value(6))
-          x = scale_ui_value(6);
-        if (y > MyScreenHeight)
-          y = MyScreenHeight;
-        if (y < scale_ui_value(4))
-          y = scale_ui_value(4);
-        if (x + scale_ui_value(viswidth) >= MyScreenWidth)
-          x = MyScreenWidth - scale_ui_value(viswidth);
-        if (y + scale_ui_value(ttheight) >= MyScreenHeight)
-          y = MyScreenHeight - scale_ui_value(ttheight);
+        if (x > ui_safe_right_edge())
+          x = ui_safe_right_edge();
+        if (x < ui_safe_left + scale_ui_value(6))
+          x = ui_safe_left + scale_ui_value(6);
+        if (y > ui_safe_bottom_edge())
+          y = ui_safe_bottom_edge();
+        if (y < ui_safe_top + scale_ui_value(4))
+          y = ui_safe_top + scale_ui_value(4);
+        if (x + scale_ui_value(viswidth) >= ui_safe_right_edge())
+          x = ui_safe_right_edge() - scale_ui_value(viswidth);
+        if (y + scale_ui_value(ttheight) >= ui_safe_bottom_edge())
+          y = ui_safe_bottom_edge() - scale_ui_value(ttheight);
         if (tttext[0] != '\0')
         {
             draw_slab64k(x, y, units_per_pixel_ui, scale_ui_value_lofi(viswidth), scale_ui_value_lofi(ttheight));
@@ -683,8 +684,8 @@ void draw_tooltip_at(long ttpos_x,long ttpos_y,char *tttext)
   if (get_displayed_view_type() == PVT_MapScreen)
   {
       pos_y = GetMouseY() + scale_ui_value(24);
-      if (pos_y > MyScreenHeight - scale_ui_value(104))
-          pos_y = MyScreenHeight - scale_ui_value(104);
+      if (pos_y > ui_safe_bottom_edge() - scale_ui_value(104))
+          pos_y = ui_safe_bottom_edge() - scale_ui_value(104);
       if (pos_y < 0)
           pos_y = 0;
   }

@@ -329,6 +329,10 @@ TbBool RendererCanPresent(void)
     return s_active_renderer != nullptr && s_active_renderer->CanPresent();
 }
 
+static TbBool s_renderer_paces_frames = 0;
+TbBool RendererPacesFramesItself(void) { return s_renderer_paces_frames; }
+void   RendererSetPacesFramesItself(TbBool on) { s_renderer_paces_frames = on ? 1 : 0; }
+
 TbBool RendererScheduleScreenshot(const char* path, int fmt)
 {
     return (s_active_renderer != nullptr) ? s_active_renderer->ScheduleScreenshot(path, fmt) : 0;

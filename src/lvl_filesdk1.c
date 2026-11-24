@@ -1416,6 +1416,43 @@ void load_map_string_data(struct GameCampaign *campgn, LevelNumber lvnum, short 
     SYNCDBG(19, "Finished");
 }
 
+void place_single_slab_type_on_map(SlabKind slbkind, MapSlabCoord slb_x, MapSlabCoord slb_y, PlayerNumber plyr_idx);
+unsigned short get_slabset_index_f(SlabKind slbkind, unsigned char style, unsigned char pick, const char *func_name);
+#define get_slabset_index(slbkind, style, pick) get_slabset_index_f(slbkind, style, pick, __func__)
+
+/** Endless (2026-11-23): a map written without its column and block files (.clm, .dat), as a script writes a test map.
+ *  Until its slabs are read every block is plain rock (the slab loader's collision pass needs real columns); then every
+ *  slab is built from its kind and owner, as placing it in the game would. Maps with those files are unchanged. */
+static void blocks_as_rock(void)
+{
+    const ColumnIndex rock = game.slabset[get_slabset_index(SlbT_ROCK, 3, 0)].col_idx[4];
+    for (MapSubtlCoord y = 0; y < game.map_subtiles_y + 1; y++)
+    {
+        for (MapSubtlCoord x = 0; x < game.map_subtiles_x + 1; x++)
+        {
+            struct Map *mapblk = get_map_block_at(x, y);
+            game.lish.subtile_lightness[get_subtile_number(x, y)] = 32;
+            mapblk->col_idx = -rock;
+            mapblk->mapwho = 0;
+            mapblk->filled_subtiles = 0;
+            mapblk->revealed = pmask_none();
+        }
+    }
+}
+
+static void build_columns_from_slabs(void)
+{
+    for (MapSlabCoord y = 0; y < game.map_tiles_y; y++)
+    {
+        for (MapSlabCoord x = 0; x < game.map_tiles_x; x++)
+        {
+            struct SlabMap *slb = get_slabmap_block(x, y);
+            place_single_slab_type_on_map(slb->kind, x, y, slabmap_owner(slb));
+        }
+    }
+    SYNCLOG("Level: no column file; the map's %dx%d slabs were built from their kinds", (int)game.map_tiles_x, (int)game.map_tiles_y);
+}
+
 static TbBool load_level_file(LevelNumber lvnum)
 {
     TbBool result;
@@ -1427,9 +1464,9 @@ static TbBool load_level_file(LevelNumber lvnum)
         result = true;
         struct GameCampaign *campgn = &campaign;
         load_map_string_data(campgn, lvnum, fgroup);
-        load_map_data_file(lvnum);
+        const TbBool have_dat = load_map_data_file(lvnum);
         load_map_flag_file(lvnum);
-        load_column_file(lvnum);
+        const TbBool have_clm = load_column_file(lvnum);
         init_whole_blocks();
         load_slab_file();
         init_columns();
@@ -1452,8 +1489,12 @@ static TbBool load_level_file(LevelNumber lvnum)
         {
             load_action_point_file(lvnum);
         }
+        if (!have_dat && !have_clm)
+          blocks_as_rock();
         if (!load_map_slab_file(lvnum))
           result = false;
+        else if (!have_dat && !have_clm)
+          build_columns_from_slabs();
         if (new_format)
         {
             result = load_tngfx_file(lvnum);

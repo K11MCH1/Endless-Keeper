@@ -60,6 +60,7 @@
 #include "world_colours.h"
 #include "world_expedition.h"
 #include "roomspace_input.h"
+#include "world_alarm.h"
 #include "post_inc.h"
 
 // Local constants
@@ -290,11 +291,27 @@ static void draw_overlay_things_of_class(ThingClass tng_class, MinimapThingDraw 
     }
 }
 
+static void panel_map_draw_ring(int32_t center_x, int32_t center_y, int32_t radius, TbPixel col, int units_per_px);
 static void draw_overlay_call_to_arms(struct Thing *thing, const struct MinimapOverlay *ov)
 {
     if (thing_is_picked_up(thing) || (thing->model != ObjMdl_CTAEnsign))//TODO CONFIG object model dependency, move to config
         return;
     const struct Coord2d pos = thing_minimap_position(thing, ov->cam, ov->zoom);
+    if (world_alarm_flag(thing))
+    {
+        /* endless worlds: an Alarm Bell's flag rings three times as wide, two pixels thick (the user, 2026-11-22) */
+        const struct PowerConfigStats *powerst = get_power_model_stats(PwrK_CALL2ARMS);
+        const int units_per_px = (16 * status_panel_width + 140 / 2) / 140;
+        float circle_time = (float)(get_gameturn() & 7);
+        if ((game.operation_flags & GOF_Paused) == 0)
+            circle_time += local_state.process_turn_time;
+        const int64_t cscale = (int64_t)(circle_time * powerst->strength[0]) * 3;
+        const int32_t radius = (int32_t)(((cscale >> 3) << 8) / ov->zoom);
+        const TbPixel col = player_room_colours[world_display_colour(thing->owner)];
+        panel_map_draw_ring(pos.x.val + ov->basepos, pos.y.val + ov->basepos, radius, col, units_per_px);
+        panel_map_draw_ring(pos.x.val + ov->basepos, pos.y.val + ov->basepos, radius + 1, col, units_per_px);
+        return;
+    }
     draw_call_to_arms_circle(thing->owner, pos.x.val, pos.y.val, ov->zoom);
 }
 

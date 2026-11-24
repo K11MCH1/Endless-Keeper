@@ -5000,10 +5000,10 @@ TbBool check_experience_upgrade(struct Thing *thing)
         return false; /* endless: no level while the caretaker keeps the dungeon (the points wait) */
     struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
     struct CreatureModelConfig *crconf = creature_stats_get_from_thing(thing);
-    long i = creature_exp_to_next_level(crconf, cctrl->exp_level) << 8;
-    if (cctrl->exp_points < i)
+    long i = creature_thing_exp_to_next_level(thing) << 8;
+    if ((cctrl->exp_points < i) || creature_at_level_cap(thing))
     {
-        return false;
+        return false; /* (at the Training Room's cap the points wait for the next Training Room level) */
     }
     cctrl->exp_points -= i;
     struct Dungeon *dungeon = get_dungeon(thing->owner);
