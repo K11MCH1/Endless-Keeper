@@ -295,6 +295,7 @@ gameplay stays exactly as Dungeon Keeper players know it, and the new systems ar
 | ⚙️ | **Link-time optimisation** | The whole game is optimised as one program: about a quarter less time per turn. |
 | 🌍 | **Faster world generation** | The generator remembers ground it has already worked out, with exactly the same result for every seed. |
 | 🎨 | **Vulkan renderer** | The game draws with Vulkan by default on Windows and Android (on Android it used to draw on the processor). Where Vulkan is missing it falls back to OpenGL (on Android, to the old drawing), and shows for a few seconds which renderer started. |
+| 📱 | **Smooth Vulkan on phones** | The picture is turned for the screen before it is shown, frames follow the screen's refresh, and the game tells Android how quickly each frame must be ready so the processor is not slowed down: a phone that dropped to 60–90 FPS now holds a steady 144, and Continue Game loads in under a second.
 | 🔬 | **Measured, not guessed** | The engine is profiled with Tracy, and each round of speed-ups starts from what the profile shows. |
 
 👉 Want to build it yourself or dig into the code? Read the **[Development Guide](docs/DEVELOPMENT.md)** for
