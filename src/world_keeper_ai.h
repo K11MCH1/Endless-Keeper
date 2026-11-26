@@ -24,6 +24,8 @@ TbBool world_keeper_ai_may_attack(PlayerNumber plyr_idx, PlayerNumber victim);
 void world_keeper_ai_woke(PlayerNumber plyr_idx, long days_alone);
 /** Its personality's name ("the Warlord"), "" before it first thinks. */
 const char *world_keeper_ai_personality_name(PlayerNumber plyr_idx);
+/** The gold the endgame-size room a rival pair's keeper wants still costs (0: none wanted; world_rivals.c tops it up). */
+long world_keeper_ai_room_gold(PlayerNumber plyr_idx);
 
 void world_keeper_ai_reset(void);
 size_t world_keeper_ai_save_size(void);

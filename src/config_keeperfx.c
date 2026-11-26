@@ -46,6 +46,7 @@
 #include "keeperfx.hpp"
 #include "net_matchmaking.h"
 #include "world_net.h"
+#include "world_setpiece.h"
 #include "net_state.h"
 #include "post_inc.h"
 
@@ -74,6 +75,8 @@ uint32_t replay_rewind_buffer_kb = 65536;
 unsigned long features_enabled = 0;
 static unsigned char parchment_map_fade_turns = 0;
 unsigned char viewport_mode = VpMode_Original;
+unsigned char window_style = WinStyle_Modern;
+unsigned short ui_scale_percent = 100;
 TbBool exit_on_lua_error = false;
 TbBool FLEE_BUTTON_DEFAULT = false;
 TbBool IMPRISON_BUTTON_DEFAULT = false;
@@ -189,6 +192,9 @@ const struct NamedCommand conf_commands[] = {
   {"REPLAY_REWIND_BUFFER_SIZE"     , 56},
   {"WORLD_LIST_SERVER"             , 57},
   {"LUA_BYTECODE_IN_SAVES"         , 58},
+  {"WINDOW_STYLE"                  , 59},
+  {"OFFICIAL_SET_PIECES"           , 60},
+  {"UI_SCALE"                      , 61},
   {NULL,                   0},
   };
 
@@ -197,6 +203,12 @@ const struct NamedCommand conf_commands[] = {
   {"FULL",           VpMode_Full},
   {"FULL_LETTERBOX", VpMode_FullLetterbox},
   {NULL,             0},
+  };
+
+  const struct NamedCommand window_style_desc[] = {
+  {"MODERN",       WinStyle_Modern},
+  {"CLASSIC",      WinStyle_Classic},
+  {NULL,           0},
   };
 
   const struct NamedCommand renderer_type_desc[] = {
@@ -863,6 +875,29 @@ static void load_string_configuration(const char *buf, int32_t len, const char *
           }
           lua_bytecode_in_saves = (i == 1);
           break;
+      case 59: // WINDOW_STYLE
+          i = recognize_conf_parameter(buf,&pos,len,window_style_desc);
+          if (i <= 0)
+          {
+              CONFWRNLOG("Couldn't recognize \"%s\" command parameter in %s file.",
+                COMMAND_TEXT(cmd_num),config_textname);
+            break;
+          }
+          window_style = i;
+          break;
+      case 61: // UI_SCALE
+          i = 0;
+          if (get_conf_parameter_single(buf,&pos,len,word_buf,sizeof(word_buf)) > 0)
+          {
+            i = atoi(word_buf);
+          }
+          if ((i >= UI_SCALE_PERCENT_MIN) && (i <= UI_SCALE_PERCENT_MAX)) {
+              ui_scale_percent = i;
+          } else {
+              CONFWRNLOG("Invalid \"%s\" value '%s' in %s file (%d to %d).",COMMAND_TEXT(cmd_num),word_buf,config_textname,
+                  UI_SCALE_PERCENT_MIN, UI_SCALE_PERCENT_MAX);
+          }
+          break;
       case 34: // API_PORT
           if (get_conf_parameter_single(buf,&pos,len,word_buf,sizeof(word_buf)) > 0)
           {
@@ -1181,6 +1216,15 @@ static void load_string_configuration(const char *buf, int32_t len, const char *
               world_net_set_list_server(word_buf);
               SYNCLOG("World list server: %s", world_list_server);
           }
+          break;
+      case 60: // OFFICIAL_SET_PIECES: the creator's set pieces (setpieces/official) in endless worlds (the launcher's option)
+          i = recognize_conf_parameter(buf, &pos, len, logicval_type);
+          if (i <= 0)
+          {
+              CONFWRNLOG("Couldn't recognize \"%s\" command parameter in %s file.", COMMAND_TEXT(cmd_num), config_textname);
+              break;
+          }
+          world_official_setpieces = (i == 1);
           break;
       case ccr_comment:
           break;

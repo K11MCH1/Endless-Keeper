@@ -17,6 +17,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "ui_front.h"
 #include "kfx/renderer/RendererManager.h"
 #include "gui_frontbtns.h"
 
@@ -37,6 +38,7 @@
 #include "game_legacy.h"
 #include "custom_sprites.h"
 #include "config_spritecolors.h"
+#include "world_side_panel.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -364,6 +366,8 @@ void frontend_copy_background(void)
 void gui_round_glass_background(struct GuiMenu *gmnu)
 {
     SYNCDBG(19,"Starting");
+    if (world_ui_textbox_draw(gmnu)) /* endless, the modern look: the message box in glass, a scroll bar for its arrows */
+        return;
     int fade_h;
     int i;
     fade_h = 0;
@@ -410,6 +414,8 @@ void gui_round_glass_background(struct GuiMenu *gmnu)
 void gui_pretty_background(struct GuiMenu *gmnu)
 {
     SYNCDBG(9,"Starting");
+    if (world_ui_menu_draw(gmnu)) /* endless, the modern look: dark glass, the buttons painted with it */
+        return;
     int fade_w;
     int fade_h;
     int i;
@@ -700,6 +706,10 @@ void frontend_draw_button(struct GuiButton *gbtn, unsigned short btntype, const 
     long y;
     int h;
     SYNCDBG(9,"Drawing type %d, text \"%s\"",(int)btntype,text);
+    if (world_ui_front_button(gbtn, text)) /* endless, the modern main menu: painted with the others */
+        return;
+    if (uf_button(gbtn, text)) /* endless, the screens behind it in the Molten look (ui_front.c) */
+        return;
     febtn_idx = gbtn->content.lval;
     if ((gbtn->flags & LbBtnF_Enabled) == 0)
     {
@@ -777,6 +787,8 @@ void frontend_draw_vlarge_menu_button(struct GuiButton *gbtn)
 
 void frontend_draw_scroll_box_tab(struct GuiButton *gbtn)
 {
+    if (uf_tab(gbtn->scr_pos_x, gbtn->scr_pos_y, gbtn->width, gbtn->height)) /* endless, the Molten look */
+        return;
     const struct TbSprite *spr;
     long pos_x;
     long pos_y;
@@ -840,6 +852,8 @@ void frontend_draw_slider_button(struct GuiButton *gbtn)
     int32_t btn_id = gbtn->content.lval;
     TbBool hovered = (btn_id != 0) && (frontend_mouse_over_button == btn_id);
     TbBool points_up = (btn_id == 17) || (btn_id == 36) || (btn_id == 38) || (btn_id == 54);
+    if (uf_arrow(gbtn, points_up)) /* endless, the Molten look */
+        return;
     int32_t spr_idx = GFS_scrollbar_btmarrow_std;
     if (points_up && hovered) {
         spr_idx = GFS_scrollbar_toparrow_act;
@@ -1000,6 +1014,16 @@ void gui_draw_scroll_box(struct GuiButton *gbtn, int height_lines, TbBool draw_s
             spr++;
         }
         units_per_px = (gbtn->width * 16 + orig_size/2) / orig_size;
+    }
+    if (uf_on())
+    {
+        /* endless, the Molten look: the box as a well of the height its borders and lines would take (ui_front.c) */
+        long h = get_frontend_sprite(GFS_hugearea_thn_cor_tl)->SHeight * units_per_px / 16;
+        for (long lines = height_lines; lines > 0; lines -= (lines < 3) ? 1 : 3)
+            h += get_frontend_sprite((lines < 3) ? GFS_hugearea_thn_cor_ml : GFS_hugearea_thc_cor_ml)->SHeight * units_per_px / 16;
+        h += get_frontend_sprite(GFS_hugearea_thn_cor_bl)->SHeight * units_per_px / 16;
+        uf_well(gbtn->scr_pos_x, gbtn->scr_pos_y, gbtn->width, (int)h);
+        return;
     }
     // Draw top border
     spr = get_frontend_sprite(GFS_hugearea_thn_cor_tl);

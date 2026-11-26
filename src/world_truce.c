@@ -17,7 +17,9 @@
  *
  *     Who is at peace:
  *       - allied keepers, anywhere (the game's alliance: in an endless world, the keepers of a co-op party);
- *       - the keepers at a World Boss's fight, inside its arena (world_boss_spares).
+ *       - the keepers at a World Boss's fight, inside its arena (world_boss_spares);
+ *       - the two keepers of a rival pair while they drive a human out of their territory: the game's alliance, made
+ *         and ended by world_rivals.c (so allied keepers' rules above cover it).
  *     A truce of a new kind is one more line in truce_covers().
  */
 /******************************************************************************/

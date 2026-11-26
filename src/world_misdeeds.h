@@ -149,6 +149,8 @@ void world_misdeeds_scroll_draw(struct GuiButton *gbtn);
 void world_misdeeds_scroll_click(struct GuiButton *gbtn);
 void world_misdeeds_pencil_maintain(struct GuiButton *gbtn);
 void world_misdeeds_pencil_draw(struct GuiButton *gbtn);
+/** The name being typed with the pencil (the Molten creature window shows it). */
+const char *world_misdeeds_name_typed(void);
 void world_misdeeds_rename_done(struct GuiButton *gbtn);
 void world_misdeeds_pick_maintain(struct GuiButton *gbtn);
 void world_misdeeds_pick_draw(struct GuiButton *gbtn);

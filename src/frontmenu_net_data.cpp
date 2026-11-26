@@ -17,6 +17,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "ui_front.h"
 #include "kfx/renderer/RendererManager.h"
 #include "frontmenu_net.h"
 #include "globals.h"
@@ -410,9 +411,12 @@ static void draw_lobby_column_tabs(struct GuiButton *gbtn, const int *columns, i
         } else {
             tab_width += left_width - right_width + 2 * scale / 16;
         }
-        LbSpriteDrawResized(tab_x, gbtn->scr_pos_y, scale, left);
-        LbSpriteDrawScaled(tab_x + left_width, gbtn->scr_pos_y, middle, tab_width - left_width - right_width, gbtn->height);
-        LbSpriteDrawResized(tab_x + tab_width - right_width, gbtn->scr_pos_y, scale, right);
+        if (!uf_tab(tab_x, gbtn->scr_pos_y, tab_width, gbtn->height)) /* endless, the Molten look */
+        {
+            LbSpriteDrawResized(tab_x, gbtn->scr_pos_y, scale, left);
+            LbSpriteDrawScaled(tab_x + left_width, gbtn->scr_pos_y, middle, tab_width - left_width - right_width, gbtn->height);
+            LbSpriteDrawResized(tab_x + tab_width - right_width, gbtn->scr_pos_y, scale, right);
+        }
         draw_lobby_text(x, gbtn->scr_pos_y + scale / 16, width - LOBBY_COLUMN_TEXT_GAP * gbtn->width / columns[count], gbtn->height, 2, 0, 0, text[i]);
     }
 }
@@ -492,6 +496,8 @@ static void draw_lobby_panel_row(int x, int y, int width, int height, int scale,
 
 static void draw_lobby_panel(int x, int y, int width, int height, int scale)
 {
+    if (uf_well(x, y, width, height)) /* endless, the Molten look */
+        return;
     const struct TbSprite *top = get_frontend_sprite(GFS_hugearea_thn_cor_tl);
     const struct TbSprite *bottom = get_frontend_sprite(GFS_hugearea_thn_cor_bl);
     int top_height = top->SHeight * scale / 16;
@@ -518,6 +524,8 @@ void frontnet_draw_lobby_panel_without_scrollbar(struct GuiButton *gbtn)
 void frontnet_draw_lobby_panel(struct GuiButton *gbtn)
 {
     frontnet_draw_lobby_panel_without_scrollbar(gbtn);
+    if (uf_on())
+        return; /* (endless, the Molten look: the scroll thumb draws the track) */
     int scale = lobby_menu_scale(gbtn);
     const struct TbSprite *top = get_frontend_sprite(GFS_scrollbar_toparrow_std);
     const struct TbSprite *middle = get_frontend_sprite(GFS_scrollbar_vert_ct_long);

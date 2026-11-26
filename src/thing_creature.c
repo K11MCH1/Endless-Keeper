@@ -108,6 +108,7 @@
 #include "kfx/profiling/KfxProfilingC.h"
 #include "slab_data.h"
 #include "world_colours.h"
+#include "world_rivals.h"
 #include "world_progress.h"
 #include "world_daynight.h"
 #include "world_stream.h"
@@ -556,7 +557,7 @@ struct Thing *get_enemy_soul_container_creature_can_see(struct Thing *creatng)
 
     for (PlayerNumber enemy_idx = 0; enemy_idx < DUNGEONS_COUNT; enemy_idx++)
     {
-        if (players_are_enemies(creatng->owner, enemy_idx))
+        if (players_are_enemies(creatng->owner, enemy_idx) && !world_rivals_spare_heart(creatng->owner, enemy_idx)) /* endless: rival pairs */
         {
             struct Thing* heartng = get_players_soul_container_creature_can_see(creatng, enemy_idx);
             if (thing_exists(heartng))

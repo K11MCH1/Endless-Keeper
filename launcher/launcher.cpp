@@ -24,6 +24,7 @@
 #include <thread>
 #include <vector>
 #include "engine_view.h"
+#include "fx.h"
 #include "net.h"
 #include "../src/ver_defs.h"
 
@@ -305,6 +306,84 @@ static const ImU32 C_GOLD = IM_COL32(222, 178, 88, 255), C_GOLD_HI = IM_COL32(25
 static const ImU32 C_TEXT = IM_COL32(226, 212, 186, 255), C_TEXT_DIM = IM_COL32(160, 146, 122, 255);
 static const ImU32 C_PANEL = IM_COL32(18, 12, 9, 200), C_EDGE = IM_COL32(104, 78, 36, 255), C_EDGE_IN = IM_COL32(44, 30, 14, 255);
 
+/* The launcher's looks (test branch 2026-11-23). LAUNCHER_LOOK in endlesskeeper-launcher.cfg; test key "look=<n>".
+   Classic is the launcher as it was. The two modern ones keep its layout and differ in what carries the picture:
+   - Molten: the battle is the picture and the boxes are dark glass over it (its blur shows through); light comes
+     from below (lava, embers) and from the Play button, which beats like the Dungeon Heart; a book face speaks
+     (titles, buttons) and a plain face is read (notes, settings).
+   - Obsidian: lines and letters carry it: sharp black slabs with a gold hairline, spaced capitals, gold dust. */
+enum { LOOK_CLASSIC = 0, LOOK_MOLTEN = 1, LOOK_OBSIDIAN = 2 };
+static int g_look = LOOK_MOLTEN;
+static ImFont *g_font_head = nullptr, *g_font_body = nullptr; /* the book face; the plain face for reading */
+static SDL_Texture *g_header_light = nullptr; /* the header again, adding light (the sheen over the title) */
+static float g_intro = 0;           /* seconds since the window came (or came back): the entrance */
+static std::string t_hover;         /* test key "hover=<button id>": that button is drawn as under the pointer */
+static bool t_fake_install = false; /* test key "fakeinstall=1": the update box with a progress bar, nothing installed */
+
+static int t_look = -1;             /* test key "look=<0|1|2>": that look, whatever the settings say */
+static bool t_still = false;        /* test key "fx=0": no motion */
+static bool g_restyle = false;      /* the look changed: the style is set again */
+static int look_from(const std::string &name);
+static float box_alpha(const char *name);
+
+/** The look and its motion, from the launcher's settings (and Windows' own "show animations" switch). */
+static void apply_look()
+{
+    g_look = (t_look >= 0) ? t_look : look_from(g_lcfg.get("LAUNCHER_LOOK", "MOLTEN"));
+    BOOL animations = TRUE;
+    SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animations, 0);
+    fx_motion = (g_look != LOOK_CLASSIC) && g_lcfg.flag("LAUNCHER_EFFECTS", true) && (animations != FALSE) && !t_still;
+    g_restyle = true;
+}
+
+static ImFont *head_font()
+{
+    return (g_font_head != nullptr) ? g_font_head : ImGui::GetFont();
+}
+
+/** The font of what is read: the plain face in the Molten look, else the book face. */
+static ImFont *body_font()
+{
+    return ((g_look == LOOK_MOLTEN) && (g_font_body != nullptr)) ? g_font_body : head_font();
+}
+
+static int look_from(const std::string &name)
+{
+    return (_stricmp(name.c_str(), "CLASSIC") == 0) ? LOOK_CLASSIC : (_stricmp(name.c_str(), "OBSIDIAN") == 0) ? LOOK_OBSIDIAN : LOOK_MOLTEN;
+}
+
+/** How far in a piece of the window is, 0 to 1: it starts `delay` seconds after the window came. */
+static float intro(float delay, float seconds = 0.5f)
+{
+    if (!fx_motion || (g_look == LOOK_CLASSIC))
+        return 1.0f;
+    return fx_ease_out((g_intro - delay) / seconds);
+}
+
+static ImU32 alpha_of(ImU32 col, float alpha)
+{
+    const ImU32 a = (ImU32)(((col >> IM_COL32_A_SHIFT) & 0xFF) * std::max(0.0f, std::min(1.0f, alpha)));
+    return (col & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
+}
+
+static ImU32 mix(ImU32 a, ImU32 b, float t)
+{
+    t = std::max(0.0f, std::min(1.0f, t));
+    ImU32 out = 0;
+    for (int shift = 0; shift < 32; shift += 8)
+        out |= ((ImU32)(((a >> shift) & 0xFF) + (((b >> shift) & 0xFF) - (float)((a >> shift) & 0xFF)) * t + 0.5f) & 0xFF) << shift;
+    return out;
+}
+
+/** In capitals (the Obsidian look's spaced titles), any alphabet. */
+static std::string upper(const char *text)
+{
+    std::wstring w = widen(text);
+    if (!w.empty())
+        CharUpperBuffW(&w[0], (DWORD)w.size());
+    return narrow(w);
+}
+
 static void open_url(const char *url)
 {
     ShellExecuteW(nullptr, L"open", widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -313,16 +392,49 @@ static void open_url(const char *url)
 /******************************************************************************/
 /* the look */
 
-static void text_shadow(ImDrawList *dl, float size, ImVec2 pos, ImU32 col, const char *text)
+static void text_shadow(ImDrawList *dl, float size, ImVec2 pos, ImU32 col, const char *text, ImFont *font = nullptr)
 {
-    ImFont *font = ImGui::GetFont();
-    dl->AddText(font, size, ImVec2(pos.x + std::max(1.0f, size * 0.06f), pos.y + std::max(1.0f, size * 0.08f)), IM_COL32(0, 0, 0, 220), text);
+    if (font == nullptr)
+        font = head_font();
+    if (g_look == LOOK_CLASSIC)
+        dl->AddText(font, size, ImVec2(pos.x + std::max(1.0f, size * 0.06f), pos.y + std::max(1.0f, size * 0.08f)), IM_COL32(0, 0, 0, 220), text);
+    else
+        /* a lighter shadow straight under the letters (it fades with them) */
+        dl->AddText(font, size, ImVec2(pos.x, pos.y + std::max(1.0f, size * 0.07f)), IM_COL32(0, 0, 0, (int)(170.0f * ((col >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f)), text);
     dl->AddText(font, size, pos, col, text);
 }
 
-/** A slab of dark stone with a bronze rim and studs in its corners. */
+/** A slab of dark stone with a bronze rim and studs in its corners; in the modern looks dark glass over the blurred
+    battle (Molten) or a sharp black slab with a gold hairline and bright corners (Obsidian). */
 static void panel(ImDrawList *dl, ImVec2 a, ImVec2 b)
 {
+    if (g_look == LOOK_MOLTEN)
+    {
+        const float r = 16.0f * S;
+        fx_shadow(dl, a, b, r, 40.0f * S, IM_COL32(0, 0, 0, 150));
+        if (fx_backdrop_draw(dl, a, b, r, IM_COL32(150, 140, 136, 255)))
+            fx_rect_gradient(dl, a, b, IM_COL32(32, 18, 13, 128), IM_COL32(9, 6, 6, 184), r);
+        else
+            fx_rect_gradient(dl, a, b, IM_COL32(28, 18, 14, 232), IM_COL32(11, 8, 7, 240), r);
+        fx_rect_gradient(dl, ImVec2(a.x + 1, a.y + 1), ImVec2(b.x - 1, a.y + 72.0f * S), IM_COL32(255, 190, 130, 24), IM_COL32(255, 190, 130, 0), r, false,
+            ImDrawFlags_RoundCornersTop);
+        dl->AddRect(a, b, IM_COL32(255, 214, 170, 40), r, 0, 1.0f);
+        return;
+    }
+    if (g_look == LOOK_OBSIDIAN)
+    {
+        const float r = 2.0f * S, k = 18.0f * S, t = std::max(1.5f, 2.0f * S);
+        fx_shadow(dl, a, b, r, 30.0f * S, IM_COL32(0, 0, 0, 170));
+        fx_rect_gradient(dl, a, b, IM_COL32(18, 16, 24, 240), IM_COL32(8, 7, 11, 246), r);
+        dl->AddRect(a, b, IM_COL32(170, 132, 62, 150), r, 0, 1.0f);
+        for (int i = 0; i < 4; i++)
+        {
+            const float x = (i & 1) ? b.x : a.x, y = (i & 2) ? b.y : a.y, sx = (i & 1) ? -1.0f : 1.0f, sy = (i & 2) ? -1.0f : 1.0f;
+            dl->AddLine(ImVec2(x, y), ImVec2(x + sx * k, y), C_GOLD_HI, t);
+            dl->AddLine(ImVec2(x, y), ImVec2(x, y + sy * k), C_GOLD_HI, t);
+        }
+        return;
+    }
     const float r = 5.0f * S;
     dl->AddRectFilled(ImVec2(a.x + 3 * S, a.y + 4 * S), ImVec2(b.x + 3 * S, b.y + 4 * S), IM_COL32(0, 0, 0, 90), r);
     dl->AddRectFilled(a, b, C_PANEL, r);
@@ -338,6 +450,126 @@ static void panel(ImDrawList *dl, ImVec2 a, ImVec2 b)
     }
 }
 
+/** The label in a modern button: in the middle, made smaller when it is too long for it (a translation), with
+    `spacing` between its letters. */
+static void button_label(ImDrawList *dl, ImVec2 a, ImVec2 size, float font_size, ImU32 col, const char *label, float spacing)
+{
+    ImFont *font = head_font();
+    const float room = size.x - 22.0f * S;
+    float width = fx_text_spaced(nullptr, font, font_size, a, col, label, spacing * font_size);
+    if ((width > room) && (width > 0))
+    {
+        font_size *= room / width;
+        width = fx_text_spaced(nullptr, font, font_size, a, col, label, spacing * font_size);
+    }
+    const ImVec2 at(floorf(a.x + (size.x - width) * 0.5f), floorf(a.y + (size.y - font_size) * 0.5f));
+    fx_text_spaced(dl, font, font_size, ImVec2(at.x, at.y + std::max(1.0f, font_size * 0.07f)), IM_COL32(0, 0, 0, (int)(170.0f * ((col >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f)),
+        label, spacing * font_size);
+    fx_text_spaced(dl, font, font_size, at, col, label, spacing * font_size);
+}
+
+/** The Molten look's buttons. Play is the one bright thing in the window: molten, with slow currents of light in it,
+    a halo that beats like the Dungeon Heart, and sparks off its top edge; the others are dark glass that warms
+    under the pointer. */
+static void button_molten(ImDrawList *dl, ImGuiID id, const char *label, ImVec2 a, ImVec2 b, bool primary, float font_size, bool enabled, bool hot, bool down, bool sparks)
+{
+    const float h = fx_follow(id, hot ? 1.0f : 0.0f, 0.18f), p = fx_follow(id + 1, down ? 1.0f : 0.0f, 0.07f);
+    const float beat = fx_heartbeat(), t = fx_motion ? fx_time() : 0.0f;
+    a.y += p * 2.0f * S;
+    b.y += p * 2.0f * S;
+    const ImVec2 size(b.x - a.x, b.y - a.y);
+    const float r = std::min(size.y * 0.5f, (primary ? 16.0f : 11.0f) * S);
+    fx_shadow(dl, a, b, r, 16.0f * S, IM_COL32(0, 0, 0, 130));
+    if (primary && enabled)
+    {
+        fx_halo(dl, a, b, r, (26.0f + 12.0f * h + 8.0f * beat) * S, IM_COL32(255, 80, 24, (int)(130.0f * std::min(1.0f, 0.28f + 0.42f * beat + 0.5f * h))));
+        const ImU32 dark = IM_COL32(60, 6, 5, 255);
+        fx_rect_gradient(dl, a, b, mix(mix(IM_COL32(176, 34, 16, 255), IM_COL32(228, 66, 26, 255), h), dark, p * 0.5f),
+            mix(mix(IM_COL32(84, 9, 7, 255), IM_COL32(126, 18, 10, 255), h), dark, p * 0.5f), r);
+        dl->PushClipRect(ImVec2(a.x + 1, a.y + 1), ImVec2(b.x - 1, b.y - 1), true);
+        for (int k = 0; k < 3; k++)
+        {
+            const float phase = fmodf(t * 0.06f * (1.0f + 0.35f * k) + k * 0.37f, 1.0f);
+            fx_glow(dl, ImVec2(a.x + (phase * 1.5f - 0.25f) * size.x, a.y + size.y * (0.64f + 0.18f * sinf(t * 0.8f + k * 2.1f))), size.x * 0.30f, size.y * 0.95f,
+                IM_COL32(255, 150, 44, (int)(52.0f + 46.0f * h + 30.0f * beat)));
+        }
+        dl->PopClipRect();
+        fx_rect_gradient(dl, ImVec2(a.x + 1, a.y + 1), ImVec2(b.x - 1, a.y + size.y * 0.42f), IM_COL32(255, 226, 190, 26), IM_COL32(255, 226, 190, 0), r, false,
+            ImDrawFlags_RoundCornersTop);
+        dl->AddRect(a, b, mix(IM_COL32(255, 168, 96, 120), IM_COL32(255, 230, 170, 255), h), r, 0, std::max(1.0f, 1.25f * S));
+        if (sparks)
+            fx_sparks(ImVec2(a.x + r, a.y - 2.0f * S), ImVec2(b.x - r, a.y + 3.0f * S), 2.5f + 13.0f * h, S);
+        button_label(dl, a, size, font_size, mix(IM_COL32(255, 232, 190, 255), IM_COL32(255, 250, 236, 255), h), label, 0.0f);
+        return;
+    }
+    if (!fx_backdrop_draw(dl, a, b, r, IM_COL32(140, 130, 126, 255)))
+        dl->AddRectFilled(a, b, IM_COL32(24, 16, 13, 236), r);
+    if (!enabled)
+    {
+        fx_rect_gradient(dl, a, b, IM_COL32(34, 30, 28, 170), IM_COL32(14, 12, 11, 200), r);
+        dl->AddRect(a, b, IM_COL32(255, 214, 170, 22), r, 0, 1.0f);
+        button_label(dl, a, size, font_size, alpha_of(C_TEXT_DIM, 0.62f), label, 0.0f);
+        return;
+    }
+    fx_rect_gradient(dl, a, b, mix(IM_COL32(44, 26, 18, 150), IM_COL32(150, 46, 20, 205), h), mix(IM_COL32(12, 8, 7, 190), IM_COL32(58, 14, 9, 220), h), r);
+    fx_rect_gradient(dl, ImVec2(a.x + 1, a.y + 1), ImVec2(b.x - 1, a.y + size.y * 0.5f), IM_COL32(255, 210, 160, 22), IM_COL32(255, 210, 160, 0), r, false,
+        ImDrawFlags_RoundCornersTop);
+    dl->AddRect(a, b, mix(IM_COL32(255, 214, 170, 52), C_GOLD_HI, h), r, 0, 1.0f + h * 0.5f * S);
+    button_label(dl, a, size, font_size, mix(C_GOLD, IM_COL32(255, 244, 214, 255), h), label, 0.0f);
+}
+
+/** The Obsidian look's buttons: black slabs with a gold line. Play has spaced capitals, a glint that runs round its
+    rim, and a red core that opens from its middle under the pointer; the others grow a gold underline. */
+static void button_obsidian(ImDrawList *dl, ImGuiID id, const char *label, ImVec2 a, ImVec2 b, bool primary, float font_size, bool enabled, bool hot, bool down)
+{
+    const float h = fx_follow(id, hot ? 1.0f : 0.0f, 0.22f), p = fx_follow(id + 1, down ? 1.0f : 0.0f, 0.07f);
+    const float beat = fx_heartbeat(), t = fx_motion ? fx_time() : 0.0f;
+    a.y += p * 1.5f * S;
+    b.y += p * 1.5f * S;
+    const ImVec2 size(b.x - a.x, b.y - a.y);
+    const float r = 2.0f * S, line = std::max(1.5f, 2.0f * S);
+    fx_shadow(dl, a, b, r, 16.0f * S, IM_COL32(0, 0, 0, 140));
+    if (primary && enabled)
+        fx_halo(dl, a, b, r, 20.0f * S, IM_COL32(210, 44, 18, (int)(34.0f * beat + 70.0f * h)));
+    fx_rect_gradient(dl, a, b, IM_COL32(19, 17, 25, 244), IM_COL32(8, 7, 11, 248), r);
+    if (!enabled)
+    {
+        dl->AddRect(a, b, IM_COL32(120, 104, 80, 90), r, 0, 1.0f);
+        button_label(dl, a, size, font_size, alpha_of(C_TEXT_DIM, 0.62f), label, 0.0f);
+        return;
+    }
+    if (primary)
+    {
+        const float cx = (a.x + b.x) * 0.5f, half = (size.x * 0.5f - 1.0f) * h;
+        if (half > 1.0f)
+            fx_rect_gradient(dl, ImVec2(cx - half, a.y + 1), ImVec2(cx + half, b.y - 1), IM_COL32(158, 28, 15, (int)(240.0f * h)), IM_COL32(80, 10, 8, (int)(240.0f * h)), 0.0f);
+        dl->AddRect(ImVec2(a.x + 5.0f * S, a.y + 5.0f * S), ImVec2(b.x - 5.0f * S, b.y - 5.0f * S), IM_COL32(222, 178, 88, (int)(46.0f + 60.0f * h)), 0.0f, 0, 1.0f);
+        dl->AddRect(a, b, mix(C_GOLD, C_GOLD_HI, std::max(h, beat * 0.4f)), r, 0, line);
+        if (fx_motion)
+        {
+            /* the glint: one bright spot going round the rim, clockwise from the top left */
+            const float per = 2.0f * (size.x + size.y);
+            float d = fmodf(t * 0.13f, 1.0f) * per;
+            ImVec2 at;
+            if (d < size.x) at = ImVec2(a.x + d, a.y);
+            else if ((d -= size.x) < size.y) at = ImVec2(b.x, a.y + d);
+            else if ((d -= size.y) < size.x) at = ImVec2(b.x - d, b.y);
+            else at = ImVec2(a.x, b.y - (d - size.x));
+            dl->PushClipRect(ImVec2(a.x - 3.0f * S, a.y - 3.0f * S), ImVec2(b.x + 3.0f * S, b.y + 3.0f * S), true);
+            fx_glow(dl, at, 30.0f * S, 30.0f * S, IM_COL32(255, 220, 150, 70));
+            fx_glow(dl, at, 7.0f * S, 7.0f * S, IM_COL32(255, 240, 200, 230));
+            dl->PopClipRect();
+        }
+        button_label(dl, a, size, font_size * 0.86f, mix(C_GOLD_HI, IM_COL32(255, 250, 236, 255), h), upper(label).c_str(), 0.2f);
+        return;
+    }
+    dl->AddRect(a, b, mix(IM_COL32(150, 118, 60, 170), C_GOLD_HI, h), r, 0, 1.0f);
+    const float under = (size.x - 28.0f * S) * 0.5f * h;
+    if (under > 0.5f)
+        dl->AddRectFilled(ImVec2((a.x + b.x) * 0.5f - under, b.y - 8.0f * S), ImVec2((a.x + b.x) * 0.5f + under, b.y - 8.0f * S + line), C_GOLD_HI);
+    button_label(dl, ImVec2(a.x, a.y - 1.0f * S), size, font_size, mix(C_GOLD, IM_COL32(255, 244, 214, 255), h), label, 0.0f);
+}
+
 /** A button of the game's kind: carved stone, or (primary) the blood red of the Play button. */
 static bool button(const char *id, const char *label, ImVec2 pos, ImVec2 size, bool primary, float font_size, bool enabled = true)
 {
@@ -345,11 +577,21 @@ static bool button(const char *id, const char *label, ImVec2 pos, ImVec2 size, b
     ImGui::BeginDisabled(!enabled);
     const bool clicked = ImGui::InvisibleButton(id, size);
     ImGui::EndDisabled();
-    const bool hot = enabled && ImGui::IsItemHovered(), down = enabled && ImGui::IsItemActive();
+    const bool hot = enabled && (ImGui::IsItemHovered() || (t_hover == id)), down = enabled && ImGui::IsItemActive();
     if (hot)
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     ImDrawList *dl = ImGui::GetWindowDrawList();
     const ImVec2 a = pos, b(pos.x + size.x, pos.y + size.y);
+    if (g_look == LOOK_MOLTEN)
+    {
+        button_molten(dl, ImGui::GetItemID(), label, a, b, primary, font_size, enabled, hot, down, strcmp(id, "play") == 0);
+        return clicked;
+    }
+    if (g_look == LOOK_OBSIDIAN)
+    {
+        button_obsidian(dl, ImGui::GetItemID(), label, a, b, primary, font_size, enabled, hot, down);
+        return clicked;
+    }
     const float r = 6.0f * S, t = (float)ImGui::GetTime();
     if (primary && enabled)
     {
@@ -367,7 +609,7 @@ static bool button(const char *id, const char *label, ImVec2 pos, ImVec2 size, b
     dl->AddRectFilledMultiColor(ImVec2(a.x + r * 0.5f, a.y + 2), ImVec2(b.x - r * 0.5f, a.y + size.y * 0.62f), top, top, bottom, bottom);
     dl->AddRect(a, b, hot ? C_GOLD_HI : (enabled ? C_GOLD : C_GOLD_DIM), r, 0, std::max(1.5f, 2.0f * S));
     dl->AddRect(ImVec2(a.x + 3.5f * S, a.y + 3.5f * S), ImVec2(b.x - 3.5f * S, b.y - 3.5f * S), IM_COL32(0, 0, 0, 110), r * 0.6f, 0, 1.0f);
-    const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(font_size, 4000.0f, 0.0f, label);
+    const ImVec2 ts = head_font()->CalcTextSizeA(font_size, 4000.0f, 0.0f, label);
     text_shadow(dl, font_size, ImVec2(a.x + (size.x - ts.x) * 0.5f, a.y + (size.y - ts.y) * 0.5f + (down ? 1.5f * S : 0)),
         !enabled ? C_TEXT_DIM : (hot ? IM_COL32(255, 244, 214, 255) : (primary ? IM_COL32(255, 226, 170, 255) : C_GOLD)), label);
     return clicked;
@@ -376,7 +618,7 @@ static bool button(const char *id, const char *label, ImVec2 pos, ImVec2 size, b
 /** Text that opens an address: underlined under the pointer. */
 static bool link(const char *id, const char *text, float size, ImU32 col)
 {
-    ImFont *font = ImGui::GetFont();
+    ImFont *font = head_font();
     const ImVec2 pos = ImGui::GetCursorScreenPos(), ts = font->CalcTextSizeA(size, 4000.0f, 0.0f, text);
     const bool clicked = ImGui::InvisibleButton(id, ts);
     const bool hot = ImGui::IsItemHovered();
@@ -439,6 +681,74 @@ static void apply_style()
     c[ImGuiCol_TabSelected] = rgb(110, 30, 16);
     c[ImGuiCol_TabSelectedOverline] = rgb(222, 178, 88);
     c[ImGuiCol_ModalWindowDimBg] = rgb(0, 0, 0, 150);
+    if (g_look == LOOK_MOLTEN)
+    {
+        /* softer and rounder: lines nearly gone, the boxes told apart by their fill */
+        st.WindowRounding = 14.0f * S;
+        st.ChildRounding = 10.0f * S;
+        st.FrameRounding = 8.0f * S;
+        st.PopupRounding = 10.0f * S;
+        st.GrabRounding = 8.0f * S;
+        st.TabRounding = 8.0f * S;
+        st.ScrollbarRounding = 8.0f * S;
+        st.ScrollbarSize = 10.0f * S;
+        st.WindowBorderSize = 1.0f;
+        st.FrameBorderSize = 0.0f;
+        st.FramePadding = ImVec2(10 * S, 6 * S);
+        st.WindowTitleAlign = ImVec2(0.5f, 0.5f);
+        c[ImGuiCol_Text] = rgb(232, 222, 204);
+        c[ImGuiCol_TextDisabled] = rgb(140, 128, 112);
+        c[ImGuiCol_WindowBg] = rgb(19, 13, 11, 248);
+        c[ImGuiCol_PopupBg] = rgb(24, 16, 13, 250);
+        c[ImGuiCol_Border] = rgb(255, 214, 170, 44);
+        c[ImGuiCol_FrameBg] = rgb(255, 236, 214, 16);
+        c[ImGuiCol_FrameBgHovered] = rgb(255, 236, 214, 30);
+        c[ImGuiCol_FrameBgActive] = rgb(255, 170, 110, 46);
+        c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = rgb(30, 19, 15);
+        c[ImGuiCol_CheckMark] = rgb(255, 190, 104);
+        c[ImGuiCol_SliderGrab] = rgb(214, 96, 40);
+        c[ImGuiCol_SliderGrabActive] = rgb(255, 150, 70);
+        c[ImGuiCol_Button] = rgb(255, 226, 196, 22);
+        c[ImGuiCol_ButtonHovered] = rgb(170, 52, 22, 220);
+        c[ImGuiCol_ButtonActive] = rgb(120, 26, 14);
+        c[ImGuiCol_Header] = rgb(150, 44, 20, 190);
+        c[ImGuiCol_HeaderHovered] = rgb(176, 56, 24, 220);
+        c[ImGuiCol_HeaderActive] = rgb(196, 64, 26);
+        c[ImGuiCol_Separator] = rgb(255, 214, 170, 30);
+        c[ImGuiCol_ScrollbarBg] = rgb(0, 0, 0, 0);
+        c[ImGuiCol_ScrollbarGrab] = rgb(255, 214, 170, 50);
+        c[ImGuiCol_ScrollbarGrabHovered] = rgb(255, 214, 170, 110);
+        c[ImGuiCol_ScrollbarGrabActive] = rgb(255, 190, 104);
+        c[ImGuiCol_Tab] = rgb(0, 0, 0, 0);
+        c[ImGuiCol_TabHovered] = rgb(170, 52, 22, 200);
+        c[ImGuiCol_TabSelected] = rgb(142, 40, 18);
+        c[ImGuiCol_TabSelectedOverline] = rgb(255, 190, 104);
+        c[ImGuiCol_ModalWindowDimBg] = rgb(4, 2, 2, 176);
+    } else if (g_look == LOOK_OBSIDIAN)
+    {
+        st.WindowRounding = st.ChildRounding = st.FrameRounding = st.PopupRounding = st.GrabRounding = st.TabRounding = 2.0f * S;
+        st.ScrollbarRounding = 0.0f;
+        st.ScrollbarSize = 9.0f * S;
+        st.WindowBorderSize = 1.0f;
+        st.WindowTitleAlign = ImVec2(0.5f, 0.5f);
+        c[ImGuiCol_WindowBg] = rgb(13, 12, 17, 250);
+        c[ImGuiCol_PopupBg] = rgb(16, 15, 21, 252);
+        c[ImGuiCol_Border] = rgb(170, 132, 62, 170);
+        c[ImGuiCol_FrameBg] = rgb(28, 26, 36);
+        c[ImGuiCol_FrameBgHovered] = rgb(44, 40, 54);
+        c[ImGuiCol_FrameBgActive] = rgb(60, 52, 60);
+        c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = rgb(20, 18, 26);
+        c[ImGuiCol_Button] = rgb(30, 28, 38);
+        c[ImGuiCol_ButtonHovered] = rgb(70, 58, 44);
+        c[ImGuiCol_ButtonActive] = rgb(130, 26, 14);
+        c[ImGuiCol_Separator] = rgb(170, 132, 62, 90);
+        c[ImGuiCol_ScrollbarBg] = rgb(0, 0, 0, 0);
+        c[ImGuiCol_ScrollbarGrab] = rgb(150, 118, 60, 150);
+        c[ImGuiCol_Tab] = rgb(0, 0, 0, 0);
+        c[ImGuiCol_TabSelected] = rgb(96, 22, 14);
+        c[ImGuiCol_ModalWindowDimBg] = rgb(2, 2, 5, 186);
+    }
+    ImGui::GetIO().FontDefault = body_font();
 }
 
 /******************************************************************************/
@@ -571,9 +881,77 @@ static void start_update(const Release &rel)
             g_up_stage = stage;
             g_up_fraction = fraction;
         }, g_cancel, why);
+        /* the creator's set pieces come with each update while the option is on (a failure leaves the update done) */
+        if (ok && g_cfg.flag("OFFICIAL_SET_PIECES", false))
+        {
+            int count = 0;
+            std::string sp_why;
+            const SetPiecesResult r = install_setpieces(rel, g_game_dir, [](const char *stage, float fraction) {
+                std::lock_guard<std::mutex> lock(g_mx);
+                g_up_stage = stage;
+                g_up_fraction = fraction;
+            }, g_cancel, count, sp_why);
+            engine_view_note(("Update: set pieces " + std::string((r == SP_INSTALLED) ? "installed" : (r == SP_LATEST_ALREADY) ?
+                "the latest already" : (r == SP_NONE_IN_RELEASE) ? "not in this release" : ("failed: " + sp_why).c_str())).c_str());
+        }
         std::lock_guard<std::mutex> lock(g_mx);
         g_up_why = why;
         g_up = ok ? UP_RESTART : UP_INSTALL_FAILED;
+    }).detach();
+}
+
+/* Settings, Game: "Download" beside the creator's set pieces option */
+static std::atomic<bool> g_sp_busy{false};
+static std::string g_sp_status; /* under g_mx */
+
+static void start_setpieces_download()
+{
+    if (g_sp_busy.exchange(true))
+        return;
+    {
+        std::lock_guard<std::mutex> lock(g_mx);
+        g_sp_status = "Looking for the latest set pieces...";
+    }
+    std::thread([] {
+        std::vector<Release> list;
+        std::string why;
+        if (!fetch_releases(REPO, list, why))
+        {
+            std::lock_guard<std::mutex> lock(g_mx);
+            g_sp_status = "The release list could not be fetched: " + why;
+            g_sp_busy = false;
+            return;
+        }
+        const Release *rel = nullptr;
+        for (const Release &r : list) /* (newest first) */
+            if (setpieces_asset(r) != nullptr)
+            {
+                rel = &r;
+                break;
+            }
+        if (rel == nullptr)
+        {
+            std::lock_guard<std::mutex> lock(g_mx);
+            g_sp_status = "No release has set pieces yet.";
+            g_sp_busy = false;
+            return;
+        }
+        static std::atomic<bool> never{false};
+        int count = 0;
+        const SetPiecesResult r = install_setpieces(*rel, g_game_dir, [](const char *stage, float fraction) {
+            std::lock_guard<std::mutex> lock(g_mx);
+            char line[96];
+            snprintf(line, sizeof(line), "%s %d%%", stage, (int)(fraction * 100.0f));
+            g_sp_status = line;
+        }, never, count, why);
+        std::lock_guard<std::mutex> lock(g_mx);
+        if (r == SP_LATEST_ALREADY)
+            g_sp_status = "You have the latest set-pieces already.";
+        else if (r == SP_INSTALLED)
+            g_sp_status = "The set pieces of " + rel->title + " are installed (" + std::to_string(count) + ").";
+        else
+            g_sp_status = "The set pieces could not be downloaded: " + why;
+        g_sp_busy = false;
     }).detach();
 }
 
@@ -608,7 +986,9 @@ static void release_notes(const std::string &body)
             return;
         if (bullet)
         {
+            ImGui::PushStyleColor(ImGuiCol_Text, (g_look == LOOK_CLASSIC) ? ImGui::GetColorU32(ImGuiCol_Text) : alpha_of(C_GOLD, 0.8f));
             ImGui::Bullet();
+            ImGui::PopStyleColor();
             ImGui::SameLine();
         }
         ImGui::PushStyleColor(ImGuiCol_Text, C_TEXT);
@@ -629,9 +1009,11 @@ static void release_notes(const std::string &body)
         if (line.rfind("### ", 0) == 0)
         {
             flush();
-            ImGui::Dummy(ImVec2(0, 2 * S));
+            ImGui::Dummy(ImVec2(0, ((g_look == LOOK_CLASSIC) ? 2 : 6) * S));
             ImGui::PushStyleColor(ImGuiCol_Text, C_GOLD);
+            ImGui::PushFont(head_font(), 0.0f); /* (a heading speaks in the book face, whatever the notes are read in) */
             ImGui::TextUnformatted(plain(line.substr(4)).c_str());
+            ImGui::PopFont();
             ImGui::PopStyleColor();
         } else if (line.rfind("## ", 0) == 0)
         {
@@ -806,8 +1188,11 @@ static void settings_window(float w, float h)
     const ImVec2 size(std::min(w - 40 * S, 820 * S), std::min(h - 40 * S, 640 * S));
     ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(size);
-    if (!ImGui::BeginPopupModal(titled("Settings").c_str(), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, box_alpha(titled("Settings").c_str()));
+    const bool open = ImGui::BeginPopupModal(titled("Settings").c_str(), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+    if (!open)
         return;
     const float foot = 52 * S;
     if (ImGui::BeginTabBar("tabs"))
@@ -844,6 +1229,30 @@ static void settings_window(float w, float h)
             cfg_check(s_cfg, "Freeze game when not focused", "FREEZE_GAME_ON_FOCUS_LOST", false);
             cfg_check(s_cfg, "Automatically save replays", "AUTOMATIC_REPLAYS", true);
             cfg_check(s_cfg, "Exit on LUA error", "EXIT_ON_LUA_ERROR", false);
+            {
+                /* the creator's set pieces (2026-11-25): off by default; when on they come with each update, and
+                   Download fetches them now (for a player on the latest release who had them off) */
+                cfg_check(s_cfg, "Download and use the creator's set pieces", "OFFICIAL_SET_PIECES", false);
+                ImGui::SameLine();
+                ImGui::BeginDisabled(g_sp_busy.load());
+                if (ImGui::Button(titled("Download").c_str()))
+                {
+                    s_cfg.set("OFFICIAL_SET_PIECES", "TRUE");
+                    start_setpieces_download();
+                }
+                ImGui::EndDisabled();
+                std::string status;
+                {
+                    std::lock_guard<std::mutex> lock(g_mx);
+                    status = g_sp_status;
+                }
+                if (!status.empty())
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, C_TEXT);
+                    ImGui::TextWrapped("%s", T(status.c_str()));
+                    ImGui::PopStyleColor();
+                }
+            }
             cfg_int(s_cfg, "Max. zoom distance\n(default = 60)", "MAX_ZOOM_DISTANCE", 60, 0, 100, true);
             cfg_int(s_cfg, "Gameturns per second\n(default = 20)", "TURNS_PER_SECOND", 20, 1, 200, false);
             {
@@ -909,6 +1318,8 @@ static void settings_window(float w, float h)
                     s_cfg.set("FRAMES_PER_SECOND", (is_auto ? "AUTO " : "") + std::to_string(std::max(0, fps)));
             }
             cfg_combo(s_cfg, "Viewport mode", "VIEWPORT_MODE", "ORIGINAL", {{"ORIGINAL", "Original"}, {"FULL", "Full"}, {"FULL_LETTERBOX", "Full (Letterbox)"}});
+            cfg_combo(s_cfg, "Window style", "WINDOW_STYLE", "MODERN", {{"MODERN", "Modern"}, {"CLASSIC", "Classic"}});
+            cfg_int(s_cfg, "UI scale", "UI_SCALE", 100, 50, 300, true, "%d%%");
             cfg_combo(s_cfg, "Resize Movies", "RESIZE_MOVIES", "FIT", {{"OFF", "Off"}, {"FIT", "Fit (default)"}, {"STRETCH", "Stretch"}, {"CROP", "Crop"},
                 {"PIXELPERFECT", "Pixel perfect"}, {"4BY3", "4:3"}, {"4BY3PP", "4:3 pixel perfect"}});
             cfg_check(s_lcfg, "Smoothen edges", "GAME_PARAM_VID_SMOOTH", false);
@@ -963,6 +1374,9 @@ static void settings_window(float w, float h)
                     langs.push_back({l.code, l.name});
                 cfg_combo(s_lcfg, "Launcher language", "LAUNCHER_LANGUAGE", "en", langs);
             }
+            /* the looks (test branch 2026-11-23), and their motion: off = the still look */
+            cfg_combo(s_lcfg, "Launcher look", "LAUNCHER_LOOK", "MOLTEN", {{"MOLTEN", "Molten"}, {"OBSIDIAN", "Obsidian"}, {"CLASSIC", "Classic"}});
+            cfg_check(s_lcfg, "Animated effects", "LAUNCHER_EFFECTS", true);
             ImGui::Dummy(ImVec2(0, 6 * S));
             if (ImGui::Button(titled("Show launcher command line options").c_str()))
                 g_show_options = true;
@@ -988,7 +1402,7 @@ static void settings_window(float w, float h)
                 ImGui::Image((ImTextureID)(intptr_t)g_header, ImVec2(iw, ih));
             }
             auto centred = [&](const char *text, float size, ImU32 col) {
-                const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(size, 4000.0f, 0.0f, text);
+                const ImVec2 ts = head_font()->CalcTextSizeA(size, 4000.0f, 0.0f, text);
                 ImGui::SetCursorPosX((aw - ts.x) * 0.5f);
                 const ImVec2 p = ImGui::GetCursorScreenPos();
                 text_shadow(ImGui::GetWindowDrawList(), size, p, col, text);
@@ -996,7 +1410,7 @@ static void settings_window(float w, float h)
             };
             auto centred_link = [&](const char *id, const char *text, const char *url) {
                 const float size = 17 * S;
-                const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(size, 4000.0f, 0.0f, text);
+                const ImVec2 ts = head_font()->CalcTextSizeA(size, 4000.0f, 0.0f, text);
                 ImGui::SetCursorPosX((aw - ts.x) * 0.5f);
                 if (link(id, text, size, C_GOLD))
                     open_url(url);
@@ -1011,7 +1425,7 @@ static void settings_window(float w, float h)
             ImGui::Separator();
             /* the credits: on the left */
             auto left_line = [&](const char *text, float size, ImU32 col) {
-                const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(size, 4000.0f, 0.0f, text);
+                const ImVec2 ts = head_font()->CalcTextSizeA(size, 4000.0f, 0.0f, text);
                 text_shadow(ImGui::GetWindowDrawList(), size, ImGui::GetCursorScreenPos(), col, text);
                 ImGui::Dummy(ts);
             };
@@ -1037,6 +1451,7 @@ static void settings_window(float w, float h)
         g_cfg = s_cfg;
         g_lcfg = s_lcfg;
         load_language(g_lcfg.get("LAUNCHER_LANGUAGE", "en"));
+        apply_look();
         ImGui::CloseCurrentPopup();
     }
     if (button("cancel", T("Cancel"), ImVec2(right - bs.x, base.y + 4 * S), bs, false, 18 * S))
@@ -1072,12 +1487,58 @@ static void settings_window(float w, float h)
 /******************************************************************************/
 /* the window */
 
+/** A small tag beside a release's date ("new", "installed"): the new one is lit and beats. */
+static void tag(const char *text, bool lit)
+{
+    ImFont *font = body_font();
+    const float fs = 13.0f * S;
+    const ImVec2 ts = font->CalcTextSizeA(fs, 4000.0f, 0.0f, text), a = ImGui::GetCursorScreenPos(), pad(8.0f * S, 2.5f * S);
+    const ImVec2 b(a.x + ts.x + pad.x * 2, a.y + ts.y + pad.y * 2);
+    const float r = (g_look == LOOK_OBSIDIAN) ? 1.0f * S : (b.y - a.y) * 0.5f;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    if (lit)
+    {
+        fx_halo(dl, a, b, r, 10.0f * S, IM_COL32(255, 90, 30, (int)(50.0f + 100.0f * fx_heartbeat())));
+        fx_rect_gradient(dl, a, b, IM_COL32(226, 70, 28, 255), IM_COL32(150, 26, 12, 255), r);
+        dl->AddText(font, fs, ImVec2(a.x + pad.x, a.y + pad.y), IM_COL32(255, 244, 220, 255), text);
+    } else
+    {
+        dl->AddRect(a, b, IM_COL32(222, 178, 88, 110), r, 0, 1.0f);
+        dl->AddText(font, fs, ImVec2(a.x + pad.x, a.y + pad.y), C_GOLD, text);
+    }
+    ImGui::Dummy(ImVec2(b.x - a.x, b.y - a.y));
+}
+
 static void updates_box(ImVec2 pos, ImVec2 size)
 {
     ImDrawList *dl = ImGui::GetWindowDrawList();
+    const bool modern = (g_look != LOOK_CLASSIC);
+    /* the entrance: the box comes in from the right, its text with it */
+    const float in = intro(0.2f, 0.6f);
+    const ImVec2 slide(modern ? (1.0f - in) * 28.0f * S : 0.0f, 0.0f);
+    const int group = fx_group_begin(dl);
     panel(dl, pos, ImVec2(pos.x + size.x, pos.y + size.y));
-    text_shadow(dl, 24 * S, ImVec2(pos.x + 20 * S, pos.y + 14 * S), C_GOLD, T("Updates"));
-    dl->AddLine(ImVec2(pos.x + 16 * S, pos.y + 48 * S), ImVec2(pos.x + size.x - 16 * S, pos.y + 48 * S), C_EDGE, 1.0f);
+    float head_h = 48 * S, side = 16 * S;
+    if (g_look == LOOK_MOLTEN)
+    {
+        text_shadow(dl, 26 * S, ImVec2(pos.x + 24 * S, pos.y + 15 * S), C_GOLD_HI, T("Updates"));
+        fx_line_fade(dl, ImVec2(pos.x + 16 * S, pos.y + 54 * S), size.x - 32 * S, IM_COL32(255, 214, 170, 74), std::max(1.0f, S));
+        head_h = 56 * S;
+        side = 24 * S;
+    } else if (g_look == LOOK_OBSIDIAN)
+    {
+        const float line = std::max(1.5f, 2.0f * S);
+        fx_text_spaced(dl, head_font(), 17 * S, ImVec2(pos.x + 24 * S, pos.y + 19 * S), C_GOLD_HI, upper(T("Updates")).c_str(), 0.24f * 17 * S);
+        dl->AddRectFilled(ImVec2(pos.x + 24 * S, pos.y + 47 * S), ImVec2(pos.x + 70 * S, pos.y + 47 * S + line), C_GOLD_HI);
+        dl->AddLine(ImVec2(pos.x + 78 * S, pos.y + 47 * S + line * 0.5f), ImVec2(pos.x + size.x - 24 * S, pos.y + 47 * S + line * 0.5f), IM_COL32(170, 132, 62, 90), 1.0f);
+        head_h = 54 * S;
+        side = 24 * S;
+    } else
+    {
+        text_shadow(dl, 24 * S, ImVec2(pos.x + 20 * S, pos.y + 14 * S), C_GOLD, T("Updates"));
+        dl->AddLine(ImVec2(pos.x + 16 * S, pos.y + 48 * S), ImVec2(pos.x + size.x - 16 * S, pos.y + 48 * S), C_EDGE, 1.0f);
+    }
+    fx_group_end(dl, group, modern ? in : 1.0f, slide);
     UpdateState up;
     std::vector<Release> releases;
     std::string why;
@@ -1087,8 +1548,8 @@ static void updates_box(ImVec2 pos, ImVec2 size)
         releases = g_releases;
         why = g_up_why;
     }
-    ImGui::SetCursorScreenPos(ImVec2(pos.x + 16 * S, pos.y + 56 * S));
-    ImGui::BeginChild("updates", ImVec2(size.x - 28 * S, size.y - 68 * S), 0, 0);
+    ImGui::SetCursorScreenPos(ImVec2(pos.x + side, pos.y + head_h + 8 * S));
+    ImGui::BeginChild("updates", ImVec2(size.x - side - 12 * S, size.y - head_h - 20 * S), 0, 0);
     if (releases.empty())
     {
         ImGui::PushStyleColor(ImGuiCol_Text, C_TEXT_DIM);
@@ -1111,24 +1572,92 @@ static void updates_box(ImVec2 pos, ImVec2 size)
     {
         const Release &r = releases[i];
         ImGui::PushID((int)i);
-        if (i > 0)
+        if ((i > 0) && modern)
+        {
+            ImGui::Dummy(ImVec2(0, 12 * S));
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            if (g_look == LOOK_MOLTEN)
+                fx_line_fade(ImGui::GetWindowDrawList(), at, ImGui::GetContentRegionAvail().x - 8 * S, IM_COL32(255, 214, 170, 48), std::max(1.0f, S));
+            else
+                ImGui::GetWindowDrawList()->AddLine(at, ImVec2(at.x + ImGui::GetContentRegionAvail().x - 8 * S, at.y), IM_COL32(170, 132, 62, 90), 1.0f);
+            ImGui::Dummy(ImVec2(0, 10 * S));
+        } else if (i > 0)
         {
             ImGui::Dummy(ImVec2(0, 6 * S));
             ImGui::Separator();
             ImGui::Dummy(ImVec2(0, 2 * S));
         }
-        if (link("title", plain(r.title).c_str(), (i == 0) ? 21 * S : 18 * S, (i == 0) ? C_GOLD_HI : C_GOLD))
+        if (link("title", plain(r.title).c_str(), (i == 0) ? (modern ? 22 : 21) * S : 18 * S, (i == 0) ? C_GOLD_HI : C_GOLD))
             open_url(r.url.c_str());
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", T("Open this release's download page"));
         ImGui::PushStyleColor(ImGuiCol_Text, C_TEXT_DIM);
         const bool newer = version_newer(r.version, mine), same = !newer && !version_newer(mine, r.version);
-        ImGui::Text("%s%s%s", r.date.c_str(), (newer || same) ? "  -  " : "", newer ? T("new") : (same ? T("installed") : ""));
+        if (modern)
+        {
+            /* the date, and what this release is to the player as a tag */
+            const float row = ImGui::GetCursorPosY() + 2 * S;
+            ImGui::SetCursorPosY(row + 1.5f * S);
+            ImGui::TextUnformatted(r.date.c_str());
+            if (newer || same)
+            {
+                ImGui::SameLine(0.0f, 10 * S);
+                ImGui::SetCursorPosY(row);
+                tag(newer ? T("new") : T("installed"), newer);
+            }
+        } else
+            ImGui::Text("%s%s%s", r.date.c_str(), (newer || same) ? "  -  " : "", newer ? T("new") : (same ? T("installed") : ""));
         ImGui::PopStyleColor();
         release_notes(r.body);
         ImGui::PopID();
     }
+    if (modern && ((in < 0.999f) || (slide.x != 0)))
+    {
+        /* the box's text is another draw list: it fades and slides with the box */
+        ImDrawList *child = ImGui::GetWindowDrawList();
+        fx_group_end(child, 0, in, slide);
+        for (ImDrawCmd &cmd : child->CmdBuffer)
+        {
+            cmd.ClipRect.x += slide.x;
+            cmd.ClipRect.z += slide.x;
+        }
+    }
     ImGui::EndChild();
+}
+
+/** A box of the modern looks fades in when it opens: the alpha to give it this frame. */
+static float box_alpha(const char *name)
+{
+    if (g_look == LOOK_CLASSIC)
+        return 1.0f;
+    return std::max(0.08f, fx_follow(ImGui::GetID(name) + 7, ImGui::IsPopupOpen(name) ? 1.0f : 0.0f, 0.22f));
+}
+
+/** The update's progress: in the modern looks a molten bar with light running along it. */
+static void progress_bar(float fraction)
+{
+    if (g_look == LOOK_CLASSIC)
+    {
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.72f, 0.16f, 0.08f, 1.0f));
+        ImGui::ProgressBar(fraction, ImVec2(-1, 22 * S), "");
+        ImGui::PopStyleColor();
+        return;
+    }
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    const float width = ImGui::GetContentRegionAvail().x, height = 14 * S, r = (g_look == LOOK_OBSIDIAN) ? 1.0f * S : height * 0.5f;
+    const ImVec2 a(ImGui::GetCursorScreenPos().x, ImGui::GetCursorScreenPos().y + 4 * S), b(a.x + width, a.y + height);
+    const float x = a.x + std::max(height, width * std::max(0.0f, std::min(1.0f, fraction))), mid = (a.y + b.y) * 0.5f;
+    dl->AddRectFilled(a, b, IM_COL32(255, 236, 214, 20), r);
+    fx_halo(dl, a, ImVec2(x, b.y), r, 10 * S, IM_COL32(255, 80, 24, 70));
+    fx_rect_gradient(dl, a, ImVec2(x, b.y), IM_COL32(150, 26, 12, 255), IM_COL32(255, 122, 40, 255), r, true);
+    if (fx_motion)
+    {
+        dl->PushClipRect(ImVec2(a.x + r * 0.5f, a.y), ImVec2(x - r * 0.5f, b.y), true);
+        fx_glow(dl, ImVec2(a.x - 50 * S + fmodf(fx_time() * 0.6f, 1.0f) * (x - a.x + 100 * S), mid), 50 * S, height * 1.7f, IM_COL32(255, 232, 176, 150));
+        dl->PopClipRect();
+    }
+    fx_glow(dl, ImVec2(x - height * 0.5f, mid), 18 * S, 18 * S, IM_COL32(255, 170, 70, 150));
+    ImGui::Dummy(ImVec2(width, height + 10 * S));
 }
 
 static void message_boxes(float w, float h)
@@ -1155,6 +1684,14 @@ static void message_boxes(float w, float h)
         g_prompted = true;
         g_prompt_update = true;
     }
+    if (t_fake_install)
+    {
+        /* the test's update box: a download that goes round and round, nothing fetched or installed */
+        up = UP_INSTALLING;
+        stage = "Downloading";
+        fraction = fmodf(fx_time() * 0.12f, 1.0f);
+        g_prompt_update = true;
+    }
     if (t_check && ((up == UP_LISTED) || (up == UP_FAILED)) && !g_prompt_update)
     {
         t_check = false;
@@ -1174,7 +1711,10 @@ static void message_boxes(float w, float h)
         ImGui::OpenPopup(titled("Update").c_str());
     ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(std::min(w - 40 * S, 520 * S), 0));
-    if (ImGui::BeginPopupModal(titled("Update").c_str(), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings))
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, box_alpha(titled("Update").c_str()));
+    const bool update_box = ImGui::BeginPopupModal(titled("Update").c_str(), nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleVar();
+    if (update_box)
     {
         const float bw = 150 * S;
         const float full = ImGui::GetContentRegionAvail().x;
@@ -1215,9 +1755,7 @@ static void message_boxes(float w, float h)
             const std::string text = (stage == "Downloading") ? percent("Downloading: %p%") : (stage == "Unpacking") ? percent("Extracting: %p%")
                 : (stage == "Installing") ? percent("Copying: %p%") : std::string(T("Updating..."));
             ImGui::TextUnformatted(text.c_str());
-            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.72f, 0.16f, 0.08f, 1.0f));
-            ImGui::ProgressBar(fraction, ImVec2(-1, 22 * S), "");
-            ImGui::PopStyleColor();
+            progress_bar(fraction);
             if ((stage == "Downloading") && ImGui::Button(titled("Cancel").c_str(), ImVec2(bw, 0)))
                 g_cancel = true;
         } else if (up == UP_INSTALL_FAILED)
@@ -1291,7 +1829,10 @@ static void message_boxes(float w, float h)
         ImGui::OpenPopup("Endless Keeper");
     ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(std::min(w - 40 * S, 480 * S), 0));
-    if (ImGui::BeginPopupModal("Endless Keeper", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, box_alpha("Endless Keeper"));
+    const bool message_box = ImGui::BeginPopupModal("Endless Keeper", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleVar();
+    if (message_box)
     {
         ImGui::TextWrapped("%s", g_message.c_str());
         ImGui::Dummy(ImVec2(0, 4 * S));
@@ -1304,21 +1845,61 @@ static void message_boxes(float w, float h)
     }
 }
 
+/** The modern looks' background, over the battle and behind everything else: the picture sits back in soft darks
+    (behind the title, and in the corners the buttons and the last lines stand in), and the look's own light and
+    particles go over it. None of it is ever in front of a letter. */
+static void backdrop(ImDrawList *bg, float w, float h, bool scene)
+{
+    const float beat = fx_heartbeat(), t = fx_motion ? fx_time() : 0.0f;
+    if (g_look == LOOK_MOLTEN)
+    {
+        if (scene)
+            bg->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(10, 4, 3, 44));
+        fx_blot(bg, ImVec2(w * 0.5f, -h * 0.04f), w * 0.60f, h * 0.56f, IM_COL32(0, 0, 0, 215));
+        fx_blot(bg, ImVec2(0, h), w * 0.50f, h * 0.66f, IM_COL32(0, 0, 0, 185));
+        fx_blot(bg, ImVec2(w, h), w * 0.40f, h * 0.50f, IM_COL32(0, 0, 0, 130));
+        /* light from below, as off lava: it breathes with the heart; the embers rise out of it */
+        fx_light_gradient(bg, ImVec2(0, h * 0.66f), ImVec2(w, h), IM_COL32(255, 72, 16, 0), IM_COL32(255, 72, 16, (int)(46.0f + 18.0f * beat)));
+        fx_particles(bg, FX_EMBERS, w, h, S);
+        fx_backdrop_capture(bg);
+    } else
+    {
+        if (scene)
+            bg->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(6, 6, 14, 78));
+        fx_blot(bg, ImVec2(w * 0.5f, -h * 0.04f), w * 0.60f, h * 0.56f, IM_COL32(0, 0, 0, 225));
+        fx_blot(bg, ImVec2(0, h), w * 0.50f, h * 0.66f, IM_COL32(0, 0, 0, 200));
+        fx_blot(bg, ImVec2(w, h), w * 0.40f, h * 0.50f, IM_COL32(0, 0, 0, 150));
+        /* cold mist along the bottom, and gold dust in the air */
+        for (int k = 0; k < 2; k++)
+            fx_glow(bg, ImVec2(w * (0.28f + 0.5f * k) + sinf(t * 0.08f + k * 2.0f) * w * 0.14f, h * 1.04f), w * 0.46f, h * 0.34f, IM_COL32(84, 96, 170, 30));
+        fx_particles(bg, FX_DUST, w, h, S);
+    }
+}
+
 static void frame(float w, float h)
 {
     ImDrawList *bg = ImGui::GetBackgroundDrawList();
-    bg->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h), IM_COL32(36, 12, 8, 255), IM_COL32(36, 12, 8, 255), IM_COL32(8, 6, 5, 255), IM_COL32(8, 6, 5, 255));
+    const bool modern = (g_look != LOOK_CLASSIC);
+    const ImU32 sky = (g_look == LOOK_OBSIDIAN) ? IM_COL32(18, 16, 28, 255) : IM_COL32(36, 12, 8, 255);
+    bg->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h), sky, sky, IM_COL32(8, 6, 5, 255), IM_COL32(8, 6, 5, 255));
+    bool scene = false;
     if (g_battle && t_bare)
         engine_view_draw(bg, w, h);
     else if (g_battle && engine_view_draw(bg, w, h))
     {
-        /* the scene sits back: darker at the top (the title) and the edges */
-        bg->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(6, 4, 3, 40));
-        bg->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h * 0.38f), IM_COL32(0, 0, 0, 170), IM_COL32(0, 0, 0, 170), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
-        bg->AddRectFilledMultiColor(ImVec2(0, h * 0.8f), ImVec2(w, h), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 150), IM_COL32(0, 0, 0, 150));
+        scene = true;
+        if (!modern)
+        {
+            /* the scene sits back: darker at the top (the title) and the edges */
+            bg->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(6, 4, 3, 40));
+            bg->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, h * 0.38f), IM_COL32(0, 0, 0, 170), IM_COL32(0, 0, 0, 170), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
+            bg->AddRectFilledMultiColor(ImVec2(0, h * 0.8f), ImVec2(w, h), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 150), IM_COL32(0, 0, 0, 150));
+        }
     }
     if (t_bare)
         return;
+    if (modern)
+        backdrop(bg, w, h, scene);
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImVec2(w, h));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
@@ -1335,11 +1916,47 @@ static void frame(float w, float h)
     {
         const float hh = std::min(h * 0.27f, (narrow ? w - pad * 2 : w * 0.5f) * g_header_h / g_header_w), hw = hh * g_header_w / g_header_h;
         const ImVec2 a((w - hw) * 0.5f, pad * 0.6f);
-        dl->AddImage((ImTextureID)(intptr_t)g_header, ImVec2(a.x + 3 * S, a.y + 5 * S), ImVec2(a.x + hw + 3 * S, a.y + hh + 5 * S),
-            ImVec2(0, 0), ImVec2(1, 1), IM_COL32(0, 0, 0, 150));
-        dl->AddImage((ImTextureID)(intptr_t)g_header, a, ImVec2(a.x + hw, a.y + hh));
+        if (!modern)
+        {
+            dl->AddImage((ImTextureID)(intptr_t)g_header, ImVec2(a.x + 3 * S, a.y + 5 * S), ImVec2(a.x + hw + 3 * S, a.y + hh + 5 * S),
+                ImVec2(0, 0), ImVec2(1, 1), IM_COL32(0, 0, 0, 150));
+            dl->AddImage((ImTextureID)(intptr_t)g_header, a, ImVec2(a.x + hw, a.y + hh));
+        } else
+        {
+            /* the header comes down into place; the head has a light of its own behind it, its eyes glow with the
+               heart's beat, and every few seconds light passes over the title (positions in the picture's own
+               pixels: 850 wide, the eyes at 140,110 and 199,111) */
+            const float in = intro(0.0f, 0.65f), k = hw / 850.0f, beat = fx_heartbeat();
+            const int group = fx_group_begin(dl);
+            if (g_look == LOOK_MOLTEN)
+                fx_glow(dl, ImVec2(a.x + 170 * k, a.y + 150 * k), 270 * k, 215 * k, IM_COL32(255, 60, 20, (int)(50.0f + 34.0f * beat)));
+            dl->AddImage((ImTextureID)(intptr_t)g_header, ImVec2(a.x, a.y + 6 * S), ImVec2(a.x + hw, a.y + hh + 6 * S), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(0, 0, 0, 150));
+            dl->AddImage((ImTextureID)(intptr_t)g_header, a, ImVec2(a.x + hw, a.y + hh));
+            fx_glow(dl, ImVec2(a.x + 140 * k, a.y + 110 * k), 17 * k, 17 * k, IM_COL32(255, 200, 70, (int)(90.0f + 130.0f * beat)));
+            fx_glow(dl, ImVec2(a.x + 199 * k, a.y + 111 * k), 19 * k, 19 * k, IM_COL32(255, 200, 70, (int)(90.0f + 130.0f * beat)));
+            const float cycle = fmodf(fx_time(), 8.0f);
+            if (fx_motion && (g_header_light != nullptr) && (cycle < 1.4f))
+            {
+                const int strips = 56;
+                const float at = 0.18f + (cycle / 1.4f) * 0.98f; /* from the head's edge to past the title's end */
+                for (int i = 0; i < strips; i++)
+                {
+                    const float u0 = (float)i / strips, u1 = (float)(i + 1) / strips, d = ((u0 + u1) * 0.5f - at) / 0.06f, light = expf(-d * d) * 0.6f;
+                    if (light > 0.02f)
+                        dl->AddImage((ImTextureID)(intptr_t)g_header_light, ImVec2(a.x + u0 * hw, a.y), ImVec2(a.x + u1 * hw, a.y + hh), ImVec2(u0, 0), ImVec2(u1, 1),
+                            IM_COL32(255, 236, 190, (int)(255.0f * light)));
+                }
+            }
+            fx_group_end(dl, group, in, ImVec2(0, -(1.0f - in) * 18 * S));
+        }
         top = a.y + hh + pad * 0.6f;
     }
+    /* the modern looks' entrance: a piece rises into place and fades in, `delay` seconds after the window came
+       (only what is drawn moves: a button can be pressed where it will be from the first frame) */
+    auto rise = [&](int group, float delay) {
+        const float in = intro(delay, 0.5f);
+        fx_group_end(dl, group, in, ImVec2(0, (1.0f - in) * 16 * S));
+    };
     /* the buttons on the left (above the box when the window is narrow), the updates beside them */
     const float bottom = h - pad - 22 * S;
     const float col_w = narrow ? (w - pad * 2) : std::min(330 * S, w * 0.3f);
@@ -1354,28 +1971,40 @@ static void frame(float w, float h)
     if (narrow)
     {
         const float third = (col_w - gap * 2) / 3.0f;
+        int group = fx_group_begin(dl);
         if (button("play", T("Play"), ImVec2(pad, top), ImVec2(third, set_h * 1.2f), true, 26 * S, !busy))
             play();
+        rise(group, 0.12f);
+        group = fx_group_begin(dl);
         if (button("settings", T("Settings"), ImVec2(pad + third + gap, top), ImVec2(third, set_h * 1.2f), false, 20 * S, !busy))
             g_show_settings = true;
+        rise(group, 0.2f);
+        group = fx_group_begin(dl);
         if (button("check", T("Check for Update"), ImVec2(pad + (third + gap) * 2, top), ImVec2(third, set_h * 1.2f), false, 17 * S,
             !busy && (up != UP_CHECKING) && !opt_no_update))
             check_now();
+        rise(group, 0.28f);
         box_pos = ImVec2(pad, top + set_h * 1.2f + gap);
         box_size = ImVec2(w - pad * 2, bottom - box_pos.y);
         engine_view_focus(w * 0.5f, h * 0.5f);
     } else
     {
         const float by = std::max(top, bottom - play_h - gap - set_h);
+        int group = fx_group_begin(dl);
         if (button("play", T("Play"), ImVec2(pad, by), ImVec2(col_w, play_h), true, 40 * S, !busy))
             play();
+        rise(group, 0.12f);
         /* Settings, and beside it Check for Update (2026-11-22) */
         const float half = (col_w - gap) * 0.5f;
+        group = fx_group_begin(dl);
         if (button("settings", T("Settings"), ImVec2(pad, by + play_h + gap), ImVec2(half, set_h), false, 22 * S, !busy))
             g_show_settings = true;
+        rise(group, 0.2f);
+        group = fx_group_begin(dl);
         if (button("check", T("Check for Update"), ImVec2(pad + half + gap, by + play_h + gap), ImVec2(half, set_h), false, 18 * S,
             !busy && (up != UP_CHECKING) && !opt_no_update))
             check_now();
+        rise(group, 0.28f);
         /* the box keeps to the right: the battle shows between it and the buttons */
         const float box_w = std::min(w - (pad + col_w + pad) - pad, std::max(430 * S, w * 0.46f));
         box_pos = ImVec2(w - pad - box_w, top);
@@ -1385,11 +2014,33 @@ static void frame(float w, float h)
     }
     if ((box_size.x > 120 * S) && (box_size.y > 90 * S))
         updates_box(box_pos, box_size);
+    fx_sparks_draw(dl);
     /* the bottom line: what the battle is, and the version */
-    const float fs = 15 * S;
-    text_shadow(dl, fs, ImVec2(pad, h - pad * 0.5f - fs), IM_COL32(200, 186, 160, 200), engine_view_caption());
-    const ImVec2 vs = ImGui::GetFont()->CalcTextSizeA(fs, 4000.0f, 0.0f, GAME_TITLE);
-    text_shadow(dl, fs, ImVec2(w - pad - vs.x, h - pad * 0.5f - fs), IM_COL32(200, 186, 160, 220), GAME_TITLE);
+    if (!modern)
+    {
+        const float fs = 15 * S;
+        text_shadow(dl, fs, ImVec2(pad, h - pad * 0.5f - fs), IM_COL32(200, 186, 160, 200), engine_view_caption());
+        const ImVec2 vs = head_font()->CalcTextSizeA(fs, 4000.0f, 0.0f, GAME_TITLE);
+        text_shadow(dl, fs, ImVec2(w - pad - vs.x, h - pad * 0.5f - fs), IM_COL32(200, 186, 160, 220), GAME_TITLE);
+    } else
+    {
+        /* quieter, in the face that is read; a small light before the battle's line says the picture is live */
+        const float fs = 14 * S, y = h - pad * 0.5f - fs;
+        const int group = fx_group_begin(dl);
+        const char *caption = engine_view_caption();
+        float x = pad;
+        if (g_battle && (caption != nullptr) && (caption[0] != 0))
+        {
+            const ImVec2 c(pad + 5 * S, y + fs * 0.56f);
+            fx_glow(dl, c, 10 * S, 10 * S, IM_COL32(255, 96, 32, (int)(110.0f + 120.0f * fx_heartbeat())));
+            dl->AddCircleFilled(c, 2.6f * S, IM_COL32(255, 150, 70, 255));
+            x += 17 * S;
+        }
+        text_shadow(dl, fs, ImVec2(x, y), IM_COL32(214, 202, 182, 205), caption, body_font());
+        const ImVec2 vs = body_font()->CalcTextSizeA(fs, 4000.0f, 0.0f, GAME_TITLE);
+        text_shadow(dl, fs, ImVec2(w - pad - vs.x, y), IM_COL32(214, 202, 182, 190), GAME_TITLE, body_font());
+        fx_group_end(dl, group, intro(0.45f, 0.6f), ImVec2(0, 0));
+    }
     if (g_show_settings)
     {
         g_show_settings = false;
@@ -1419,6 +2070,14 @@ static SDL_Texture *load_header()
         SDL_UpdateTexture(tex, nullptr, px, g_header_w * 4);
         SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
         SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR);
+    }
+    /* the same picture, adding light: the sheen that passes over the title in the modern looks */
+    g_header_light = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, g_header_w, g_header_h);
+    if (g_header_light != nullptr)
+    {
+        SDL_UpdateTexture(g_header_light, nullptr, px, g_header_w * 4);
+        SDL_SetTextureBlendMode(g_header_light, SDL_BLENDMODE_ADD);
+        SDL_SetTextureScaleMode(g_header_light, SDL_SCALEMODE_LINEAR);
     }
     stbi_image_free(px);
     return tex;
@@ -1520,34 +2179,71 @@ int main(int, char **)
         /* a book face for the game's feel: Windows' own fonts (none is shipped) */
         wchar_t win[MAX_PATH];
         GetWindowsDirectoryW(win, MAX_PATH);
-        bool loaded = false;
-        for (const wchar_t *name : {L"\\Fonts\\palab.ttf", L"\\Fonts\\georgiab.ttf", L"\\Fonts\\segoeuib.ttf", L"\\Fonts\\arialbd.ttf"})
-        {
-            const std::string file = narrow(std::wstring(win) + name);
-            if ((GetFileAttributesW((std::wstring(win) + name).c_str()) != INVALID_FILE_ATTRIBUTES) &&
-                (io.Fonts->AddFontFromFileTTF(file.c_str(), 17.0f) != nullptr))
+        /* a font file's bytes, read once and kept for as long as the launcher runs: the two faces share the fonts
+           that fill their gaps, so those big files are not read twice */
+        auto bytes = [&](const wchar_t *name, int *size) -> void * {
+            FILE *f = _wfopen((std::wstring(win) + name).c_str(), L"rb");
+            if (f == nullptr)
+                return nullptr;
+            fseek(f, 0, SEEK_END);
+            const long n = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            void *data = (n > 0) ? malloc((size_t)n) : nullptr;
+            if ((data != nullptr) && (fread(data, 1, (size_t)n, f) != (size_t)n))
             {
-                loaded = true;
-                break;
+                free(data);
+                data = nullptr;
             }
-        }
-        if (!loaded)
-            io.Fonts->AddFontDefault();
-        /* and Windows' fonts for the letters the book face lacks (Japanese, Korean, Chinese ...) */
+            fclose(f);
+            *size = (int)n;
+            return data;
+        };
+        /* Windows' fonts for the letters a face lacks (Japanese, Korean, Chinese ...) */
+        std::vector<std::pair<void *, int>> gaps;
         for (const wchar_t *name : {L"\\Fonts\\segoeui.ttf", L"\\Fonts\\malgunbd.ttf", L"\\Fonts\\malgun.ttf", L"\\Fonts\\YuGothB.ttc", L"\\Fonts\\meiryob.ttc",
                  L"\\Fonts\\msyhbd.ttc", L"\\Fonts\\msyh.ttc"})
         {
-            if (GetFileAttributesW((std::wstring(win) + name).c_str()) == INVALID_FILE_ATTRIBUTES)
-                continue;
-            ImFontConfig merge;
-            merge.MergeMode = true;
-            io.Fonts->AddFontFromFileTTF(narrow(std::wstring(win) + name).c_str(), 17.0f, &merge);
+            int size = 0;
+            void *data = bytes(name, &size);
+            if (data != nullptr)
+                gaps.push_back({data, size});
         }
+        auto face = [&](std::initializer_list<const wchar_t *> names) -> ImFont * {
+            ImFont *font = nullptr;
+            for (const wchar_t *name : names)
+            {
+                int size = 0;
+                void *data = bytes(name, &size);
+                if (data == nullptr)
+                    continue;
+                ImFontConfig own;
+                own.FontDataOwnedByAtlas = false;
+                font = io.Fonts->AddFontFromMemoryTTF(data, size, 17.0f, &own);
+                if (font != nullptr)
+                    break;
+                free(data);
+            }
+            if (font == nullptr)
+                font = io.Fonts->AddFontDefault();
+            for (const auto &gap : gaps)
+            {
+                ImFontConfig merge;
+                merge.MergeMode = true;
+                merge.FontDataOwnedByAtlas = false;
+                io.Fonts->AddFontFromMemoryTTF(gap.first, gap.second, 17.0f, &merge);
+            }
+            return font;
+        };
+        /* the book face speaks (titles, buttons; all of the Classic and Obsidian looks); the plain face is read (the
+           Molten look's notes and settings) */
+        g_font_head = face({L"\\Fonts\\palab.ttf", L"\\Fonts\\georgiab.ttf", L"\\Fonts\\segoeuib.ttf", L"\\Fonts\\arialbd.ttf"});
+        g_font_body = face({L"\\Fonts\\segoeui.ttf", L"\\Fonts\\arial.ttf"});
     }
     start_mark("fonts");
     ImGui_ImplSDL3_InitForSDLRenderer(g_window, g_renderer);
     ImGui_ImplSDLRenderer3_Init(g_renderer);
     g_header = load_header();
+    fx_init(g_renderer);
     start_mark("header");
     g_battle = battle_started;
     if (g_battle)
@@ -1575,12 +2271,17 @@ int main(int, char **)
                 else if (key == "update") t_update = true;
                 else if (key == "check") t_check = true;
                 else if (key == "size") sscanf(val.c_str(), "%dx%d", &t_w, &t_h);
+                else if (key == "look") t_look = atoi(val.c_str());
+                else if (key == "fx") t_still = (atoi(val.c_str()) == 0);
+                else if (key == "hover") t_hover = val;
+                else if (key == "fakeinstall") t_fake_install = true;
             }
             at = end + 1;
         }
         if ((t_w > 0) && (t_h > 0))
             SDL_SetWindowSize(g_window, t_w, t_h);
     }
+    apply_look();
     if (!opt_no_update)
         check_updates();
     else
@@ -1614,6 +2315,7 @@ int main(int, char **)
                 engine_view_note("Play: the game has closed; the launcher is back");
                 g_cfg.load(g_cfg.path);
                 engine_view_resume();
+                g_intro = 0; /* the window comes back as it first came */
                 if (!t_hidden)
                 {
                     SDL_ShowWindow(g_window);
@@ -1639,6 +2341,7 @@ int main(int, char **)
                 start_mark("window shown");
                 engine_view_note(start_timing_line().c_str());
                 last = SDL_GetPerformanceCounter();
+                g_intro = 0;
             } else
             {
                 SDL_Delay(15);
@@ -1654,15 +2357,20 @@ int main(int, char **)
         int pw = 0, ph = 0;
         SDL_GetWindowSizeInPixels(g_window, &pw, &ph);
         const float scale = std::max(0.7f, std::min(2.6f, std::min((float)ph / 720.0f, (float)pw / 1000.0f)));
-        if (fabsf(scale - last_scale) > 0.01f)
+        if ((fabsf(scale - last_scale) > 0.01f) || g_restyle)
         {
+            g_restyle = false;
             last_scale = S = scale;
             apply_style();
-            ImGui::GetStyle().FontSizeBase = 17.0f * S;
+            ImGui::GetStyle().FontSizeBase = ((g_look == LOOK_MOLTEN) ? 16.0f : 17.0f) * S; /* (the plain face is larger for its size) */
         }
         const Uint64 now = SDL_GetPerformanceCounter();
         const float dt = (float)((double)(now - last) / (double)SDL_GetPerformanceFrequency());
         last = now;
+        fx_frame(dt);
+        g_intro += std::min(dt, 0.05f); /* (a slow first frame doesn't eat the entrance) */
+        if (g_look == LOOK_MOLTEN)
+            fx_target_begin(pw, ph); /* its glass needs the frame as a picture */
         if (g_battle)
             engine_view_update(dt);
         ImGui_ImplSDLRenderer3_NewFrame();
@@ -1673,6 +2381,7 @@ int main(int, char **)
         SDL_SetRenderDrawColor(g_renderer, 8, 6, 5, 255);
         SDL_RenderClear(g_renderer);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), g_renderer);
+        fx_target_end();
         if (!t_shot.empty())
         {
             static float t_time = 0;
@@ -1709,6 +2418,7 @@ int main(int, char **)
     }
     g_cancel = true;
     engine_view_shutdown();
+    fx_shutdown();
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();

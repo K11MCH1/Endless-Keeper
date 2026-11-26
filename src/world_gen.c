@@ -105,7 +105,8 @@
 #endif
 #define LAY_MAX_BYTES ((size_t)24 << 20)
 
-#define MAX_LTHINGS 32  /* things of one structure: a keeper has at most 6 imps and 12 creatures */
+#define MAX_LTHINGS 64  /* things of one structure: a keeper has at most 6 imps and 12 creatures; a rival pair two
+                           keepers, their skirmishers and the battlefield's prize */
 #define MAX_FOUND 64    /* structures touching one chunk, before the WG_MAX_CHUNK_STRUCTS check */
 
 #define COUNT_OF(a) ((int)(sizeof(a) / sizeof((a)[0])))
@@ -119,7 +120,7 @@ static const char *const slab_names[WgS_COUNT] = {
     "ENTRANCE_ZONE", "HEART_PEDESTAL", "TREASURY_AREA", "LAIR_AREA", "HATCHERY", "TRAINING_AREA",
     "BOOK_SHELVES", "DOOR_WOODEN", "DOOR_BRACE"};
 
-static const char *const type_names[WgT_COUNT] = {"start", "keeper", "fortress", "portal", "reward"};
+static const char *const type_names[WgT_COUNT] = {"start", "keeper", "fortress", "portal", "reward", "rival"};
 
 enum {
     N_WX, N_WY, N_HARD, N_ROCK, N_CAVE, N_CAVEM, N_TUN, N_TUNM, N_LAVA, N_LRIV, N_LRIVM, N_WATER,
@@ -237,6 +238,8 @@ static const struct Spec specs[WgT_COUNT] = {
     {14, 5, 0.6, 90, 10, 3, 3},    /* fortress */
     {7, 2, 0.75, 40, 6, 2, 3},     /* portal */
     {4, 1, 0.495, 26, 6, 1, 3},    /* reward: 10% rarer than 0.55 (2026-11-08) */
+    {28, 8, 0.0, 170, 60, 5, 8},   /* rival pair: none before version 9 (structs_in never asks for them); its size,
+                                      priority (above every other kind) and margin hold in every version */
 };
 /* Version 8: the same structures packed tighter, about 2.5 times as many in the same ground (spacing and chance), and
    nearer the start: hero fortresses from 40 slabs (90), computer keepers from 80 (150); portals and caves as before.
@@ -247,9 +250,23 @@ static const struct Spec specs_v8[WgT_COUNT] = {
     {9, 3, 0.6, 40, 10, 3, 3},     /* fortress: 14 -> 9 */
     {4, 1, 0.6, 40, 6, 2, 3},      /* portal: 7 -> 4, chance 0.75 -> 0.6 */
     {3, 1, 0.7, 26, 6, 1, 3},      /* reward: 4 -> 3, chance 0.495 -> 0.7 */
+    {28, 8, 0.0, 170, 60, 5, 8},   /* rival pair: none */
+};
+/* Version 9 (2026-11-24, the user: portals "too close together", reward caves up to make up for it, enemy keepers
+   allowed from 50 slabs): version 8 with portals on a wider grid (8 chunks, at least 4 apart: about 40 in 1000x1000
+   slabs instead of 114, the nearest usually ~110 slabs away instead of ~54), reward caves 0.7 -> 0.95 (about 300 in
+   1000x1000 instead of 208) and computer keepers from 50 slabs (80). */
+static const struct Spec specs_v9[WgT_COUNT] = {
+    {1, 0, 1.0, 0, 32, 99, 3},     /* start */
+    {15, 6, 0.45, 50, 24, 4, 8},   /* keeper: from 80 -> 50 slabs */
+    {9, 3, 0.6, 40, 10, 3, 3},     /* fortress */
+    {8, 4, 0.85, 40, 6, 2, 3},     /* portal: 4 -> 8 chunks, separation 1 -> 4, chance 0.6 -> 0.85 */
+    {3, 1, 0.95, 26, 6, 1, 3},     /* reward: chance 0.7 -> 0.95 */
+    {28, 8, 0.55, 220, 60, 5, 8},  /* rival pair (2026-11-25): one region of 28 x 28 chunks in two has one, its middle
+                                      220+ slabs from the start (its nearer heart 180+): not crowding the start */
 };
 /* worldgen.SPECS (highest priority first) is keeper, fortress, portal, reward: the enum order */
-#define PLACED_MASK ((1u << WgT_Keeper) | (1u << WgT_Fortress) | (1u << WgT_Portal) | (1u << WgT_Reward))
+#define PLACED_MASK ((1u << WgT_Keeper) | (1u << WgT_Fortress) | (1u << WgT_Portal) | (1u << WgT_Reward) | (1u << WgT_Rival))
 
 enum { OP_NONE = 0, OP_SOFT, OP_SET };
 
@@ -275,6 +292,8 @@ struct LThing {
 struct Layout {
     struct Cand st;
     struct WgStructRef ref;
+    struct WgStructRef ref2; /* a rival pair: the second keeper (ref is the first) */
+    uint8_t pair;            /* a rival pair: its chunks and wg_structures_in report ref and ref2 */
     int side;
     int nthings;
     int overflow;
@@ -326,6 +345,7 @@ struct WgWorld {
     uint64_t s_gems;
     uint64_t s_seam;
     int version;                     /* the generator version (6, 7 or 8) */
+    int rival_min_dist;              /* test hook (wg_world_set_rival_min_dist): rival pairs from this far; 0: the spec's */
     uint64_t s7[V7_COUNT];           /* version 7's noises */
     int dml_start;                   /* version 7: Dead Man's Land round the start (1 seed in 100) */
     double dml_cx, dml_cy, dml_r;
@@ -3189,6 +3209,380 @@ static void build_keeper(struct Builder *b)
     ref->money = (int32_t)(2000 + 500 * min64(6, (int64_t)(b->distance / 150.0)));
 }
 
+/******************************************************************************/
+/* Rival pairs (generator version 9 on, 2026-11-25). The user: "2 Enemy Keepers are interlocked in a battle of
+ * attrition. Their Dungeon are connected through a battlefield [...] of constant battles." Two keeper dungeons face
+ * each other along a line through the structure's origin (west-east or north-south), their hearts 68-80 slabs apart.
+ * Between them, from 14 slabs in front of each heart, lies the battlefield (nobody's ground), reached from each
+ * dungeon's Training Room by a claimed war road 3 slabs wide. The battlefield is point-symmetric about the origin (a
+ * slab a along and p across the line has its twin at -a, -p), and the two dungeons are each other's mirror image,
+ * with the same creatures (first run, 2026-11-25: kinds rolled for each side alone made one army half again as
+ * strong as the other, which then held 459 of the battlefield's 469 slabs): neither side starts ahead. Each
+ * dungeon's portal lies behind it and its gold to one side, away from the other. A keeper's slabs and things stay
+ * 14+ slabs from the middle, so no chunk ever holds both keepers. */
+#define RIVAL_HALF_MIN 34      /* slabs from the middle to each heart */
+#define RIVAL_HALF_MAX 40
+#define RIVAL_FIELD_GAP 14     /* slabs from a heart to its end of the battlefield */
+#define RIVAL_BOX 24           /* each keeper's own box reaches this far round its heart, as a keeper's does */
+#define RIVAL_OWNER_B 4        /* layout owner of the second keeper's slabs and things (WgO_Keeper in a chunk) */
+
+static const char *const field_names[WgF_COUNT] = {"the Killing Field", "the Lava Moats", "the Burning Isle",
+    "the Drowned Ford", "the Narrows", "the Broken Hall"};
+
+struct RivalFrame {
+    int64_t ox, oy;
+    int ns;                    /* 1: the hearts lie north and south of the middle; 0: west and east */
+    int kind;                  /* WgField */
+    int64_t L, W;              /* the field's half length and half width */
+    uint64_t s;                /* noise seed of its sides */
+    int64_t m, t;              /* moats: from m to m + t - 1 slabs out (each half has one) */
+    int64_t cross[2];          /* moats: the crossings' middles across the line (the a > 0 half; twins at -p) */
+    int ncross;
+    int64_t r1, r2;            /* island: its radius; the lava ring's outer edge along the line */
+    int64_t bw, b0[2];         /* island: the bridges' width and first slab across the line (the a > 0 half) */
+    int nb;
+    int64_t ford_h, ford_p;    /* ford: the water's half width along the line; the fords' middles at +-ford_p */
+    int64_t pass;              /* narrows: the pass's half width at the middle (1 or 2: 3 or 5 slabs) */
+    int64_t pil[12][3];        /* pillars (rock) or mounds (earth): a, p, size (the a > 0 half; twins at -a, -p) */
+    int npil;
+};
+
+/** The world slab of (a along the line, p across it). */
+static void rv_xy(const struct RivalFrame *f, int64_t a, int64_t p, int64_t *x, int64_t *y)
+{
+    *x = f->ns ? f->ox + p : f->ox + a;
+    *y = f->ns ? f->oy + a : f->oy + p;
+}
+
+/** The arena's half length along the line (its half width is f->W): the open middle of the battlefield. */
+static int64_t rv_arena(const struct RivalFrame *f)
+{
+    if (f->kind == WgF_Island)
+        return f->r2 + 2;
+    return (f->L * 3) / 5;
+}
+
+/** Is the folded slab (ua >= 0) in the battlefield's open ground: the arena (an ellipse with a lumpy edge) or a road 3
+ *  slabs wide winding from it to the war road (the user, 2026-11-25: the battlefield's big squares "looks unnatural")? */
+static int rv_open(const struct RivalFrame *f, int64_t ua, int64_t up)
+{
+    const int64_t A = rv_arena(f), W = (f->kind == WgF_Island) ? f->r2 + 2 : f->W;
+    const double x = (double)ua / (double)A, y = (double)up / (double)W;
+    const double th = atan2(y, x), rad = 1.0 + 0.16 * perlin(f->s, cos(th) * 1.5 + 11.0, sin(th) * 1.5 + 5.0);
+    int64_t c, hw;
+    if (x * x + y * y <= rad * rad)
+        return 1;
+    if (ua < (A * 3) / 4 || ua > f->L)
+        return 0;
+    /* the road: its middle winds a little, straight for the last slabs (the war road meets it there); an island\x27s
+       bridges go on as its roads, as wide */
+    c = (ua >= f->L - 4) ? 0 : py_round(1.5 * perlin(f->s, (double)ua * 0.18, 2.7));
+    hw = 1;
+    if (f->kind == WgF_Island) {
+        c = 0;
+        hw = (f->nb == 1) ? f->bw / 2 : 3;
+        if (ua > A + 3)
+            hw = 1;
+    }
+    return up >= c - hw && up <= c + hw;
+}
+
+/** The battlefield's slab at (a, p), or -1 outside it. */
+static int rv_slab(const struct RivalFrame *f, int64_t a, int64_t p)
+{
+    int64_t ua = a, up = p, wn;
+    int k;
+    if (a < -f->L || a > f->L)
+        return -1;
+    if (a < 0 || (a == 0 && p < 0)) {
+        ua = -a; /* its twin on the a >= 0 half */
+        up = -p;
+    }
+    if (f->kind == WgF_Narrows) {
+        /* dirt that pinches to the pass in the middle and to the roads at the ends, lava pits beside the pass */
+        wn = f->pass + py_round((double)(f->W - f->pass) * 0.8 * sin(3.14159265358979 * (double)ua / (double)f->L) +
+                                0.8 * perlin(f->s, (double)ua * 0.25, up >= 0 ? 4.4 : 8.8));
+        if (wn < f->pass)
+            wn = f->pass;
+        if (up <= wn && up >= -wn)
+            return WgS_Path;
+        if (ua < f->L / 3 && up <= wn + 2 && up >= -wn - 2)
+            return WgS_Lava;
+        return -1;
+    }
+    if (!rv_open(f, ua, up))
+        return -1;
+    switch (f->kind) {
+    case WgF_Moats:
+        if (ua >= f->m && ua < f->m + f->t) {
+            for (k = 0; k < f->ncross; k++)
+                if (up >= f->cross[k] - 1 && up <= f->cross[k] + 1)
+                    return WgS_Path;
+            return WgS_Lava;
+        }
+        return WgS_Path;
+    case WgF_Island:
+        if (ua > f->r2 || ua * ua + up * up < f->r1 * f->r1)
+            return WgS_Path;
+        for (k = 0; k < f->nb; k++)
+            if (ua >= 1 && up >= f->b0[k] && up < f->b0[k] + f->bw)
+                return WgS_Path;
+        return WgS_Lava;
+    case WgF_Ford:
+        if (ua <= f->ford_h && !(up >= f->ford_p - 1 && up <= f->ford_p + 1) && !(up >= -f->ford_p - 1 && up <= -f->ford_p + 1))
+            return WgS_Water;
+        return WgS_Path;
+    default: /* the Killing Field (mounds of earth), the Broken Hall (pillars of rock) */
+        for (k = 0; k < f->npil; k++)
+            if (ua >= f->pil[k][0] && ua < f->pil[k][0] + f->pil[k][2] && up >= f->pil[k][1] && up < f->pil[k][1] + f->pil[k][2])
+                return f->kind == WgF_Pillars ? WgS_Rock : WgS_Earth;
+        return WgS_Path;
+    }
+}
+
+/** One keeper's dungeon of a rival pair, facing the battlefield (front). The layout comes from b->rng (both sides
+ *  are given the same state: mirror images); the creatures' kinds from kinds. */
+static void rv_side(struct Builder *b, int owner, int64_t hx, int64_t hy, int front, struct Rng *kinds, int64_t count,
+                    int64_t lvl, struct WgStructRef *ref)
+{
+    static const int64_t imp_spots[6][2] = {{-2, -2}, {2, -2}, {-2, 2}, {2, 2}, {0, -2}, {0, 2}};
+    struct Rng *rng = &b->rng;
+    const int back = (front + 2) % 4;
+    int arm_room[4], lair_d, store_d, r_back, k, i, nlair = 0, npool;
+    int64_t arm_far[4], lair_cells[4 * 5][2], keep[1][2], spots[6][2];
+    int64_t far, plen, pcx, pcy, gcx, gcy, nimps, px, py, a, p;
+    const char *pool_names[16];
+    int pool_w[16];
+
+    b->ox = hx;
+    b->oy = hy;
+    b->owner = owner;
+    b_heart_room(b, owner);
+    r_back = rng_randint(rng, 0, 1) == 0 ? WgS_Hatchery : WgS_Treasury;
+    if (rng_randint(rng, 0, 1) == 0) {
+        lair_d = (front + 1) % 4;
+        store_d = (front + 3) % 4;
+    } else {
+        lair_d = (front + 3) % 4;
+        store_d = (front + 1) % 4;
+    }
+    arm_room[front] = WgS_Training;
+    arm_room[back] = r_back;
+    arm_room[lair_d] = WgS_Lair;
+    arm_room[store_d] = (r_back == WgS_Hatchery) ? WgS_Treasury : WgS_Hatchery;
+    for (k = 0; k < 4; k++) {
+        int depth, width;
+        int64_t length = (k == front) ? 3 : rng_randint(rng, 3, 4), start = 3 + length;
+        b_corridor(b, k, 3, 2 + length, owner);
+        room_size(arm_room[k], &depth, &width);
+        if (arm_room[k] == WgS_Lair)
+            nlair = b_arm_room(b, k, start, depth, width, arm_room[k], owner, lair_cells);
+        else
+            b_arm_room(b, k, start, depth, width, arm_room[k], owner, NULL);
+        arm_far[k] = start + depth;
+    }
+    /* the war road: 3 slabs wide from the Training Room to the battlefield */
+    px = -dir_y[front];
+    py = dir_x[front];
+    for (a = arm_far[front]; a < RIVAL_FIELD_GAP; a++)
+        for (p = -1; p <= 1; p++)
+            b_set(b, hx + dir_x[front] * a + px * p, hy + dir_y[front] * a + py * p, WgS_Claimed, owner);
+    /* the portal behind the dungeon */
+    far = arm_far[back];
+    plen = rng_randint(rng, 2, 4);
+    b_corridor(b, back, far, far + plen - 1, owner);
+    pcx = hx + dir_x[back] * (far + plen + 1);
+    pcy = hy + dir_y[back] * (far + plen + 1);
+    b_rect(b, pcx - 1, pcy - 1, pcx + 1, pcy + 1, WgS_Portal, owner);
+    /* gold on the side away from the Lair: the dungeon's way out */
+    far = arm_far[store_d];
+    b_corridor(b, store_d, far, far, owner);
+    keep[0][0] = hx + dir_x[store_d] * (far + 1);
+    keep[0][1] = hy + dir_y[store_d] * (far + 1);
+    gcx = hx + dir_x[store_d] * (far + 4);
+    gcy = hy + dir_y[store_d] * (far + 4);
+    b_gold_seam(b, gcx, gcy, 2.3, 0.3);
+    b_soft_line(b, keep[0][0], keep[0][1], gcx, gcy, 1);
+    b_fortify(b, owner, keep, 1);
+    /* imps on the heart ring */
+    memcpy(spots, imp_spots, sizeof spots);
+    rng_shuffle(rng, spots, 6, sizeof spots[0]);
+    nimps = rng_randint(rng, 4, 6);
+    for (i = 0; i < nimps; i++)
+        b_creature(b, "IMP", hx + spots[i][0], hy + spots[i][1], owner, 1);
+    /* creatures in the lair */
+    rng_shuffle(rng, lair_cells, nlair, sizeof lair_cells[0]);
+    npool = make_biome_pool(keeper_creatures, COUNT_OF(keeper_creatures), b->distance, b->biome, pool_names, pool_w);
+    for (i = 0; i < count && i < nlair; i++) {
+        const char *name = pool_names[rng_weighted(kinds, pool_w, npool)];
+        ref_count(ref, name);
+        b_creature(b, name, lair_cells[i][0], lair_cells[i][1], owner, lvl + rng_randint(kinds, 0, 1));
+    }
+    b_blob(b, hx, hy, 17.0, 3.0, BLOB_SOFT, 0.0);
+    ref->heart_x = hx;
+    ref->heart_y = hy;
+    ref->portal_x = pcx;
+    ref->portal_y = pcy;
+    ref->gold_x = gcx;
+    ref->gold_y = gcy;
+    for (k = 0; k < 4; k++)
+        ref->rooms[k] = (uint8_t)arm_room[k];
+}
+
+/** A rival keeper's ref: a keeper structure of its own (id from its heart's chunk), its box its own 24 slabs round the
+ *  heart and the battlefield up to the middle. */
+static void rv_ref(const struct Builder *b, const struct RivalFrame *f, struct WgStructRef *r, int which, int64_t hx,
+                   int64_t hy, int64_t ohx, int64_t ohy, int32_t threat, int32_t money)
+{
+    r->id.type = WgT_Keeper;
+    r->id.start_cx = (int32_t)fdiv(hx, WG_CHUNK);
+    r->id.start_cy = (int32_t)fdiv(hy, WG_CHUNK);
+    r->origin_x = hx;
+    r->origin_y = hy;
+    r->bbox_x1 = hx - RIVAL_BOX;
+    r->bbox_y1 = hy - RIVAL_BOX;
+    r->bbox_x2 = hx + RIVAL_BOX;
+    r->bbox_y2 = hy + RIVAL_BOX;
+    if (f->ns) {
+        if (which == 1)
+            r->bbox_y2 = f->oy;
+        else
+            r->bbox_y1 = f->oy + 1;
+    } else {
+        if (which == 1)
+            r->bbox_x2 = f->ox;
+        else
+            r->bbox_x1 = f->ox + 1;
+    }
+    r->distance = hypot_int(hx - START_X, hy - START_Y);
+    r->threat_radius = threat;
+    r->money = money;
+    r->biome = (uint8_t)b->biome;
+    r->rival = (uint8_t)which;
+    r->field_kind = (uint8_t)f->kind;
+    r->rival_heart_x = ohx;
+    r->rival_heart_y = ohy;
+    r->field_x = f->ox;
+    r->field_y = f->oy;
+    r->field_half = (int32_t)f->L;
+    r->field_width = (int32_t)f->W;
+}
+
+static void build_rival(struct Builder *b)
+{
+    static const int field_weights[WgF_COUNT] = {20, 20, 20, 13, 15, 12};
+    struct Rng *rng = &b->rng, main_rng, layout, kinds_a, kinds_b;
+    struct RivalFrame f;
+    struct WgStructRef *ra = &b->lay->ref, *rb = &b->lay->ref2;
+    const int64_t ox = b->ox, oy = b->oy;
+    int64_t H, a, p, ax, ay, bx, by, count, lvl, x, y;
+    int32_t threat, money;
+    int k, side;
+    memset(&f, 0, sizeof f);
+    f.ox = ox;
+    f.oy = oy;
+    f.ns = (int)rng_randint(rng, 0, 1);
+    H = rng_randint(rng, RIVAL_HALF_MIN, RIVAL_HALF_MAX);
+    f.L = H - RIVAL_FIELD_GAP;
+    f.W = rng_randint(rng, 7, 10);
+    f.kind = rng_weighted(rng, field_weights, WgF_COUNT);
+    f.s = hash2(b->seed, 0x6669656C64ULL);
+    switch (f.kind) {
+    case WgF_Moats:
+        f.t = rng_randint(rng, 2, 3);
+        f.m = rng_randint(rng, (rv_arena(&f) * 2) / 5, rv_arena(&f) / 2); /* (inside the arena) */
+        f.ncross = (int)rng_randint(rng, 1, 2);
+        f.cross[0] = rng_randint(rng, 1, (f.W * 3) / 5) * (rng_randint(rng, 0, 1) ? 1 : -1);
+        f.cross[1] = -f.cross[0];
+        break;
+    case WgF_Island:
+        f.r1 = rng_randint(rng, 4, 6);
+        f.r2 = f.r1 + rng_randint(rng, 3, 4);
+        f.nb = (int)rng_randint(rng, 1, 2);
+        f.bw = f.nb == 1 ? rng_randint(rng, 3, 5) : 3;
+        f.b0[0] = f.nb == 1 ? -(f.bw / 2) : 1;
+        f.b0[1] = -f.bw;
+        break;
+    case WgF_Ford:
+        f.ford_h = rng_randint(rng, 2, 3);
+        f.ford_p = rng_randint(rng, 0, (f.W * 3) / 5);
+        break;
+    case WgF_Narrows:
+        f.pass = rng_randint(rng, 1, 2);
+        break;
+    default: /* mounds of earth on the Killing Field, pillars of rock in the Broken Hall; the middle lane stays open */
+        f.npil = (int)(f.kind == WgF_Pillars ? rng_randint(rng, 6, 10) : rng_randint(rng, 3, 6));
+        for (k = 0; k < f.npil; k++) {
+            f.pil[k][2] = f.kind == WgF_Pillars ? rng_randint(rng, 1, 2) : 2;
+            f.pil[k][0] = rng_randint(rng, 2, rv_arena(&f) - 2 - f.pil[k][2]);
+            f.pil[k][1] = rng_randint(rng, -(f.W - 3), f.W - 2 - f.pil[k][2]);
+            if (f.pil[k][1] <= 1 && f.pil[k][1] + f.pil[k][2] - 1 >= -1)
+                f.pil[k][2] = 0; /* (it would block the lane: none) */
+        }
+        break;
+    }
+    count = min64(12, 5 + (int64_t)(b->distance / 150.0) + rng_randint(rng, 0, 2));
+    lvl = level_for(b->distance, 200, 6);
+    threat = (int32_t)rng_randint(rng, 36, 56);
+    money = (int32_t)(3500 + 500 * min64(6, (int64_t)(b->distance / 150.0)));
+    /* the battlefield, the ground right beside it softened (no rock, lava or water seals it in) */
+    for (a = -f.L - 2; a <= f.L + 2; a++)
+        for (p = -f.W - 5; p <= f.W + 5; p++) {
+            const int sl = rv_slab(&f, a, p);
+            rv_xy(&f, a, p, &x, &y);
+            if (sl >= 0) {
+                b_set(b, x, y, sl, WgO_Neutral);
+            } else {
+                int64_t da, dp;
+                int near = 0;
+                for (da = -2; da <= 2 && !near; da++)
+                    for (dp = -2; dp <= 2 && !near; dp++)
+                        near = rv_slab(&f, a + da, p + dp) >= 0;
+                if (near)
+                    b_soft(b, x, y);
+            }
+        }
+    /* the two dungeons: mirror images */
+    main_rng = *rng;
+    layout.s = hash2(b->seed, 0x6C61796F7574ULL);
+    rv_xy(&f, -H, 0, &ax, &ay);
+    rv_xy(&f, H, 0, &bx, &by);
+    rv_ref(b, &f, ra, 1, ax, ay, bx, by, threat, money);
+    rv_ref(b, &f, rb, 2, bx, by, ax, ay, threat, money);
+    ra->rival_id = rb->id;
+    rb->rival_id = ra->id;
+    kinds_a = kinds_b = main_rng;
+    b->rng = layout;
+    rv_side(b, WgO_Keeper, ax, ay, f.ns ? D_S : D_E, &kinds_a, count, lvl, ra);
+    b->rng = layout;
+    rv_side(b, RIVAL_OWNER_B, bx, by, f.ns ? D_N : D_W, &kinds_b, count, lvl, rb);
+    main_rng = kinds_a;
+    b->rng = main_rng;
+    b->ox = ox;
+    b->oy = oy;
+    b->owner = WgO_Keeper;
+    /* skirmishers: two on each side's own road onto the battlefield, the same kinds on both */
+    for (k = 2; k <= 3; k++) {
+        const char *pool_names[16];
+        int pool_w[16], npool;
+        const char *name;
+        if (rv_slab(&f, -(f.L - k), 0) != WgS_Path)
+            continue; /* (its twin is the same slab kind) */
+        npool = make_biome_pool(keeper_creatures, COUNT_OF(keeper_creatures), b->distance, b->biome, pool_names, pool_w);
+        name = pool_names[rng_weighted(rng, pool_w, npool)];
+        for (side = 0; side < 2; side++) {
+            const int64_t sa = side == 0 ? -(f.L - k) : f.L - k, sp = 0;
+            rv_xy(&f, sa, sp, &x, &y);
+            ref_count(side == 0 ? ra : rb, name);
+            b_creature(b, name, x, y, side == 0 ? WgO_Keeper : RIVAL_OWNER_B, lvl);
+        }
+    }
+    /* the prize they fight over on the Burning Isle */
+    if (f.kind == WgF_Island)
+        b_obj(b, "GOLDL", ox, oy, WgO_Neutral);
+    b->lay->pair = 1;
+}
+
 static void build_fortress(struct Builder *b)
 {
     static const char *const loot[3] = {"GOLD_CHEST", "GOLD", "GOLDL"};
@@ -3429,6 +3823,7 @@ static struct Layout *build_layout(const struct Cand *c)
     case WgT_Keeper: b.owner = WgO_Keeper; build_keeper(&b); break;
     case WgT_Fortress: b.owner = WgO_Heroes; build_fortress(&b); break;
     case WgT_Portal: b.owner = WgO_Neutral; build_portal(&b); break;
+    case WgT_Rival: b.owner = WgO_Keeper; build_rival(&b); break;
     default: b.owner = WgO_Neutral; build_reward(&b); break;
     }
     return L;
@@ -3470,8 +3865,10 @@ static int blocked(struct WgWorld *w, const struct Cand *c)
     const struct Cand *s = &w->start;
     unsigned mask = 0;
     int t;
-    if (overlap(c->x1 - m, c->y1 - m, c->x2 + m, c->y2 + m, s->x1, s->y1, s->x2, s->y2))
-        return 1;
+    if (overlap(c->x1 - m, c->y1 - m, c->x2 + m, c->y2 + m, s->x1, s->y1, s->x2, s->y2) &&
+            !((c->type == WgT_Rival) && (w->rival_min_dist > 0)))
+        return 1; /* (the test hook wg_world_set_rival_min_dist lets a pair's box reach over the start's: the start is
+                     drawn after it, and the test's distance keeps the pair's own slabs off it) */
     for (t = WgT_Keeper; t < WgT_COUNT; t++)
         if (specs[t].priority > specs[c->type].priority)
             mask |= 1u << t;
@@ -3493,7 +3890,7 @@ static int biome_struct_pct(int biome, int type)
 /** The placement of a structure type in the world's generator version. */
 static const struct Spec *spec_of(const struct WgWorld *w, int type)
 {
-    return (w->version >= 8) ? &specs_v8[type] : &specs[type];
+    return (w->version >= 9) ? &specs_v9[type] : (w->version >= 8) ? &specs_v8[type] : &specs[type];
 }
 
 /** Spec.chance_bound: the highest chance any biome gives the type (a roll at or above it never places one). */
@@ -3565,7 +3962,7 @@ static int candidate(struct WgWorld *w, int type, int64_t rx, int64_t ry, struct
     }
     if (roll < chance && in_range && !rock) {
         dist = hypot_int(ox - START_X, oy - START_Y);
-        if (dist >= (double)sp->min_dist) {
+        if (dist >= (double)((type == WgT_Rival && w->rival_min_dist > 0) ? w->rival_min_dist : sp->min_dist)) {
             if (biome < 0)
                 biome = biome_at_v(w, ox, oy);
             make_cand(w, &c, type, ccx, ccy, ox, oy, dist, biome);
@@ -3604,6 +4001,8 @@ static int structs_in(struct WgWorld *w, int64_t bx1, int64_t by1, int64_t bx2, 
         int64_t reach = sp->radius, rx, ry, r1x, r1y, r2x, r2y;
         if (!(mask & (1u << t)))
             continue;
+        if (t == WgT_Rival && w->version < WG_RIVALS_FROM_VERSION)
+            continue; /* (older worlds have none: never asked, so nothing of theirs changes) */
         r1x = fdiv(fdiv(bx1 - reach, WG_CHUNK), sp->spacing);
         r1y = fdiv(fdiv(by1 - reach, WG_CHUNK), sp->spacing);
         r2x = fdiv(fdiv(bx2 + reach, WG_CHUNK), sp->spacing);
@@ -3719,7 +4118,7 @@ struct WgWorld *wg_world_create_version(uint64_t seed, int version)
     w->s_seam = hash2(seed, salt2("feature:", "goldseam", 8));
     for (i = 0; i < WgT_COUNT; i++)
         w->spec_salt[i] = salt2("structure:", type_names[i], strlen(type_names[i]));
-    w->version = version >= 8 ? 8 : version >= 7 ? 7 : 6;
+    w->version = version >= 9 ? 9 : version >= 8 ? 8 : version >= 7 ? 7 : 6;
     if (w->version >= 7)
         w->gmemo = (struct GroundMemo *)calloc(1, sizeof(struct GroundMemo)); /* NULL: it works without */
     if (w->version >= 7) {
@@ -3777,10 +4176,11 @@ int wg_generate_chunk(struct WgWorld *w, int32_t cx, int32_t cy, struct WgChunk 
     struct Cand found[MAX_FOUND];
     char ids[MAX_FOUND][40];
     int order[MAX_FOUND];
-    uint8_t kref[WG_CHUNK_CELLS]; /* 1 + index in out->structs of the keeper whose cell it is */
+    uint8_t kref[WG_CHUNK_CELLS]; /* 1 + index in kid[] of the keeper whose cell it is */
+    struct WgStructId kid[2 * MAX_FOUND]; /* structure k's keepers: 2k its first (ref), 2k + 1 a rival pair's second */
     const struct Cand *s = &w->start;
     int64_t cx0 = (int64_t)cx * WG_CHUNK, cy0 = (int64_t)cy * WG_CHUNK, x, y;
-    int n, i, j, k, err = 0, have_keeper = 0;
+    int n, i, j, k, err = 0, have_keeper = 0, nout = 0;
     struct WgStructId keeper;
 
     maintain_caches(w);
@@ -3850,6 +4250,8 @@ int wg_generate_chunk(struct WgWorld *w, int32_t cx, int32_t cy, struct WgChunk 
             return -1;
         if (L->overflow)
             err = 1;
+        kid[2 * k] = L->ref.id;
+        kid[2 * k + 1] = L->ref2.id;
         ix1 = max64(cx0, c->x1);
         iy1 = max64(cy0, c->y1);
         ix2 = min64(cx0 + WG_CHUNK - 1, c->x2);
@@ -3862,8 +4264,8 @@ int wg_generate_chunk(struct WgWorld *w, int32_t cx, int32_t cy, struct WgChunk 
                     if ((L->slab[li] == WgS_Gold || L->slab[li] == WgS_DenseGold) && out->slabs[ci] == WgS_Rock)
                         continue; /* a structure's gold never goes into impenetrable rock */
                     out->slabs[ci] = L->slab[li];
-                    out->owners[ci] = L->own[li];
-                    kref[ci] = (uint8_t)(L->own[li] == WgO_Keeper ? k + 1 : 0);
+                    out->owners[ci] = L->own[li] == RIVAL_OWNER_B ? (uint8_t)WgO_Keeper : L->own[li];
+                    kref[ci] = (uint8_t)(L->own[li] == WgO_Keeper ? 2 * k + 1 : L->own[li] == RIVAL_OWNER_B ? 2 * k + 2 : 0);
                 } else if (L->op[li] == OP_SOFT) {
                     uint8_t sl = out->slabs[ci];
                     if (sl == WgS_Rock || sl == WgS_Lava || sl == WgS_Water) {
@@ -3885,9 +4287,9 @@ int wg_generate_chunk(struct WgWorld *w, int32_t cx, int32_t cy, struct WgChunk 
             o = &out->things[out->thing_count++];
             o->is_creature = t->is_creature;
             strncpy(o->name, t->name, WG_NAME_LEN - 1);
-            o->owner = t->owner;
-            if (t->owner == WgO_Keeper) {
-                o->keeper = L->ref.id;
+            o->owner = t->owner == RIVAL_OWNER_B ? (uint8_t)WgO_Keeper : t->owner;
+            if (t->owner == WgO_Keeper || t->owner == RIVAL_OWNER_B) {
+                o->keeper = t->owner == RIVAL_OWNER_B ? L->ref2.id : L->ref.id;
                 if (have_keeper && !same_id(&keeper, &o->keeper))
                     err = 1;
                 keeper = o->keeper;
@@ -3900,11 +4302,21 @@ int wg_generate_chunk(struct WgWorld *w, int32_t cx, int32_t cy, struct WgChunk 
             if (t->has_gate)
                 o->gate = L->ref.id;
         }
-        out->structs[k] = L->ref;
+        /* (a rival pair is two keepers: one entry each) */
+        if (nout < WG_MAX_CHUNK_STRUCTS)
+            out->structs[nout++] = L->ref;
+        else
+            err = 1;
+        if (L->pair) {
+            if (nout < WG_MAX_CHUNK_STRUCTS)
+                out->structs[nout++] = L->ref2;
+            else
+                err = 1;
+        }
         if (temp)
             free(L);
     }
-    out->struct_count = n;
+    out->struct_count = nout;
     /* space round the start dungeon, whatever put it there: no gold or dense gold within START_GOLD_FREE and no
      * dirt path within START_PATH_FREE (both become earth) */
     if (overlap(cx0, cy0, cx0 + WG_CHUNK - 1, cy0 + WG_CHUNK - 1, START_X - START_PATH_FREE, START_Y - START_PATH_FREE,
@@ -3923,7 +4335,7 @@ int wg_generate_chunk(struct WgWorld *w, int32_t cx, int32_t cy, struct WgChunk 
         }
     for (i = 0; i < WG_CHUNK_CELLS; i++)
         if (out->owners[i] == WgO_Keeper) {
-            const struct WgStructId *id = &out->structs[kref[i] - 1].id;
+            const struct WgStructId *id = &kid[kref[i] - 1];
             if (have_keeper && !same_id(&keeper, id))
                 err = 1;
             keeper = *id;
@@ -3938,7 +4350,8 @@ int wg_structures_in(struct WgWorld *w, int64_t x1, int64_t y1, int64_t x2, int6
                      struct WgStructRef *out, int max)
 {
     struct Cand *buf = NULL;
-    int n, i;
+    unsigned mask;
+    int n, i, o = 0, pairs = 0;
     maintain_caches(w);
     x1 = max64(-BOX_LIMIT, min64(BOX_LIMIT, x1));
     y1 = max64(-BOX_LIMIT, min64(BOX_LIMIT, y1));
@@ -3951,7 +4364,10 @@ int wg_structures_in(struct WgWorld *w, int64_t x1, int64_t y1, int64_t x2, int6
         if (buf == NULL)
             return -1;
     }
-    n = structs_in(w, x1, y1, x2, y2, type_mask & PLACED_MASK, buf, max, 0);
+    mask = type_mask & PLACED_MASK;
+    if (mask & (1u << WgT_Keeper))
+        mask |= 1u << WgT_Rival; /* a rival pair is two keepers */
+    n = structs_in(w, x1, y1, x2, y2, mask, buf, max, 0);
     for (i = 0; i < n && i < max; i++) {
         int temp;
         struct Layout *L = get_layout(w, &buf[i], &temp);
@@ -3959,12 +4375,20 @@ int wg_structures_in(struct WgWorld *w, int64_t x1, int64_t y1, int64_t x2, int6
             free(buf);
             return -1;
         }
-        out[i] = L->ref;
+        if (o < max)
+            out[o] = L->ref;
+        o++;
+        if (L->pair) {
+            pairs++;
+            if (o < max)
+                out[o] = L->ref2;
+            o++;
+        }
         if (temp)
             free(L);
     }
     free(buf);
-    return n;
+    return n + pairs; /* (pairs past max are counted as one: more than max either way) */
 }
 
 unsigned wg_structure_memory_epoch(const struct WgWorld *w)
@@ -4002,6 +4426,22 @@ void wg_start_ref(struct WgWorld *w, struct WgStructRef *out)
 const char *wg_slab_name(int slab)
 {
     return (slab >= 0 && slab < WgS_COUNT) ? slab_names[slab] : "?";
+}
+
+void wg_world_set_rival_min_dist(struct WgWorld *w, int slabs)
+{
+    w->rival_min_dist = slabs > 0 ? slabs : 0;
+    w->cand_gen++; /* (what it remembered of structure places was found with the old distance) */
+    if (w->cand_gen == 0) {
+        memset(w->cand, 0, sizeof(struct CandEntry) * CAND_CAP);
+        w->cand_gen = 1;
+    }
+    w->cand_count = 0;
+}
+
+const char *wg_field_name(int kind)
+{
+    return (kind >= 0 && kind < WgF_COUNT) ? field_names[kind] : "?";
 }
 
 const char *wg_struct_type_name(int type)

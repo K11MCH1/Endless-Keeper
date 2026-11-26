@@ -34,7 +34,12 @@ extern "C" {
 /* Version 8 (2026-11-22, the user: "everything seems too far to reach"): version 7's land, its structures packed
  * tighter (about 2.5 times as many in the same ground: smaller placement grids, the same sizes) and nearer the start
  * (hero fortresses from 40 slabs, computer keepers from 80; portals and caves as before). */
-#define WG_GENERATOR_LATEST 8
+/* Version 9 (2026-11-24, the user): version 8 with portals spread out (about a third as many, ~110 slabs apart),
+ * more reward caves to make up for it (about 1.45 times), and computer keepers from 50 slabs; and (2026-11-25) rival
+ * pairs: two enemy keepers facing each other across a battlefield, about 2 in 1000 x 1000 slabs, their nearer heart
+ * 180+ slabs from the start (WgT_Rival, build_rival). */
+#define WG_GENERATOR_LATEST 9
+#define WG_RIVALS_FROM_VERSION 9 /* the first generator version with rival pairs (WgT_Rival) */
 #define WG_V6_BIOMES 8 /* the biomes of versions 2-6: points of the climate */
 #define WG_CHUNK 16
 #define WG_CHUNK_CELLS (WG_CHUNK * WG_CHUNK)
@@ -100,7 +105,22 @@ enum WgStructType {
     WgT_Fortress,
     WgT_Portal,
     WgT_Reward,
+    /* Rival pair (generator version 9 on; not in worldgen.py): two enemy keepers at war across a battlefield. Only
+     * the generator's own type: wg_structures_in and the chunks report a pair as two keeper structures (WgT_Keeper
+     * refs with WgStructRef.rival set), each with the other's id. A mask with WgT_Keeper finds them. */
+    WgT_Rival,
     WgT_COUNT
+};
+
+/** The battlefield between a rival pair's keepers (WgStructRef.field_kind); wg_field_name gives its name. */
+enum WgField {
+    WgF_Field = 0,   /* the Killing Field: open dirt with a few mounds of earth */
+    WgF_Moats,       /* the Lava Moats: two lava moats across the field, crossed by dirt crossings 3+ slabs wide */
+    WgF_Island,      /* the Burning Isle: a dirt island in a lava ring, dirt bridges 3-5 slabs wide to each side */
+    WgF_Ford,        /* the Drowned Ford: a band of water across the middle, with dirt fords */
+    WgF_Narrows,     /* the Narrows: the field pinches to a pass 3 or 5 slabs wide between lava pits */
+    WgF_Pillars,     /* the Broken Hall: dirt among pillars of impenetrable rock */
+    WgF_COUNT
 };
 
 /** Identifies a structure, like worldgen.py's Structure.id "<type>@<start_cx>,<start_cy>". */
@@ -143,6 +163,14 @@ struct WgStructRef {
     struct WgNameCount creatures[WG_MAX_REF_CREATURES]; /* keeper "creatures", fortress "heroes", reward
                                                            "creatures": count per name, in worldgen.py's order */
     uint8_t biome;                   /* WgBiome at the origin (ref()["biome"]) */
+    /* keeper of a rival pair (zero for every other structure): the pair, its rival and their battlefield */
+    uint8_t rival;                   /* 0: none; 1: the pair's first keeper (west or north), 2: the second */
+    uint8_t field_kind;              /* WgField */
+    struct WgStructId rival_id;      /* the other keeper of the pair */
+    int64_t rival_heart_x, rival_heart_y;
+    int64_t field_x, field_y;        /* the battlefield's middle */
+    int32_t field_half;              /* slabs from the middle to either end of the battlefield (along the hearts' line) */
+    int32_t field_width;             /* slabs from the battlefield's middle line to its sides, about */
 };
 
 /** A thing placed by a structure (worldgen.py's thing dicts). */
@@ -211,6 +239,12 @@ void wg_start_ref(struct WgWorld *world, struct WgStructRef *out);
 const char *wg_slab_name(int slab);
 const char *wg_struct_type_name(int type);
 const char *wg_biome_name(int biome);
+/** Test hook (a played session): rival pairs may stand from this many slabs from the start (their middle; 0: the
+ *  rule's 220). Never in a real world: it changes where the pairs and what yields to them stand. Call it right after
+ *  creating the world. */
+void wg_world_set_rival_min_dist(struct WgWorld *world, int slabs);
+/** The name of a rival pair's battlefield (WgField), e.g. "the Burning Isle". */
+const char *wg_field_name(int kind);
 /** The KeeperFX texture pack of a biome (texture_pack_desc id: STANDARD 1, ANCIENT 2, WINTER 3, ...). */
 int wg_biome_texture(int biome);
 /** Biome at world slab (x, y): worldgen.World.biome_at. */

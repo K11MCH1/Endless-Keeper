@@ -11,6 +11,7 @@
 #include "../../world_attract.h"
 #include "pre_inc.h"
 #include "kfx/renderer/RendererVulkan.h"
+#include "kfx/renderer/UIImage.h"
 #include "bflib_basics.h"
 #include "globals.h"
 #include "bflib_video.h"
@@ -93,6 +94,9 @@ struct VkFrameData {
     int32_t overlay_y0 = 0;
     int32_t overlay_rows = 0;
     std::vector<unsigned char> overlay_rgba;
+
+    // Endless Keeper: the true-colour window of this frame (UIImage.h)
+    UIImageFrame ui_image[UI_IMAGE_SLOTS];
 };
 
 static void frame_clear_colour(const VkFrameData& fd, float* rgba)
@@ -158,6 +162,14 @@ struct RendererVulkan::Impl {
     VkImageObj    overlay_img;
     int32_t overlay_drawn_y0 = 0, overlay_drawn_y1 = 0;   // the surface's rows drawn on last time (cleared next)
     int32_t overlay_img_y0 = 0, overlay_img_y1 = 0;       // the image's rows that may not be empty
+
+    // Endless Keeper: the true-colour window (UIImage.h), drawn with overlay_prog. Game thread: the source.
+    UIImageSource ui_image_src[UI_IMAGE_SLOTS];
+    VkImageObj    ui_image_img[UI_IMAGE_SLOTS];
+    const void*   ui_image_uploaded[UI_IMAGE_SLOTS] = {}; // the copy now in each image
+    uint32_t      ui_image_uploaded_gen[UI_IMAGE_SLOTS] = {}; // (and its generation: copies are reused)
+    void DrawUIImages(VkFrameData& fd, int first, int last);
+    void DrawUIImage(VkFrameData& fd, int slot);
 
     // Android: what a frame costs, logged every 5 s; the refresh rate asked again for each new swapchain
     uint32_t refresh_serial = 0;
@@ -497,7 +509,7 @@ void RendererVulkan::render_thread_init()
     im.text.SetTextCommandBuffers(&im.frames[0].text_cmds);
     im.world.SetWorldCommandBuffers(&im.frames[0].world_cmds);
     im.write_idx = 0;
-#ifdef KFX_ANDROID
+    // (all platforms since 2026-11-25: the true-colour windows use it too, UIImage.h)
     if (im.overlay_prog.Create(&im.core, "overlay_rgba"))
     {
         VkVertexLayout l;
@@ -508,7 +520,6 @@ void RendererVulkan::render_thread_init()
         };
         im.overlay_layout = im.overlay_prog.AddLayout(l);
     }
-#endif
     im.init_ok = true;
     SYNCLOG("RendererVulkan: ready on '%s'%s", im.core.device_name.c_str(),
             im.want_present ? "" : " (no swapchain: the launcher's background)");
@@ -614,6 +625,8 @@ void RendererVulkan::render_thread_cleanup()
         im.resource_mapper.ShutdownAll();
         im.overlay_prog.Destroy();
         im.core.DestroyImage(im.overlay_img);
+        for (VkImageObj& img : im.ui_image_img)
+            im.core.DestroyImage(img);
         VkProgram_FreeDummies(&im.core);
     }
     im.core.Shutdown();
@@ -738,6 +751,7 @@ void RendererVulkan::FGDrawWorldOverlayFlatLayer()
 void RendererVulkan::FGDrawGameUI()
 {
     m_impl->core.last_pass = "game UI";
+    m_impl->DrawUIImages(m_impl->frames[m_impl->render_idx], UI_IMAGE_UNDER, UI_IMAGE_SLOTS); // (the pictures under the game's UI)
     m_impl->ui.DrawGameUILayerRT(m_impl->frames[m_impl->render_idx].text_cmds, &m_impl->text);
 }
 
@@ -745,6 +759,74 @@ void RendererVulkan::FGDrawFrontOverlay()
 {
     m_impl->core.last_pass = "front overlay";
     m_impl->ui.DrawFrontOverlay();
+    m_impl->DrawUIImages(m_impl->frames[m_impl->render_idx], 0, UI_IMAGE_UNDER);
+}
+
+bool RendererVulkan::SubmitUIImage(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t* rgba, uint32_t gen)
+{
+    if (m_impl == nullptr || !m_impl->init_ok || slot < 0 || slot >= UI_IMAGE_SLOTS)
+        return false;
+    return m_impl->ui_image_src[slot].Submit(m_impl->frames[m_impl->write_idx].ui_image[slot], x, y, w, h, rgba, gen);
+}
+
+// Render thread: the true-colour window over the UI (uploaded when it is a new copy; an upload goes in the upload
+// command buffer, before the frame's draws, as the Android overlay's).
+void RendererVulkan::Impl::DrawUIImages(VkFrameData& fd, int first, int last)
+{
+    bool bound = (first < UI_IMAGE_UNDER); // (the front overlay draws into the screen already)
+    for (int slot = first; slot < last; slot++)
+    {
+        if (!bound && fd.ui_image[slot].on)
+        {
+            /* before the game UI's layer: the screen as the target (an overhead map or a picture-in-picture capture
+               may have had another) */
+            resource_mapper.BindScreen();
+            core.SetViewport(0.0f, 0.0f, (float)fd.screen_w, (float)fd.screen_h);
+            bound = true;
+        }
+        DrawUIImage(fd, slot);
+    }
+}
+
+void RendererVulkan::Impl::DrawUIImage(VkFrameData& fd, int slot)
+{
+    const UIImageFrame& pic = fd.ui_image[slot];
+    if (!pic.on || !pic.rgba || pic.w <= 0 || pic.h <= 0 || pic.rgba->size() != (size_t)pic.w * (size_t)pic.h * 4)
+        return;
+    if (!overlay_prog.Valid() || fd.screen_w <= 0 || fd.screen_h <= 0)
+        return;
+    core.last_pass = "true-colour window";
+    if (ui_image_img[slot].image == VK_NULL_HANDLE || ui_image_img[slot].width != pic.w || ui_image_img[slot].height != pic.h)
+    {
+        core.DestroyImage(ui_image_img[slot]);
+        ui_image_uploaded[slot] = nullptr;
+        if (!core.CreateImage(ui_image_img[slot], pic.w, pic.h, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, "ui_rgba"))
+            return;
+        ui_image_img[slot].sampler = core.GetSampler(false, false);
+        core.InitSampledImage(ui_image_img[slot]);
+    }
+    if ((ui_image_uploaded[slot] != pic.rgba.get()) || (ui_image_uploaded_gen[slot] != pic.gen))
+    {
+        core.UploadImage(ui_image_img[slot], 0, 0, 0, pic.w, pic.h, pic.rgba->data(), (uint32_t)pic.w * 4, 4);
+        ui_image_uploaded[slot] = pic.rgba.get();
+        ui_image_uploaded_gen[slot] = pic.gen;
+    }
+    core.SetScissorEnabled(false);
+    const float x0 = (float)pic.x, y0 = (float)pic.y, x1 = (float)(pic.x + pic.w), y1 = (float)(pic.y + pic.h);
+    const float verts[] = {
+        x0, y0, 0, 0,   x1, y0, 1, 0,   x1, y1, 1, 1,
+        x0, y0, 0, 0,   x1, y1, 1, 1,   x0, y1, 0, 1,
+    };
+    overlay_prog.Set2f("u_screen_size", (float)fd.screen_w, (float)fd.screen_h);
+    overlay_prog.SetTexture("u_image", &ui_image_img[slot]);
+    VkPipeState st;
+    st.Blend(VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
+    st.layout_id = overlay_layout;
+    if (!overlay_prog.Bind(st))
+        return;
+    core.BindVertices(verts, sizeof(verts));
+    vkCmdDraw(core.Cmd(), 6, 1, 0, 0);
 }
 
 void RendererVulkan::FGExecuteCursor()
@@ -920,6 +1002,8 @@ void RendererVulkan::PresentFrame()
     next_fd.tooltip_ui_cmds.Reset();
     next_fd.tooltip_text_cmds.Reset();
     next_fd.frame_seq = 0;
+    for (UIImageFrame& f : next_fd.ui_image)
+        f.on = false;
     next_fd.palette_dirty = false;
     memcpy(next_fd.palette_rgba, im.frames[filled].palette_rgba, sizeof(next_fd.palette_rgba));
     next_fd.clear_index = im.frames[filled].clear_index;

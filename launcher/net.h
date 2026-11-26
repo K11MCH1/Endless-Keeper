@@ -39,3 +39,13 @@ std::vector<std::string> programs_open_in(const std::wstring &game_dir);
  *  folder it is "Close:<name>|<name>..." and the update waits for them to be closed (or for cancel). False with why. */
 bool install_release(const Release &rel, const std::wstring &game_dir, const std::wstring &self_exe,
     const std::function<void(const char *stage, float fraction)> &progress, const std::atomic<bool> &cancel, std::string &why);
+
+/** The creator's set pieces (2026-11-25): the release's endless-keeper-setpieces*.zip, or nullptr. */
+const ReleaseAsset *setpieces_asset(const Release &rel);
+enum SetPiecesResult { SP_FAILED = 0, SP_INSTALLED, SP_LATEST_ALREADY, SP_NONE_IN_RELEASE };
+/** Downloads the release's set pieces into levels/endless_cfgs/setpieces/official (the folder is replaced as a whole;
+ *  the player's own pieces beside it are never touched), unless the copy there is that one already (its GitHub
+ *  checksum is kept in official/release.sha256): SP_LATEST_ALREADY. `count` gets how many pieces it holds. */
+SetPiecesResult install_setpieces(const Release &rel, const std::wstring &game_dir,
+    const std::function<void(const char *stage, float fraction)> &progress, const std::atomic<bool> &cancel, int &count,
+    std::string &why);

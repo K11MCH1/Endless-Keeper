@@ -80,6 +80,14 @@ public:
     // Save the current frame to a file (fmt: 1=PNG, 2=BMP). Default: unsupported.
     virtual bool ScheduleScreenshot(const char* path, int fmt) { (void)path; (void)fmt; return false; }
 
+    /** Endless Keeper (2026-11-25): a premultiplied RGBA picture (w x h, top row first) laid over this frame's UI,
+     *  under the pointer (UIImage.h). False: the backend has no such picture (software). */
+    virtual bool SubmitUIImage(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t* rgba, uint32_t gen)
+    {
+        (void)slot; (void)x; (void)y; (void)w; (void)h; (void)rgba; (void)gen;
+        return false;
+    }
+
     // Sub-renderers. Every backend provides all four once initialised.
     virtual class ITextRenderer*      GetTextRenderer()      = 0;
     virtual class IUIRenderer*        GetUIRenderer()        = 0;

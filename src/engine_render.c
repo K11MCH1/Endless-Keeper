@@ -5157,8 +5157,8 @@ void draw_engine_room_flagpole(struct BucketKindRoomFlag *rflg)
 
             if (cam->view_mode == PVM_FrontView) {
                 zoom_factor = 4094*scale_by_zoom;
-                deltay = (zoom_factor << 7 >> 13) * units_per_pixel_ui / 16;
-                height = ((2 * (71 * zoom_factor) >> 13) * units_per_pixel_ui + 8) / 16;
+                deltay = (zoom_factor << 7 >> 13) * units_per_pixel_ui_base / 16;
+                height = ((2 * (71 * zoom_factor) >> 13) * units_per_pixel_ui_base + 8) / 16;
             } else {
                 zoom_factor = camera_zoom;
                 deltay = (zoom_factor << 7 >> 13);
@@ -5167,12 +5167,12 @@ void draw_engine_room_flagpole(struct BucketKindRoomFlag *rflg)
 
             LbDrawBox(rflg->x,
                       rflg->y - deltay,
-                      ((4*scale_by_zoom) * units_per_pixel_ui + 8) / 16,
+                      ((4*scale_by_zoom) * units_per_pixel_ui_base + 8) / 16,
                       height,
                       colours[3][1][0]);
-            LbDrawBox(rflg->x + (2*scale_by_zoom) * (units_per_pixel_ui) / 16,
+            LbDrawBox(rflg->x + (2*scale_by_zoom) * (units_per_pixel_ui_base) / 16,
                       rflg->y - deltay,
-                      ((2*scale_by_zoom) * units_per_pixel_ui + 8) / 16,
+                      ((2*scale_by_zoom) * units_per_pixel_ui_base + 8) / 16,
                       height,
                       colours[1][0][0]);
         }
@@ -5369,7 +5369,7 @@ void draw_status_sprites(long scrpos_x, long scrpos_y, struct Thing *thing)
     const struct TbSprite *spr;
     int bs_units_per_px;
     spr = get_button_sprite(GBS_creature_states_cloud);
-    bs_units_per_px = units_per_pixel_ui * 2 * scale_by_zoom;
+    bs_units_per_px = units_per_pixel_ui_base * 2 * scale_by_zoom;
 
     if (cam->view_mode == PVM_FrontView)
     {
@@ -5614,12 +5614,12 @@ void draw_engine_room_flag_top(struct BucketKindRoomFlag *rflg)
 
             if (cam->view_mode == PVM_FrontView) {
                 zoom_factor = (4094*scale_by_zoom);
-                top_of_pole_offset = (zoom_factor << 7 >> 13) * (units_per_pixel_ui)/16;
+                top_of_pole_offset = (zoom_factor << 7 >> 13) * (units_per_pixel_ui_base)/16;
             } else {
                 zoom_factor = camera_zoom;
                 top_of_pole_offset = (zoom_factor << 7 >> 13);
             }
-            draw_room_flag_top(rflg->x, rflg->y - top_of_pole_offset, (units_per_pixel_ui *scale_by_zoom), room);
+            draw_room_flag_top(rflg->x, rflg->y - top_of_pole_offset, (units_per_pixel_ui_base *scale_by_zoom), room);
         }
     }
 }

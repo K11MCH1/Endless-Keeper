@@ -1,3 +1,4 @@
+/** @file net_input_lag.c: adaptive input lag for lockstep multiplayer: measures packet delays, raises or lowers the lag in turns, and skips turns while waiting for input. */
 #include "pre_inc.h"
 #include "net_input_lag.h"
 

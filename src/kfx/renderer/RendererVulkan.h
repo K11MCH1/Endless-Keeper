@@ -70,6 +70,7 @@ public:
     void FGDrawDevToolsOverlay() override;
 
     bool ScheduleScreenshot(const char* path, int fmt) override;
+    bool SubmitUIImage(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t* rgba, uint32_t gen) override;
     void FGCaptureScreenshot() override;
 
     /** Why Init() failed (for the log and the fallback notice). */

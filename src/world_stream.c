@@ -88,12 +88,15 @@
 #include "net_game.h"
 #include "world_colours.h"
 #include "scrcapt.h"
+#include "custom_sprites.h"
+#include "config_spritecolors.h"
 #include "room_workshop.h"
 #include "config_magic.h"
 #include "creature_states_lair.h"
 #include "net_state.h"
 #include "world_progress.h"
 #include "world_outpost.h"
+#include "world_setpiece.h"
 #include "thing_effects.h"
 #include "config_effects.h"
 #include "power_specials.h"
@@ -135,6 +138,7 @@
 #include "world_keeper_panel.h"
 #include "world_level_window.h"
 #include "world_keeper_ai.h"
+#include "world_rivals.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -200,6 +204,9 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_FILL 0x314C4946u     /* "FIL1": the Fill room's marks (world_fill.c) */
 #define WORLD_EXTRA_EXPEDITION 0x31505845u /* "EXP1": the Expedition spell's expeditions and marks (world_expedition.c) */
 #define WORLD_EXTRA_SPAWNPORTAL 0x314F5046u /* "FPO1": the portal each keeper's creatures come from (world_spawn_portal) */
+#define WORLD_EXTRA_RIVALS 0x31564952u    /* "RIV1": the rival pairs' truces and reinforcements (world_rivals.c) */
+#define WORLD_EXTRA_SETPIECES 0x32435053u /* "SPC2": the set pieces decided (world_setpiece.c) */
+#define WORLD_EXTRA_SPSCRIPTS 0x31535053u /* "SPS1": the set pieces' scripts (after SPC2) */
 static void world_extras_reset(void);
 #define WORLD_COOPSEATS_MAGIC 0x31535043u /* "CPS1": optional, after COP1 (last): co-op seats (partner token, played at) */
 #define WORLD_MAX_PORTALS 65536
@@ -754,6 +761,8 @@ static TbBool world_paged_requested(void)
 
 /******************************************************************************/
 /* Owners */
+
+static int keeper_rival_index(int k);
 
 static int keeper_index(const struct WgStructId *id)
 {
@@ -1314,6 +1323,90 @@ static void apply_outposts(int32_t cx, int32_t cy, struct WorldChunkData *cd)
         th->z = -1;
         th->health = -1;
         th->extra = ov.things[t].extra;
+    }
+}
+
+/** A set piece's keeper (world_setpiece.c) on the world's record, the first time one of its chunks is made; returns
+ *  its owner byte. Its id is its heart's world slab, with bit 30 of start_cy set: generator keepers' ids are their
+ *  chunks (far smaller), so the two never meet. */
+static uint8_t setpiece_keeper_owner(const struct SetPieceKeeper *sk)
+{
+    struct WgStructRef ref;
+    memset(&ref, 0, sizeof(ref));
+    ref.id.type = WgT_Keeper;
+    ref.id.start_cx = (int32_t)sk->heart_x;
+    ref.id.start_cy = (int32_t)((uint32_t)(int32_t)sk->heart_y ^ 0x40000000u);
+    ref.origin_x = ref.heart_x = sk->heart_x;
+    ref.origin_y = ref.heart_y = sk->heart_y;
+    ref.bbox_x1 = sk->bbox_x1;
+    ref.bbox_y1 = sk->bbox_y1;
+    ref.bbox_x2 = sk->bbox_x2;
+    ref.bbox_y2 = sk->bbox_y2;
+    ref.threat_radius = sk->threat_radius;
+    ref.money = sk->money;
+    const int k = keeper_register(&ref);
+    return ((k >= 0) && (k < WORLD_KEEPER_CODES)) ? (uint8_t)(WOwn_Keeper0 + k) : (uint8_t)WOwn_Neutral;
+}
+
+/** The set pieces in a freshly generated chunk (world_setpiece.c, generator version 9 on): their slabs, doors and
+ *  things (whatever the generator put on those slabs goes), and round them the blending ring, where rock becomes
+ *  earth. The heroes outposts keep off them. */
+static void apply_setpieces(int32_t cx, int32_t cy, struct WorldChunkData *cd)
+{
+    static struct SetPieceOverlay ov;
+    if (world_setpiece_overlay(cx, cy, &ov) <= 0)
+        return;
+    uint8_t keeper_own[SETPIECE_CHUNK_KEEPERS];
+    for (int k = 0; k < ov.keeper_count; k++)
+        keeper_own[k] = setpiece_keeper_owner(&ov.keepers[k]);
+    for (int i = 0; i < WG_CHUNK_CELLS; i++)
+    {
+        if (ov.set[i] == 2)
+        {
+            if (cd->kind[i] == SlbT_ROCK)
+                cd->kind[i] = SlbT_EARTH;
+            continue;
+        }
+        if (ov.set[i] != 1)
+            continue;
+        cd->kind[i] = ov.kind[i];
+        cd->owner[i] = (ov.owner[i] == SPO_Heroes) ? WOwn_Heroes :
+            ((ov.owner[i] >= SPO_Keeper0) ? keeper_own[ov.owner[i] - SPO_Keeper0] : WOwn_Neutral);
+        if (slab_kind_has_no_ownership(cd->kind[i]))
+            cd->owner[i] = WOwn_Neutral;
+        cd->texture[i] = ov.texture[i];
+        cd->texture_initial[i] = ov.texture[i];
+        cd->wall[i] = 0;
+        cd->door[i] = ov.door[i];
+    }
+    int kept = 0;
+    for (int t = 0; t < cd->thing_count; t++)
+    {
+        const struct WorldThing *th = &cd->things[t];
+        const int sx = th->x / (COORD_PER_STL * STL_PER_SLB), sy = th->y / (COORD_PER_STL * STL_PER_SLB);
+        if ((sx >= 0) && (sx < WG_CHUNK) && (sy >= 0) && (sy < WG_CHUNK) && (ov.set[sy * WG_CHUNK + sx] == 1))
+            continue;
+        if (kept != t)
+            cd->things[kept] = *th;
+        kept++;
+    }
+    cd->thing_count = kept;
+    for (int t = 0; (t < ov.thing_count) && (cd->thing_count < WORLD_MAX_THINGS_PER_CHUNK); t++)
+    {
+        const struct SetPieceThing *o = &ov.things[t];
+        struct WorldThing *th = &cd->things[cd->thing_count++];
+        memset(th, 0, sizeof(*th));
+        th->oclass = o->oclass;
+        th->model = o->model;
+        th->owner = (o->owner == SPO_Heroes) ? WOwn_Heroes :
+            ((o->owner >= SPO_Keeper0) ? keeper_own[o->owner - SPO_Keeper0] : WOwn_Neutral);
+        th->level = (th->oclass == TCls_Creature) ? (uint8_t)max(1, (int)o->level) : 0;
+        th->x = o->x;
+        th->y = o->y;
+        th->z = -1;
+        th->health = -1;
+        th->extra = o->extra;
+        th->gold = o->gold;
     }
 }
 
@@ -2256,6 +2349,7 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
     gt[3] = world_prof_now();
     decorate_rewards(&ch, cx, cy, cd);
     gt[4] = world_prof_now();
+    apply_setpieces(cx, cy, cd); /* set pieces (world_setpiece.c): decided before the outposts, which keep off them */
     apply_outposts(cx, cy, cd);
     if (!world_attract_active())
         circles_grade_chunk(cd); /* circles (world_circles.c): enemies as strong as the circle they stand in */
@@ -3794,6 +3888,9 @@ static void fill_chunks(struct FillChunk *list, int count)
             world_place_door(x, y, owner, cd->door[i]);
         }
     }
+    /* set pieces (world_setpiece.c): their maps' own columns back on their slabs still as made, the band and its ring */
+    world_setpiece_columns_box(max(bx1 - 1, 0), max(by1 - 1, 0), min(bx2 + 1, game.map_tiles_x - 1),
+        min(by2 + 1, game.map_tiles_y - 1));
     for (int c = 0; c < count; c++)
     {
         struct WorldChunkData *cd = list[c].cd;
@@ -4173,6 +4270,7 @@ static void keeper_release_slot(int k)
     for (int i = 0; i < W.portal_count; i++)
         if (W.portals[i].owner == p)
             W.portals[i].owner = -1; /* its frozen portals don't count for the next holder of the slot */
+    world_raids_forget_player(p); /* (raids come for awake keepers too, 2026-11-25) */
     SYNCLOG("World: keeper@%d,%d gives player %d back (%s, %d gold kept)", (int)wk->id.start_cx, (int)wk->id.start_cy,
         (int)p, (wk->state == WKSt_Destroyed) ? "destroyed" : "asleep", (int)wk->money);
     wk->slot = -1;
@@ -4228,6 +4326,33 @@ static void update_keepers(void)
         }
         if (((wk->state == WKSt_Passive) || (wk->state == WKSt_Destroyed)) && keeper_slot_unused(wk))
             keeper_release_slot(k);
+    }
+    /* rival pairs (world_rivals.c) wake and sleep together: their war goes on while either is awake (a human near either
+       wakes both), and they go back to sleep together once no human has been near either for a long time */
+    for (int k = 0; k < W.keeper_count; k++)
+    {
+        struct WorldKeeper *wk = &W.keepers[k];
+        if (wk->state != WKSt_Active)
+            continue;
+        const int j = keeper_rival_index(k);
+        if (j < 0)
+            continue;
+        struct WorldKeeper *rk = &W.keepers[j];
+        if ((rk->state == WKSt_Passive) && rk->set_up && !rk->heart_frozen && (rk->slot >= 0))
+        {
+            const long days_alone = (keeper_alone_since[j] > 0) ? max(0L, world_day_number() - keeper_alone_since[j]) : 0;
+            rk->state = WKSt_Active;
+            W.keeper_last_near[j] = W.keeper_last_near[k];
+            SYNCLOG("World: keeper@%d,%d (player %d) wakes up with its rival keeper@%d,%d (player %d)", (int)rk->id.start_cx,
+                (int)rk->id.start_cy, (int)rk->slot, (int)wk->id.start_cx, (int)wk->id.start_cy, (int)wk->slot);
+            world_keeper_ai_woke(rk->slot, days_alone);
+        }
+        if ((rk->state == WKSt_Active) && (W.keeper_last_near[j] != W.keeper_last_near[k]))
+        {
+            const GameTurn last = (game.play_gameturn - W.keeper_last_near[j] < game.play_gameturn - W.keeper_last_near[k]) ?
+                W.keeper_last_near[j] : W.keeper_last_near[k];
+            W.keeper_last_near[j] = W.keeper_last_near[k] = last;
+        }
     }
 }
 
@@ -5074,6 +5199,8 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
     world_daynight_want_chunks(cm_want_world);
     world_misdeeds_want_chunks(cm_want_world); /* bodies waiting to be carried home */
     world_expedition_want_chunks(cm_want_world); /* the ground round each expedition (world_expedition.c) */
+    world_circles_want_chunks(cm_want_world); /* (a test switch's dig front: world_circles.c) */
+    world_setpiece_want_chunks(cm_want_world); /* (a test switch's revealed set piece: world_setpiece.c) */
     /* the human players' creatures and imps, and raid heroes (the creature list: the same set as a scan of every slot,
        in another order, which a table of keys doesn't mind) */
     const struct StructureList *creatures = get_list_for_thing_class(TCls_Creature);
@@ -5108,28 +5235,38 @@ static void cm_collect_wanted(int64_t *home_cx, int64_t *home_cy)
         if (wk->state == WKSt_Destroyed)
             continue;
         if ((wk->state != WKSt_Active) && !player_creature_near_keeper(wk, humans))
-            continue;
+        {
+            /* a rival pair's keeper whose rival is awake: its ground loads, so that it is set up and wakes as well */
+            const int j = keeper_rival_index(k);
+            if ((j < 0) || (W.keepers[j].state != WKSt_Active))
+                continue;
+        }
         for (int64_t cy = floor_div(wk->bbox_y1, WG_CHUNK); cy <= floor_div(wk->bbox_y2, WG_CHUNK); cy++)
             for (int64_t cx = floor_div(wk->bbox_x1, WG_CHUNK); cx <= floor_div(wk->bbox_x2, WG_CHUNK); cx++)
                 table_insert(&cm_wanted, (int32_t)cx, (int32_t)cy);
     }
     /* the player's territory (any loaded chunk with a slab they own) and the chunks next to it, so that the ground
-       just past the claimed area can always be seen and marked for digging, wherever the imps are */
+       just past the claimed area can always be seen and marked for digging, wherever the imps are; an awake computer
+       keeper's too (2026-11-25: its tunnels out to the world's structures stopped where its box ended) */
+    PlayerBitFlags diggers = humans;
+    for (int k = 0; k < W.keeper_count; k++)
+        if ((W.keepers[k].state == WKSt_Active) && (W.keepers[k].slot >= 0))
+            pmask_add(&diggers, W.keepers[k].slot);
     for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
     {
         for (int i = 0; i < WP_CHUNK_SLAB_CELLS; i++)
         {
-            if (owner_in_mask(slabmap_owner(&pg->slab[i]), humans))
+            if (owner_in_mask(slabmap_owner(&pg->slab[i]), diggers))
             {
                 cm_want(page_world_cx(pg), page_world_cy(pg), CM_TERRITORY_RADIUS);
                 break;
             }
         }
     }
-    /* the human players' dig orders: their chunks stay until they are dug */
+    /* the human players' (and awake keepers') dig orders: their chunks stay until they are dug */
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
-        if (!owner_in_mask(p, humans))
+        if (!owner_in_mask(p, diggers))
             continue;
         struct Dungeon *dungeon = get_dungeon(p);
         if (dungeon_invalid(dungeon))
@@ -6270,6 +6407,12 @@ static TbBool world_init_state(void)
     if ((W.gen_version < WORLD_GEN_OLDEST) || (W.gen_version > WG_GENERATOR_LATEST))
         W.gen_version = WORLD_GEN_OLDEST;
     W.gen = wg_world_create_version(W.seed, W.gen_version);
+    if ((W.gen != NULL) && (getenv("KFX_WORLD_RIVALNEAR") != NULL) && (atoi(getenv("KFX_WORLD_RIVALNEAR")) > 0))
+    {
+        /* test hook (a played session, 2026-11-25): rival pairs from this many slabs out (the rule: 220) */
+        wg_world_set_rival_min_dist(W.gen, atoi(getenv("KFX_WORLD_RIVALNEAR")));
+        SYNCLOG("World: TEST: rival pairs from %d slabs from the start (the rule: 220)", atoi(getenv("KFX_WORLD_RIVALNEAR")));
+    }
     stamp_src_n = stamp_src_next = 0; /* (a new generator: the start's chunks kept for the stamps were another's, */
     book_starts_forget();             /* and so were the starts' nearest reward caves) */
     if (W.gen == NULL)
@@ -6435,6 +6578,8 @@ static TbBool stamp_place_free(const struct WorldStamp *st)
         return false;
     if (world_outpost_in_box(x1 - 8, y1 - 8, x2 + 8, y2 + 8))
         return false; /* nor a heroes outpost */
+    if (world_setpiece_in_box(x1 - 8, y1 - 8, x2 + 8, y2 + 8))
+        return false; /* nor a set piece (generator version 9 on) */
     /* nor ground already made (stored or loaded): the copy goes only into freshly generated chunks */
     for (int64_t cy = floor_div(y1 - 8, WG_CHUNK); cy <= floor_div(y2 + 8, WG_CHUNK); cy++)
         for (int64_t cx = floor_div(x1 - 8, WG_CHUNK); cx <= floor_div(x2 + 8, WG_CHUNK); cx++)
@@ -6746,6 +6891,8 @@ static void world_start_test(void)
 {
     if ((getenv("KFX_WORLD_OPSURVEY") != NULL) && (atoi(getenv("KFX_WORLD_OPSURVEY")) > 0))
         world_outpost_survey(atoi(getenv("KFX_WORLD_OPSURVEY")));
+    if ((getenv("KFX_WORLD_SPSURVEY") != NULL) && (atoi(getenv("KFX_WORLD_SPSURVEY")) > 0))
+        world_setpiece_survey(atoi(getenv("KFX_WORLD_SPSURVEY")));
     const char *v = getenv("KFX_WORLD_STARTTEST");
     if ((v == NULL) || (atoi(v) <= 0))
         return;
@@ -10031,6 +10178,89 @@ static void world_mapzoom_hook(void)
         block, (long)vx, (long)vy, ox, oy, count_active_battles(my_player_number), parchment_draw_micros());
 }
 
+/** Test hook KFX_WORLD_LOREMAP=T (local only): at T-30 the full-screen map opens; at T-6 three level-up lore books
+ *  (entries 0-2) and a Special box lie in a row three subtiles south of the player's heart (late, before an Imp
+ *  carries the box off); from then the game's mouse sits on the row, so the magnifier shows the books' own icon
+ *  beside the box's; at T the screen is saved as scrshots/loremap.png and the icons are logged (2026-11-26). */
+static void world_loremap_hook(void)
+{
+    static long at = -2;
+    static MapSubtlCoord row_x = 0, row_y = 0;
+    static long book_icon = 0, box_icon = 0;
+    if (at == -2)
+    {
+        const char *v = getenv("KFX_WORLD_LOREMAP");
+        at = (v != NULL) ? atol(v) : -1;
+    }
+    if ((at < 60) || netstate_is_client())
+        return;
+    const long now = (long)game.play_gameturn;
+    if (now == at - 6)
+    {
+        const struct Thing *heartng = find_players_dungeon_heart(my_player_number);
+        const ThingModel lore = (ThingModel)get_id(object_desc, "LORE_BOOK");
+        const ThingModel box = (ThingModel)get_id(object_desc, "SPECBOX_MKSAFE");
+        if (!thing_exists(heartng) || (lore <= 0) || (box <= 0))
+        {
+            SYNCLOG("World lore map: no heart, LORE_BOOK or SPECBOX_MKSAFE");
+            return;
+        }
+        row_x = heartng->mappos.x.stl.num;
+        row_y = heartng->mappos.y.stl.num + 3;
+        for (int i = 0; i < 4; i++)
+        {
+            struct Coord3d pos = {0};
+            pos.x.val = subtile_coord_center(row_x - 3 + 2 * i);
+            pos.y.val = subtile_coord_center(row_y);
+            struct Thing *thing = create_object(&pos, (i < 3) ? lore : box, my_player_number, -1);
+            if (thing_is_invalid(thing))
+                continue;
+            if (i < 3)
+                thing->custom_box.box_kind = (uint8_t)(WORLD_LEVELUP_KIND_FIRST + i);
+            const long icon = (world_progress_map_icon(thing) > 0) ? world_progress_map_icon(thing) :
+                (long)get_object_model_stats(thing->model)->map_icon;
+            if (i == 0)
+                book_icon = icon;
+            else if (i == 3)
+                box_icon = icon;
+            SYNCLOG("World lore map: %s at (%d,%d), map icon %ld", (i < 3) ? "level-up lore book" : "Special box",
+                (int)(row_x - 3 + 2 * i), (int)row_y, icon);
+        }
+        return;
+    }
+    if (now == at - 30)
+        zoom_to_parchment_map();
+    if ((now < at - 5) || (now > at + 1))
+        return;
+    test_mouse_in_window = (now <= at);
+    if (get_local_view_type() != PVT_MapScreen)
+        return;
+    struct TbRect area;
+    const long block = get_parchment_map_area_rect(&area);
+    MapSlabCoord vx = 0, vy = 0;
+    long ox = 0, oy = 0;
+    world_parchment_view(area.right - area.left, area.bottom - area.top, block, &vx, &vy, &ox, &oy);
+    /* the inverse of the magnifier's pmap_point_to_subtile, at the subtile's middle */
+    const long sx = area.left - ox + ((long)row_x - STL_PER_SLB * vx) * block / STL_PER_SLB + block / (2 * STL_PER_SLB);
+    const long sy = area.top - oy + ((long)row_y - STL_PER_SLB * vy) * block / STL_PER_SLB + block / (2 * STL_PER_SLB);
+    lbDisplay.MMouseX = lbDisplay.MouseX = sx / pixel_size;
+    lbDisplay.MMouseY = lbDisplay.MouseY = sy / pixel_size;
+    if (now == at)
+    {
+        char fname[] = "scrshots/loremap.png";
+        take_screenshot(fname);
+        /* (the sprites the magnifier draws: after the player's colour, as draw_gui_panel_sprite_centered looks them up) */
+        const struct TbSprite *bs = (book_icon > 0) ?
+            get_panel_sprite(get_player_colored_icon_idx((short)book_icon, my_player_number)) : NULL;
+        const struct TbSprite *xs = (box_icon > 0) ?
+            get_panel_sprite(get_player_colored_icon_idx((short)box_icon, my_player_number)) : NULL;
+        SYNCLOG("World lore map: mouse (%ld,%ld) over subtile (%d,%d), %ld pixels per slab; book icon %ld (%dx%d), "
+            "box icon %ld (%dx%d), saved %s", sx, sy, (int)row_x, (int)row_y, block, book_icon,
+            (bs != NULL) ? (int)bs->SWidth : 0, (bs != NULL) ? (int)bs->SHeight : 0, box_icon,
+            (xs != NULL) ? (int)xs->SWidth : 0, (xs != NULL) ? (int)xs->SHeight : 0, fname);
+    }
+}
+
 /** Test hook KFX_WORLD_ASSIST (network tests). */
 static void world_assist_hook(void)
 {
@@ -11688,8 +11918,10 @@ void world_process_turn(void)
     world_handpick_hook();
     world_mapedge_hook();
     world_mapzoom_hook();
+    world_loremap_hook();
     world_progress_turn();
     world_keeper_ai_turn(); /* the enemy keepers' brain */
+    world_rivals_turn(); /* rival pairs: their war kept going, their truces */
     world_caretaker_turn(); /* away players' dungeons: the gold held */
     world_attract_turn(); /* the launcher's background: its battles and camera */
     coop_upkeep(); /* party dungeons: defeats, deleted seats freed, unplayed ones deleted */
@@ -11700,6 +11932,9 @@ void world_process_turn(void)
     world_spawntest_hook();
     world_testportal_hook();
     world_testoutpost_hook();
+    world_setpiece_test_turn(); /* test hook KFX_WORLD_TESTSETPIECE */
+    world_setpiece_reveal_turn(); /* test switch KFX_WORLD_SETPIECEREVEAL */
+    world_setpieces_turn(); /* the set pieces' own map scripts */
     world_teststrong_hook();
     world_testbox_hook();
     world_treasurytest_hook();
@@ -11855,6 +12090,100 @@ unsigned short world_minimap_code(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 
 /******************************************************************************/
 /* For the keepers' brain (world_keeper_ai.c) */
+
+/* Rival pairs (world_rivals.c): what the generator says of each keeper on record, looked up once (generator version
+   9 on; older worlds have none). */
+struct KeeperRivalMemo {
+    uint64_t seed;
+    int32_t cx, cy;
+    uint8_t known, which, kind;
+    struct WgStructId rival_id;
+    int64_t rival_hx, rival_hy, field_x, field_y;
+    int32_t field_half, field_width;
+};
+static struct KeeperRivalMemo keeper_rival_memo[WORLD_MAX_KEEPERS];
+
+static const struct KeeperRivalMemo *keeper_rival_memo_of(int k)
+{
+    struct KeeperRivalMemo *m = &keeper_rival_memo[k];
+    const struct WorldKeeper *wk = &W.keepers[k];
+    if (m->known && (m->seed == W.seed) && (m->cx == wk->id.start_cx) && (m->cy == wk->id.start_cy))
+        return m;
+    memset(m, 0, sizeof(*m));
+    m->known = 1;
+    m->seed = W.seed;
+    m->cx = wk->id.start_cx;
+    m->cy = wk->id.start_cy;
+    if ((W.gen == NULL) || (wg_world_version(W.gen) < WG_RIVALS_FROM_VERSION))
+        return m;
+    struct WgStructRef refs[8];
+    const int n = wg_structures_in(W.gen, wk->heart_x, wk->heart_y, wk->heart_x, wk->heart_y, 1u << WgT_Keeper, refs, 8);
+    for (int i = 0; (i < n) && (i < 8); i++)
+        if (refs[i].rival && (refs[i].id.start_cx == wk->id.start_cx) && (refs[i].id.start_cy == wk->id.start_cy))
+        {
+            m->which = refs[i].rival;
+            m->kind = refs[i].field_kind;
+            m->rival_id = refs[i].rival_id;
+            m->rival_hx = refs[i].rival_heart_x;
+            m->rival_hy = refs[i].rival_heart_y;
+            m->field_x = refs[i].field_x;
+            m->field_y = refs[i].field_y;
+            m->field_half = refs[i].field_half;
+            m->field_width = refs[i].field_width;
+        }
+    return m;
+}
+
+/** The record of keeper k's rival, or -1 (no pair, or its rival not on record). */
+static int keeper_rival_index(int k)
+{
+    const struct KeeperRivalMemo *m = keeper_rival_memo_of(k);
+    return m->which ? keeper_index(&m->rival_id) : -1;
+}
+
+TbBool world_keeper_rival(PlayerNumber plyr_idx, struct WorldKeeperRival *out)
+{
+    if (!W.active || (plyr_idx < 0))
+        return false;
+    for (int k = 0; k < W.keeper_count; k++)
+    {
+        const struct WorldKeeper *wk = &W.keepers[k];
+        if ((wk->slot != plyr_idx) || (wk->state == WKSt_Destroyed))
+            continue;
+        const struct KeeperRivalMemo *m = keeper_rival_memo_of(k);
+        if (!m->which)
+            return false;
+        if (out != NULL)
+        {
+            memset(out, 0, sizeof(*out));
+            out->index = k;
+            out->rival_index = keeper_index(&m->rival_id);
+            out->rival = PLAYER_NONE;
+            out->active = (wk->state == WKSt_Active);
+            if (out->rival_index >= 0)
+            {
+                const struct WorldKeeper *rk = &W.keepers[out->rival_index];
+                if ((rk->slot >= 0) && rk->set_up && (rk->state != WKSt_Destroyed))
+                    out->rival = rk->slot;
+                out->rival_active = (rk->state == WKSt_Active);
+            }
+            out->which = m->which;
+            out->field_kind = m->kind;
+            out->heart_x = wk->heart_x;
+            out->heart_y = wk->heart_y;
+            out->rival_heart_x = m->rival_hx;
+            out->rival_heart_y = m->rival_hy;
+            out->field_x = m->field_x;
+            out->field_y = m->field_y;
+            out->field_half = m->field_half;
+            out->field_width = m->field_width;
+            out->pair_cx = (m->which == 1) ? wk->id.start_cx : m->rival_id.start_cx;
+            out->pair_cy = (m->which == 1) ? wk->id.start_cy : m->rival_id.start_cy;
+        }
+        return true;
+    }
+    return false;
+}
 
 TbBool world_keeper_of_player(PlayerNumber plyr_idx, struct WorldKeeperInfo *out)
 {
@@ -12168,6 +12497,10 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_FILL, world_fill_save_size, world_fill_save, world_fill_load, world_fill_reset},
     {WORLD_EXTRA_EXPEDITION, world_expedition_save_size, world_expedition_save, world_expedition_load, world_expedition_reset},
     {WORLD_EXTRA_SPAWNPORTAL, spawn_portal_save_size, spawn_portal_save, spawn_portal_load, spawn_portal_reset_all},
+    {WORLD_EXTRA_RIVALS, world_rivals_save_size, world_rivals_save, world_rivals_load, world_rivals_reset},
+    {WORLD_EXTRA_SETPIECES, world_setpieces_save_size, world_setpieces_save, world_setpieces_load, world_setpieces_reset},
+    {WORLD_EXTRA_SPSCRIPTS, world_setpiece_scripts_save_size, world_setpiece_scripts_save, world_setpiece_scripts_load,
+        world_setpiece_scripts_reset},
 };
 #define WORLD_EXTRAS ((int)(sizeof(world_extras) / sizeof(world_extras[0])))
 

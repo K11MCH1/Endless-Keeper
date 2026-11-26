@@ -74,6 +74,7 @@
 #include "world_boss.h"
 #include "world_hand.h"
 #include "world_migrate.h"
+#include "world_rivals.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1691,6 +1692,10 @@ TbBool can_drop_thing_here_as(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNu
             return true;
         /* endless worlds: the ground of a party's allied keeper (co-op) takes the player's creatures */
         if (creature && world_coop_allies(plyr_idx, slabmap_owner(slb)))
+            return true;
+        /* endless worlds: a rival pair's keeper in a truce drops its creatures on its rival's ground (world_rivals.c; a
+           computer keeper's Hand holds its creature outside the player's hand list, so not by the creature flag) */
+        if (world_rivals_truce_ground(plyr_idx, slabmap_owner(slb)))
             return true;
     }
     if (allow_unclaimed && slabmap_owner(slb) == game.neutral_player_num && slb->kind == SlbT_PATH)

@@ -20,6 +20,7 @@
 #include "creature_states.h"
 #include "globals.h"
 #include "world_boss.h"
+#include "world_rivals.h"
 
 #include "bflib_math.h"
 #include "bflib_planar.h"
@@ -1106,6 +1107,8 @@ TbBool attempt_to_destroy_enemy_room(struct Thing *thing, MapSubtlCoord stl_x, M
         return false;
     if (players_creatures_tolerate_each_other(thing->owner, room->owner))
         return false;
+    if (world_rivals_spare_room(thing->owner, room))
+        return false; /* endless: a rival pair's keeper never wrecks its rival's rooms */
     if (room_cannot_vandalise(room->kind))
         return false;
     if (!find_first_valid_position_for_thing_anywhere_in_room(thing, room, &pos))

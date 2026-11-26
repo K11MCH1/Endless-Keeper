@@ -1,3 +1,4 @@
+/** @file net_spectator.c: network spectators (icons, notices, chat, resyncs) and the server seating joiners, reconnects and co-op parties into keeper seats. */
 #include "pre_inc.h"
 #include "net_spectator.h"
 #include "observer.h"

@@ -15,6 +15,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "ui_front.h"
 #include "kfx/renderer/RendererManager.h"
 #include "world_misdeeds.h"
 #include "world_stream.h"
@@ -90,6 +91,7 @@
 #include "creature_states_train.h"
 #include "world_creature_window.h"
 #include "world_defectors.h"
+#include "config_keeperfx.h"
 #include "post_inc.h"
 
 #define MD_SAMPLE 32            /* a creature is sampled one turn in this many */
@@ -3871,6 +3873,8 @@ static int md_scroll_box[4];      /* the bar's place (w 0: none) */
  *  software one. */
 static void md_stone(int x, int y, int w, int h, TbBool over)
 {
+    if (uf_card(x, y, w, h, over)) /* (the Molten creature window: ui_front.c) */
+        return;
     const int u = max((md_window_upp + 8) / 32, 1);
     const TbPixel frame = over ? world_window_ink(WwI_Gold) : colours[8][6][3];
     if (over)
@@ -3889,17 +3893,24 @@ static TbBool mw_in(const struct MdSheet *sh, int y, int h, int slack)
     return (y >= sh->y_top) && (y + h <= sh->y_end + slack);
 }
 
+/** The Molten look's air round the sheet's pieces (the user, 2026-11-26: "add more space above and below the header"). */
+static TbBool mw_molten(void)
+{
+    return (window_style != WinStyle_Classic);
+}
+
 /** A heading: the game's lettering, a thin rule to each side of it. */
 static int mw_heading(struct MdSheet *sh, int y, const char *text)
 {
     const int cap = max(MW_U(MW_HEAD_CAP), MW_HEAD_FLOOR);
-    const int h = max(MW_U(MW_HEAD), cap + MW_U(6) + 2);
+    const int above = mw_molten() ? MW_U(9) : 0, below = mw_molten() ? MW_U(7) : 0;
+    const int h = max(MW_U(MW_HEAD), cap + MW_U(6) + 2) + above + below;
     sh->fixed += h;
     if (sh->draw && mw_in(sh, y, h, 0))
     {
         const int wide = min(world_window_display_width(text, cap), sh->w);
         const int rule = (sh->w - wide) / 2 - MW_U(5);
-        const int cap_y = y + h - cap - max(MW_U(3), 1);
+        const int cap_y = y + h - below - cap - max(MW_U(3), 1);
         world_window_display(sh->x, cap_y, sh->w, cap, 1, text);
         if (rule >= MW_U(6))
         {
@@ -4020,6 +4031,8 @@ static int md_sheet_run(struct MdSheet *sh, int y, const struct Thing *thing, co
         const char *came = world_defectors_rap_line(thing->index);
         if (came != NULL)
             y += mw_text(sh, y, WwI_Dim, came);
+        if (mw_molten())
+            y += MW_B4(14); /* (the Molten look: air between it and the table; the user, 2026-11-26) */
     }
     {
         /* the priors: a label and its number, in two columns where the room holds two side by side */
@@ -4063,6 +4076,10 @@ static int md_sheet_run(struct MdSheet *sh, int y, const struct Thing *thing, co
         snprintf(left, sizeof(left), "Party post: %s", md_post_names[post]);
         snprintf(right, sizeof(right), "Regimen: %s", md_regimen_names[(rec->regimen < MdR_COUNT) ? rec->regimen : 0]);
         const int need = max(world_window_plain_width(left, cap), world_window_plain_width(right, cap)) + MW_B4(mw_btn4[sh->close]);
+        /* (the Molten look: the row stands clear of the table above it and of the heading under it) */
+        const int row_air = mw_molten() ? MW_B4(2 * mw_gap4[sh->close]) : 0;
+        y += row_air;
+        sh->fixed += 2 * row_air;
         if (need <= half)
         {
             mw_row(sh, md_post_box, md_row_text[2], mine, sh->x, y, half, left);
@@ -4072,6 +4089,7 @@ static int md_sheet_run(struct MdSheet *sh, int y, const struct Thing *thing, co
             y += mw_row(sh, md_post_box, md_row_text[2], mine, sh->x, y, sh->w, left) + gap;
             y += mw_row(sh, md_regimen_box, md_row_text[0], mine, sh->x, y, sh->w, right) + air;
         }
+        y += row_air;
         if (post != MdP_None)
         {
             snprintf(text, sizeof(text), "%s: %s%s", md_post_names[post], md_post_does[post],
@@ -4419,6 +4437,14 @@ void world_misdeeds_scroll_draw(struct GuiButton *gbtn)
     const int x = gbtn->scr_pos_x, y = gbtn->scr_pos_y, w = gbtn->width, h = gbtn->height;
     int top, height;
     md_thumb(gbtn, &top, &height);
+    if (uf_on())
+    {
+        /* (the Molten creature window: a track and its thumb between the two arrows, ui_front.c) */
+        uf_thumb(x, y + w, w, h - 2 * w, y + top, height, over);
+        uf_arrow_at(x, y, w, w, true, md_sheet_scroll > 0, false);
+        uf_arrow_at(x, y + h - w, w, w, false, md_sheet_scroll < md_sheet_over, false);
+        return;
+    }
     LbDrawBox(x, y, w, h, colours[2][1][0]);
     LbDrawBox(x, y, u, h, colours[8][6][3]);
     LbDrawBox(x + w - u, y, u, h, colours[8][6][3]);
@@ -4510,6 +4536,8 @@ void world_misdeeds_mark_draw(struct GuiButton *gbtn)
         const int u = max((md_window_upp + 8) / 32, 1);
         const TbPixel frame = marked ? colours[15][4][2] : world_window_ink(WwI_Gold);
         const int x = gbtn->scr_pos_x, y = gbtn->scr_pos_y, w = gbtn->width, h = gbtn->height;
+        if (uf_frame(x, y, w, h, marked, over)) /* (the Molten creature window: ui_front.c) */
+            return;
         LbDrawBox(x, y, w, u, frame);
         LbDrawBox(x, y + h - u, w, u, frame);
         LbDrawBox(x, y, u, h, frame);
@@ -4676,8 +4704,15 @@ void world_misdeeds_pencil_maintain(struct GuiButton *gbtn)
     }
 }
 
+const char *world_misdeeds_name_typed(void)
+{
+    return md_name_buf;
+}
+
 void world_misdeeds_pencil_draw(struct GuiButton *gbtn)
 {
+    if (uf_on())
+        return; /* (the Molten creature window paints the pencil and the name being typed itself) */
     const int x = gbtn->scr_pos_x, y = gbtn->scr_pos_y, s = max(gbtn->height, 8);
     if (gbtn == input_button)
     {
@@ -7279,7 +7314,7 @@ static void md_rapview_hook(void)
     const long t = (long)game.play_gameturn - base;
     if (t == 0)
     {
-        ThingIndex pick = 0;
+        ThingIndex pick = 0, fallback = 0;
         const struct StructureList *slist = get_list_for_thing_class(TCls_Creature);
         long k = slist->index;
         for (int n = 0; (k > 0) && (n < THINGS_COUNT); n++)
@@ -7291,7 +7326,11 @@ static void md_rapview_hook(void)
             const struct MdRec *rec = (c->owner == my_player_number) ? md_peek(c) : NULL;
             if ((rec != NULL) && ((rec->offer[0] != MdV_None) || rec->contract_open || (rec->lesson_learn != 0) || (rec->lesson_master != 0)))
                 pick = c->index;
+            else if ((pick == 0) && (fallback == 0) && (c->owner == my_player_number))
+                fallback = c->index; /* (none waiting, as in a new world: any of the keeper's own, to see the window) */
         }
+        if (pick == 0)
+            pick = fallback;
         SYNCLOG("Rap view test: creature %d has something waiting", (int)pick);
         if (pick != 0)
             set_players_packet_action(get_my_player(), PckA_PlyrQueryCreature, pick, 0, 0, 0);

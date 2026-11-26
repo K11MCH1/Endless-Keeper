@@ -367,6 +367,21 @@ static HandFinger handFinger;
 static bool gripping = false; // two fingers hold the map (below)
 static void endGrip() { gripping = false; }
 constexpr float handLongPressMs = 400; // before the recogniser's hold (450), which would press the left button
+/** A window in the middle of the view is under the finger: the Keeper panel, the Library's window, the creature window,
+ *  the World Boss window. A finger on one works its buttons (and drags the Keeper panel by its top strip); it never pans
+ *  or turns the camera behind it (2026-11-25, the user: "The mouse panning triggers behind the panels while swiping
+ *  around on the panels"). */
+static bool windowOverViewAt(float x, float y) {
+    const auto p = gamePosition(x, y);
+    for (int idx = 0; idx < ACTIVE_MENUS_COUNT; idx++) {
+        const struct GuiMenu& m = active_menus[idx];
+        if (m.visual_state != 2 || !m.is_turned_on) continue;
+        if (m.ident != GMnu_KEEPER_PANEL && m.ident != GMnu_LEVEL_WINDOW && m.ident != GMnu_CREATURE_WINDOW && m.ident != GMnu_WORLD_BOSS_PICK) continue;
+        if (p.x >= m.pos_x && p.x < m.pos_x + m.width && p.y >= m.pos_y && p.y < m.pos_y + m.height) return true;
+    }
+    return false;
+}
+
 static bool handInForce(float x, float y) {
     auto* player = get_my_player();
     if (!player || player == &local_observer_player || !local_state.camera.ready || observer_is_active()) return false;
@@ -1218,6 +1233,7 @@ extern "C" int KfxAndroidTouchEvent(const SDL_Event* e) {
         // dragged like a mouse drags it (it follows the finger), so it gets the left button instead.
         const auto* player = get_my_player();
         bool world = player && !endlessMap() && (get_local_view_type() == PVT_DungeonTop || get_local_view_type() == PVT_MapScreen);
+        if (windowOverViewAt(x, y)) world = false; // (a window over the view: its own finger, no pan, no grip)
         gestures.setPanEnabled(world && inEngineWindow(gamePosition(x,y)));
         // The first finger on the map is asked about by the hand's rules (it may come to drop or slap).
         if (gestFingers.empty() && handInForce(x,y)) startHandStroke(e->tfinger.fingerID, x, y);

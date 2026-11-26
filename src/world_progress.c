@@ -46,6 +46,7 @@
 #include "gui_msgs.h"
 #include "replay_rewind.h"
 #include "world_outpost.h"
+#include "world_rivals.h"
 #include "room_data.h"
 #include "server_admin.h"
 #include "room_library.h"
@@ -76,6 +77,8 @@
 #include "vidmode.h"
 #include "engine_render.h"
 #include "bflib_video.h"
+#include "custom_sprites.h"
+#include "world_progress_icons.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -158,6 +161,10 @@ static TbBool wpr_item_disabled(int i)
 {
     return (i == WPR_ARMAGEDDON) || ((i >= 0) && (i < WPR_ITEMS) && ((strcmp(wpr_items[i].name, "POWER_DESTROY_WALLS") == 0) ||
         (strcmp(wpr_items[i].name, "POWER_DISEASE") == 0) || /* Disease: off since 2026-11-09 */
+        (strcmp(wpr_items[i].name, "POWER_TIME_BOMB") == 0) || /* Time Bomb and Tunneller: off since 2026-11-26 (the user) */
+        (strcmp(wpr_items[i].name, "POWER_TUNNELLER") == 0) ||
+        (strcmp(wpr_items[i].name, "POWER_FREEZE") == 0) || (strcmp(wpr_items[i].name, "POWER_SLOW") == 0) || /* off since */
+        (strcmp(wpr_items[i].name, "POWER_FLIGHT") == 0) || (strcmp(wpr_items[i].name, "POWER_VISION") == 0) || /* 2026-11-26 too */
         (strcmp(wpr_items[i].name, "SCAVENGER") == 0))); /* the Scavenger Room: off since 2026-11-12 */
 }
 
@@ -401,6 +408,26 @@ TbBool world_progress_active(void)
 ThingModel world_progress_book_model(void)
 {
     return book_model;
+}
+
+/* the level-up lore book's own icon on the full map's magnifier: LORE_BOOK's MapIcon is the Special box's, which hid
+   them among the boxes (the user, 2026-11-26) */
+static long wpr_levelup_icon = 0;
+
+void world_progress_register_icons(void)
+{
+    const unsigned char *png[1] = {wpi_levelup_book};
+    const unsigned int len[1] = {wpi_levelup_book_len};
+    wpr_levelup_icon = custom_sprites_add_builtin_icon("ENDLESS_LEVELUP_BOOK", png, len, 1);
+}
+
+long world_progress_map_icon(const struct Thing *thing)
+{
+    if ((wpr_levelup_icon <= 0) || !world_mode_active() || (lore_model <= 0) || !thing_exists(thing) ||
+        (thing->class_id != TCls_Object) || (thing->model != lore_model) ||
+        (wrl_of_levelup_kind(thing->custom_box.box_kind) < 0))
+        return 0;
+    return wpr_levelup_icon;
 }
 
 uint8_t world_progress_book_kind(int grade, int biome)
@@ -2413,7 +2440,28 @@ static void hell_hound_entrance(void)
     SYNCLOG("World progress: Hell Hounds come to a Lair of 9 slabs (no Scavenger Room in endless worlds)");
 }
 
-/** Destroy Walls, Armageddon and Disease stay off in endless worlds for every keeper, AI ones too: neither
+/** Set pieces (world_setpiece.c, 2026-11-25): a map's spellbooks and rooms of what stays off are left out. By name,
+ *  so it holds before resolve_ids has run. */
+static TbBool wpr_banned(int kind, const struct NamedCommand *desc, long id)
+{
+    for (int i = 0; (i < WPR_ITEMS) && (id > 0); i++)
+        if ((wpr_items[i].kind == kind) && wpr_item_disabled(i) && (get_id(desc, wpr_items[i].name) == id))
+            return true;
+    return false;
+}
+
+TbBool world_progress_power_banned(PowerKind pwkind)
+{
+    return wpr_banned(WprK_Power, power_desc, (long)pwkind);
+}
+
+TbBool world_progress_room_banned(RoomKind rkind)
+{
+    return wpr_banned(WprK_Room, room_desc, (long)rkind);
+}
+
+/** Destroy Walls, Armageddon, Disease, Time Bomb, Tunneller, Freeze, Slow, Flight and Vision stay off in endless worlds for
+ *  every keeper, AI ones too, and so do their spellbooks: neither
  *  researchable nor usable. */
 static void hell_hound_entrance(void);
 static void ban_powers(void)
@@ -2445,6 +2493,37 @@ static void ban_powers(void)
             if ((dungeon->magic_resrchable[wpr_ids[i]] != 0) || (dungeon->magic_level[wpr_ids[i]] > 0))
                 set_power_available(p, wpr_ids[i], 0, 0);
         }
+    }
+    /* no spellbook of a spell that stays off lies anywhere: a Library's shelf in an older world, a book a fallen
+       Library dropped (the user, 2026-11-26: "Make sure disabled Keeper spells do not appear with Spellbook drops") */
+    if (netstate_is_client())
+        return;
+    const struct StructureList *list = get_list_for_thing_class(TCls_Object);
+    long t = list->index;
+    long guard = 0;
+    while ((t > 0) && (guard++ < THINGS_COUNT))
+    {
+        struct Thing *thing = thing_get(t);
+        if (!thing_exists(thing))
+            break;
+        t = thing->next_of_class;
+        if (!thing_is_spellbook(thing) || thing_is_picked_up(thing) || thing_is_dragged_or_pulled(thing))
+            continue;
+        const PowerKind pwkind = book_thing_to_power_kind(thing);
+        if ((pwkind <= 0) || !world_progress_power_banned(pwkind))
+            continue;
+        /* (a shelved book leaves its Library's count, as the engine takes one off) */
+        struct Room *room = get_room_thing_is_on(thing);
+        if (!room_is_invalid(room) && (thing->owner == room->owner) && !is_neutral_thing(thing) &&
+            room_role_matches(room->kind, RoRoF_PowersStorage))
+        {
+            remove_item_from_room_capacity(room);
+            if (get_players_num_dungeon(thing->owner)->magic_level[pwkind] > 0)
+                remove_power_from_player(pwkind, thing->owner);
+        }
+        SYNCLOG("World progress: the spellbook of %s (a spell endless worlds keep off) at subtile (%d,%d) is taken away",
+            power_code_name(pwkind), (int)thing->mappos.x.stl.num, (int)thing->mappos.y.stl.num);
+        delete_thing_structure(thing, 0);
     }
 }
 
@@ -2860,8 +2939,12 @@ static void mirror_computer_keepers(void)
         int rooms = 0, powers = 0, traps = 0;
         for (RoomKind r = 1; r < game.conf.slab_conf.room_types_count; r++)
         {
-            const long want_res = hd->room_resrchable[r];
-            const long want_av = hd->room_buildable[r] & 1;
+            /* (a rival pair's keeper also builds more of a room kind it has: its war needs endgame-size rooms, the user,
+               2026-11-25, "if they need bigger rooms, any room, that they build another one"; world_keeper_ai.c;
+               set_room_available keeps a room buildable only with a research value) */
+            const TbBool rival_own = world_rivals_is_rival(c) && dungeon_has_room(cd, r);
+            const long want_res = (rival_own && (hd->room_resrchable[r] == 0)) ? 1 : hd->room_resrchable[r];
+            const long want_av = ((hd->room_buildable[r] & 1) || rival_own) ? 1 : 0;
             if ((cd->room_resrchable[r] != want_res) || ((cd->room_buildable[r] & 1) != want_av))
             {
                 set_room_available(c, r, want_res, want_av);

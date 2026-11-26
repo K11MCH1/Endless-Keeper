@@ -104,7 +104,10 @@
 #include "world_caretaker.h"
 #include "world_boss.h"
 #include "world_keeper_panel.h"
+#include "world_side_panel.h"
 #include "world_level_window.h"
+#include "ui_front.h"
+#include "ui_paint.h"
 #include "ui_safe_area.h"
 #include "post_inc.h"
 
@@ -1167,6 +1170,9 @@ void frontend_draw_scroll_tab(struct GuiButton *gbtn, long scroll_offset, long f
         n = 0;
     else
         n = (scroll_offset * (k << 8) / (i - 1)) >> 8;
+    if (uf_thumb(gbtn->scr_pos_x, gbtn->scr_pos_y, gbtn->width, gbtn->height, gbtn->scr_pos_y + n, spr->SHeight * units_per_px / 16,
+        gbtn->button_state_left_pressed != 0)) /* endless, the Molten look */
+        return;
     LbSpriteDrawResized(gbtn->scr_pos_x, n+gbtn->scr_pos_y, units_per_px, spr);
 }
 
@@ -1274,6 +1280,8 @@ void frontend_draw_icon(struct GuiButton *gbtn)
     int units_per_px;
     units_per_px = simple_frontend_sprite_width_units_per_px(gbtn, gbtn->sprite_idx, 100);
     const struct TbSprite *spr = get_frontend_sprite(gbtn->sprite_idx);
+    if (uf_sprite(gbtn->scr_pos_x, gbtn->scr_pos_y, gbtn->width, spr->SHeight * units_per_px / 16, spr)) /* endless, the Molten look */
+        return;
     LbSpriteDrawResized(gbtn->scr_pos_x, gbtn->scr_pos_y, units_per_px, spr);
 }
 
@@ -1282,6 +1290,8 @@ void frontend_draw_slider(struct GuiButton *gbtn)
     if ((gbtn->flags & LbBtnF_Enabled) == 0) {
         return;
     }
+    if (uf_slider(gbtn, gbtn->slide_val)) /* endless, the Molten look */
+        return;
     const int fs_units_per_px = simple_frontend_sprite_height_units_per_px(gbtn, GFS_slider_horiz_c, 100);
     const float scale = float(fs_units_per_px) / 16;
 
@@ -1315,6 +1325,8 @@ void frontend_draw_small_slider(struct GuiButton *gbtn)
     if ((gbtn->flags & LbBtnF_Enabled) == 0) {
         return;
     }
+    if (uf_slider(gbtn, gbtn->slide_val)) /* endless, the Molten look */
+        return;
     int fs_units_per_px;
     fs_units_per_px = simple_frontend_sprite_height_units_per_px(gbtn, GFS_slider_horiz_c, 100);
     int scr_x;
@@ -1482,6 +1494,8 @@ void frontend_draw_enter_text(struct GuiButton *gbtn)
         if ((LbTimerClock() / 200 & 1) != 0)
             print_with_cursor = 1;
     }
+    if (uf_input(gbtn, srctext, gbtn == input_button)) /* endless, the Molten look */
+        return;
     snprintf(text, sizeof(text), "%s%s", srctext, print_with_cursor?"_":"");
     LbTextSetFont(frontend_font[font_idx]);
     RendererSetDrawFlags(0);
@@ -2394,7 +2408,10 @@ MenuNumber create_menu(struct GuiMenu *gmnu)
     // Decrease scale factor if for some reason resulting size would exceed screen (wierd aspec ratio support)
     if (gmnu->width * units_per_px > RendererPhysicalWidth() * 16)
         units_per_px = RendererPhysicalWidth() * 16 / gmnu->width;
-    if (gmnu->height * units_per_px > RendererPhysicalHeight() * 16)
+    /* (Endless Keeper: a UI_SCALE over 100 lets the modern side panel grow past the screen's height - its own layout is
+     *  shorter than the old panel's 400 and the player chose the size; the user, 2026-11-26) */
+    const TbBool scaled_side_panel = (amnu->ident == GMnu_MAIN) && (ui_scale_percent > 100) && world_side_hud_modern();
+    if ((gmnu->height * units_per_px > RendererPhysicalHeight() * 16) && !scaled_side_panel)
         units_per_px = RendererPhysicalHeight() * 16 / gmnu->height;
     // Setting position X
     amnu->pos_x = compute_menu_position_x(gmnu->pos_x,gmnu->width,units_per_px);
@@ -3243,6 +3260,7 @@ short get_frontend_global_inputs(void)
 void frontend_input(void)
 {
     SYNCDBG(7,"Starting");
+    world_menu_test_tick(); /* (endless: KFX_WORLD_MENU steps on every screen; timed, so a second call a frame is harmless) */
     if (menu_is_active(GMnu_FEERROR_BOX)) {
         time_last_played_demo = LbTimerClock();
         get_gui_inputs(0);
@@ -3395,6 +3413,8 @@ void draw_menu_buttons(struct GuiMenu *gmnu)
     {
         gbtn = &active_buttons[i];
         callback = gbtn->draw_call;
+        if (world_side_panel_paints(gbtn) || world_ui_menu_paints(gbtn)) /* endless, the modern look paints it */
+            continue;
         if ((callback != NULL) && (gbtn->flags & LbBtnF_Visible) && (gbtn->flags & LbBtnF_Active) && (gbtn->gmenu_idx == gmnu->number))
         {
           if ( ((gbtn->button_state_left_pressed == 0) && (gbtn->button_state_right_pressed == 0)) || (gbtn->gbtype == LbBtnT_HorizSlider) || (callback == gui_area_null) )
@@ -3406,6 +3426,8 @@ void draw_menu_buttons(struct GuiMenu *gmnu)
     {
         gbtn = &active_buttons[i];
         callback = gbtn->draw_call;
+        if (world_side_panel_paints(gbtn) || world_ui_menu_paints(gbtn))
+            continue;
         if ((callback != NULL) && (gbtn->flags & LbBtnF_Visible) && (gbtn->flags & LbBtnF_Active) && (gbtn->gmenu_idx == gmnu->number))
         {
           if (((gbtn->button_state_left_pressed) || (gbtn->button_state_right_pressed)) && (gbtn->gbtype != LbBtnT_HorizSlider) && (callback != gui_area_null))
@@ -3446,7 +3468,7 @@ void draw_active_menus_buttons(void)
         /* (and the message boxes at the foot of the view are left out while it is up: their glass is put on the screen
            after everything else, over the panel) */
         if (((menu_stack[k] == GMnu_TEXT_INFO) || (menu_stack[k] == GMnu_BATTLE) || (menu_stack[k] == GMnu_DUNGEON_SPECIAL)) &&
-            world_keeper_panel_open()) continue;
+            (world_keeper_panel_open() || world_level_window_open())) continue;
         menu_num = menu_id_to_number(menu_stack[k]);
         if (menu_num < 0) continue;
         gmnu = &active_menus[menu_num];
@@ -3464,6 +3486,8 @@ void draw_active_menus_buttons(void)
               callback(gmnu);
             if (gmnu->visual_state == 2)
               draw_menu_buttons(gmnu);
+            if (menu_stack[k] == GMnu_CREATURE_WINDOW)
+              world_creature_window_drawn(gmnu); /* endless: the Molten window paints what it and its buttons drew */
             RendererClearDrawFlags(Lb_SPRITE_TRANSPAR4);
         }
     }
@@ -3566,6 +3590,7 @@ void draw_gui(void)
         }
     }
     RendererSetDrawFlags(flg_mem);
+    uf_window_stop(); /* (endless: no window's recording runs past the menus) */
     SYNCDBG(8,"Finished");
 }
 
@@ -3636,7 +3661,12 @@ short frontend_draw(void)
     case FeSt_ENDLESS_LOAD:
     case FeSt_WORLD_LIST:
         frontend_copy_background();
+        ui_blit_palette = frontend_palette; /* (endless: the software renderer's Molten windows in the frontend's palette) */
+        uf_begin(); /* endless, the screens behind the main menu in the Molten look (ui_front.c) */
         draw_gui();
+        world_ui_front_flush(); /* endless, the modern main menu: its buttons painted together */
+        uf_flush();
+        ui_blit_palette = NULL;
         break;
     case FeSt_LAND_VIEW:
         frontmap_draw();
@@ -3655,9 +3685,13 @@ short frontend_draw(void)
         break;
     case FeSt_FEDEFINE_KEYS:
         frontend_copy_background();
+        ui_blit_palette = frontend_palette;
+        uf_begin(); /* endless, the Molten look; the "press a key" box is recorded with it, so it stays over the list */
         draw_gui();
         if ( defining_a_key )
             draw_defining_a_key_box();
+        uf_flush();
+        ui_blit_palette = NULL;
         break;
     case FeSt_STORY_BIRTHDAY:
         frontbirthday_draw();
@@ -4259,9 +4293,17 @@ void frontend_draw_product_version(struct GuiButton *gbtn)
     char text[128];
     snprintf(text, sizeof(text), "Endless Keeper %d.%d.%d-%s %s", VER_MAJOR, VER_MINOR, VER_RELEASE,
         (ENDLESS_RELEASE[0] != '\0') ? ENDLESS_RELEASE : "dev", (ENDLESS_STAGE[0] != '\0') ? ENDLESS_STAGE : "Alpha");
+    {
+        char base[128];
+        snprintf(base, sizeof(base), "%s %s", PRODUCT_NAME, PRODUCT_VERSION);
+        if (world_ui_front_version(gbtn->scr_pos_y, h, text, base)) /* endless, the modern main menu */
+            return;
+    }
+    const TbBool rec = uf_pause(); /* (endless, the Molten screens: the version stays in its corner, out of the window) */
     LbTextDrawResized(0, 0, units_per_px, text);
     snprintf(text, sizeof(text), "%s %s", PRODUCT_NAME, PRODUCT_VERSION);
     LbTextDrawResized(0, h, units_per_px, text);
+    uf_resume(rec);
 }
 
 /******************************************************************************/

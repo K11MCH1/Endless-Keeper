@@ -62,6 +62,7 @@
 #include "gui_msgs.h"
 
 #include "keeperfx.hpp"
+#include "world_rivals.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1633,7 +1634,8 @@ struct ComputerTask * able_to_build_room(struct Computer2 *comp, struct Coord3d 
         {
             stl_x = corpos.x.stl.num;
             stl_y = corpos.y.stl.num;
-            if (other_build_here(comp, stl_x, stl_y, width_slabs, height_slabs))
+            if (other_build_here(comp, stl_x, stl_y, width_slabs, height_slabs) &&
+                world_rivals_site_ok(dungeon->owner, subtile_slab(stl_x), subtile_slab(stl_y))) /* endless: rivals grow apart */
             {
                 dstpos.x.stl.num = stl_x;
                 dstpos.y.stl.num = stl_y;

@@ -30,6 +30,9 @@ TbBool world_level_window_inputs(void);
 /** Each turn on every machine but a dedicated server: the test hook KFX_WORLD_LEVELTEST. */
 void world_level_window_turn(void);
 
+/** The pointer is on the floating spellbook (drawn this frame or the last). */
+TbBool world_level_book_hovered(void);
+
 #ifdef __cplusplus
 }
 #endif

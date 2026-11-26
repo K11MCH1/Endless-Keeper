@@ -19,6 +19,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "ui_front.h"
 #include "kfx/renderer/software/SwDrawTarget.h"
 #include "kfx/renderer/RendererManager.h"
 #include "bflib_vidraw.h"
@@ -311,6 +312,9 @@ void LbDrawBoxClip(long x, long y, unsigned long width, unsigned long height, Tb
  */
 TbResult LbDrawBox(long x, long y, unsigned long width, unsigned long height, TbPixel colour)
 {
+    /* (endless, the Molten windows and screens: a box of their drawing is painted with them, ui_front.c) */
+    if (uf_on() && uf_box((int)x, (int)y, (int)width, (int)height, colour))
+        return Lb_SUCCESS;
     return RendererDrawBox(x, y, width, height, colour);
 }
 

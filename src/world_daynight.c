@@ -84,6 +84,7 @@
 #include "vidfade.h"
 #include "world_wallbreak.h"
 #include "ui_safe_area.h"
+#include "world_side_panel.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -398,6 +399,12 @@ void world_daynight_draw(void)
         dn_make_frame(k);
     if (dn_frame_data[k] == NULL)
         return;
+    if (world_side_hud_modern())
+    {
+        /* the modern look: the dial in a gold ring with the year's days on it, the World Boss strip under it */
+        world_boss_draw(0, world_side_dial_draw(&dn_frame_spr[k], k), 0);
+        return;
+    }
     const int upp = units_per_pixel;
     const int size = DAYNIGHT_RIM * upp / 16;
     const int margin = 6 * upp / 16;
@@ -1886,7 +1893,7 @@ static void dn_invasions_turn(long day, GameTurnDelta t)
             {
                 /* a raider from before the invasions were kept: it starts one for its target, landed here today */
                 const PlayerNumber tp = cctrl->party.target_plyr_idx;
-                if ((tp < 0) || (tp >= PLAYERS_COUNT) || !world_player_is_human(tp))
+                if ((tp < 0) || (tp >= PLAYERS_COUNT) || !(world_player_is_human(tp) || world_player_is_keeper(tp)))
                     continue;
                 struct DnInvasion *inv = &dn_inv[tp];
                 memset(inv, 0, sizeof(*inv));
@@ -2082,6 +2089,29 @@ static void dn_threat_outcome(PlayerNumber p)
     th->made = th->killed = 0;
 }
 
+/** Whom raids come for: a human player's dungeon (not a co-op seat whose player is away, nor one at a World Boss
+ *  fight), and an awake computer keeper's (the user, 2026-11-25: "Hero raids should work for Enemy keepers as well";
+ *  a keeper asleep is not loaded, and its ground freezes). */
+static TbBool dn_raid_target(PlayerNumber p)
+{
+    if ((p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX))
+        return false;
+    if (world_player_is_human(p))
+        return !world_coop_seat_away(p) && !world_boss_player_away(p);
+    return world_player_is_keeper(p) && !world_keeper_is_passive(p) && thing_exists(find_players_dungeon_heart(p));
+}
+
+void world_raids_forget_player(PlayerNumber p)
+{
+    if ((p < 0) || (p >= PLAYERS_MAX))
+        return;
+    memset(&dn_inv[p], 0, sizeof(dn_inv[p]));
+    dn_owed_day[p] = 0;
+    memset(&dn_army_wait[p], 0, sizeof(dn_army_wait[p]));
+    memset(&dn_late[p], 0, sizeof(dn_late[p]));
+    memset(&dn_thr[p], 0, sizeof(dn_thr[p]));
+}
+
 static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
 {
     if (world_safe_day())
@@ -2122,7 +2152,7 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
     struct DnRng rng = {dn_mix(world_seed() ^ ((uint64_t)day << 8) ^ (uint64_t)idx ^ 0x5A1D5A1D5A1DULL ^
         dn_player_salt(plyr_idx))};
     struct Thing *heartng = find_players_dungeon_heart(plyr_idx);
-    if (!thing_exists(heartng) || !world_human_heart_loaded(plyr_idx))
+    if (!thing_exists(heartng) || (world_player_is_human(plyr_idx) && !world_human_heart_loaded(plyr_idx)))
     {
         SYNCLOG("World: day %ld raid %d skipped: the player's heart isn't loaded", day, idx + 1);
         return;
@@ -2165,8 +2195,8 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
                 continue;
             const struct SlabMap *slb = get_slabmap_block(x, y);
             const PlayerNumber o = slabmap_block_invalid(slb) ? PLAYER_NEUTRAL : slabmap_owner(slb);
-            if ((o >= 0) && (o < PLAYERS_COUNT) && (o != plyr_idx) && world_player_is_human(o))
-                area.mine[c] = 1;
+            if ((o >= 0) && (o < PLAYERS_COUNT) && (o != plyr_idx) && (world_player_is_human(o) || world_player_is_keeper(o)))
+                area.mine[c] = 1; /* (a computer keeper's floor too, 2026-11-25: raids come for keepers as well) */
         }
     dn_reach(&area, hx, hy); /* only where a Tunneller can get to the heart from */
     int ncand = 0, best_blockers = -1, best_off = 0;
@@ -2398,7 +2428,9 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         th->made = (int16_t)made_all;
         th->killed = 0;
     }
-    world_progress_raid(plyr_idx, day, idx, world_seed()); /* its book: only for a raid that came (audit 2026-11-09) */
+    if (world_player_is_human(plyr_idx))
+        world_progress_raid(plyr_idx, day, idx, world_seed()); /* its book: only for a raid that came (audit 2026-11-09); a
+                                                                   computer keeper's raid carries none */
     inv.active = 1;
     inv.day = (int32_t)day;
     dn_inv[plyr_idx] = inv;
@@ -3154,7 +3186,7 @@ void world_daynight_turn(void)
         {
             if ((dn_owed_day[p] != (int32_t)day) || dn_invasion_on(p))
                 continue;
-            if (!world_player_is_human(p) || world_coop_seat_away(p))
+            if (!dn_raid_target(p))
             {
                 dn_owed_day[p] = 0;
                 continue;
@@ -3181,7 +3213,7 @@ void world_daynight_turn(void)
             struct DnArmyWait *aw = &dn_army_wait[p];
             if (aw->mask == 0)
                 continue;
-            if ((aw->day != (int32_t)day) || !world_player_is_human(p) || world_coop_seat_away(p))
+            if ((aw->day != (int32_t)day) || !dn_raid_target(p))
             {
                 aw->mask = 0;
                 continue;
@@ -3208,7 +3240,7 @@ void world_daynight_turn(void)
     {
         for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
         {
-            struct Thing *heartng = world_player_is_human(p) ? find_players_dungeon_heart(p) : INVALID_THING;
+            struct Thing *heartng = dn_raid_target(p) ? find_players_dungeon_heart(p) : INVALID_THING;
             if (!thing_exists(heartng))
                 continue;
             const MapSlabCoord hx = subtile_slab(heartng->mappos.x.stl.num), hy = subtile_slab(heartng->mappos.y.stl.num);
@@ -3217,12 +3249,12 @@ void world_daynight_turn(void)
         }
     }
     /* every human player gets its day's raids (as many as its dungeon's own days allow), each at its own time in the
-       raid's part of the day, rolled on its own */
+       raid's part of the day, rolled on its own; and every awake computer keeper (2026-11-25) */
     for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
     {
-        if (!world_player_is_human(p) || world_coop_seat_away(p) || world_boss_player_away(p))
+        if (!dn_raid_target(p))
             continue; /* (a co-op dungeon whose player is away is frozen: no raid comes for it; nor for a keeper at a
-                         World Boss fight) */
+                         World Boss fight, nor for a computer keeper asleep) */
         const int n = dn_raids_on_day(world_seat_day(p)) + world_season_extra_raids(p); /* the Swelter: one more */
         for (int i = 0; i < n; i++)
         {

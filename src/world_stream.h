@@ -44,7 +44,7 @@ const char *world_next_seed_text(void);
 /** Generator versions: a world keeps the one it was made with (saved with it; older saves are version 6). */
 #define WORLD_GEN_OLDEST 6
 /** The version this build gives a new world (test hook KFX_WORLD_GENVERSION=6 or 7). */
-#define WORLD_NEW_GEN_VERSION 8 /* since 2026-11-22 (7 from 2026-11-12, 6 before) */
+#define WORLD_NEW_GEN_VERSION 9 /* since 2026-11-24 (8 from 2026-11-22, 7 from 2026-11-12, 6 before) */
 int world_new_gen_version(void);
 /** A replay or a network game's host says which version the next new world has (0: this build's). */
 void world_set_next_gen_version(int version);
@@ -212,6 +212,20 @@ struct WorldKeeperInfo {
     long days_alone;       /* world days since a human was last near it (0: not known) */
 };
 TbBool world_keeper_of_player(PlayerNumber plyr_idx, struct WorldKeeperInfo *out);
+/** A keeper of a rival pair (world_rivals.c): what the generator made of its pair, and its rival now. */
+struct WorldKeeperRival {
+    int index;                        /* its keeper record */
+    int rival_index;                  /* its rival's record, -1 while the rival is not on record */
+    PlayerNumber rival;               /* its rival's player; PLAYER_NONE while it has none (no colour, not set up, destroyed) */
+    TbBool active, rival_active;      /* awake */
+    uint8_t which;                    /* 1: the pair's first keeper (west or north), 2: the second */
+    uint8_t field_kind;               /* WgField */
+    int64_t heart_x, heart_y, rival_heart_x, rival_heart_y, field_x, field_y; /* world slabs */
+    int32_t field_half, field_width;
+    int32_t pair_cx, pair_cy;         /* the pair's name: its first keeper's start chunk */
+};
+/** False when the player is no computer keeper of a rival pair. */
+TbBool world_keeper_rival(PlayerNumber plyr_idx, struct WorldKeeperRival *out);
 /** The portals the world knows (world slabs, owner or -1); returns how many were written. */
 int world_portals_list(int64_t *x, int64_t *y, int *owner, int max_portals);
 /** The world apart (2026-11-14, chunked worlds): the far corner of the world plane, from world slab WORLD_APART_MIN

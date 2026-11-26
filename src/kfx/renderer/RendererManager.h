@@ -159,6 +159,12 @@ TbBool RendererSubmitLandviewZoom(const unsigned char *src_buf, int src_w, int s
 // Save the current frame to a file via the active backend (fmt: 1=PNG, 2=BMP).
 TbBool RendererScheduleScreenshot(const char* path, int fmt);
 
+/** Endless Keeper: a true-colour window (premultiplied RGBA, w x h, top row first) laid over this frame's UI, under
+ *  the pointer (kfx/renderer/UIImage.h), in `slot` (0-3: drawn in that order; one slot a window). Call each frame it
+ *  shows; its pixels are copied only when gen changes. False when the active backend cannot (software): draw the
+ *  palette version instead. */
+TbBool RendererSubmitUIImage(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const unsigned char* rgba, uint32_t gen);
+
 /** True when the active backend composites the minimap over the panel
  *  artwork itself (draw-order layering) -- index 0 in its minimap buffer is
  *  transparent, so callers must draw black with another index.

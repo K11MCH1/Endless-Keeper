@@ -53,6 +53,8 @@ int world_circles_breached(PlayerNumber plyr_idx);
 void world_circles_player_reset(PlayerNumber plyr_idx);
 /** Once per game turn (from world_process_turn). */
 void world_circles_turn(void);
+/** world_stream.c's chunk keeper: the test switch KFX_WORLD_DIGRUN keeps its dig front loaded. */
+void world_circles_want_chunks(void (*want)(int64_t wx, int64_t wy, int r));
 /** The banner, drawn over the game view. */
 void world_circles_draw(void);
 /** A thin client: a server notice that is a circle message (not shown as chat). */

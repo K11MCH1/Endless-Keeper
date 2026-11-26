@@ -1614,8 +1614,10 @@ TbBool open_new_packet_file_for_save(void)
         set_flag(replay.head.flags, PSHF_Players16);
     if (world_mode_active() && (world_gen_version() == 7))
         set_flag(replay.head.flags, PSHF_WorldGen7);
-    if (world_mode_active() && (world_gen_version() >= 8))
+    if (world_mode_active() && (world_gen_version() == 8))
         set_flag(replay.head.flags, PSHF_WorldGen8);
+    if (world_mode_active() && (world_gen_version() >= 9))
+        set_flag(replay.head.flags, PSHF_WorldGen9);
     replay.head.players_in_use = (game.players_extended > 1) ? (uint8_t)players_in_use() : 0;
     memset(replay.head.world_seed, 0, sizeof(replay.head.world_seed));
     if (world_mode_active())

@@ -57,6 +57,14 @@ void world_progress_client_turn(void);
 int world_progress_books_of(const struct WgStructRef *ref, uint64_t world_seed, TbBool guaranteed, uint8_t *box_kind);
 /** The object model of a research book (0 when the map pack doesn't have it). */
 ThingModel world_progress_book_model(void);
+/** Registers the built-in icons (custom_sprites.c, with the other built-in icons). */
+void world_progress_register_icons(void);
+/** The full map's icon for this thing when it differs from its object's MapIcon (a level-up lore book: its own icon,
+ *  not the Special box's), else 0. */
+long world_progress_map_icon(const struct Thing *thing);
+/** Does this power or room stay off in endless worlds (Destroy Walls, Armageddon, Disease, the Scavenger Room)? */
+TbBool world_progress_power_banned(PowerKind pwkind);
+TbBool world_progress_room_banned(RoomKind rkind);
 /** Endless research books are drawn in their grade's colour (1 white, 2 green, 3 blue, 4 red, 5 purple), lore books
  *  in the colour of the tier of what they teach (the user, 2026-11-20: to tell them from ordinary spellbooks). The
  *  remap table to draw the thing with, with the light `shade` (0-31, rounded to 4 levels; 32 or more: none) on it, or

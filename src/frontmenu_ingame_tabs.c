@@ -86,6 +86,7 @@
 #include "world_progress.h"
 #include "world_fill.h"
 #include "ui_safe_area.h"
+#include "world_side_panel.h"
 #include "post_inc.h"
 #include "room_workshop.h"
 
@@ -2120,7 +2121,8 @@ void gui_activity_background(struct GuiMenu *gmnu)
         }
     }
     RendererAddDrawFlags(Lb_SPRITE_TRANSPAR4);
-    LbDrawBox(gmnu->pos_x + scale_ui_value(2),gmnu->pos_y + scale_ui_value(218),scale_ui_value(134),scale_ui_value(24),colours[0][0][0]);
+    if (!world_side_panel_on()) /* (the modern side panel paints its own rows) */
+        LbDrawBox(gmnu->pos_x + scale_ui_value(2),gmnu->pos_y + scale_ui_value(218),scale_ui_value(134),scale_ui_value(24),colours[0][0][0]);
 
     RendererSetDrawFlags(flg_mem);
 }
@@ -2213,6 +2215,12 @@ void gui_scroll_activity_down(struct GuiButton *gbtn)
 {
     if (top_of_breed_list + 6 < no_of_breeds_owned)
         top_of_breed_list++;
+}
+
+/** Endless, the modern side panel (world_side_panel.c): the player in a row of the Information tab (-1: none). */
+PlayerNumber world_info_panel_player(int idx)
+{
+    return info_panel_pos_to_player_number(idx);
 }
 
 void gui_area_ally(struct GuiButton *gbtn)
@@ -2808,20 +2816,31 @@ void draw_whole_status_panel(void)
     }
     RendererSetDrawColour(colours[15][15][15]);
     RendererSetDrawFlags(0);
+    if (world_side_panel_on())
+    {
+        /* endless, the modern look: the panel's glass, buttons and gold painted under the UI (world_side_panel.c);
+           the world view runs under it */
+        world_side_panel_draw();
+    } else
+    {
     // The world view runs under the sidebar; hide it below the panel art too.
     if (viewport_mode == VpMode_FullLetterbox)
         LbDrawBox(0, 0, gmnu->pos_x + gmnu->width, MyScreenHeight, colours[0][0][0]);
     draw_panel_art_to_bottom(gmnu, fs_units_per_px);
     // Draws gold amount; note that button_sprite[] is used instead of full font
     draw_gold_total(player->id_number, gmnu->pos_x + gmnu->width/2, gmnu->pos_y + gmnu->height*67/200, fs_units_per_px, dungeon->total_money_owned);
+    }
     int32_t basic_zoom = get_local_minimap_zoom();
     if (16/mm_units_per_px < 3)
         mmzoom = basic_zoom / scale_value_for_resolution_with_upp(2,mm_units_per_px);
     else
         mmzoom = basic_zoom;
+    if (!world_side_minimap_away()) /* endless: not while the modern side panel is away or sliding */
+    {
     panel_map_draw_slabs(local_state.minimap_pos_x, local_state.minimap_pos_y, mm_units_per_px, mmzoom);
     panel_map_draw_overlay_things(mm_units_per_px, mmzoom, basic_zoom);
     panel_map_submit_to_renderer();
+    }
     /* (no placefiller under the panel: the panel itself reaches the screen's bottom, draw_panel_art_to_bottom) */
 }
 

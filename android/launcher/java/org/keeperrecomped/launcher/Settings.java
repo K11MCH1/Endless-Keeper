@@ -94,6 +94,9 @@ final class Settings {
         bool("graphics", "Interface", "safe_bars", false, "Black bars at the screen edges",
                 "Draws the whole game inside the rounded screen corners and the camera hole, with black bars beside it, "
                         + "so nothing is cut off. Screen safe area is not needed then.");
+        integer("graphics", "Interface", "ui_scale", 100, 50, 300, "UI scale (%)",
+                "Size of the in-game side panel, menus, messages and windows. Larger is easier to read and tap on a phone; "
+                        + "the 3D view and the main menu keep their size.");
         integer("graphics", "Interface", "creature_status_size", 16, 4, 64, "Creature flower size (px)", null);
         integer("graphics", "Interface", "hand_size", 100, 25, 400, "Hand size (%)", null);
         integer("graphics", "Interface", "line_box_size", 150, 25, 400, "Select box line size (%)", null);

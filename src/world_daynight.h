@@ -83,6 +83,8 @@ TbBool world_raids_load(const uint8_t *buf, size_t len);
 void world_raids_reset(void);
 /** Start again: the raid on that player (if any) goes home now. */
 void world_raids_player_retreat(PlayerNumber plyr_idx);
+/** A computer keeper's player slot is given back: its raids' records go (the next keeper there starts afresh). */
+void world_raids_forget_player(PlayerNumber plyr_idx);
 
 /** Draws the day/night icon in the top right corner (endless levels only; from the in-game UI). */
 void world_daynight_draw(void);

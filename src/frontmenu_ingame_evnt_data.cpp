@@ -35,6 +35,7 @@
 #include "frontmenu_options.h"
 #include "game_legacy.h"
 #include "sprites.h"
+#include "world_side_panel.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -51,7 +52,7 @@ void gui_setup_enemy_over(struct GuiButton *gbtn);
 void gui_area_enemy_battlers(struct GuiButton *gbtn);
 /******************************************************************************/
 struct GuiButtonInit text_info_buttons[] = {
-  { 0, 0,                   0, 0, NULL,               NULL,        NULL,               0, 999,   4, 999,   4,400, 78, gui_area_scroll_window,            0, GUIStr_Empty,        0,{.ptr = &game.evntbox_scroll_window},0,NULL },
+  { 0, 0,                   0, 0, NULL,               NULL,        NULL,               0, 999,   4, 999,   4,400, 78, gui_area_scroll_window,            0, GUIStr_Empty,        0,{.ptr = &game.evntbox_scroll_window},0,world_ui_textbox_maintain },
   { 1, BID_EVENT_ZOOM,      0, 0, gui_go_to_event,    NULL,        NULL,               0,   4,   4,   4,   4, 30, 24, gui_area_new_normal_button, GPS_message_message_btn_show_act, GUIStr_ZoomToArea,   0,       {0},            0, maintain_zoom_to_event },
   { 0, BID_OBJ_CLOSE,       0, 1, gui_close_objective,gui_close_objective,NULL,        0,   4,  56,   4,  56, 30, 24, gui_area_new_normal_button, GPS_message_message_btn_accept_act, GUIStr_CloseWindow,  0,       {0},            0, NULL },
   { 1, BID_OBJ_SCRL_UP,     0, 0, gui_scroll_text_up, NULL,        NULL,               0, 446,   4, 446,   4, 30, 24, gui_area_new_normal_button, GPS_message_message_btn_up_act, GUIStr_CtrlUp,       0,{.ptr = &game.evntbox_scroll_window},0,maintain_scroll_up },

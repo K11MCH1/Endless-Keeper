@@ -1108,6 +1108,19 @@ void main()
 }
 )glsl";
 
+// Endless Keeper (2026-11-25): a true-colour window painted on the CPU (UIImage.h), premultiplied RGBA, drawn as it
+// is (blend ONE, ONE_MINUS_SRC_ALPHA). Vulkan draws it with its own copy of this, the "overlay_rgba" program.
+constexpr const char* UI_RGBA_FRAGMENT_SHADER = R"glsl(
+#version 330 core
+in vec2 v_uv;
+uniform sampler2D u_image;
+out vec4 fragColor;
+void main()
+{
+    fragColor = texture(u_image, v_uv);
+}
+)glsl";
+
 // Window-frame overlay (compressed_window_draw(), front_landview.c)
 // -- same as RAWIMAGE_BLIT_FRAGMENT_SHADER but index 0 is transparent instead
 // of opaque black, so this draws over whatever the opaque present already put

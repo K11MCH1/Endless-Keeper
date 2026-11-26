@@ -49,6 +49,20 @@
 #include "server_admin.h"
 #include "gui_ttf.h"
 #include "thing_stats.h"
+#include "config_terrain.h"
+#include "creature_control.h"
+#include "creature_states.h"
+#include "creature_states_spdig.h"
+#include "dungeon_data.h"
+#include "map_blocks.h"
+#include "map_columns.h"
+#include "map_data.h"
+#include "power_hand.h"
+#include "slab_data.h"
+#include "thing_creature.h"
+#include "thing_list.h"
+#include "thing_navigate.h"
+#include "tasks_list.h"
 #include "post_inc.h"
 
 /* circles 1-4: the share of the nearest keeper's best creature level, in percent; 5-9: the fixed level */
@@ -356,11 +370,411 @@ TbBool world_circles_net_notice(const char *text)
     return true;
 }
 
+
+/******************************************************************************/
+/* Test hook KFX_WORLD_DIGRUN="imps[,drops[,stop_circle]]" (local, single player): from turn 400 player 0 digs a
+   1-wide tunnel east from its Heart for ever, the way a player keeps marking slabs ahead of the dig: a few slabs past
+   the dig front are always marked, round impenetrable rock, gems, lava and walls it cannot dig. The keeper keeps that
+   many Imps (more are made when some die). drops=1 (the default): every 10 s each free Imp more than 25 slabs from
+   the front is put down at the claimed slab nearest the front, as a player drops them with the Hand, and the gold it
+   carries goes to the treasury (as a player who drops it there first). "DIGRUN" lines: every game minute the front's
+   distance from the start and its circle, each circle reached with its time, "DIGRUN: done" at stop_circle (9). */
+
+#define DR_AHEAD 6
+#define DR_BX0 24   /* the search box: this far behind the anchor (west) */
+#define DR_BX1 56   /* this far ahead (east) */
+#define DR_BY 40    /* this far to each side */
+#define DR_BW (DR_BX0 + DR_BX1 + 1)
+#define DR_BH (2 * DR_BY + 1)
+#define DR_N (DR_BW * DR_BH)
+static struct {
+    int imps, drops, stop;
+    TbBool on, done;
+    long started;
+    int64_t row, ax, ay; /* the start's row; the anchor: the farthest dug slab on the way, connected to the dungeon */
+    int circle, marked;
+    long dropped, made, gold;
+    double best;
+    int32_t cost[DR_N], prev[DR_N];
+    int8_t kind[DR_N];
+    int32_t heap[DR_N * 4];
+    int path[DR_N], plen;
+} dr;
+
+/** 0 open (dug), 1 to dig, 2 cannot be dug, -1 not loaded. */
+static int dr_slab(int64_t wx, int64_t wy)
+{
+    MapSlabCoord ex, ey;
+    if (!world_engine_slab(wx, wy, &ex, &ey))
+        return -1;
+    const struct SlabMap *slb = get_slabmap_block(ex, ey);
+    if (slabmap_block_invalid(slb))
+        return -1;
+    const SlabKind k = slb->kind;
+    if ((k == SlbT_ROCK) || (k == SlbT_GEMS) || (k == SlbT_LAVA))
+        return 2;
+    const struct SlabConfigStats *st = get_slab_kind_stats(k);
+    if (((st->block_flags & SlbAtFlg_IsRoom) != 0) && (slabmap_owner(slb) == PLAYER0))
+        return 0; /* (the keeper's own rooms, the Heart's middle too) */
+    if ((st->block_flags & SlbAtFlg_IsDoor) != 0)
+        return (slabmap_owner(slb) == PLAYER0) ? 0 : 2;
+    if ((st->block_flags & SlbAtFlg_Blocking) != 0)
+        return (((st->block_flags & SlbAtFlg_Digable) != 0) || (slabmap_owner(slb) == PLAYER0)) ? 1 : 2; /* (its own
+            walls a keeper can dig too) */
+    return 0;
+}
+
+static void dr_box_xy(int i, int64_t *wx, int64_t *wy)
+{
+    *wx = dr.ax - DR_BX0 + i % DR_BW;
+    *wy = dr.ay - DR_BY + i / DR_BW;
+}
+
+/** The anchor moves only over ground the keeper holds or one of its Imps has reached (within 3 slabs): an open cave
+ *  ahead is walked, not skipped. */
+static TbBool dr_reached(int i)
+{
+    int64_t wx, wy;
+    MapSlabCoord ex, ey;
+    dr_box_xy(i, &wx, &wy);
+    if (!world_engine_slab(wx, wy, &ex, &ey))
+        return false;
+    if (slabmap_owner(get_slabmap_block(ex, ey)) == PLAYER0)
+        return true;
+    const struct Dungeon *dungeon = get_players_num_dungeon(PLAYER0);
+    long guard = 0;
+    for (ThingIndex t = dungeon->digger_list_start; (t > 0) && (guard++ <= (long)THINGS_COUNT);)
+    {
+        const struct Thing *thing = thing_get(t);
+        const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        if (thing_is_invalid(thing) || creature_control_invalid(cctrl))
+            break;
+        t = cctrl->players_next_creature_idx;
+        if ((abs((int)subtile_slab(thing->mappos.x.stl.num) - ex) <= 3) && (abs((int)subtile_slab(thing->mappos.y.stl.num) - ey) <= 3))
+            return true;
+    }
+    return false;
+}
+
+/** Plans the way on from the anchor: the cheapest route (walking 1 a slab, digging 5) to the place in the box that
+ *  is best for going east (cost less 6 a slab east, plus 1 a slab off the start's row; ground that isn't loaded yet
+ *  counts as to dig, so the way goes round the rock it knows towards it); the anchor moves on along it
+ *  over dug ground; dr.path gets the route from the anchor. */
+static void dr_plan(void)
+{
+    for (int i = 0; i < DR_N; i++)
+    {
+        int64_t wx, wy;
+        dr_box_xy(i, &wx, &wy);
+        dr.kind[i] = (int8_t)dr_slab(wx, wy);
+        dr.cost[i] = INT32_MAX;
+        dr.prev[i] = -1;
+    }
+    const int start = DR_BY * DR_BW + DR_BX0;
+    int hn = 0;
+    dr.cost[start] = 0;
+    dr.heap[hn++] = start;
+    while (hn > 0)
+    {
+        /* (a binary heap on cost) */
+        const int u = dr.heap[0];
+        dr.heap[0] = dr.heap[--hn];
+        for (int c = 0;;)
+        {
+            int l = 2 * c + 1, r = l + 1, m = c;
+            if ((l < hn) && (dr.cost[dr.heap[l]] < dr.cost[dr.heap[m]])) m = l;
+            if ((r < hn) && (dr.cost[dr.heap[r]] < dr.cost[dr.heap[m]])) m = r;
+            if (m == c) break;
+            const int t = dr.heap[c]; dr.heap[c] = dr.heap[m]; dr.heap[m] = t; c = m;
+        }
+        const int ux = u % DR_BW, uy = u / DR_BW;
+        static const int ddx[4] = {1, 0, 0, -1}, ddy[4] = {0, 1, -1, 0};
+        for (int d = 0; d < 4; d++)
+        {
+            const int vx = ux + ddx[d], vy = uy + ddy[d];
+            if ((vx < 0) || (vy < 0) || (vx >= DR_BW) || (vy >= DR_BH))
+                continue;
+            const int v = vy * DR_BW + vx;
+            if (dr.kind[v] == 2)
+                continue;
+            const int32_t nc = dr.cost[u] + ((dr.kind[v] != 0) ? 5 : 1); /* (ground not loaded yet: as if to dig) */
+            if (nc >= dr.cost[v] || (hn >= DR_N * 4))
+                continue;
+            dr.cost[v] = nc;
+            dr.prev[v] = u;
+            int c = hn;
+            dr.heap[hn++] = v;
+            while (c > 0)
+            {
+                const int pa = (c - 1) / 2;
+                if (dr.cost[dr.heap[pa]] <= dr.cost[dr.heap[c]]) break;
+                const int t = dr.heap[c]; dr.heap[c] = dr.heap[pa]; dr.heap[pa] = t; c = pa;
+            }
+        }
+    }
+    /* the goal: the best place at least 8 slabs further east (if none can be reached, the farthest east there is) */
+    int best = -1, far_x = -1;
+    long best_score = 0;
+    for (int i = 0; i < DR_N; i++)
+        if ((dr.cost[i] != INT32_MAX) && (i % DR_BW > far_x))
+            far_x = i % DR_BW;
+    const int min_x = min(DR_BX0 + 8, far_x);
+    for (int i = 0; i < DR_N; i++)
+    {
+        if ((dr.cost[i] == INT32_MAX) || (i % DR_BW < min_x))
+            continue;
+        int64_t wx, wy;
+        dr_box_xy(i, &wx, &wy);
+        const long score = (long)dr.cost[i] - 6L * (long)(wx - dr.ax) + (long)llabs((long long)(wy - dr.row));
+        if ((best < 0) || (score < best_score))
+        {
+            best = i;
+            best_score = score;
+        }
+    }
+    dr.plen = 0;
+    for (int i = best; (i >= 0) && (dr.plen < DR_N); i = dr.prev[i])
+        dr.path[dr.plen++] = i;
+    for (int i = 0; i < dr.plen / 2; i++)
+    {
+        const int t = dr.path[i]; dr.path[i] = dr.path[dr.plen - 1 - i]; dr.path[dr.plen - 1 - i] = t;
+    }
+    /* the anchor moves on over the dug part of the way (kept a few slabs back: the box stays round the dig) */
+    int k = 0;
+    while ((k + 1 < dr.plen) && (dr.kind[dr.path[k + 1]] == 0) && dr_reached(dr.path[k + 1]))
+        k++;
+    if (k > 0)
+    {
+        int64_t wx, wy;
+        dr_box_xy(dr.path[k], &wx, &wy);
+        dr.ax = wx;
+        dr.ay = wy;
+        memmove(dr.path, dr.path + k, (size_t)(dr.plen - k) * sizeof(dr.path[0]));
+        dr.plen -= k;
+    }
+}
+
+void world_circles_want_chunks(void (*want)(int64_t wx, int64_t wy, int r))
+{
+    if (dr.on && !dr.done && (dr.started != 0))
+        want(dr.ax, dr.ay, 1); /* (the dig front's ground, as the Imps working there keep it) */
+}
+
+static TbBool dr_imp_free(const struct Thing *thing)
+{
+    if (!thing_exists(thing) || (thing->owner != PLAYER0) || !thing_is_creature_special_digger(thing))
+        return false;
+    if (thing_is_picked_up(thing) || ((thing->alloc_flags & TAlF_IsControlled) != 0) || (thing->health <= 0))
+        return false;
+    if (creature_is_being_unconscious(thing) || creature_is_kept_in_custody(thing) ||
+        creature_is_dragging_or_being_dragged(thing) || creature_is_dying(thing))
+        return false;
+    return get_creature_state_type(thing) != CrStTyp_FightCrtr;
+}
+
+static void dr_imps(const struct Coord3d *drop, MapSlabCoord fx, MapSlabCoord fy, int drop_d)
+{
+    struct Dungeon *dungeon = get_players_num_dungeon(PLAYER0);
+    int have = 0;
+    long guard = 0;
+    for (ThingIndex i = dungeon->digger_list_start; (i > 0) && (guard++ <= (long)THINGS_COUNT);)
+    {
+        struct Thing *thing = thing_get(i);
+        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        if (thing_is_invalid(thing) || creature_control_invalid(cctrl))
+            break;
+        i = cctrl->players_next_creature_idx;
+        if (!thing_is_creature_special_digger(thing))
+            continue;
+        have++;
+        if ((drop == NULL) || !dr.drops || !dr_imp_free(thing))
+            continue;
+        const int d = abs((int)subtile_slab(thing->mappos.x.stl.num) - fx) + abs((int)subtile_slab(thing->mappos.y.stl.num) - fy);
+        if (d <= drop_d + 10)
+            continue; /* (put down only when it saves the Imp a walk) */
+        if (thing->creature.gold_carried > 0)
+        {
+            player_add_offmap_gold(PLAYER0, thing->creature.gold_carried);
+            dr.gold += thing->creature.gold_carried;
+            thing->creature.gold_carried = 0;
+        }
+        struct Coord3d pos = *drop;
+        pos.z.val = get_floor_height_at(&pos);
+        move_thing_in_map(thing, &pos);
+        set_start_state(thing);
+        dr.dropped++;
+    }
+    for (; have < dr.imps; have++)
+    {
+        struct Thing *heart = get_player_soul_container(PLAYER0);
+        const struct Coord3d *at = (drop != NULL) ? drop : (thing_exists(heart) ? &heart->mappos : NULL);
+        if ((at == NULL) || thing_is_invalid(create_owned_special_digger(at->x.val, at->y.val, PLAYER0)))
+            break;
+        dr.made++;
+    }
+}
+
+static void dr_turn(void)
+{
+    static TbBool read = false;
+    if (!read)
+    {
+        read = true;
+        const char *v = getenv("KFX_WORLD_DIGRUN");
+        dr.drops = 1;
+        dr.stop = WC_CIRCLES;
+        if ((v != NULL) && (sscanf(v, "%d,%d,%d", &dr.imps, &dr.drops, &dr.stop) >= 1) && (dr.imps > 0))
+        {
+            dr.on = true;
+            SYNCLOG("World: test switch KFX_WORLD_DIGRUN=%s", v);
+        }
+    }
+    if (!dr.on || dr.done || (game.game_kind == GKind_MultiGame) || (game.play_gameturn < 400))
+        return;
+    const long t = (long)game.play_gameturn;
+    if (dr.started == 0)
+    {
+        struct Thing *heart = get_player_soul_container(PLAYER0);
+        if (!thing_exists(heart))
+            return;
+        int64_t hx, hy;
+        world_slab_to_world(subtile_slab(heart->mappos.x.stl.num), subtile_slab(heart->mappos.y.stl.num), &hx, &hy);
+        dr.ax = hx;
+        dr.ay = hy;
+        dr.row = hy;
+        dr.started = t;
+        dr.circle = 1;
+        dr_imps(NULL, 0, 0, 0);
+        SYNCLOG("World: DIGRUN: from world slab (%ld,%ld), %d Imps, drops %s", (long)hx, (long)hy, dr.imps, dr.drops ? "on" : "off");
+    }
+    if ((t % 20) != 0)
+        return;
+    dr_plan();
+    int dug = 0;
+    int64_t tx = dr.ax, ty = dr.ay; /* the slab being dug: the first to dig on the way */
+    for (int i = 1; (i < dr.plen) && (dug < DR_AHEAD); i++)
+    {
+        if (dr.kind[dr.path[i]] != 1)
+            continue;
+        int64_t wx, wy;
+        MapSlabCoord ex, ey;
+        dr_box_xy(dr.path[i], &wx, &wy);
+        if (dug++ == 0)
+        {
+            tx = wx;
+            ty = wy;
+        }
+        if (!world_engine_slab(wx, wy, &ex, &ey))
+            continue;
+        for (int k = 0; k < STL_PER_SLB * STL_PER_SLB; k++)
+            reveal_map_subtile(slab_subtile(ex, k % STL_PER_SLB), slab_subtile(ey, k / STL_PER_SLB), PLAYER0);
+        if (tag_blocks_for_digging_in_area(slab_subtile(ex, 0), slab_subtile(ey, 0), PLAYER0))
+            dr.marked++;
+    }
+    const double d = world_dist_to_nearest_start(dr.ax, dr.ay);
+    if (d > dr.best)
+        dr.best = d;
+    const int circle = world_circle_of_distance(dr.best);
+    const long el = t - dr.started;
+    if (circle > dr.circle)
+    {
+        dr.circle = circle;
+        SYNCLOG("World: DIGRUN: circle %d reached at %ld turns (%ld:%02ld:%02ld game time), front %.0f slabs out, "
+            "%d slabs marked", circle, el, el / 72000, (el / 1200) % 60, (el / 20) % 60, dr.best, dr.marked);
+    }
+    if ((t % 200) == 0)
+    {
+        /* a player puts free Imps down on the keeper's ground nearest the slab being dug */
+        struct Coord3d drop, *dp = NULL;
+        int bestd = 1 << 30;
+        for (int dy = -16; dy <= 16; dy++)
+            for (int dx = -24; dx <= 24; dx++)
+            {
+                MapSlabCoord ex, ey;
+                if ((abs(dx) + abs(dy) >= bestd) || !world_engine_slab(tx + dx, ty + dy, &ex, &ey))
+                    continue;
+                const struct SlabMap *slb = get_slabmap_block(ex, ey);
+                if ((slabmap_owner(slb) != PLAYER0) || (dr_slab(tx + dx, ty + dy) != 0))
+                    continue;
+                bestd = abs(dx) + abs(dy);
+                drop.x.val = subtile_coord_center(slab_subtile_center(ex));
+                drop.y.val = subtile_coord_center(slab_subtile_center(ey));
+                drop.z.val = 0;
+                dp = &drop;
+            }
+        MapSlabCoord gx = 0, gy = 0;
+        if (!world_engine_slab(tx, ty, &gx, &gy))
+            dp = NULL;
+        dr_imps(dp, gx, gy, bestd);
+    }
+    if ((el % 1200) == 0)
+    {
+        const struct Dungeon *dungeon = get_players_num_dungeon(PLAYER0);
+        SYNCLOG("World: DIGRUN: %ld min: front at world slab (%ld,%ld), %.0f slabs out (best %.0f), circle %d, %d "
+            "slabs marked, Imps %d, made %ld, dropped %ld, gold carried back %ld, treasury %ld", el / 1200, (long)dr.ax,
+            (long)dr.ay, d, dr.best, circle, dr.marked, (int)dungeon->num_active_diggers, dr.made, dr.dropped,
+            dr.gold, (long)dungeon->total_money_owned);
+        if (el == 12000)
+        {
+            for (int i = 0; (i < dr.plen) && (i < 14); i++)
+            {
+                int64_t wx, wy;
+                MapSlabCoord ex = 0, ey = 0;
+                dr_box_xy(dr.path[i], &wx, &wy);
+                const TbBool here = world_engine_slab(wx, wy, &ex, &ey);
+                const struct SlabMap *slb = here ? get_slabmap_block(ex, ey) : NULL;
+                const struct Map *mapblk = here ? get_map_block_at(slab_subtile_center(ex), slab_subtile_center(ey)) : NULL;
+                SYNCLOG("World: DIGRUN:   way %d: world (%ld,%ld) engine (%d,%d) kind %d slab %d owner %d tagged %d reached %d",
+                    i, (long)wx, (long)wy, (int)ex, (int)ey, dr.kind[dr.path[i]], (slb != NULL) ? (int)slb->kind : -1,
+                    (slb != NULL) ? (int)slabmap_owner(slb) : -1,
+                    (mapblk != NULL) ? (int)(find_from_task_list_by_slab(PLAYER0, ex, ey) >= 0) : -1,
+                    dr_reached(dr.path[i]));
+            }
+            const struct Dungeon *dg = get_players_num_dungeon(PLAYER0);
+            long guard = 0;
+            for (ThingIndex ti = dg->digger_list_start; (ti > 0) && (guard++ <= (long)THINGS_COUNT);)
+            {
+                const struct Thing *thing = thing_get(ti);
+                const struct CreatureControl *cc = creature_control_get_from_thing(thing);
+                if (thing_is_invalid(thing) || creature_control_invalid(cc))
+                    break;
+                ti = cc->players_next_creature_idx;
+                int64_t iwx, iwy;
+                world_slab_to_world(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num), &iwx, &iwy);
+                SYNCLOG("World: DIGRUN:   Imp %d at world (%ld,%ld), state %d, continue %d, tasks in the list %d", (int)thing->index,
+                    (long)iwx, (long)iwy, (int)thing->active_state, (int)thing->continue_state, (int)dg->task_count);
+            }
+        }
+        int counts[4] = {0, 0, 0, 0};
+        for (int i = 0; i < DR_N; i++)
+            counts[(dr.kind[i] < 0) ? 3 : dr.kind[i]]++;
+        SYNCLOG("World: DIGRUN:   way planned %d slabs on from the anchor; the box: %d dug, %d to dig, %d not, %d unloaded; "
+            "round the anchor E %d S %d N %d W %d", dr.plen, counts[0], counts[1], counts[2], counts[3],
+            dr_slab(dr.ax + 1, dr.ay), dr_slab(dr.ax, dr.ay + 1), dr_slab(dr.ax, dr.ay - 1), dr_slab(dr.ax - 1, dr.ay));
+        {
+            MapSlabCoord ex, ey;
+            if (world_engine_slab(dr.ax + 1, dr.ay, &ex, &ey))
+            {
+                const struct SlabMap *slb = get_slabmap_block(ex, ey);
+                SYNCLOG("World: DIGRUN:   east of the anchor: kind %d owner %d flags %lx", (int)slb->kind, (int)slabmap_owner(slb),
+                    (unsigned long)get_slab_kind_stats(slb->kind)->block_flags);
+            }
+        }
+    }
+    if (circle >= dr.stop)
+    {
+        dr.done = true;
+        SYNCLOG("World: DIGRUN: done, circle %d at %ld turns (%ld:%02ld:%02ld game time)", circle, el, el / 72000,
+            (el / 1200) % 60, (el / 20) % 60);
+    }
+}
+
 void world_circles_turn(void)
 {
     if (!world_mode_active() || world_attract_active())
         return;
     wc_test_read();
+    dr_turn();
     if ((wc_test.breach > 1) && ((long)game.play_gameturn == wc_test.breach_turn)
       && (wc_test.breach > world_circles_breached(PLAYER0)))
         wc_breach(PLAYER0, min(wc_test.breach, WC_CIRCLES), "test hook");

@@ -59,6 +59,7 @@
 #include "world_pages.h"
 #include "world_stream.h"
 #include "world_truce.h"
+#include "world_rivals.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -378,7 +379,7 @@ long near_thing_pos_thing_filter_is_enemy_object_which_can_be_attacked_by_creatu
             if ((param->plyr_idx == -1) || (objtng->owner == param->plyr_idx))
             {
                 struct Thing* creatng = thing_get(param->primary_number);
-                if (players_are_enemies(creatng->owner, objtng->owner))
+                if (players_are_enemies(creatng->owner, objtng->owner) && !world_rivals_spare_heart(creatng->owner, objtng->owner))
                 {
                     MapCoordDelta distance = get_2d_distance(&creatng->mappos, &objtng->mappos);
                     //Just dungeon hearts now. Todo: expand with other types of destructible objects

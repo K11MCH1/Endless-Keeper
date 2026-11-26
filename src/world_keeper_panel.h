@@ -38,6 +38,15 @@ void world_keeper_panel_packet(PlayerNumber plyr_idx, unsigned long par1, unsign
 /** Every turn, on the machine that shows the game (test hook KFX_WORLD_PANELTEST). */
 void world_keeper_panel_turn(void);
 
+/** ESC was pressed: the Keeper panel (its portrait choice first) or the Library's window closes. True: it closed one
+ *  (ESC is taken: no pause menu). */
+TbBool world_windows_escape(void);
+/** The local player's empty Hand is on the Soul Container's picture or the Library's floating book: the Hand opens over
+ *  them as over a creature (a local look only: game state does not change). */
+TbBool world_hand_hover_local(void);
+/** Draws that open Hand (before the game's own Hand, which draws nothing then). */
+void world_hand_draw_hover(void);
+
 #ifdef __cplusplus
 }
 #endif

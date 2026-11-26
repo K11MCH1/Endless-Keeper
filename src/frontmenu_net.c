@@ -17,6 +17,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "ui_front.h"
 #include "kfx/renderer/RendererManager.h"
 #include "frontmenu_net.h"
 #include "globals.h"
@@ -177,6 +178,8 @@ void frontnet_session_set_player_name(struct GuiButton *gbtn)
 
 static void draw_tiled_bar(struct GuiButton *gbtn, int left_index, int first_middle_index, int middle_count, int right_index)
 {
+    if (uf_well(gbtn->scr_pos_x, gbtn->scr_pos_y, gbtn->width, gbtn->height)) /* endless, the Molten look */
+        return;
     int scale = simple_frontend_sprite_height_units_per_px(gbtn, first_middle_index, 100);
     const struct TbSprite *left = get_frontend_sprite(left_index);
     const struct TbSprite *right = get_frontend_sprite(right_index);

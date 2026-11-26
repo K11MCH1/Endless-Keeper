@@ -77,6 +77,7 @@
 #include "world_migrate.h"
 #include "world_dark.h"
 #include "world_expedition.h"
+#include "world_progress.h"
 #include "world_alarm.h"
 #include "front_simple.h"
 #include "post_inc.h"
@@ -1675,7 +1676,9 @@ void draw_zoom_box_things_on_mapblk(struct Map *mapblk,unsigned short subtile_si
             case TCls_Object:
                 //get spridx from config
                 objst = get_object_model_stats(thing->model);
-                spridx = objst->map_icon;
+                spridx = world_progress_map_icon(thing); /* Endless: a level-up lore book's own icon */
+                if (spridx <= 0)
+                    spridx = objst->map_icon;
                 if (spridx < 0)
                 {
                     if (thing_is_spellbook(thing))

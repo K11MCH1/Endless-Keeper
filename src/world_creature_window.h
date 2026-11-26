@@ -26,6 +26,9 @@ extern struct GuiMenu world_creature_window_menu;
 TbBool world_creature_window_used(void);
 /** Is it on the screen now? (What the view draws over itself - messages, the day's dial - goes under it then.) */
 TbBool world_creature_window_open(void);
+/** The window's menu has drawn (its buttons too): the Molten look paints its canvas now. */
+struct GuiMenu;
+void world_creature_window_drawn(struct GuiMenu *gmnu);
 /** The side panel's menu to show for a queried creature: the given page of the Information Panel, or, where the
  *  creature window is used, the Information tab itself (the window has what the pages had). */
 int world_creature_window_panel_menu(int menu);

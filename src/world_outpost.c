@@ -34,6 +34,7 @@
 #include <limits.h>
 
 #include "world_stream.h"
+#include "world_setpiece.h"
 #include "world_gen.h"
 #include "world_wild.h"
 #include "world_progress.h"
@@ -1649,6 +1650,9 @@ static TbBool op_place_clear(int64_t x1, int64_t y1, int64_t x2, int64_t y2)
         return false;
     /* version 7 (as its generator places its own structures): never in Dead Man's Land or an ocean */
     if (!world_land_fits(x1, y1, x2, y2, false))
+        return false;
+    /* nor on a set piece (generator version 9 on: pieces are decided first; always no in older worlds) */
+    if (world_setpiece_in_box(x1 - OP_MARGIN, y1 - OP_MARGIN, x2 + OP_MARGIN, y2 + OP_MARGIN))
         return false;
     return true;
 }

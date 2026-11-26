@@ -146,6 +146,7 @@
 #include "config_crtrstates.h"
 #include "world_curtain.h"
 #include "ui_safe_area.h"
+#include "world_side_panel.h"
 #include "post_inc.h"
 
 #define WB_EVERY_DEFAULT (24L * 60 * 60 * 20)  /* turns between two fights: 24 hours of game time */
@@ -2655,6 +2656,45 @@ void world_boss_draw(int x, int y, int w)
         else
             snprintf(text, sizeof(text), "The World Boss has fallen");
         break;
+    }
+    if (world_side_hud_modern())
+    {
+        /* the modern look (2026-11-26, the user: "World Boss Event", its right end square and against the screen's
+           edge): the event's name or state on the left, its clock or word on the right in ember */
+        char lpart[64], rpart[32];
+        snprintf(lpart, sizeof(lpart), "World Boss Event");
+        snprintf(rpart, sizeof(rpart), "%s", clock);
+        if (game.world_boss_phase == WBP_Open)
+        {
+            int joined = 0;
+            for (PlayerNumber p = 0; p < PLAYERS_MAX; p++)
+                joined += game.world_boss_joined[p] ? 1 : 0;
+            if (wb_i_am_ready())
+                snprintf(lpart, sizeof(lpart), "%s", (joined > 0) ? "Ready: starts in" : "Ready");
+            else if (joined >= WB_PLAYERS_LIMIT)
+                snprintf(lpart, sizeof(lpart), "World Boss full");
+            else if (joined > 0)
+                snprintf(lpart, sizeof(lpart), "World Boss ready");
+            if (joined == 0)
+                snprintf(rpart, sizeof(rpart), "%s", wb_i_am_ready() ? "..." : "Open");
+        } else if (game.world_boss_phase == WBP_Fight)
+            snprintf(rpart, sizeof(rpart), "Fight");
+        else if (game.world_boss_phase != WBP_Waiting)
+        {
+            if (mine == 1)
+                snprintf(lpart, sizeof(lpart), "%s falls! Home in", (kind == 0) ? "Avatar" : (kind == 1) ? "Reaper" :
+                    (kind == 2) ? "Dragon" : "Giant");
+            else
+            {
+                snprintf(lpart, sizeof(lpart), "The World Boss has fallen");
+                rpart[0] = '\0';
+            }
+        }
+        const TbBool clickable = wb_strip_clickable();
+        world_side_boss_strip(y, lpart, rpart, clickable, wb_strip_hover, wb_strip_box);
+        if (clickable && (wb_tapped_event != (long)game.world_boss_number))
+            wb_sparkle(wb_strip_box[0], y, wb_strip_box[2], wb_strip_box[3], (long)game.play_gameturn);
+        return;
     }
     /* The World Boss button (the user's design, 2026-11-14): half a button and half a square. Its left end is the
        left end of the game's own button bar; its right end is cut square and lies against the right edge of the

@@ -338,6 +338,11 @@ TbBool RendererScheduleScreenshot(const char* path, int fmt)
     return (s_active_renderer != nullptr) ? s_active_renderer->ScheduleScreenshot(path, fmt) : 0;
 }
 
+TbBool RendererSubmitUIImage(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const unsigned char* rgba, uint32_t gen)
+{
+    return (s_active_renderer != nullptr) ? s_active_renderer->SubmitUIImage(slot, x, y, w, h, rgba, gen) : 0;
+}
+
 /******************************************************************************/
 /* Fade-cache preservation / forced UI flip                                   */
 /******************************************************************************/

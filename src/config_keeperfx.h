@@ -126,6 +126,15 @@ extern char keeper_runtime_directory[152];
 /******************************************************************************/
 extern unsigned long features_enabled;
 extern unsigned char viewport_mode;
+/** Endless Keeper: how its own windows look (the Keeper panel, the Library's window): WINDOW_STYLE (2026-11-25). */
+enum WindowStyle { WinStyle_Modern = 1, WinStyle_Classic = 2 };
+extern unsigned char window_style;
+/** Endless Keeper: the in-game UI's size in percent of its normal size, UI_SCALE (the user, 2026-11-26: "the ui is too
+ *  small on the phone"). It scales the game's UI units (side panel, menus, messages, the Endless windows), not the 3D
+ *  view, the creatures' flowers or the main menu. */
+#define UI_SCALE_PERCENT_MIN 50
+#define UI_SCALE_PERCENT_MAX 300
+extern unsigned short ui_scale_percent;
 extern const struct NamedCommand lang_type[];
 extern const struct NamedCommand scrshot_type[];
 extern char cmd_char;

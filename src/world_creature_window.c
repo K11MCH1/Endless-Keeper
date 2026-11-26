@@ -66,6 +66,16 @@
 #include "vidfade.h"
 #include "world_misdeeds.h"
 #include "world_stream.h"
+#include "ui_front.h"
+#include "config_keeperfx.h"
+#include "ui_paint.h"
+#include "ui_molten.h"
+#include "ui_safe_area.h"
+#include "creature_instances.h"
+#include "local_possession.h"
+#include <math.h>
+#include "bflib_datetm.h"
+#include "kjm_input.h"
 #include "post_inc.h"
 
 /* the Information Panel's own drawing (frontmenu_ingame_tabs.c), used here at other places */
@@ -309,6 +319,8 @@ unsigned char world_window_ink(int ink)
 
 void world_window_plain(int x, int y, int w, int cap, int align, unsigned char colour, const char *text)
 {
+    if (uf_plain(x, y, w, cap, align, colour, text)) /* (the Molten window records it: ui_front.c) */
+        return;
     struct CwText t;
     cw_plain_setup(cap, &t);
     int wide = cw_text_width(&t, text);
@@ -371,6 +383,14 @@ int world_window_plain_wrap(const char *text, int cap, int w, char lines[][WORLD
 
 void world_window_display(int x, int y, int w, int cap, int align, const char *text)
 {
+    if (uf_on())
+    {
+        /* (the Molten window records it, in the room the game's lettering takes: the Rap Sheet's rules stop at its ends) */
+        const int wide = min(world_window_display_width(text, cap), w);
+        const int at = (align == 1) ? x + (w - wide) / 2 : ((align == 2) ? x + w - wide : x);
+        if (uf_heading(at, y, wide, cap, 1, text))
+            return;
+    }
     struct CwText t;
     cw_display_setup(cap, &t);
     int wide = cw_text_width(&t, text);
@@ -464,6 +484,8 @@ static void cw_place(struct GuiMenu *gmnu)
     }
 }
 
+static void cwm_place(struct GuiMenu *gmnu);
+
 void world_creature_window_turn(void)
 {
     if (!world_creature_window_used())
@@ -497,8 +519,13 @@ void world_creature_window_turn(void)
         {
             turn_on_menu(GMnu_CREATURE_WINDOW);
             const MenuNumber num = menu_id_to_number(GMnu_CREATURE_WINDOW);
-            if (num >= 0)
-                cw_place(get_active_menu(num)); /* (at once: the mouse is tested against the buttons before the first frame) */
+            if (num >= 0) /* (at once: the mouse is tested against the buttons before the first frame) */
+            {
+                if (window_style != WinStyle_Classic)
+                    cwm_place(get_active_menu(num));
+                else
+                    cw_place(get_active_menu(num));
+            }
         }
     } else if (menu_is_active(GMnu_CREATURE_WINDOW))
         turn_off_menu(GMnu_CREATURE_WINDOW);
@@ -553,7 +580,7 @@ void world_window_frame(int pos_x, int pos_y, int width, int height, int upp)
 
 /** The window's own drawing, under its buttons: the frame, the title, the portrait, the name with the health behind
  *  it, and the Rap Sheet's text. */
-static void cw_background(struct GuiMenu *gmnu)
+static void cwc_background(struct GuiMenu *gmnu)
 {
     cw_place(gmnu);
     const int upp = cw_upp;
@@ -616,6 +643,465 @@ static void cw_background(struct GuiMenu *gmnu)
 #undef U
 }
 
+/******************************************************************************/
+/* The Molten look (WINDOW_STYLE=MODERN; the user, 2026-11-26: "Also modernize the Creatures query panel"): the window
+   in the launcher's design, as the Keeper panel - dark glass, rounded cards, TrueType faces - painted in true colour.
+   Its left and middle are painted here from the creature itself (the portrait, the mood, the level and its bar, the
+   name over the health, the ten abilities with their clocks, the twenty statistics); its right is the Rap Sheet, drawn
+   by world_misdeeds.c as before while ui_front.c records its words, headings and stone buttons for this canvas. The
+   game's buttons stay the window's: they are moved where the cards are, so tooltips and clicks work as before. */
+
+long anger_get_creature_highest_anger_type_and_byte_percentage(struct Thing *creatng, int32_t *out_angr_typ, int32_t *out_angr_prct);
+
+#define CWM_W 960.0f
+#define CWM_H 668.0f
+#define CWM_E 28.0f                     /* the inner margin */
+#define CWM_TOP 70.0f                   /* the rule under the title */
+#define CWM_LEFT_X CWM_E                /* the portrait, the name, the abilities */
+#define CWM_LEFT_W 268.0f
+#define CWM_MID_X (CWM_LEFT_X + CWM_LEFT_W + 28.0f) /* the statistics */
+#define CWM_MID_W 244.0f
+#define CWM_RIGHT_X (CWM_MID_X + CWM_MID_W + 28.0f) /* the Rap Sheet */
+#define CWM_RIGHT_W (CWM_W - CWM_E - CWM_RIGHT_X)
+#define CWM_FOOT 76.0f                  /* the Close button's strip */
+
+/* the buttons of the table, by their place in it */
+enum CwmButton { CwmB_Ground = 0, CwmB_Mood, CwmB_Level, CwmB_Name, CwmB_Pencil, CwmB_Ability0, CwmB_Stat0 = CwmB_Ability0 + 10,
+    CwmB_Sheet0 = CwmB_Stat0 + 20, CwmB_Close = CwmB_Sheet0 + 11, CwmB_Count };
+
+static struct {
+    float u;
+    int px, py, pw, ph;                 /* the window on the screen */
+    int margin;                         /* room round it on the canvas for its shadow */
+} cwm;
+static struct GuiButton *cwm_btn[CwmB_Count];
+static struct UmHost cwm_host;
+static TbBool cwm_recording;
+/* where the player dragged it by its title strip, from the safe area's middle (as the Keeper panel: the user,
+   2026-11-26, "make every new panel in-game draggable") */
+static int cwm_off_x, cwm_off_y;
+static int cwm_grab_mx, cwm_grab_my, cwm_grab_x, cwm_grab_y;
+static TbBool cwm_dragging, cwm_was_down;
+
+static TbBool cwm_modern(void)
+{
+    return (window_style != WinStyle_Classic);
+}
+
+struct CwmRect { float x, y, w, h; };
+
+static struct CwmRect cwm_rect(int b)
+{
+    struct CwmRect r = {0, 0, 0, 0};
+    if (b == CwmB_Ground)
+        r = (struct CwmRect){0, 0, CWM_W, CWM_H};
+    else if (b == CwmB_Mood)
+        r = (struct CwmRect){CWM_LEFT_X + 144.0f, CWM_TOP + 18.0f, 124.0f, 54.0f};
+    else if (b == CwmB_Level)
+        r = (struct CwmRect){CWM_LEFT_X + 144.0f, CWM_TOP + 82.0f, 124.0f, 62.0f};
+    else if (b == CwmB_Name)
+        r = (struct CwmRect){CWM_LEFT_X, CWM_TOP + 160.0f, CWM_LEFT_W - 44.0f, 40.0f};
+    else if (b == CwmB_Pencil)
+        r = (struct CwmRect){CWM_LEFT_X + CWM_LEFT_W - 38.0f, CWM_TOP + 162.0f, 36.0f, 36.0f};
+    else if ((b >= CwmB_Ability0) && (b < CwmB_Ability0 + 10))
+    {
+        const int k = b - CwmB_Ability0;
+        r = (struct CwmRect){CWM_LEFT_X + (float)(k % 2) * 140.0f, CWM_TOP + 218.0f + (float)(k / 2) * 62.0f, 128.0f, 54.0f};
+    }
+    else if ((b >= CwmB_Stat0) && (b < CwmB_Stat0 + 20))
+    {
+        const int k = b - CwmB_Stat0;
+        r = (struct CwmRect){CWM_MID_X + (float)(k % 2) * 126.0f, CWM_TOP + 18.0f + (float)(k / 2) * 50.0f, 118.0f, 44.0f};
+    }
+    else if (b == CwmB_Close)
+        r = (struct CwmRect){(CWM_W - 200.0f) * 0.5f, CWM_H - CWM_FOOT + 16.0f, 200.0f, 46.0f};
+    return r;
+}
+
+/** The window's scale and place (as the Keeper panel: the middle of the safe area; on a computer no larger than the
+ *  screen's height / 720 a unit times UI_SCALE, on a phone as large as fits) and its buttons where its cards are. */
+static void cwm_place(struct GuiMenu *gmnu)
+{
+    const int sx0 = ui_safe_left, sy0 = ui_safe_top;
+    const int sw = max(64, ui_safe_right_edge() - ui_safe_left), sh = max(64, ui_safe_bottom_edge() - ui_safe_top);
+    float u = min((float)sw * 0.94f / CWM_W, (float)sh * 0.94f / CWM_H);
+#ifndef __ANDROID__
+    u = min(u, (float)MyScreenHeight / 720.0f * (float)ui_scale_percent / 100.0f);
+#endif
+    cwm.u = max(0.45f, u);
+    cwm.pw = (int)(CWM_W * cwm.u + 0.5f);
+    cwm.ph = (int)(CWM_H * cwm.u + 0.5f);
+    /* (dragged: its body kept on the screen) */
+    cwm.px = max(0, min(sx0 + (sw - cwm.pw) / 2 + cwm_off_x, (int)MyScreenWidth - cwm.pw));
+    cwm.py = max(0, min(sy0 + (sh - cwm.ph) / 2 + cwm_off_y, (int)MyScreenHeight - cwm.ph));
+    cwm_off_x = cwm.px - (sx0 + (sw - cwm.pw) / 2);
+    cwm_off_y = cwm.py - (sy0 + (sh - cwm.ph) / 2);
+    const struct UmStyle st = {cwm.u, um_host_flat()};
+    cwm.margin = st.flat ? 0 : (int)ceilf(um_window_margin(&st));
+    cw_upp = max(4, (int)(cwm.u * 24.0f + 0.5f)); /* (the Rap Sheet's units: a panel unit is 2/3 of a menu unit) */
+    gmnu->pos_x = cwm.px;
+    gmnu->pos_y = cwm.py;
+    gmnu->width = cwm.pw;
+    gmnu->height = cwm.ph;
+    memset(cwm_btn, 0, sizeof(cwm_btn));
+    int n = 0;
+    for (int i = 0; (i < ACTIVE_BUTTONS_COUNT) && (gmnu->buttons != NULL) && (n < CwmB_Count); i++)
+    {
+        struct GuiButton *gbtn = &active_buttons[i];
+        if (((gbtn->flags & LbBtnF_Active) == 0) || (gbtn->gmenu_idx != gmnu->number))
+            continue;
+        if (gmnu->buttons[n].gbtype == -1)
+            break;
+        cwm_btn[n] = gbtn;
+        const int b = n++;
+        if ((b >= CwmB_Sheet0) && (b < CwmB_Close))
+            continue; /* (the Rap Sheet's: the sheet places them) */
+        const struct CwmRect r = cwm_rect(b);
+        gbtn->scr_pos_x = cwm.px + (int)(r.x * cwm.u + 0.5f);
+        gbtn->scr_pos_y = cwm.py + (int)(r.y * cwm.u + 0.5f);
+        gbtn->pos_x = gbtn->scr_pos_x;
+        gbtn->pos_y = gbtn->scr_pos_y;
+        gbtn->width = max(1, (int)(r.w * cwm.u + 0.5f));
+        gbtn->height = max(1, (int)(r.h * cwm.u + 0.5f));
+    }
+}
+
+static TbBool cwm_hot(int b)
+{
+    return (b >= 0) && (b < CwmB_Count) && (cwm_btn[b] != NULL) && ((cwm_btn[b]->flags & LbBtnF_MouseOver) != 0);
+}
+
+/* the statistics, in the table's order (CW_STAT's last value) */
+static const int cwm_stats[20] = {CrLStat_Health, CrLStat_Strength, CrLStat_Armour, CrLStat_Defence, CrLStat_Luck,
+    CrLStat_Dexterity, CrLStat_GoldWage, CrLStat_GoldHeld, CrLStat_AgeTime, CrLStat_Kills, CrLStat_Speed, CrLStat_Loyalty,
+    CrLStat_ResearchSkill, CrLStat_ManufactureSkill, CrLStat_TrainingSkill, CrLStat_ScavengeSkill, CrLStat_TrainingCost,
+    CrLStat_ScavengeCost, CrLStat_Weight, CrLStat_BloodType};
+static const long cwm_stat_icons[20] = {GPS_crspell_heal_std_s, GPS_symbols_creatr_stat_strength_std, GPS_symbols_creatr_stat_armor_std,
+    GPS_symbols_creatr_stat_defense_std, GPS_symbols_creatr_stat_luck_std, GPS_symbols_creatr_stat_dexterity_std,
+    GPS_symbols_creatr_stat_wage_std, GPS_symbols_creatr_stat_gold_std, GPS_symbols_creatr_stat_age_std,
+    GPS_symbols_creatr_stat_kills_std, GPS_crspell_speedup_dis_s, GPS_crspell_whip_std_s, GPS_room_research_std_s,
+    GPS_room_workshop_std_s, GPS_room_training_std_s, GPS_room_scavenge_std_s, GPS_symbols_creatr_stat_traingcst_std,
+    GPS_symbols_creatr_stat_scavngcst_std, GPS_trapdoor_trap_boulder_std_s, GPS_symbols_creatr_stat_blood_std};
+
+static int cwm_btn_stat(int k)
+{
+    return cwm_stats[(k >= 0) && (k < 20) ? k : 0];
+}
+
+/** What the window shows now, as a key: painted again only when it changes. */
+static uint32_t cwm_state_hash(struct Thing *thing)
+{
+    char key[1024];
+    int kn = 0;
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    int32_t angr_typ = 0, angr_prct = 0;
+    anger_get_creature_highest_anger_type_and_byte_percentage(thing, &angr_typ, &angr_prct);
+    const char *given = world_misdeeds_shown_name(thing);
+    kn += snprintf(key + kn, sizeof(key) - kn, "%d %d %ld %ld %d %ld %ld %d|%s|%s|%d|", (int)thing->index, (int)thing->owner,
+        (long)thing->health, creature_control_invalid(cctrl) ? 0L : (long)cctrl->max_health, creature_control_invalid(cctrl) ? 0 : (int)cctrl->exp_level,
+        creature_control_invalid(cctrl) ? 0L : (long)cctrl->exp_points, (long)creature_thing_exp_to_next_level(thing), (int)(5 * angr_prct / 256),
+        (given != NULL) ? given : "", (cwm_btn[CwmB_Pencil] == input_button) ? world_misdeeds_name_typed() : "",
+        ((LbTimerClock() / 250) & 1) && (cwm_btn[CwmB_Pencil] == input_button));
+    for (int b = 0; (b < CwmB_Count) && (kn < (int)sizeof(key) - 8); b++)
+        kn += snprintf(key + kn, sizeof(key) - kn, "%d", (int)cwm_hot(b));
+    for (int k = 0; (k < 20) && (kn < (int)sizeof(key) - 40); k++)
+        kn += snprintf(key + kn, sizeof(key) - kn, "|%s", creature_statistic_text(thing, (CreatureLiveStatId)cwm_btn_stat(k)));
+    if (!creature_control_invalid(cctrl))
+    {
+        const struct CreatureControl *lcc = get_local_creature_control(thing);
+        const GameTurn turn = get_local_creature_turn(thing);
+        for (int k = 0; (k < 10) && (kn < (int)sizeof(key) - 16); k++)
+        {
+            const CrInstance inst = creature_instance_get_available_id_for_pos(thing, k);
+            const TbBool avail = creature_instance_is_available(thing, inst);
+            int clock = 32;
+            if (avail && !creature_instance_has_reset_at(thing, lcc, inst, turn))
+            {
+                const struct InstanceInfo *inf = creature_instance_info_get(inst);
+                const int32_t need = ((thing->alloc_flags & TAlF_IsControlled) != 0) ? inf->fp_reset_time : inf->reset_time;
+                const int32_t done = (GameTurnDelta)(turn - lcc->instance_use_turn[inst]) + lcc->inst_action_turns - lcc->inst_total_turns;
+                clock = (need > 0) ? max(0, min(32, (int)(32 * (long)done / need))) : 32;
+            }
+            kn += snprintf(key + kn, sizeof(key) - kn, ";%d,%d,%d", (int)inst, (int)avail, clock);
+        }
+    }
+    return um_hash("%s", key);
+}
+
+/** A pencil: its body slanting from the bottom left to the top right, the tip dark, the rubber red. */
+static void cwm_pencil(struct UiCanvas *c, float x0, float y0, float x1, float y1, TbBool hot)
+{
+    const float w = x1 - x0, h = y1 - y0;
+    const float ax = x0 + w * 0.22f, ay = y1 - h * 0.22f, bx = x1 - w * 0.22f, by = y0 + h * 0.22f;
+    const float t = min(w, h) * 0.11f;   /* half the body's thickness */
+    const float dx = (bx - ax), dy = (by - ay), len = sqrtf(dx * dx + dy * dy);
+    const float nx = -dy / len * t, ny = dx / len * t, ux = dx / len, uy = dy / len;
+    const float tip = len * 0.22f, rub = len * 0.16f;
+    const float body[8] = {ax + ux * tip + nx, ay + uy * tip + ny, bx - ux * rub + nx, by - uy * rub + ny, bx - ux * rub - nx,
+        by - uy * rub - ny, ax + ux * tip - nx, ay + uy * tip - ny};
+    const float point[6] = {ax, ay, ax + ux * tip + nx, ay + uy * tip + ny, ax + ux * tip - nx, ay + uy * tip - ny};
+    const float rubber[8] = {bx - ux * rub + nx, by - uy * rub + ny, bx + nx, by + ny, bx - nx, by - ny, bx - ux * rub - nx, by - uy * rub - ny};
+    const int c4[1] = {4}, c3[1] = {3};
+    ui_fill_path(c, body, c4, 1, hot ? UM_GOLD_HI : UM_GOLD);
+    ui_fill_path(c, point, c3, 1, UIC(236, 214, 176, 255));
+    ui_fill_path(c, rubber, c4, 1, UIC(206, 82, 64, 255));
+}
+
+static void cwm_paint(struct Thing *thing)
+{
+    struct UiCanvas *c = &cwm_host.canvas;
+    const struct UmStyle stv = {cwm.u, um_host_flat()};
+    const struct UmStyle *st = &stv;
+    const float u = cwm.u, m = (float)cwm.margin;
+#define X(v) (m + (v) * u)
+#define Y(v) (m + (v) * u)
+#define S(v) ((v) * u)
+#define RX(r) X((r).x), Y((r).y), X((r).x + (r).w), Y((r).y + (r).h)
+    um_window(c, st, m, m, m + (float)cwm.pw, m + (float)cwm.ph);
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    /* the title: the creature's kind, a rule under it, and the parts apart */
+    ui_text_box(c, UiF_Head, ui_text_fit(UiF_Head, S(32.0f), S(0.6f), S(CWM_W - 2 * CWM_E), cw_kind_name(thing->model)), X(CWM_E), Y(16.0f),
+        S(CWM_W - 2 * CWM_E), S(40.0f), 1, UM_BRIGHT, S(0.6f), !st->flat, cw_kind_name(thing->model));
+    um_rule(c, st, X(CWM_E), Y(CWM_TOP), X(CWM_W - CWM_E));
+    um_rule(c, st, X(CWM_E), Y(CWM_H - CWM_FOOT), X(CWM_W - CWM_E));
+    /* the portrait */
+    {
+        const struct CwmRect pr = {CWM_LEFT_X, CWM_TOP + 18.0f, 126.0f, 126.0f};
+        const float r = S(16.0f);
+        um_well(c, st, RX(pr), r);
+        const long spr_idx = (thing->ccontrol_idx > 0) ? get_creature_model_graphics(thing->model, CGI_QuerySymbol) : 0;
+        const struct TbSprite *spr = (spr_idx > 0) ? get_button_sprite_for_player(spr_idx, thing->owner) : NULL;
+        const unsigned char *px = (spr != NULL) ? uf_sprite_true(spr) : NULL;
+        if (px != NULL)
+        {
+            const float k = min(S(pr.w - 18.0f) / (float)spr->SWidth, S(pr.h - 18.0f) / (float)spr->SHeight);
+            const int dw = max(1, (int)((float)spr->SWidth * k)), dh = max(1, (int)((float)spr->SHeight * k));
+            ui_image_gain(c, (int)(X(pr.x + pr.w * 0.5f) - (float)dw * 0.5f), (int)(Y(pr.y + pr.h * 0.5f) - (float)dh * 0.5f), dw, dh, px,
+                spr->SWidth, spr->SHeight, 1.0f);
+        }
+        um_frame(c, st, RX(pr), r, false);
+    }
+    /* the mood: its face, and how it feels in words */
+    {
+        const struct CwmRect r = cwm_rect(CwmB_Mood);
+        um_card(c, st, RX(r));
+        int32_t angr_typ = 0, angr_prct = 0;
+        anger_get_creature_highest_anger_type_and_byte_percentage(thing, &angr_typ, &angr_prct);
+        const int pos = max(0, min(4, 5 * (int)angr_prct / 256));
+        static const char *const moods[5] = {"Very happy", "Happy", "Content", "Unhappy", "Angry"};
+        um_icon_draw(c, GPS_symbols_creatr_mood_vhappy_std + pos, X(r.x + 4.0f), Y(r.y + 4.0f), X(r.x + 50.0f), Y(r.y + r.h - 4.0f), 0.9f,
+            cwm_hot(CwmB_Mood) ? 1.15f : 1.0f);
+        ui_text_box(c, UiF_Body, S(13.0f), X(r.x + 52.0f), Y(r.y + 6.0f), S(r.w - 58.0f), S(18.0f), 0, UM_DIM, 0.0f, !st->flat, "Mood");
+        ui_text_box(c, UiF_Body, ui_text_fit(UiF_Body, S(15.0f), 0.0f, S(r.w - 58.0f), moods[pos]), X(r.x + 52.0f), Y(r.y + 26.0f), S(r.w - 58.0f),
+            S(20.0f), 0, (pos >= 3) ? UM_EMBER : UM_TEXT, 0.0f, !st->flat, moods[pos]);
+    }
+    /* the level and the way to the next */
+    if (!creature_control_invalid(cctrl))
+    {
+        const struct CwmRect r = cwm_rect(CwmB_Level);
+        um_card(c, st, RX(r));
+        char lv[24];
+        snprintf(lv, sizeof(lv), "Level %d", (int)cctrl->exp_level + 1);
+        ui_text_box(c, UiF_Head, S(19.0f), X(r.x + 12.0f), Y(r.y + 6.0f), S(r.w - 24.0f), S(26.0f), 0, cwm_hot(CwmB_Level) ? UM_GOLD_HI : UM_GOLD,
+            0.0f, !st->flat, lv);
+        const long need = creature_thing_exp_to_next_level(thing) << 8;
+        const float frac = (need > 0) ? (float)min((long)cctrl->exp_points, need) / (float)need : 1.0f;
+        um_bar(c, st, X(r.x + 12.0f), Y(r.y + 40.0f), X(r.x + r.w - 12.0f), Y(r.y + 50.0f), frac);
+    }
+    /* the name, over its health */
+    {
+        const struct CwmRect r = cwm_rect(CwmB_Name);
+        const float rad = S(10.0f);
+        um_well(c, st, RX(r), rad);
+        float frac = 0.0f;
+        if (!creature_control_invalid(cctrl) && (cctrl->max_health > 0))
+            frac = (float)max((HitPoints)0, min(thing->health, cctrl->max_health)) / (float)cctrl->max_health;
+        if (frac > 0.0f)
+        {
+            const float x1 = X(r.x + 3.0f) + (S(r.w - 6.0f)) * frac;
+            const UiColour top = (frac > 0.5f) ? UIC(150, 30, 20, 255) : UIC(190, 40, 20, 255);
+            ui_fill_rrect(c, X(r.x + 3.0f), Y(r.y + 3.0f), x1, Y(r.y + r.h - 3.0f), rad - S(3.0f), top, UIC(90, 14, 10, 255), false);
+        }
+        const char *given = world_misdeeds_shown_name(thing);
+        const char *name = (given != NULL) ? given : cw_kind_name(thing->model);
+        if (cwm_btn[CwmB_Pencil] == input_button)
+        {
+            char line[WORLD_MISDEED_NAME_MAX + 8];
+            snprintf(line, sizeof(line), "%s%s", world_misdeeds_name_typed(), ((LbTimerClock() / 250) & 1) ? "_" : "");
+            ui_stroke_rrect(c, RX(r), rad, max(1.0f, S(1.0f)), UIC(255, 200, 120, 220));
+            ui_text_box(c, UiF_Body, ui_text_fit(UiF_Body, S(17.0f), 0.0f, S(r.w - 20.0f), line), X(r.x + 10.0f), Y(r.y), S(r.w - 20.0f), S(r.h), 1,
+                UM_BRIGHT, 0.0f, !st->flat, line);
+        } else
+            ui_text_box(c, UiF_Head, ui_text_fit(UiF_Head, S(18.0f), 0.0f, S(r.w - 20.0f), name), X(r.x + 10.0f), Y(r.y), S(r.w - 20.0f), S(r.h), 1,
+                cwm_hot(CwmB_Name) ? UM_GOLD_HI : UM_BRIGHT, 0.0f, !st->flat, name);
+        if ((cwm_btn[CwmB_Pencil] != NULL) && ((cwm_btn[CwmB_Pencil]->flags & LbBtnF_Visible) != 0))
+        {
+            const struct CwmRect p = cwm_rect(CwmB_Pencil);
+            um_button(c, st, RX(p), UmB_Normal, cwm_hot(CwmB_Pencil) ? UmS_Hot : UmS_Normal, 1.0f, "");
+            cwm_pencil(c, RX(p), cwm_hot(CwmB_Pencil));
+        }
+    }
+    /* the abilities: each its picture, its clock and its key */
+    if (!creature_control_invalid(cctrl))
+    {
+        ui_text_box(c, UiF_Body, S(13.0f), X(CWM_LEFT_X), Y(CWM_TOP + 202.0f), S(CWM_LEFT_W), S(14.0f), 0, UM_DIM, 0.0f, !st->flat, "Abilities");
+        const struct CreatureControl *lcc = get_local_creature_control(thing);
+        const GameTurn turn = get_local_creature_turn(thing);
+        for (int k = 0; k < 10; k++)
+        {
+            const struct CwmRect r = cwm_rect(CwmB_Ability0 + k);
+            const CrInstance inst = creature_instance_get_available_id_for_pos(thing, k);
+            if (!creature_instance_is_available(thing, inst))
+            {
+                um_well(c, st, RX(r), S(10.0f));
+                continue;
+            }
+            const struct InstanceInfo *inf = creature_instance_info_get(inst);
+            const TbBool reset = creature_instance_has_reset_at(thing, lcc, inst, turn);
+            float clock = 1.0f;
+            if (lcc->instance_id == inst)
+                clock = 0.0f;
+            else if (!reset)
+            {
+                const int32_t need = ((thing->alloc_flags & TAlF_IsControlled) != 0) ? inf->fp_reset_time : inf->reset_time;
+                const int32_t done = (GameTurnDelta)(turn - lcc->instance_use_turn[inst]) + lcc->inst_action_turns - lcc->inst_total_turns;
+                clock = (need > 0) ? (float)max(0, min(need, done)) / (float)need : 1.0f;
+            }
+            const TbBool active = (lcc->active_instance_id == inst);
+            const TbBool hot = cwm_hot(CwmB_Ability0 + k);
+            um_button(c, st, RX(r), UmB_Normal, hot ? UmS_Hot : (active ? UmS_Armed : UmS_Normal), 1.0f, "");
+            um_icon_draw(c, inf->symbol_spridx, X(r.x + 4.0f), Y(r.y + 4.0f), X(r.x + 50.0f), Y(r.y + r.h - 4.0f), 0.86f, reset ? 1.0f : 0.5f);
+            char key[4];
+            snprintf(key, sizeof(key), "%d", (k + 1) % 10);
+            ui_text_box(c, UiF_Num, S(15.0f), X(r.x + 54.0f), Y(r.y + 6.0f), S(r.w - 64.0f), S(18.0f), 2, UM_DIM, 0.0f, !st->flat, key);
+            um_bar(c, st, X(r.x + 56.0f), Y(r.y + r.h - 18.0f), X(r.x + r.w - 10.0f), Y(r.y + r.h - 10.0f), clock);
+        }
+    }
+    /* the statistics: each its picture and its value */
+    for (int k = 0; k < 20; k++)
+    {
+        const struct CwmRect r = cwm_rect(CwmB_Stat0 + k);
+        const TbBool hot = cwm_hot(CwmB_Stat0 + k);
+        um_card(c, st, RX(r));
+        if (hot && !st->flat)
+            ui_stroke_rrect(c, RX(r), S(10.0f), max(1.0f, S(1.0f)), UIC(255, 214, 150, 170));
+        um_icon_draw(c, cwm_stat_icons[k], X(r.x + 4.0f), Y(r.y + 3.0f), X(r.x + 42.0f), Y(r.y + r.h - 3.0f), 0.86f, hot ? 1.15f : 1.0f);
+        const char *v = creature_statistic_text(thing, (CreatureLiveStatId)cwm_stats[k]);
+        ui_text_box(c, UiF_Num, ui_text_fit(UiF_Num, S(18.0f), 0.0f, S(r.w - 52.0f), v), X(r.x + 44.0f), Y(r.y), S(r.w - 54.0f), S(r.h), 2,
+            hot ? UM_GOLD_HI : UM_TEXT, 0.0f, !st->flat, v);
+    }
+    /* the Rap Sheet, as world_misdeeds.c drew it (recorded) */
+    uf_window_paint(c, st, cwm.px - cwm.margin, cwm.py - cwm.margin);
+    /* Close */
+    {
+        const struct CwmRect r = cwm_rect(CwmB_Close);
+        um_button(c, st, RX(r), UmB_Normal, cwm_hot(CwmB_Close) ? UmS_Hot : UmS_Normal, S(18.0f), "Close");
+    }
+#undef RX
+#undef S
+#undef Y
+#undef X
+}
+
+/** The window's drawing under its buttons (its menu's callback): its place and buttons, then the Rap Sheet, recorded
+ *  while it and the sheet's buttons draw. */
+static void cwm_drag(void)
+{
+    const TbBool down = (lbDisplay.MLeftButton != 0);
+    const int mx = GetMouseX(), my = GetMouseY();
+    if (down && !cwm_was_down)
+    {
+        cwm_dragging = (mx >= cwm.px) && (mx < cwm.px + cwm.pw) && (my >= cwm.py) && (my < cwm.py + (int)(CWM_TOP * cwm.u));
+        cwm_grab_mx = mx;
+        cwm_grab_my = my;
+        cwm_grab_x = cwm_off_x;
+        cwm_grab_y = cwm_off_y;
+    }
+    if (down && cwm_dragging)
+    {
+        cwm_off_x = cwm_grab_x + (mx - cwm_grab_mx);
+        cwm_off_y = cwm_grab_y + (my - cwm_grab_my);
+    }
+    if (!down)
+        cwm_dragging = false;
+    cwm_was_down = down;
+}
+
+static void cwm_background(struct GuiMenu *gmnu)
+{
+    cwm_drag();
+    cwm_place(gmnu);
+    struct Thing *thing = cw_thing();
+    if (thing_is_invalid(thing))
+        return;
+    uf_window_begin();
+    cwm_recording = true;
+    world_misdeeds_window_draw(cwm.px + (int)(CWM_RIGHT_X * cwm.u), cwm.py + (int)((CWM_TOP + 14.0f) * cwm.u), (int)(CWM_RIGHT_W * cwm.u),
+        (int)((CWM_H - CWM_FOOT - CWM_TOP - 26.0f) * cwm.u), cw_upp);
+}
+
+void world_creature_window_drawn(struct GuiMenu *gmnu)
+{
+    if (!cwm_recording)
+        return;
+    cwm_recording = false;
+    uf_window_stop();
+    struct Thing *thing = cw_thing();
+    if (thing_is_invalid(thing) || (gmnu == NULL))
+        return;
+    const int cw = cwm.pw + 2 * cwm.margin, ch = cwm.ph + 2 * cwm.margin;
+    char key[96];
+    snprintf(key, sizeof(key), "%d %d %.4f %d %08x %08x", cw, ch, (double)cwm.u, (int)um_host_flat(), (unsigned)cwm_state_hash(thing),
+        (unsigned)uf_window_hash());
+    cwm_host.name = "creature";
+    cwm_host.slot = UmSl_Front2; /* (the frontend's slot: free in a game) */
+    if (cwm_host.gen < 0x60000000u)
+        cwm_host.gen = 0x60000000u; /* (its own numbers: the main menu's version line uses the slot in the frontend) */
+    if (um_host_begin(&cwm_host, cw, ch, key))
+    {
+        const unsigned long t0 = (unsigned long)LbTimerClock();
+        cwm_paint(thing);
+        um_host_painted(&cwm_host, t0);
+        if ((cwm_host.paints <= 3) || (cwm_host.paints % 100 == 0))
+            SYNCLOG("World: the creature window painted in %lu ms (%dx%d, scale %.2f, %s; %lu paintings)", cwm_host.paint_ms, cw, ch,
+                (double)cwm.u, um_host_flat() ? "palette" : "true colour", cwm_host.paints);
+    }
+    um_host_show(&cwm_host, cwm.px - cwm.margin, cwm.py - cwm.margin);
+}
+
+/* the buttons' own drawing: the classic look only (the Molten one paints them on its canvas) */
+static void cwm_mood_draw(struct GuiButton *gbtn)
+{
+    if (!cwm_modern())
+        gui_area_smiley_anger_button(gbtn);
+}
+
+static void cwm_level_draw(struct GuiButton *gbtn)
+{
+    if (!cwm_modern())
+        gui_area_experience_button(gbtn);
+}
+
+static void cwm_ability_draw(struct GuiButton *gbtn)
+{
+    if (!cwm_modern())
+        gui_area_instance_button(gbtn);
+}
+
+static void cwm_stat_draw(struct GuiButton *gbtn)
+{
+    if (!cwm_modern())
+        gui_area_stat_button(gbtn);
+}
+
+static void cw_background(struct GuiMenu *gmnu)
+{
+    if (cwm_modern())
+        cwm_background(gmnu);
+    else
+        cwc_background(gmnu);
+}
+
 /** Close: the Information tool lets go of the creature, as a right click does. */
 static void cw_close_click(struct GuiButton *gbtn)
 {
@@ -628,6 +1114,8 @@ static void cw_close_click(struct GuiButton *gbtn)
 /** The Close button: the game's own button bar, lit while the mouse is on it, its word on its middle. */
 static void cw_close_draw(struct GuiButton *gbtn)
 {
+    if (cwm_modern())
+        return; /* (painted on the Molten canvas) */
     const TbBool over = (gbtn->flags & LbBtnF_MouseOver) != 0;
     const int bu = simple_button_sprite_height_units_per_px(gbtn, GBS_frontend_button_std_c, 100);
     const int cap = gbtn->height * 15 / 26;
@@ -649,11 +1137,11 @@ static void cw_close_draw(struct GuiButton *gbtn)
 /* an ability's slot: a column (0, 1) and a row (0 to 4) of the left part, under the portrait and the name */
 #define CW_ABILITY(slot) {LbBtnT_NormalBtn, BID_DEFAULT, 0, 0, NULL, NULL, NULL, 0, \
     CW_AT(CW_LEFT_X + 60 * ((slot) % 2), CW_TOP + 123 + 30 * ((slot) / 2), 52, 21), \
-    gui_area_instance_button, 0, GUIStr_Empty, 0, {.lval = (slot)}, 0, maintain_instance }
+    cwm_ability_draw, 0, GUIStr_Empty, 0, {.lval = (slot)}, 0, maintain_instance }
 /* a statistic: its place (0 to 19: two columns, ten rows), its picture, its tooltip and which one it is */
 #define CW_STAT(at, sprite, tip, stat) {LbBtnT_NormalBtn, BID_QUERY_INFO, 0, 0, NULL, NULL, NULL, 0, \
     CW_AT(CW_MID_X + 60 * ((at) % 2), CW_TOP + 9 + 26 * ((at) / 2), 52, 21), \
-    gui_area_stat_button, (sprite), (tip), 0, {.lval = (stat)}, 0, NULL }
+    cwm_stat_draw, (sprite), (tip), 0, {.lval = (stat)}, 0, NULL }
 /* a button of the Rap Sheet: the sheet's drawing puts it where its row is (no size here: cw_place leaves it alone) */
 #define CW_SHEET(click, draw, maintain, value) {LbBtnT_NormalBtn, BID_DEFAULT, 0, 0, (click), NULL, NULL, 0, \
     CW_AT(CW_RIGHT_X, CW_TOP, 0, 0), (draw), 0, GUIStr_Empty, 0, {.lval = (value)}, 0, (maintain) }
@@ -663,8 +1151,8 @@ static struct GuiButtonInit world_creature_window_buttons[] = {
      the window does (the buttons made after it are looked at first) */
   {LbBtnT_NormalBtn, BID_DEFAULT, 0, 0, NULL, cw_close_click, NULL, 0, CW_AT(0, 0, CW_W, CW_H), NULL, 0, GUIStr_Empty, 0, {.lval = 0}, 0, NULL },
   /* the mood and the level, right of the portrait */
-  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 0, NULL, NULL, NULL, 0, CW_AT(CW_LEFT_X + 63, CW_TOP + 25, 49, 21), gui_area_smiley_anger_button, GPS_rpanel_bar_rounded_empty, GUIStr_CreatureAngerDesc, 0, {.lval = 0}, 0, NULL },
-  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 0, NULL, NULL, NULL, 0, CW_AT(CW_LEFT_X + 63, CW_TOP + 51, 49, 21), gui_area_experience_button, GPS_rpanel_bar_rounded_full, GUIStr_ExperienceDesc, 0, {.lval = 0}, 0, NULL },
+  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 0, NULL, NULL, NULL, 0, CW_AT(CW_LEFT_X + 63, CW_TOP + 25, 49, 21), cwm_mood_draw, GPS_rpanel_bar_rounded_empty, GUIStr_CreatureAngerDesc, 0, {.lval = 0}, 0, NULL },
+  {LbBtnT_NormalBtn, BID_DEFAULT, 0, 0, NULL, NULL, NULL, 0, CW_AT(CW_LEFT_X + 63, CW_TOP + 51, 49, 21), cwm_level_draw, GPS_rpanel_bar_rounded_full, GUIStr_ExperienceDesc, 0, {.lval = 0}, 0, NULL },
   /* the name: a click goes to the keeper's next creature, a right click to its next of the same kind; the pencil renames */
   {LbBtnT_NormalBtn, BID_DEFAULT, 0, 0, gui_query_next_creature_of_owner, gui_query_next_creature_of_owner_and_model, NULL, 0, CW_AT(CW_LEFT_X + 3, CW_TOP + 85, 94, 12), NULL, 0, GUIStr_NameAndHealthDesc, 0, {.lval = 0}, 0, NULL },
   {LbBtnT_EditBox, BID_DEFAULT, 0, 0, world_misdeeds_rename_done, NULL, NULL, 0, CW_AT(CW_LEFT_X + 98, CW_TOP + 86, 10, 10), world_misdeeds_pencil_draw, 0, GUIStr_Empty, 0, {.lval = 0}, WORLD_MISDEED_NAME_MAX, world_misdeeds_pencil_maintain },

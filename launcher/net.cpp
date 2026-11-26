@@ -560,3 +560,141 @@ bool install_release(const Release &rel, const std::wstring &game_dir, const std
     fs::remove_all(work, ec);
     return true;
 }
+
+/******************************************************************************/
+/* the creator's set pieces (2026-11-25): one zip per release, its folders being the pieces */
+
+const ReleaseAsset *setpieces_asset(const Release &rel)
+{
+    for (const ReleaseAsset &a : rel.assets)
+        if ((a.name.rfind("endless-keeper-setpieces", 0) == 0) && ends_with(a.name, ".zip"))
+            return &a;
+    return nullptr;
+}
+
+static std::string read_small_text(const fs::path &p)
+{
+    std::string s;
+    FILE *f = _wfopen(p.c_str(), L"rb");
+    if (f == nullptr)
+        return s;
+    char buf[256];
+    const size_t n = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    s.assign(buf, n);
+    while (!s.empty() && ((s.back() == '\n') || (s.back() == '\r') || (s.back() == ' ')))
+        s.pop_back();
+    return s;
+}
+
+static int count_pieces(const fs::path &dir)
+{
+    std::error_code ec;
+    int n = 0;
+    for (const fs::directory_entry &e : fs::directory_iterator(dir, ec))
+        if (e.is_directory() && fs::exists(e.path() / L"setpiece.cfg", ec))
+            n++;
+    return n;
+}
+
+SetPiecesResult install_setpieces(const Release &rel, const std::wstring &game_dir,
+    const std::function<void(const char *stage, float fraction)> &progress, const std::atomic<bool> &cancel, int &count,
+    std::string &why)
+{
+    count = 0;
+    const ReleaseAsset *asset = setpieces_asset(rel);
+    if (asset == nullptr)
+        return SP_NONE_IN_RELEASE;
+    std::error_code ec;
+    const fs::path official = fs::path(game_dir) / L"levels" / L"endless_cfgs" / L"setpieces" / L"official";
+    const fs::path stamp = official / L"release.sha256";
+    /* the same pieces as the release's: GitHub's checksum of the zip, kept when it was installed */
+    if (!asset->digest.empty() && fs::exists(official, ec) && (_stricmp(read_small_text(stamp).c_str(), asset->digest.c_str()) == 0))
+    {
+        count = count_pieces(official);
+        return SP_LATEST_ALREADY;
+    }
+    wchar_t tmp[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp);
+    const fs::path work = fs::path(tmp) / L"EndlessKeeperSetPieces";
+    fs::remove_all(work, ec);
+    fs::create_directories(work / L"files", ec);
+    const fs::path archive = work / widen(asset->name);
+    progress("Downloading", 0.0f);
+    if (!http_download(asset->url, archive.wstring(), [&](long long done, long long total) {
+            const long long all = (total > 0) ? total : asset->size;
+            progress("Downloading", (all > 0) ? (float)((double)done / (double)all) : 0.0f);
+        }, cancel, why))
+        return SP_FAILED;
+    progress("Checking", 1.0f);
+    if (asset->digest.rfind("sha256:", 0) == 0)
+    {
+        std::string hex;
+        if (!sha256_file(archive.wstring(), hex) || (_stricmp(hex.c_str(), asset->digest.c_str() + 7) != 0))
+        {
+            why = "the download is damaged (its checksum is wrong)";
+            fs::remove_all(work, ec);
+            return SP_FAILED;
+        }
+    }
+    progress("Unpacking", 1.0f);
+    const std::wstring tar = tar_exe();
+    if (tar.empty() || (run_hidden(L"\"" + tar + L"\" -xf \"" + archive.wstring() + L"\" -C \"" + (work / L"files").wstring() + L"\"", L"") != 0))
+    {
+        why = "the set pieces could not be unpacked on this computer";
+        fs::remove_all(work, ec);
+        return SP_FAILED;
+    }
+    /* a zip with one folder at its top that is not itself a piece: the pieces are in it */
+    fs::path root = work / L"files";
+    {
+        int dirs = 0, files = 0;
+        fs::path only;
+        for (const fs::directory_entry &e : fs::directory_iterator(root, ec))
+        {
+            if (e.is_directory()) { dirs++; only = e.path(); } else files++;
+        }
+        if ((dirs == 1) && (files == 0) && !fs::exists(only / L"setpiece.cfg", ec))
+            root = only;
+    }
+    count = count_pieces(root);
+    if (count <= 0)
+    {
+        why = "the download holds no set pieces";
+        fs::remove_all(work, ec);
+        return SP_FAILED;
+    }
+    progress("Installing", 1.0f);
+    /* the old copy aside first, so a failure leaves it as it was */
+    const fs::path old = official.wstring() + L".old";
+    fs::remove_all(old, ec);
+    if (fs::exists(official, ec))
+    {
+        fs::rename(official, old, ec);
+        if (ec)
+        {
+            why = "the old set pieces could not be moved aside (is the game running?)";
+            fs::remove_all(work, ec);
+            return SP_FAILED;
+        }
+    }
+    fs::create_directories(official.parent_path(), ec);
+    fs::copy(root, official, fs::copy_options::recursive, ec);
+    if (ec)
+    {
+        why = "the set pieces could not be written: " + ec.message();
+        fs::remove_all(official, ec);
+        fs::rename(old, official, ec);
+        fs::remove_all(work, ec);
+        return SP_FAILED;
+    }
+    FILE *f = _wfopen(stamp.c_str(), L"wb");
+    if (f != nullptr)
+    {
+        fputs(asset->digest.c_str(), f);
+        fclose(f);
+    }
+    fs::remove_all(old, ec);
+    fs::remove_all(work, ec);
+    return SP_INSTALLED;
+}

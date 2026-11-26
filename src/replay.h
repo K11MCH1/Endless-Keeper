@@ -47,6 +47,7 @@ enum PacketSaveHeadFlags {
     PSHF_MultiGame  = 0x04,
     PSHF_WorldGen7  = 0x08, // endless world: made with world generator version 7 (without it and WorldGen8: version 6)
     PSHF_WorldGen8  = 0x10, // endless world: made with world generator version 8
+    PSHF_WorldGen9  = 0x20, // endless world: made with world generator version 9
     PSHF_Players16  = 0x40, // endless world: players 10-15 were in use (game.players_extended)
     PSHF_ChunkedWorld = 0x80, // endless world: the level ran on the chunked world, not the sliding window
 };

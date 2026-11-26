@@ -277,6 +277,8 @@ extern unsigned short units_per_pixel_menu;
 extern unsigned short units_per_pixel_landview;
 extern unsigned short units_per_pixel_landview_frame;
 extern unsigned short units_per_pixel_ui;
+/** units_per_pixel_ui before the Endless UI_SCALE percent: for what is drawn in the 3D view (room flags, flowers) */
+extern unsigned short units_per_pixel_ui_base;
 extern unsigned long aspect_ratio_factor_HOR_PLUS;
 extern unsigned long aspect_ratio_factor_HOR_PLUS_AND_VERT_PLUS;
 extern unsigned long first_person_horizontal_fov;

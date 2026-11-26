@@ -44,6 +44,7 @@
 #include "player_data.h"
 #include "server_admin.h"
 #include "net_state.h"
+#include "world_side_panel.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -725,6 +726,8 @@ void init_key_to_strings(void)
  */
 TbBool mouse_is_over_panel_map(ScreenCoord x, ScreenCoord y)
 {
+    if (world_side_minimap_away())
+        return false; /* endless: the modern side panel is away (its minimap with it) */
     long cmx = GetMouseX();
     long cmy = GetMouseY();
     int units_per_px = (16 * status_panel_width + 140 / 2) / 140;

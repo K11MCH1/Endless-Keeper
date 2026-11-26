@@ -77,6 +77,8 @@
 #include "world_curtain.h"
 #include "world_stream.h"
 #include "ui_safe_area.h"
+#include "world_keeper_panel.h"
+#include "world_side_panel.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -244,6 +246,8 @@ static void draw_creature_view_icons(struct Thing* creatng)
 int32_t engine_window_reserved_left(void)
 {
     if (!local_state.show_gui)
+        return 0;
+    if (world_side_panel_on()) /* endless, the modern side panel: glass over the world */
         return 0;
     return (viewport_mode == VpMode_Original) ? status_panel_width : 0;
 }
@@ -732,7 +736,8 @@ static void process_dungeon_top_pointer_graphic(NetUserId user)
           i = ustate->secondary_cursor_state;
         else
           i = ustate->primary_cursor_state;
-        if (ustate->instance_num == PI_Grab || ustate->instance_num == PI_Drop || ustate->instance_num == PI_Whip || ustate->instance_num == PI_WhipEnd || power_hand_is_hovering(user) || (!power_hand_is_empty(player) && (i != CSt_DoorKey))) {
+        if (ustate->instance_num == PI_Grab || ustate->instance_num == PI_Drop || ustate->instance_num == PI_Whip || ustate->instance_num == PI_WhipEnd || power_hand_is_hovering(user) || (!power_hand_is_empty(player) && (i != CSt_DoorKey))
+            || (is_local_user(user) && world_hand_hover_local())) { /* (endless: the Soul Container's picture, the Library's book) */
             i = CSt_PowerHand;
         } else
         if ((i == CSt_PowerHand) && power_hand_is_empty(player)) {

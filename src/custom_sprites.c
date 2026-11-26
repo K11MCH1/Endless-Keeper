@@ -40,6 +40,7 @@
 #include "config_campaigns.h"
 #include "world_fill.h"
 #include "world_expedition.h"
+#include "world_progress.h"
 #include "post_inc.h"
 #include "bflib_sprite.h"
 
@@ -572,6 +573,7 @@ void init_custom_sprites(LevelNumber lvnum)
     }
     world_fill_register_icons(); /* endless worlds: the Fill room's icons (built into the program) */
     world_expedition_register_icons(); /* and the Expedition spell's */
+    world_progress_register_icons(); /* and the level-up lore book's map icon */
 
     if (mods_conf.after_base_cnt > 0)
     {

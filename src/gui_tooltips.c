@@ -48,6 +48,7 @@
 #include "keeperfx.hpp"
 #include "world_progress.h"
 #include "ui_safe_area.h"
+#include "world_side_panel.h"
 #include "post_inc.h"
 #include <math.h>
 
@@ -558,6 +559,8 @@ void toggle_tooltips(void)
 
 void draw_tooltip_slab64k(char *tttext, long pos_x, long pos_y, long ttwidth, long ttheight, long viswidth)
 {
+    if (world_ui_tooltip(tttext, pos_x, pos_y)) /* endless, the modern look: dark glass, the whole text */
+        return;
     unsigned int flg_mem = RendererGetDrawFlags();
     if (ttwidth > viswidth)
     {

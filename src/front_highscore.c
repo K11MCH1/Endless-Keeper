@@ -17,6 +17,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "ui_front.h"
 #include "kfx/renderer/RendererManager.h"
 #include "front_highscore.h"
 #include "globals.h"
@@ -447,6 +448,8 @@ void frontend_high_scores_update()
 
 void frontend_draw_highscores_scroll_box_tab(struct GuiButton *gbtn)
 {
+    if (uf_tab(gbtn->scr_pos_x, gbtn->scr_pos_y, gbtn->width, gbtn->height)) /* endless, the Molten look */
+        return;
     int fs_units_per_px = simple_frontend_sprite_height_units_per_px(gbtn, GFS_hugearea_thc_tx1_tc, 100);
     const struct TbSprite *spr = get_frontend_sprite(GFS_hugearea_thc_tx1_tc);
     int pos_x = gbtn->scr_pos_x;

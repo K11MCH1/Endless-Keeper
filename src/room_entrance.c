@@ -36,6 +36,7 @@
 #include "gui_soundmsgs.h"
 #include "game_legacy.h"
 #include "world_misdeeds.h"
+#include "world_rivals.h"
 #include "world_pools.h"
 #include "world_seasons.h"
 #include "world_stream.h"
@@ -210,6 +211,8 @@ TbBool creature_will_generate_for_dungeon(const struct Dungeon * dungeon, ThingM
         return false;
     }
 
+    if (!world_rivals_may_attract(dungeon->owner, crmodel))
+        return false; /* endless: a rival pair's keeper has two Dragons at most */
     // Not allowed creatures can never be attracted
     if (!dungeon->creature_allowed[crmodel]) {
         SYNCDBG(11, "The %s is not allowed for player %d", creature_code_name(crmodel),(int)dungeon->owner);

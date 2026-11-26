@@ -35,6 +35,7 @@
 #include "frontend.h"
 #include "front_credits.h"
 #include "config_keeperfx.h"
+#include "ui_front.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -960,6 +961,10 @@ TbBool LbTextDrawResizedImmediate(int posx, int posy, int units_per_px, const ch
  */
 TbBool LbTextDrawResized(int posx, int posy, int units_per_px, const char *text)
 {
+    /* (endless, the frontend's screens in the Molten look: their words are painted with the window, ui_front.c) */
+    if (uf_on() && (lbFontPtr != NULL) && uf_text_at(lbTextJustifyWindow.x, lbTextJustifyWindow.y, lbTextJustifyWindow.width,
+        lbTextJustifyWindow.height, posx, posy, LbTextLineHeight() * units_per_px / 16, text))
+        return true;
     return RendererTextDrawResized(posx, posy, units_per_px, text);
 }
 

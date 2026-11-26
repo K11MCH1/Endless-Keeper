@@ -54,6 +54,7 @@
 #include "player_data.h"
 #include "player_instances.h"
 #include "player_utils.h"
+#include "power_hand.h"
 #include "room_data.h"
 #include "room_util.h"
 #include "config_trapdoor.h"
@@ -67,6 +68,7 @@
 #include "world_gen.h"
 #include "world_outpost.h"
 #include "world_progress.h"
+#include "world_rivals.h"
 #include "world_stream.h"
 #include "world_threat.h"
 #include "world_truce.h"
@@ -139,9 +141,10 @@ static const struct KaiTraits kai_traits[KaiP_COUNT] = {
     {"the Diplomat",     130,   0,    0,     25,    120,     50,     0,    0,   1, kai_focus_diplo},
 };
 
-enum KaiStance { KaiS_Calm = 0, KaiS_Probe, KaiS_Bully, KaiS_Assault, KaiS_Retreat, KaiS_Defend, KaiS_Turtle, KaiS_COUNT };
+enum KaiStance { KaiS_Calm = 0, KaiS_Probe, KaiS_Bully, KaiS_Assault, KaiS_Retreat, KaiS_Defend, KaiS_Turtle, KaiS_War,
+    KaiS_COUNT };
 static const char *const kai_stance_names[KaiS_COUNT] = {"calm", "probing", "bullying", "assaulting", "retreating",
-    "defending", "turtling"};
+    "defending", "turtling", "warring"};
 
 #pragma pack(1)
 struct KaiState {
@@ -336,11 +339,19 @@ static int kai_free_fighters(const struct KaiView *v, int share)
     return max(1, min(12, (v->own - v->wounded) * share / 100));
 }
 
+static TbBool kai_edge_toward(PlayerNumber p, const struct Coord3d *heart, const struct Coord3d *target, struct Coord3d *out);
+
 static void kai_defend(struct Computer2 *comp, struct KaiState *ks, const struct KaiView *v, PlayerNumber p)
 {
     struct Coord3d pos = v->home_pos;
+    /* the drop: on the intruders when the Hand may put creatures there, else on its own ground nearest them (a raid's
+       heroes stand in their own tunnel: the drop there failed, "Could not dump", play-test round 2026-11-25) */
+    struct Coord3d drop = pos;
+    const struct Thing *heartng = find_players_dungeon_heart(p);
+    if (!can_drop_thing_here_as(pos.x.stl.num, pos.y.stl.num, p, 0, true) && thing_exists(heartng))
+        kai_edge_toward(p, &heartng->mappos, &pos, &drop);
     if (!is_task_in_progress(comp, CTT_MoveCreaturesToDefend))
-        create_task_move_creatures_to_defend(comp, &pos, kai_free_fighters(v, 70), 0);
+        create_task_move_creatures_to_defend(comp, &drop, kai_free_fighters(v, 70), 0);
     if (!is_task_in_progress(comp, CTT_MagicCallToArms) && computer_able_to_use_power(comp, PwrK_CALL2ARMS, 0, 1))
         create_task_magic_battle_call_to_arms(comp, &pos, 20 * 30, kai_free_fighters(v, 60));
     (void)ks;
@@ -795,6 +806,14 @@ static int kai_room_side(const struct Dungeon *dungeon, int r, int personality, 
     return max(3, min(side, (r == KaiR_Lair) ? 9 : 7));
 }
 
+/* A rival pair's keeper builds at the endgame's size (the user, 2026-11-25, after watching a war: "they're always stuck
+   with the 3x4 training room. Make sure that if they need bigger rooms, any room, that they build another one in the
+   standard of endgame"): its main rooms 7x7, the others 5x5, every new room of a kind, the stock "room nearly full"
+   ones too; kai_rival_rooms builds another such room of every kind it has whose rooms are smaller than that. */
+static const int8_t kai_endgame_side[KaiR_COUNT] = {
+    /* Tres Lair Hatc Libr Trai Work Pris Tort Barr Grav Temp */
+        7,   7,   7,   7,   7,   7,   5,   5,   5,   5,   5};
+
 /* the sizes it last gave each process (a process that found no room for them makes them smaller itself; they are
    set again only when the need changes) */
 static uint8_t kai_set_side[PLAYERS_MAX][COMPUTER_PROCESSES_COUNT + 1];
@@ -814,12 +833,13 @@ static void kai_build_plan(struct Computer2 *comp, const struct KaiState *ks, co
         if (r < 0)
             continue;
         cproc->priority = kai_room_plans[ks->personality].prio[r];
-        const int side = kai_room_side(dungeon, r, ks->personality, v->own, researchers);
+        const TbBool rival = world_mode_active() && world_rivals_is_rival(p);
+        const int side = rival ? kai_endgame_side[r] : kai_room_side(dungeon, r, ks->personality, v->own, researchers);
         if (kai_set_side[p][i] != side)
         {
             kai_set_side[p][i] = (uint8_t)side;
             cproc->process_configuration_value_2 = side;
-            cproc->process_configuration_value_3 = (r == KaiR_Hatchery) ? side + 1 : side;
+            cproc->process_configuration_value_3 = ((r == KaiR_Hatchery) && !rival) ? side + 1 : side;
             if (kai_logging())
                 SYNCLOG("Keeper AI: player %d (%s) plans its next %s at %dx%d, priority %d", (int)p,
                     kai_traits[ks->personality].name, kai_room_names[r], (int)cproc->process_configuration_value_2,
@@ -850,6 +870,8 @@ static TbBool kai_foreign_near(PlayerNumber p, MapSlabCoord x, MapSlabCoord y, i
 /** May it dig to and claim this place (its expansion rules): not near another keeper's ground unless it is assaulting. */
 static TbBool kai_may_claim(PlayerNumber p, const struct Coord3d *c)
 {
+    if (world_mode_active() && !world_rivals_site_ok(p, subtile_slab(c->x.stl.num), subtile_slab(c->y.stl.num)))
+        return false; /* (a rival pair's keeper: never towards its rival) */
     if (kai[p].stance == KaiS_Assault)
         return true;
     return !kai_foreign_near(p, subtile_slab(c->x.stl.num), subtile_slab(c->y.stl.num), KAI_KEEP_OUT);
@@ -876,7 +898,7 @@ static void kai_keep_out(struct Computer2 *comp, PlayerNumber p)
         if ((ctask->ttype != CTT_DigToGold) && (ctask->ttype != CTT_DigToEntrance))
             continue;
         const MapSlabCoord x = subtile_slab(ctask->dig.pos_dest.x.stl.num), y = subtile_slab(ctask->dig.pos_dest.y.stl.num);
-        if (!kai_foreign_near(p, x, y, KAI_KEEP_OUT / 2))
+        if (!kai_foreign_near(p, x, y, KAI_KEEP_OUT / 2) && (!world_mode_active() || world_rivals_site_ok(p, x, y)))
             continue;
         SYNCLOG("Keeper AI: player %d drops its digging to engine slab (%d,%d): another keeper's ground", (int)p, (int)x, (int)y);
         remove_task(comp, ctask);
@@ -1098,7 +1120,8 @@ static TbBool kai_find_site(PlayerNumber p, MapSlabCoord cx, MapSlabCoord cy, in
                 } else
                     touches = (nb->kind == SlbT_CLAIMED) || (nb->room_index > 0);
             }
-            if (!touches || kai_foreign_near(p, x0 + w / 2, y0 + h / 2, KAI_KEEP_OUT))
+            if (!touches || kai_foreign_near(p, x0 + w / 2, y0 + h / 2, KAI_KEEP_OUT) ||
+                (world_mode_active() && !world_rivals_site_ok(p, x0 + w / 2, y0 + h / 2)))
                 continue;
             *ox = x0;
             *oy = y0;
@@ -1225,6 +1248,7 @@ static void kai_init(PlayerNumber p, uint32_t id_hash)
 
 static void kai_think_stance(PlayerNumber p, struct Computer2 *comp, struct KaiState *ks, const struct Coord3d *heartp,
     struct KaiView *vp);
+static void kai_rival_rooms(struct Computer2 *comp, PlayerNumber p);
 
 static void kai_think(PlayerNumber p, const struct WorldKeeperInfo *wi)
 {
@@ -1240,6 +1264,8 @@ static void kai_think(PlayerNumber p, const struct WorldKeeperInfo *wi)
     kai_think_stance(p, comp, ks, &heart, &v);
     /* building (every thought, whatever its stance): its plan, its expansion rules, defences towards a foe, outposts */
     kai_build_plan(comp, ks, &v, p);
+    if (world_mode_active() && world_rivals_is_rival(p))
+        kai_rival_rooms(comp, p);
     kai_keep_out(comp, p);
     {
         const struct Coord3d *foe = NULL;
@@ -1264,6 +1290,406 @@ static void kai_think(PlayerNumber p, const struct WorldKeeperInfo *wi)
         kai_outpost_build(comp, ks, p, &heart);
 }
 
+/******************************************************************************/
+/* A rival pair's keeper (world_rivals.c): its war with its rival, and the humans who come into its territory */
+#define KAI_WAR_WAVE (20 * 40)   /* turns between two waves onto the battlefield (by its liking for probing) */
+#define KAI_WAR_WAY (20 * 45)    /* turns between two marks of its Imps' way across */
+#define KAI_HELP_GAP (20 * 15)   /* in a truce: turns between two parties sent to help its rival */
+#define KAI_RIVAL_SIGHT 40       /* slabs from its heart: a human's creature it sees (and goes for) on a safe day's rest */
+static GameTurn kai_war_wave[PLAYERS_MAX], kai_war_way[PLAYERS_MAX], kai_war_help[PLAYERS_MAX]; /* (not saved: timers) */
+#define KAI_WAR_EXPLORE (20 * 30) /* turns between two marks of its exploring tunnel (its Imps' work between battles) */
+#define KAI_WAR_EXPLORE_R 150     /* slabs: the world's structures it digs out to */
+static GameTurn kai_war_explore[PLAYERS_MAX];
+#define KAI_ROOM_GAP (20 * 20)    /* turns between two looks at its rooms' sizes */
+static GameTurn kai_room_look[PLAYERS_MAX];
+static long kai_room_gold[PLAYERS_MAX]; /* the gold the endgame room it wants still costs (world_rivals.c tops it up) */
+#define KAI_ROOM_RETRY (20 * 180) /* turns before it looks again for a place for a kind that found none */
+static GameTurn kai_room_fail[PLAYERS_MAX][KaiR_COUNT];
+
+long count_no_room_build_tasks(const struct Computer2 *comp);
+
+/** A place further out than KeeperFX's own search (that looks at most about 11 slabs from its rooms): a corridor of
+ *  12 to 22 slabs from any of its rooms to a w x w room. */
+static struct ComputerTask *kai_rival_room_far(struct Computer2 *comp, RoomKind rkind, int w)
+{
+    struct Dungeon *dungeon = comp->dungeon;
+    for (long dist = 12; dist <= 22; dist += 2)
+        for (long perfect = 1; perfect >= 0; perfect--)
+            for (RoomKind look = 1; look < game.conf.slab_conf.room_types_count; look++)
+            {
+                long ri = dungeon->room_list_start[look];
+                for (int guard = 0; (ri != 0) && (guard < ROOMS_COUNT); guard++)
+                {
+                    const struct Room *room = room_get(ri);
+                    if (room_is_invalid(room))
+                        break;
+                    ri = room->next_of_owner;
+                    struct Coord3d pos;
+                    pos.x.val = subtile_coord_center(room->central_stl_x);
+                    pos.y.val = subtile_coord_center(room->central_stl_y);
+                    pos.z.val = subtile_coord(1, 0);
+                    struct ComputerTask *ctask = able_to_build_room(comp, &pos, rkind, w, w, dist, perfect);
+                    if (!computer_task_invalid(ctask))
+                        return ctask;
+                }
+            }
+    return INVALID_COMPUTER_TASK;
+}
+
+/** A rival pair's keeper's rooms (see kai_endgame_side): of every kind it has whose rooms together are smaller than
+ *  one endgame room, it builds another at the endgame's size, one at a time, the Training Room first. Through KeeperFX's
+ *  own room building (a site its Imps dig out beside its rooms; world_rivals_site_ok keeps it off the rival's side). */
+static void kai_rival_rooms(struct Computer2 *comp, PlayerNumber p)
+{
+    static const int order[] = {KaiR_Training, KaiR_Lair, KaiR_Hatchery, KaiR_Treasury, KaiR_Library, KaiR_Workshop,
+        KaiR_Barracks, KaiR_Temple, KaiR_Prison, KaiR_Torture, KaiR_Graveyard};
+    const GameTurn now = game.play_gameturn;
+    if ((kai_room_look[p] != 0) && ((GameTurnDelta)(now - kai_room_look[p]) >= 0) &&
+        ((GameTurnDelta)(now - kai_room_look[p]) < KAI_ROOM_GAP))
+        return;
+    kai_room_look[p] = now;
+    struct Dungeon *dungeon = comp->dungeon;
+    if (count_no_room_build_tasks(comp) > 0)
+        return; /* (one at a time: the gold it wants stays as it was) */
+    kai_room_gold[p] = 0;
+    for (int k = 0; k < (int)(sizeof(order) / sizeof(order[0])); k++)
+    {
+        const int r = order[k];
+        const RoomKind rkind = kai_room_kind(r);
+        if (kai_logging() && (rkind > 0))
+            SYNCLOG("Keeper AI: rival player %d's %s: has %d, buildable %d, %ld slabs", (int)p, kai_room_names[r],
+                (int)dungeon_has_room(dungeon, rkind), (int)is_room_available(p, rkind), get_room_slabs_count(p, rkind));
+        if ((rkind <= 0) || !dungeon_has_room(dungeon, rkind) || !is_room_available(p, rkind))
+            continue;
+        const int side = kai_endgame_side[r];
+        const long have = get_room_slabs_count(p, rkind);
+        if (have >= side * side)
+            continue;
+        if ((kai_room_fail[p][r] != 0) && ((GameTurnDelta)(now - kai_room_fail[p][r]) >= 0) &&
+            ((GameTurnDelta)(now - kai_room_fail[p][r]) < KAI_ROOM_RETRY))
+            continue; /* (no place last time: later) */
+        const struct RoomConfigStats *roomst = get_room_kind_stats(rkind);
+        kai_room_gold[p] = (long)roomst->cost * side * side;
+        /* (no place for the full size beside its rooms: further out, then one slab smaller each way, still a big room) */
+        int got = side;
+        struct ComputerTask *ctask = computer_setup_build_room(comp, rkind, side, side, -1);
+        if (computer_task_invalid(ctask))
+            ctask = kai_rival_room_far(comp, rkind, side);
+        if (computer_task_invalid(ctask) && (side > 5))
+        {
+            got = side - 1;
+            ctask = computer_setup_build_room(comp, rkind, got, got, -1);
+            if (computer_task_invalid(ctask))
+                ctask = kai_rival_room_far(comp, rkind, got);
+        }
+        if (computer_task_invalid(ctask))
+        {
+            kai_room_fail[p][r] = now;
+            SYNCLOG("Keeper AI: rival player %d wants a %dx%d %s (its %s slabs: %ld), but finds no place", (int)p, side, side,
+                kai_room_names[r], kai_room_names[r], have);
+            continue; /* (the next kind) */
+        }
+        /* the task's process: the stock one of the kind (its completion wakes it), else none */
+        int pi = COMPUTER_PROCESSES_COUNT;
+        for (int i = 0; i < COMPUTER_PROCESSES_COUNT; i++)
+        {
+            const struct ComputerProcess *cproc = &comp->processes[i];
+            if (flag_is_set(cproc->flags, ComProc_ListEnd))
+                break;
+            if ((computer_process_func_list[cproc->func_check] == computer_check_any_room) &&
+                ((RoomKind)cproc->process_configuration_value_4 == rkind))
+            {
+                pi = i;
+                break;
+            }
+        }
+        ctask->cproc_idx = pi;
+        SYNCLOG("Keeper AI: rival player %d builds another %s at the endgame's %dx%d%s (its %s slabs: %ld, gold %ld)", (int)p,
+            kai_room_names[r], got, got, (got < side) ? " (no place for 7x7)" : "", kai_room_names[r], have,
+            (long)dungeon->total_money_owned);
+        return;
+    }
+}
+
+long world_keeper_ai_room_gold(PlayerNumber plyr_idx)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
+        return 0;
+    return kai_room_gold[plyr_idx];
+}
+static uint8_t kai_war_explore_dir[PLAYERS_MAX];
+/* targets whose tunnel had nothing left to dig (reached, or no way on from its ground): the next is chosen instead (a
+   play-test run: half the marks went to such a target, its Imps idle meanwhile) */
+#define KAI_EXPLORE_DONE 8
+static int64_t kai_explore_done[PLAYERS_MAX][KAI_EXPLORE_DONE][2];
+static uint8_t kai_explore_done_n[PLAYERS_MAX];
+
+/** Exploring as a player does (the user, 2026-11-25: Imps "roaming around the battles. Give them something to do, even
+ *  if their treasuries are full"; "They should explore outwards like Player to find procedurally generated
+ *  structures"): the next stretch of a tunnel is marked for its Imps towards the nearest portal or reward cave of the
+ *  world on its own side (away from its rival, and off other keepers' ground), else a hero fortress, else a way
+ *  straight out from its rival in turn ahead, half left, half right. */
+static void kai_rival_explore(PlayerNumber p, struct Computer2 *comp, const struct Coord3d *heart)
+{
+    struct WorldKeeperRival kr;
+    struct WgWorld *gen = world_generator();
+    if ((gen == NULL) || !world_keeper_rival(p, &kr))
+        return;
+    int64_t hwx, hwy;
+    world_slab_to_world(subtile_slab(heart->x.stl.num), subtile_slab(heart->y.stl.num), &hwx, &hwy);
+    double ux = (double)(hwx - kr.rival_heart_x), uy = (double)(hwy - kr.rival_heart_y);
+    const double ul = sqrt(ux * ux + uy * uy);
+    if (ul < 1.0)
+        return;
+    ux /= ul;
+    uy /= ul;
+    static struct WgStructRef refs[32];
+    const int n = min(32, wg_structures_in(gen, hwx - KAI_WAR_EXPLORE_R, hwy - KAI_WAR_EXPLORE_R, hwx + KAI_WAR_EXPLORE_R,
+        hwy + KAI_WAR_EXPLORE_R, (1u << WgT_Portal) | (1u << WgT_Reward) | (1u << WgT_Fortress), refs, 32));
+    double best = 1e18;
+    int64_t tx = 0, ty = 0;
+    const char *what = NULL;
+    for (int i = 0; i < n; i++)
+    {
+        const struct WgStructRef *r = &refs[i];
+        const int64_t sx = (r->id.type == WgT_Portal) ? r->portal_x : (r->id.type == WgT_Fortress) ? r->gate_x : (r->bbox_x1 + r->bbox_x2) / 2;
+        const int64_t sy = (r->id.type == WgT_Portal) ? r->portal_y : (r->id.type == WgT_Fortress) ? r->gate_y : (r->bbox_y1 + r->bbox_y2) / 2;
+        const double dx = (double)(sx - hwx), dy = (double)(sy - hwy), d = sqrt(dx * dx + dy * dy);
+        if ((d < 8.0) || (d > KAI_WAR_EXPLORE_R) || (dx * ux + dy * uy < -4.0))
+            continue; /* (here already, too far, or towards its rival) */
+        TbBool done = false;
+        for (int k = 0; (k < KAI_EXPLORE_DONE) && !done; k++)
+            done = (kai_explore_done[p][k][0] == sx) && (kai_explore_done[p][k][1] == sy);
+        if (done)
+            continue;
+        MapSlabCoord ex, ey;
+        if (world_engine_slab(sx, sy, &ex, &ey))
+        {
+            const struct SlabMap *slb = get_slabmap_block(ex, ey);
+            if (slabmap_block_invalid(slb) || (slabmap_owner(slb) == p))
+                continue; /* (reached: its own ground) */
+            struct Coord3d c;
+            c.x.val = subtile_coord_center(slab_subtile_center(ex));
+            c.y.val = subtile_coord_center(slab_subtile_center(ey));
+            c.z.val = 0;
+            if ((r->id.type != WgT_Fortress) && !kai_may_claim(p, &c))
+                continue; /* (another keeper's ground) */
+        }
+        const double score = d + ((r->id.type == WgT_Fortress) ? 60.0 : 0.0);
+        if (score < best)
+        {
+            best = score;
+            tx = sx;
+            ty = sy;
+            what = (r->id.type == WgT_Portal) ? "a portal" : (r->id.type == WgT_Fortress) ? "a hero fortress" : "a reward cave";
+        }
+    }
+    if (what == NULL)
+    {
+        static const double turns[5] = {0.0, 0.785, -0.785, 1.571, -1.571};
+        const double a = turns[kai_war_explore_dir[p]++ % 5];
+        tx = hwx + (int64_t)lround(60.0 * (ux * cos(a) - uy * sin(a)));
+        ty = hwy + (int64_t)lround(60.0 * (ux * sin(a) + uy * cos(a)));
+        what = "the world away from its rival";
+    }
+    MapSlabCoord ex, ey;
+    if (!world_engine_slab_unloaded(tx, ty, &ex, &ey))
+        return;
+    struct Coord3d to, edge;
+    to.x.val = subtile_coord_center(slab_subtile_center(ex));
+    to.y.val = subtile_coord_center(slab_subtile_center(ey));
+    to.z.val = 0;
+    if (!kai_edge_toward(p, heart, &to, &edge))
+        return;
+    const int marked = kai_mark_tunnel(p, &edge, &to);
+    if ((marked > 0) && !is_task_in_progress(comp, CTT_SlapDiggers))
+        create_task_slap_imps(comp, 1, false);
+    if (marked == 0)
+    {
+        const int k = kai_explore_done_n[p]++ % KAI_EXPLORE_DONE;
+        kai_explore_done[p][k][0] = tx;
+        kai_explore_done[p][k][1] = ty;
+        kai_war_explore[p] = game.play_gameturn - KAI_WAR_EXPLORE + 20 * 3; /* (the next target soon) */
+    }
+    SYNCLOG("Keeper AI: player %d explores towards %s at world slab (%ld,%ld): %d slabs marked for its Imps", (int)p, what,
+        (long)tx, (long)ty, marked);
+}
+
+static void kai_think_rival(PlayerNumber p, struct Computer2 *comp, struct KaiState *ks, const struct Coord3d *heart,
+    const struct KaiView *v, const struct WorldRivalView *rv)
+{
+    const struct KaiTraits *tr = &kai_traits[ks->personality];
+    const GameTurn now = game.play_gameturn;
+    /* its Imps' work between battles: exploring outwards, whatever else it does (but not with a human at home) */
+    if (!rv->invaded && ((GameTurnDelta)(now - kai_war_explore[p]) > KAI_WAR_EXPLORE))
+    {
+        kai_war_explore[p] = now;
+        kai_rival_explore(p, comp, heart);
+    }
+    /* a human in its territory: it defends there (in a truce its rival comes to help) */
+    if (rv->invaded)
+    {
+        static struct KaiView dv;
+        dv = *v;
+        dv.home_pos = rv->invader_pos;
+        const double human = ((rv->invader >= 0) && (rv->invader < PLAYERS_MAX)) ? v->near_power[rv->invader] : 0.0;
+        const TbBool turtle = (human * 100.0 > max(v->army.power, 1.0) * tr->turtle);
+        kai_set_stance(ks, turtle ? KaiS_Turtle : KaiS_Defend, rv->invader, v, p);
+        kai_defend(comp, ks, &dv, p);
+        if (turtle && ((GameTurnDelta)(now - ks->last_cut) > KAI_CUT_GAP))
+        {
+            ks->last_cut = now;
+            kai_cut_off(comp, p, heart, &rv->invader_pos);
+        }
+        return;
+    }
+    /* raiding heroes at its home (world_daynight.c raids it too): it defends, whatever its war or truce */
+    if (v->home_power[PLAYER_GOOD] > 0.0)
+    {
+        kai_set_stance(ks, KaiS_Defend, PLAYER_GOOD, v, p);
+        kai_defend(comp, ks, v, p);
+        return;
+    }
+    if (rv->truce)
+    {
+        if (rv->rival_invaded && (v->own - v->wounded >= 2) && ((GameTurnDelta)(now - kai_war_help[p]) > KAI_HELP_GAP))
+        {
+            kai_war_help[p] = now;
+            kai_set_stance(ks, KaiS_Defend, rv->rival, v, p);
+            /* its Hand drops them on its rival's ground nearest the intruder (truced, that ground takes them); a Call
+               To Arms instead when it has one (truce run, 2026-11-25: dropped on its own ground nearest the intruder, the
+               help never got there) */
+            struct Coord3d spot;
+            TbBool found = false;
+            const MapSlabCoord ix = subtile_slab(rv->rival_invader_pos.x.stl.num), iy = subtile_slab(rv->rival_invader_pos.y.stl.num);
+            for (int r = 1; (r <= 6) && !found; r++)
+                for (int dy = -r; (dy <= r) && !found; dy++)
+                    for (int dx = -r; (dx <= r) && !found; dx++)
+                    {
+                        if ((abs(dx) != r) && (abs(dy) != r))
+                            continue;
+                        const struct SlabMap *slb = get_slabmap_block(ix + dx, iy + dy);
+                        if (slabmap_block_invalid(slb) || (slabmap_owner(slb) != rv->rival) ||
+                            ((slb->kind != SlbT_CLAIMED) && (slb->room_index <= 0)))
+                            continue;
+                        spot.x.val = subtile_coord_center(slab_subtile_center(ix + dx));
+                        spot.y.val = subtile_coord_center(slab_subtile_center(iy + dy));
+                        spot.z.val = 0;
+                        if (can_drop_thing_here_as(spot.x.stl.num, spot.y.stl.num, p, 0, true))
+                            found = true;
+                    }
+            if (computer_able_to_use_power(comp, PwrK_CALL2ARMS, 0, 1) || !found)
+                kai_send_party(comp, p, heart, &rv->rival_invader_pos, kai_free_fighters(v, 60));
+            else if (!is_task_in_progress(comp, CTT_MoveCreaturesToDefend) &&
+                create_task_move_creatures_to_defend(comp, &spot, kai_free_fighters(v, 60), 0))
+                SYNCLOG("Keeper AI: player %d drops %d creatures on its rival's ground at engine slab (%d,%d), beside the intruder",
+                    (int)p, kai_free_fighters(v, 60), (int)subtile_slab(spot.x.stl.num), (int)subtile_slab(spot.y.stl.num));
+            SYNCLOG("Keeper AI: player %d (%s) sends its creatures to help player %d, its rival, drive an intruder away", (int)p,
+                tr->name, (int)rv->rival);
+            return;
+        }
+        if (rv->rest && !rv->rival_invaded)
+        {
+            /* the safe day's rest: no war, but a human's creature in sight (within KAI_RIVAL_SIGHT of its heart, on the
+               battlefield too) is attacked, by a player's means (the user, 2026-11-25: "the truce is not applicable to
+               Player so they will attack Player on sight") */
+            long best = KAI_SLABS2(KAI_RIVAL_SIGHT);
+            PlayerNumber who = -1;
+            struct Coord3d at;
+            memset(&at, 0, sizeof(at));
+            for (PlayerNumber o = 0; o < PLAYERS_MAX; o++)
+            {
+                if (!kai_is_human(o) || !kai_enemy(p, o))
+                    continue;
+                if (v->near_d2[o] < best)
+                {
+                    best = v->near_d2[o];
+                    at = v->near_pos[o];
+                    who = o;
+                }
+                if (v->imp_d2[o] < best)
+                {
+                    best = v->imp_d2[o];
+                    at = v->imp_pos[o];
+                    who = o;
+                }
+            }
+            if ((who >= 0) && (v->own - v->wounded >= 2) && ((GameTurnDelta)(now - kai_war_help[p]) > KAI_HELP_GAP))
+            {
+                kai_war_help[p] = now;
+                kai_set_stance(ks, KaiS_Defend, who, v, p);
+                kai_send_party(comp, p, heart, &at, kai_free_fighters(v, 60));
+                SYNCLOG("Keeper AI: player %d (%s) rests from its war on the safe day, and goes for player %d's creature it sees at "
+                    "engine slab (%d,%d)", (int)p, tr->name, (int)who, (int)subtile_slab(at.x.stl.num), (int)subtile_slab(at.y.stl.num));
+                return;
+            }
+        }
+        if (!rv->rival_invaded)
+        {
+            kai_set_stance(ks, KaiS_Calm, -1, v, p);
+            kai_nurture(comp, ks, v, p, heart);
+        }
+        return;
+    }
+    if (rv->rival == PLAYER_NONE)
+    {
+        /* its rival asleep or gone: no war; and it leaves everyone else alone */
+        kai_set_stance(ks, KaiS_Calm, -1, v, p);
+        kai_nurture(comp, ks, v, p, heart);
+        return;
+    }
+    /* its rival's creatures at its home: it defends (they cannot take it, but they fight there) */
+    if ((rv->rival < PLAYERS_MAX) && (v->home_power[rv->rival] > 0.0))
+    {
+        kai_set_stance(ks, KaiS_Defend, rv->rival, v, p);
+        kai_defend(comp, ks, v, p);
+        return;
+    }
+    /* the war: waves onto the battlefield, the Imps' way across marked */
+    kai_set_stance(ks, KaiS_War, rv->rival, v, p);
+    if (rv->field_known)
+    {
+        if ((GameTurnDelta)(now - kai_war_way[p]) > KAI_WAR_WAY)
+        {
+            kai_war_way[p] = now;
+            struct Coord3d edge;
+            if (kai_edge_toward(p, heart, &rv->field_far, &edge))
+            {
+                const int marked = kai_mark_tunnel(p, &edge, &rv->field_far);
+                if ((marked > 0) && !is_task_in_progress(comp, CTT_SlapDiggers))
+                    create_task_slap_imps(comp, 2, false);
+            }
+        }
+        const GameTurnDelta wave_gap = KAI_WAR_WAVE * 100 / max(40, min(160, tr->probe + 60));
+        if ((v->own - v->wounded >= KAI_MIN_FIGHTERS) && ((GameTurnDelta)(now - kai_war_wave[p]) > wave_gap))
+        {
+            kai_war_wave[p] = now;
+            struct WorldArmy theirs;
+            world_threat_army(rv->rival, &theirs);
+            const double ratio = max(v->army.power, 1.0) * 100.0 / max(theirs.power, 1.0);
+            if (ratio > 150.0)
+            {
+                /* half again as strong: it has overreached; it pulls back and regroups while its rival's portal sends
+                   reinforcements (world_rivals.c), and the war goes on even (second run: the stronger side kept 20
+                   creatures on the battlefield and killed every newcomer as it came) */
+                SYNCLOG("Keeper AI: player %d (%s) regroups at home: its army %.0f against player %d's %.0f", (int)p, tr->name,
+                    v->army.power, (int)rv->rival, theirs.power);
+                kai_bring_home(comp, v, heart);
+                return;
+            }
+            /* weaker: it holds its own end of the battlefield; stronger: it pushes towards the far end */
+            const struct Coord3d *to = (ratio < 70.0) ? &rv->field_own : (ratio > 140.0) ? &rv->field_far : &rv->field_mid;
+            const int share = (ratio < 70.0) ? 40 : (ratio > 140.0) ? 80 : 60;
+            SYNCLOG("Keeper AI: player %d (%s) sends a wave to the %s of %s against player %d (armies %.0f against %.0f)", (int)p,
+                tr->name, (ratio < 70.0) ? "near end" : (ratio > 140.0) ? "far end" : "middle", wg_field_name(rv->field_kind),
+                (int)rv->rival, v->army.power, theirs.power);
+            kai_send_party(comp, p, heart, to, kai_free_fighters(v, share));
+            return;
+        }
+    }
+    kai_nurture(comp, ks, v, p, heart);
+}
+
 static void kai_think_stance(PlayerNumber p, struct Computer2 *comp, struct KaiState *ks, const struct Coord3d *heartp,
     struct KaiView *vp)
 {
@@ -1271,6 +1697,14 @@ static void kai_think_stance(PlayerNumber p, struct Computer2 *comp, struct KaiS
     const struct Coord3d heart = *heartp;
     static struct KaiView v;
     v = *vp;
+    {
+        struct WorldRivalView rv;
+        if (world_mode_active() && world_rivals_view(p, &rv))
+        {
+            kai_think_rival(p, comp, ks, heartp, vp, &rv);
+            return;
+        }
+    }
     const double own = max(v.army.power, 1.0);
     /* intruders at home */
     double home = 0.0;
@@ -1659,6 +2093,8 @@ TbBool world_keeper_ai_may_attack(PlayerNumber plyr_idx, PlayerNumber victim)
 {
     if ((!world_mode_active() && !kai_classic()) || (plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX) || kai_is_human(plyr_idx))
         return true;
+    if (world_mode_active() && world_rivals_is_rival(plyr_idx))
+        return false; /* (a rival pair's keeper: never KeeperFX's attack plans; its war is waves onto the battlefield) */
     const struct KaiState *ks = &kai[plyr_idx];
     if (!ks->used)
         return false; /* (not thought yet: no assault) */
@@ -1701,6 +2137,16 @@ void world_keeper_ai_reset(void)
 {
     memset(kai, 0, sizeof(kai));
     memset(kai_set_side, 0, sizeof(kai_set_side));
+    memset(kai_war_wave, 0, sizeof(kai_war_wave));
+    memset(kai_war_way, 0, sizeof(kai_war_way));
+    memset(kai_war_help, 0, sizeof(kai_war_help));
+    memset(kai_war_explore, 0, sizeof(kai_war_explore));
+    memset(kai_war_explore_dir, 0, sizeof(kai_war_explore_dir));
+    memset(kai_room_look, 0, sizeof(kai_room_look));
+    memset(kai_room_gold, 0, sizeof(kai_room_gold));
+    memset(kai_room_fail, 0, sizeof(kai_room_fail));
+    memset(kai_explore_done, 0, sizeof(kai_explore_done));
+    memset(kai_explore_done_n, 0, sizeof(kai_explore_done_n));
 }
 
 size_t world_keeper_ai_save_size(void)

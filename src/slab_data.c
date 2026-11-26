@@ -31,6 +31,7 @@
 #include "creature_states.h"
 #include "map_data.h"
 #include "world_pages.h"
+#include "world_rivals.h"
 #include "world_fill.h"
 #include "post_inc.h"
 #include "lua_triggers.h"
@@ -987,6 +988,8 @@ TbBool player_can_claim_slab(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabC
         SYNCDBG(8,"The slab %d,%d is not by players land",(int)slb_x, (int)slb_y);
         return false;
     }
+    if (!world_rivals_may_claim(plyr_idx, slb_x, slb_y))
+        return false; /* endless: a rival pair's keeper never takes its rival's home ground */
     return true;
 }
 

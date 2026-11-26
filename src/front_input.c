@@ -98,6 +98,7 @@
 void KfxAndroidNotePacket(const struct Packet *pckt); /* android/native/TouchBridge.cpp */
 #endif
 #include "world_keeper_panel.h"
+#include "world_side_panel.h"
 #include "world_level_window.h"
 #include "world_expedition.h"
 #include "post_inc.h"
@@ -529,14 +530,17 @@ static void get_interface_inputs(void)
         return;
     }
     if (!a_menu_window_is_active() && is_game_key_pressed(Gkey_ToggleGui, true, false)) {
-        toggle_gui();
+        if (!world_side_hud_toggle()) /* endless, the modern look: the panel and the dial slide away instead */
+            toggle_gui();
         return;
     }
     if (!is_key_pressed(KC_ESCAPE, KMod_DONTCARE)) {
         return;
     }
     clear_key_pressed(KC_ESCAPE);
-    if (a_menu_window_is_active()) {
+    if (world_windows_escape()) {
+        /* endless: the Keeper panel or the Library's window closes first (no pause menu behind it) */
+    } else if (a_menu_window_is_active()) {
         turn_off_all_window_menus();
     } else if (!local_state.show_gui) {
         set_gui_visible(true);
@@ -3365,6 +3369,18 @@ short get_gui_inputs(short gameplay_on)
       }
   }
   update_busy_doing_gui_on_menu();
+  world_side_panel_place(); /* endless, the modern side panel: its buttons where they are drawn */
+  if (world_side_tab_over())
+  {
+      /* endless: the side panel's tab (its own click, not the dungeon's) */
+      busy_doing_gui = 1;
+      if (left_button_clicked)
+      {
+          left_button_clicked = 0;
+          left_button_released = 0;
+          world_side_tab_click();
+      }
+  }
   
   // click outside of edit box to end entry
   if (game_is_busy_doing_gui_string_input()

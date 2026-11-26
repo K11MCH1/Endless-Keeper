@@ -26,6 +26,7 @@
 #include "world_creature_window.h"
 #include "world_keeper_panel.h"
 #include "world_level_window.h"
+#include "world_side_panel.h"
 #include "gui_frontmenu.h"         /* menu_is_active */
 
 #include "post_inc.h"
@@ -62,7 +63,8 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
     /* endless: the creature window and the World Boss window are windows over the view - what the view draws over
        itself (the day's dial, the World Boss strip and bar, the messages) goes under them, not across their titles
        and their top rows */
-    const bool window_on_top = world_creature_window_open() || menu_is_active(GMnu_WORLD_BOSS_PICK) || world_keeper_panel_open();
+    const bool window_on_top = world_creature_window_open() || menu_is_active(GMnu_WORLD_BOSS_PICK) || world_keeper_panel_open() ||
+        world_level_window_open();
     if (window_on_top) {
         world_daynight_draw();
         message_draw();
@@ -72,7 +74,10 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
         world_daynight_draw();
     }
     if (show_sidebar) {
-        draw_overlay_compass(local_state.minimap_pos_x, local_state.minimap_pos_y);
+        if (world_side_panel_on())
+            world_side_panel_draw_over(); /* endless, the modern side panel's compass letters */
+        else
+            draw_overlay_compass(local_state.minimap_pos_x, local_state.minimap_pos_y);
     }
 
     if (!window_on_top) {
@@ -83,6 +88,7 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
     world_keeper_panel_draw_last(); /* endless: the Keeper panel over everything but the Hand */
     world_level_window_draw_last(); /* endless: Rooms & Spells To Level, the same */
     world_level_book_draw(); /* endless: the spellbook over the Library the Hand is on, under the Hand */
+    world_hand_draw_hover(); /* endless: the open Hand over the Soul Container's picture and the book */
     draw_power_hand();
     gui_draw_all_boxes();
 }

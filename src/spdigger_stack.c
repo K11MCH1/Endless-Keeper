@@ -57,6 +57,7 @@
 #include "kfx/profiling/KfxProfilingC.h"
 #include "world_misdeeds.h"
 #include "world_fill.h"
+#include "world_rivals.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -818,6 +819,8 @@ long check_place_to_pretty_excluding(struct Thing *creatng, MapSlabCoord slb_x, 
         SYNCDBG(8,"The slab %d,%d is not by players land",(int)slb_x, (int)slb_y);
         return 0;
     }
+    if (!world_rivals_may_claim(creatng->owner, slb_x, slb_y))
+        return 0; /* endless: a rival pair's keeper never claims its rival's third of the battlefield */
     struct Thing *thing;
     long i;
     unsigned long k;
@@ -1480,6 +1483,7 @@ long add_to_pretty_to_imp_stack_if_need_to(MapSlabCoord slb_x, MapSlabCoord slb_
     {
         if (subtile_revealed(stl_x, stl_y, dungeon->owner)
           && slab_by_players_land(dungeon->owner, slb_x, slb_y)
+          && world_rivals_may_claim(dungeon->owner, slb_x, slb_y) /* endless: rival pairs */
           && find_in_dungeon_imp_stack_using_pos(stl_num, DigTsk_ImproveDungeon, dungeon) < 0
           ) {
             (*remain_num)--;
@@ -1492,6 +1496,7 @@ long add_to_pretty_to_imp_stack_if_need_to(MapSlabCoord slb_x, MapSlabCoord slb_
         {
             if (subtile_revealed(stl_x, stl_y, dungeon->owner)
               && slab_by_players_land(dungeon->owner, slb_x, slb_y)
+              && world_rivals_may_claim(dungeon->owner, slb_x, slb_y) /* endless: rival pairs */
               && find_in_dungeon_imp_stack_using_pos(stl_num, DigTsk_ConvertDungeon, dungeon) < 0
               ) {
                 (*remain_num)--;

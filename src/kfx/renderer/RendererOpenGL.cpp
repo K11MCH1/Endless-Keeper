@@ -31,6 +31,8 @@
 #include "kfx/renderer/RendererThread.h"
 #include "kfx/renderer/RenderGraph.h"
 #include "kfx/renderer/RendererManager.h"
+#include "kfx/renderer/UIImage.h"
+#include "kfx/renderer/opengl/GLShaders.h"
 #include "kfx/profiling/KfxProfiling.h"
 #include "engine_textures.h" // block_ptrs[] -- tile atlas build-ready check
 #include "vidmode.h" // pixmap.fade_tables
@@ -80,6 +82,9 @@ struct GLFrameData {
     unsigned char clear_index = 0;
 
     GLCursorSnapshot cursor_snapshot;
+
+    // Endless Keeper: the true-colour window of this frame (UIImage.h)
+    UIImageFrame ui_image[UI_IMAGE_SLOTS];
 };
 
 static void frame_clear_colour(const GLFrameData& fd, GLfloat* rgba)
@@ -126,6 +131,19 @@ struct RendererOpenGL::Impl {
 
     std::string screenshot_path;
     int         screenshot_fmt = 0;
+
+    // Endless Keeper: the true-colour window (UIImage.h). Game thread: the source; render thread: the rest.
+    UIImageSource     ui_image_src[UI_IMAGE_SLOTS];
+    GpuResourceHandle ui_image_prog = kInvalidGpuResource;
+    GpuResourceHandle ui_image_geom = kInvalidGpuResource;
+    GpuResourceHandle ui_image_tex[UI_IMAGE_SLOTS] = {kInvalidGpuResource, kInvalidGpuResource, kInvalidGpuResource, kInvalidGpuResource,
+        kInvalidGpuResource, kInvalidGpuResource, kInvalidGpuResource, kInvalidGpuResource, kInvalidGpuResource, kInvalidGpuResource,
+        kInvalidGpuResource, kInvalidGpuResource, kInvalidGpuResource, kInvalidGpuResource, kInvalidGpuResource, kInvalidGpuResource};
+    int32_t           ui_image_tex_w[UI_IMAGE_SLOTS] = {}, ui_image_tex_h[UI_IMAGE_SLOTS] = {};
+    const void*       ui_image_uploaded[UI_IMAGE_SLOTS] = {}; // the copy now in each texture
+    uint32_t          ui_image_uploaded_gen[UI_IMAGE_SLOTS] = {}; // (and its generation: copies are reused)
+    void DrawUIImages(const GLFrameData& fd, int first, int last);
+    void DrawUIImage(const GLFrameData& fd, int slot);
 
     int swap_interval = -1; // render thread: interval last applied to the context
 
@@ -352,6 +370,23 @@ void RendererOpenGL::render_thread_init()
         ERRORLOG("RendererOpenGL::Init: UI renderer/atlas init failed");
         m_impl->init_ok = false;
         return;
+    }
+    {
+        GpuProgramDesc desc;
+        desc.vertex_src = RAWIMAGE_VERTEX_SHADER;
+        desc.fragment_src = UI_RGBA_FRAGMENT_SHADER;
+        desc.debug_name = "ui_rgba";
+        m_impl->ui_image_prog = m_impl->resource_mapper.RequestCreateProgram(desc);
+        GpuGeometryBufferDesc geom;
+        geom.vertex_stride = 4 * (uint32_t)sizeof(float);
+        geom.attribs = {
+            { 0, 2, GpuVertexAttribType::Float, 0 },
+            { 1, 2, GpuVertexAttribType::Float, 2 * (uint32_t)sizeof(float) },
+        };
+        geom.dynamic = true;
+        geom.initial_vertex_capacity = 6 * 4 * sizeof(float);
+        geom.debug_name = "ui_rgba_quad";
+        m_impl->ui_image_geom = m_impl->resource_mapper.RequestCreateGeometryBuffer(geom);
     }
 
     unsigned char black_palette[256 * 4] = {};
@@ -631,12 +666,94 @@ void RendererOpenGL::FGDrawWorldOverlayFlatLayer()
 void RendererOpenGL::FGDrawGameUI()
 {
     GLFrameData& fd = m_impl->frames[m_impl->render_idx];
+    m_impl->DrawUIImages(fd, UI_IMAGE_UNDER, UI_IMAGE_SLOTS); // (the pictures under the game's UI)
     m_impl->ui.DrawGameUILayerRT(fd.text_cmds, &m_impl->text);
 }
 
 void RendererOpenGL::FGDrawFrontOverlay()
 {
     m_impl->ui.DrawFrontOverlay();
+    m_impl->DrawUIImages(m_impl->frames[m_impl->render_idx], 0, UI_IMAGE_UNDER);
+}
+
+bool RendererOpenGL::SubmitUIImage(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t* rgba, uint32_t gen)
+{
+    if (m_impl == nullptr || !m_impl->init_ok || slot < 0 || slot >= UI_IMAGE_SLOTS)
+        return false;
+    return m_impl->ui_image_src[slot].Submit(m_impl->frames[m_impl->write_idx].ui_image[slot], x, y, w, h, rgba, gen);
+}
+
+// Render thread: the true-colour window over the UI (uploaded when it is a new copy).
+void RendererOpenGL::Impl::DrawUIImages(const GLFrameData& fd, int first, int last)
+{
+    for (int slot = first; slot < last; slot++)
+        DrawUIImage(fd, slot);
+}
+
+void RendererOpenGL::Impl::DrawUIImage(const GLFrameData& fd, int slot)
+{
+    const UIImageFrame& im = fd.ui_image[slot];
+    if (!im.on || !im.rgba || im.w <= 0 || im.h <= 0 || im.rgba->size() != (size_t)im.w * (size_t)im.h * 4)
+        return;
+    const GLProgram* prog = resource_mapper.ResolveProgram(ui_image_prog);
+    const GLGeometryBuffer* geom = resource_mapper.ResolveGeometryBuffer(ui_image_geom);
+    if (prog == nullptr || geom == nullptr || fd.screen_w <= 0 || fd.screen_h <= 0)
+        return;
+    if (ui_image_tex[slot] == kInvalidGpuResource)
+    {
+        GpuTextureDesc desc;
+        desc.width = im.w;
+        desc.height = im.h;
+        desc.format = GpuTextureFormat::RGBA8;
+        desc.min_filter = GpuTextureFilter::Nearest;
+        desc.mag_filter = GpuTextureFilter::Nearest;
+        desc.wrap = GpuTextureWrap::Clamp;
+        desc.debug_name = "ui_rgba";
+        ui_image_tex[slot] = resource_mapper.RequestCreateTexture(desc);
+        ui_image_tex_w[slot] = ui_image_tex_h[slot] = 0;
+    }
+    const GLTexture* tex = resource_mapper.ResolveTexture(ui_image_tex[slot]);
+    if (tex == nullptr)
+        return;
+    glBindTexture(GL_TEXTURE_2D, tex->id);
+    if (im.w != ui_image_tex_w[slot] || im.h != ui_image_tex_h[slot])
+    {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, im.w, im.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        ui_image_tex_w[slot] = im.w;
+        ui_image_tex_h[slot] = im.h;
+        ui_image_uploaded[slot] = nullptr;
+    }
+    if ((ui_image_uploaded[slot] != im.rgba.get()) || (ui_image_uploaded_gen[slot] != im.gen))
+    {
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, im.w, im.h, GL_RGBA, GL_UNSIGNED_BYTE, im.rgba->data());
+        ui_image_uploaded[slot] = im.rgba.get();
+        ui_image_uploaded_gen[slot] = im.gen;
+    }
+    const float x0 = (float)im.x, y0 = (float)im.y, x1 = (float)(im.x + im.w), y1 = (float)(im.y + im.h);
+    const float verts[] = {
+        x0, y0, 0.0f, 0.0f,   x1, y0, 1.0f, 0.0f,   x1, y1, 1.0f, 1.0f,
+        x0, y0, 0.0f, 0.0f,   x1, y1, 1.0f, 1.0f,   x0, y1, 0.0f, 1.0f,
+    };
+    glBindBuffer(GL_ARRAY_BUFFER, geom->vbo);
+    glBufferData(GL_ARRAY_BUFFER, (long)sizeof(verts), nullptr, GL_STREAM_DRAW);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (long)sizeof(verts), verts);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(prog->id);
+    glUniform2f(glGetUniformLocation(prog->id, "u_screen_size"), (float)fd.screen_w, (float)fd.screen_h);
+    glUniform1i(glGetUniformLocation(prog->id, "u_image"), 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex->id);
+    glBindVertexArray(geom->vao);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_BLEND);
 }
 
 bool RendererOpenGL::ScheduleScreenshot(const char* path, int fmt)
@@ -787,6 +904,8 @@ void RendererOpenGL::PresentFrame()
     next_fd.tooltip_ui_cmds.Reset();
     next_fd.tooltip_text_cmds.Reset();
     next_fd.frame_seq = 0;
+    for (UIImageFrame& f : next_fd.ui_image)
+        f.on = false;
     next_fd.palette_dirty = false; // defensive; a real change always re-sets this itself
     // Both slots must hold the current palette, not the one last written into them.
     std::memcpy(next_fd.palette_rgba, m_impl->frames[filled].palette_rgba, sizeof(next_fd.palette_rgba));

@@ -13,6 +13,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "ui_front.h"
 #include "kfx/renderer/RendererManager.h"
 #include "world_menu.h"
 
@@ -69,6 +70,7 @@
 #include "world_attract.h"
 #include "chat_box.h"
 #include "net_matchmaking.h"
+#include "bflib_mouse.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -232,7 +234,7 @@ TbBool world_menu_mp_host = false;
  *  L Load Game, N New Run, C Continue, R<n> the n-th row of the save list (0 = newest), H Host (a new run
  *  open to the network), J Join (the World List), W the World List, P<n> a screenshot of the frame, T<n> a chat
  *  line, G<n> join the n-th world of the list, A join 127.0.0.1:5556, X<port> join 127.0.0.1:<port> (a failed join), D<n>/U<n> scroll the list, K<n> the name becomes Tester<n>,
- *  Q<n> choose the n-th name in the names box other than this player's own (0: the first), I click "Invite to party",
+ *  s<n> any frontend screen by its state number, o<n> the mouse over the n-th clickable button, Q<n> choose the n-th name in the names box other than this player's own (0: the first), I click "Invite to party",
  *  Y accept the invite, Z refuse it, V leave the party, F<n> scroll the names box by n, B<n> scroll the chat back by n
  *  (negative: forward), h<port> the Server box becomes 127.0.0.1:<port> (h0: empty, the default hub), anything else
  *  waits. The steps carry on after a game, so one string can drive a whole session. */
@@ -268,6 +270,25 @@ void world_menu_test_tick(void)
     case 'H': wm_host(NULL); break;
     case 'J': wm_join(NULL); break;
     case 'W': frontend_set_state(FeSt_WORLD_LIST); break;
+    case 'o':
+    {
+        /* the mouse over the arg-th clickable button on the screen (no click): the Molten screens' hover test */
+        int k = 0;
+        for (int i = 0; i < ACTIVE_BUTTONS_COUNT; i++)
+        {
+            const struct GuiButton *b = &active_buttons[i];
+            if (((b->flags & LbBtnF_Active) == 0) || (b->click_event == NULL) || ((b->flags & LbBtnF_Visible) == 0))
+                continue;
+            if (k++ == arg)
+            {
+                LbMouseSetPositionInitial((b->scr_pos_x + b->width / 2) / max((int)pixel_size, 1), (b->scr_pos_y + b->height / 2) / max((int)pixel_size, 1));
+                SYNCLOG("Endless Mode test: the mouse over button %d at (%d,%d)", arg, b->scr_pos_x + b->width / 2, b->scr_pos_y + b->height / 2);
+                break;
+            }
+        }
+        break;
+    }
+    case 's': frontend_set_state(arg); break; /* (any frontend screen by its number: the Molten screens' tests) */
     case 'P':
     {
         /* the frame as drawn (no desktop capture) */
@@ -1127,6 +1148,9 @@ static void wl_draw_tab(struct GuiButton *gbtn, int offset, int max_offset)
     const struct TbSprite *spr = get_frontend_sprite(GFS_slider_indicator_std);
     const int room = gbtn->height - spr->SHeight * units_per_px / 16;
     const int y = (max_offset > 0) ? (int)((long)max(0, min(offset, max_offset)) * room / max_offset) : 0;
+    if (uf_thumb(gbtn->scr_pos_x, gbtn->scr_pos_y, gbtn->width, gbtn->height, gbtn->scr_pos_y + y, spr->SHeight * units_per_px / 16,
+        gbtn->button_state_left_pressed != 0)) /* endless, the Molten look */
+        return;
     LbSpriteDrawResized(gbtn->scr_pos_x, gbtn->scr_pos_y + y, units_per_px, spr);
 }
 

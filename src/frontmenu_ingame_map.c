@@ -61,6 +61,7 @@
 #include "world_expedition.h"
 #include "roomspace_input.h"
 #include "world_alarm.h"
+#include "world_side_panel.h"
 #include "post_inc.h"
 
 // Local constants
@@ -1111,6 +1112,10 @@ void panel_map_draw_slabs(long x, long y, long units_per_px, long zoom)
         // memory of dropped chunks; nothing is loaded or generated for it.
         const MapSubtlCoord frame_x2 = game.map_subtiles_x - STL_PER_SLB;
         const MapSubtlCoord frame_y2 = game.map_subtiles_y - STL_PER_SLB;
+        /* The modern side panel: earth and impenetrable rock are tints of what lies under the map - the classic panel's
+           stone, the dark view behind the glass now - and came out the wrong way round there, earth the darker. They
+           swap colours (the user, 2026-11-27: "cant you just flip the color of Impenetrable Rock and Earth"). */
+        const TbBool flip = world_side_hud_modern();
         for (int h = 0; h < MapDiagonalLength; h++)
         {
             int start_w = MapShapeStart[h];
@@ -1134,6 +1139,8 @@ void panel_map_draw_slabs(long x, long y, long units_per_px, long zoom)
                     kind = world_minimap_code(stl_x, stl_y);
                 if (kind >= PnC_End)
                     kind = 0;
+                if (flip && ((kind == 0) || (kind == PnC_Rock)))
+                    kind = (kind == 0) ? PnC_Rock : 0; /* (earth: blocking, not filled - kind 0; the filled kind is the walls) */
                 *out = (kind <= PnC_Abyss) ? MapKindColours[kind][*out] : ((kind < PnC_End) ? PanelColours[kind] : 0);
                 px += shift_y;
                 py -= shift_x;

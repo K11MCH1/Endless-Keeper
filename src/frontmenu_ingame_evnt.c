@@ -59,6 +59,7 @@
 #include "keeperfx.hpp"
 #include "world_colours.h"
 #include "ui_safe_area.h"
+#include "world_side_panel.h"
 #include "post_inc.h"
 
 #define HIGHLIGHTED_TEXT_FADE_LEVEL 48
@@ -730,6 +731,11 @@ void draw_paused_message(int tx_units_per_px)
 {
     struct TextBoxLayout layout;
     if (!get_paused_message_layout(&layout)) {
+        return;
+    }
+    /* endless, the modern look: a Molten button with the same words, lit while the pointer is on it, pressed while held */
+    if (world_ui_paused(get_string(GUIStr_PausedMsg), layout.scr_x, layout.scr_y, layout.width, layout.height,
+            mouse_is_over_paused_message_layout(&layout))) {
         return;
     }
     int32_t text_x = layout.scr_x;
