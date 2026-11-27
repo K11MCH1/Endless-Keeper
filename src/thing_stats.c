@@ -536,8 +536,8 @@ GoldAmount compute_creature_max_pay(GoldAmount base_param, CrtrExpLevel exp_leve
         base_param = 100000;
     if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
         exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
-    if (world_mode_active()) /* endless: 2% more for every level (world_progress.c) */
-        return world_level_scaled_gold(base_param, exp_level);
+    if (world_mode_active()) /* endless: 2% more for every level (world_progress.h) */
+        return world_level_scaled_gold(base_param, exp_level, WORLD_PAY_PERCENT_A_LEVEL);
     GoldAmount max_param = base_param + (game.conf.crtr_conf.exp.pay_increase_on_exp * base_param * (long)exp_level) / 100;
     return saturate_set_signed(max_param, 16);
 }
@@ -551,8 +551,8 @@ GoldAmount compute_creature_max_training_cost(GoldAmount base_param, CrtrExpLeve
         base_param = 100000;
     if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
         exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
-    if (world_mode_active()) /* endless: 2% more for every level (world_progress.c) */
-        return world_level_scaled_gold(base_param, exp_level);
+    if (world_mode_active()) /* endless: 3% more for every level (world_progress.h) */
+        return world_level_scaled_gold(base_param, exp_level, WORLD_TRAINING_PERCENT_A_LEVEL);
     GoldAmount max_param = base_param + (game.conf.crtr_conf.exp.training_cost_increase_on_exp * base_param * (long)exp_level) / 100;
     return saturate_set_signed(max_param, 16);
 }
@@ -566,8 +566,8 @@ GoldAmount compute_creature_max_scavenging_cost(GoldAmount base_param, CrtrExpLe
         base_param = 100000;
     if (exp_level >= CREATURE_MAX_LEVEL_LIMIT)
         exp_level = CREATURE_MAX_LEVEL_LIMIT-1;
-    if (world_mode_active()) /* endless: 2% more for every level (world_progress.c) */
-        return world_level_scaled_gold(base_param, exp_level);
+    if (world_mode_active()) /* endless: 2% more for every level (world_progress.h) */
+        return world_level_scaled_gold(base_param, exp_level, WORLD_PAY_PERCENT_A_LEVEL);
     GoldAmount max_param = base_param + (game.conf.crtr_conf.exp.scavenging_cost_increase_on_exp * base_param * (long)exp_level) / 100;
     return saturate_set_signed(max_param, 16);
 }

@@ -275,8 +275,12 @@ const struct WorldPerks *world_perks_entry(int i);
 void world_perks_reset(void);
 
 /** Endless worlds (the user, 2026-11-15): a creature's wage and what a room charges it (training, scavenging) grow by
- *  2% with every level, each level on the one before: base * 1.02^exp_level (exp_level 0 is level 1). */
-GoldAmount world_level_scaled_gold(GoldAmount base, int exp_level);
+ *  a percentage with every level, each level on the one before: base * (1 + percent/100)^exp_level (exp_level 0 is
+ *  level 1). Wages and scavenging 2% a level; training 3% a level (the user, 2026-11-27: the Training Room's fee
+ *  1% more a level than before). */
+#define WORLD_PAY_PERCENT_A_LEVEL      2
+#define WORLD_TRAINING_PERCENT_A_LEVEL 3
+GoldAmount world_level_scaled_gold(GoldAmount base, int exp_level, int percent_a_level);
 
 /* Imps (2026-11-15): a keeper has at most WORLD_MAX_IMPS; Create Imp is refused at that many. */
 #define WORLD_MAX_IMPS 13

@@ -3821,11 +3821,11 @@ TbBool world_imp_net_notice(const char *text)
     return true;
 }
 
-GoldAmount world_level_scaled_gold(GoldAmount base, int exp_level)
+GoldAmount world_level_scaled_gold(GoldAmount base, int exp_level, int percent_a_level)
 {
     int64_t v = (int64_t)base * 10000; /* in ten-thousandths, so that small wages grow too */
     for (int i = 0; i < exp_level; i++)
-        v = v * 102 / 100;
+        v = v * (100 + percent_a_level) / 100;
     v = (v + 5000) / 10000;
     return (GoldAmount)((v > 32767) ? 32767 : v); /* (as the game's own formula saturates it) */
 }
