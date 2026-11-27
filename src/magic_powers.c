@@ -68,6 +68,7 @@
 #include "world_boss.h"
 #include "world_truce.h"
 #include "world_expedition.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -676,7 +677,7 @@ void slap_creature(struct PlayerInfo *player, struct Thing *thing)
     }
     powerst = get_power_model_stats(PwrK_SLAP);
     i = cctrl->slap_turns;
-    cctrl->slap_turns = powerst->duration;
+    cctrl->slap_turns = world_pentagram_slap(thing, player->id_number, powerst->duration); /* endless: Heavy Hand, Reign of Terror */
     if (i == 0)
     {
         cctrl->max_speed = calculate_correct_creature_maxspeed(thing);
@@ -861,6 +862,7 @@ GoldAmount compute_power_price(PlayerNumber plyr_idx, PowerKind pwkind, KeepPwrL
     const struct PowerConfigStats *powerst = get_power_model_stats(pwkind);
     long amount;
     long price;
+    power_level = world_pentagram_price_level(plyr_idx, power_level); /* endless: Overchannel pays the level asked for */
     switch (powerst->cost_formula)
     {
     case Cost_Digger: // Special price algorithm for "create imp" power
@@ -886,7 +888,7 @@ GoldAmount compute_power_price(PlayerNumber plyr_idx, PowerKind pwkind, KeepPwrL
         price = powerst->cost[power_level];
         break;
     }
-    return price;
+    return world_pentagram_power_price(plyr_idx, pwkind, power_level, price); /* endless: the Pentagram */
 }
 
 /**
@@ -958,6 +960,9 @@ TbBool pay_for_spell(PlayerNumber plyr_idx, PowerKind pwkind, KeepPwrLevel power
     if (power_level >= MAGIC_OVERCHARGE_LEVELS)
         power_level = MAGIC_OVERCHARGE_LEVELS;
     price = compute_power_price(plyr_idx, pwkind, power_level);
+    price = world_pentagram_spell_pay(plyr_idx, pwkind, price); /* endless: Eclipse, Soul Harvest */
+    if (price <= 0)
+        return true;
     // Try to take money
     if (take_money_from_dungeon(plyr_idx, price, 1) >= 0)
     {
@@ -2107,7 +2112,21 @@ TbResult magic_use_available_power_on_thing(PlayerNumber plyr_idx, PowerKind pwk
 }
 
 
+static TbResult magic_use_power_direct_now(PlayerNumber plyr_idx, PowerKind pwkind,
+    KeepPwrLevel power_level, MapSubtlCoord stl_x, MapSubtlCoord stl_y, struct Thing *thing, unsigned long allow_flags);
+
 TbResult magic_use_power_direct(PlayerNumber plyr_idx, PowerKind pwkind,
+    KeepPwrLevel power_level, MapSubtlCoord stl_x, MapSubtlCoord stl_y, struct Thing *thing, unsigned long allow_flags)
+{
+    /* endless: the Pentagram's Overchannel (a level higher), Spell Echo and Resonance round the cast */
+    const KeepPwrLevel asked = power_level;
+    power_level = world_pentagram_cast_begin(plyr_idx, pwkind, power_level);
+    const TbResult ret = magic_use_power_direct_now(plyr_idx, pwkind, power_level, stl_x, stl_y, thing, allow_flags);
+    world_pentagram_cast_end(plyr_idx, pwkind, asked, stl_x, stl_y, thing, allow_flags, ret);
+    return ret;
+}
+
+static TbResult magic_use_power_direct_now(PlayerNumber plyr_idx, PowerKind pwkind,
     KeepPwrLevel power_level, MapSubtlCoord stl_x, MapSubtlCoord stl_y, struct Thing *thing, unsigned long allow_flags)
 {
     lua_on_power_cast(plyr_idx, pwkind, power_level, stl_x, stl_y, thing);

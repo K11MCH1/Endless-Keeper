@@ -36,6 +36,7 @@
 #include "slab_data.h"
 #include "thing_data.h"
 #include "thing_list.h"
+#include "world_pentagram.h"
 #include "post_inc.h"
 
 #define CR_ROADS 64
@@ -109,6 +110,12 @@ void world_crusade_fortress_disturbed(int32_t fcx, int32_t fcy, PlayerNumber ply
 {
     if (!world_mode_active() || (plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX) || !world_player_is_human(plyr_idx))
         return;
+    if (world_pentagram_crusade_spared(plyr_idx))
+    {
+        SYNCLOG("World: the fortress at chunk (%d,%d) sends no Crusade Road towards player %d (Crusade's End)", (int)fcx,
+            (int)fcy, (int)plyr_idx);
+        return;
+    }
     for (int i = 0; i < CR_ROADS; i++)
         if (cr_roads[i].used && (cr_roads[i].fcx == fcx) && (cr_roads[i].fcy == fcy))
             return; /* its road has its keeper already */

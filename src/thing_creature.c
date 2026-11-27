@@ -119,6 +119,7 @@
 #include "world_sword.h"
 #include "world_hand.h"
 #include "world_expedition.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -706,6 +707,8 @@ void anger_apply_anger_to_creature_f(struct Thing *creatng, long anger, AnnoyMot
     if (!creature_can_get_angry(creatng)) {
         return;
     }
+    if (anger > 0)
+        anger = world_pentagram_anger(creatng, anger, reason); /* endless: Loyalty, Iron Crown, Cult of the Keeper */
     if (anger > 0)
     {
         anger_increase_creature_anger_f(creatng, anger, reason, func_name);
@@ -1526,6 +1529,7 @@ void first_apply_spell_effect_to_thing(struct Thing *thing, SpellKind spell_idx,
     GameTurnDelta duration = get_spell_full_duration(spell_idx, spell_level);
     if (duration > 0)
         duration += world_spell_extra_turns(world_power_caster, spell_idx); /* endless: a keeper's Conceal and Protect levels */
+    duration = world_pentagram_spell_duration(world_power_caster, spell_idx, duration); /* endless: the Pentagram */
     long i = get_free_spell_slot(thing);
     if (i != -1)
     {
@@ -1549,6 +1553,7 @@ void reapply_spell_effect_to_thing(struct Thing *thing, SpellKind spell_idx, Crt
     GameTurnDelta duration = get_spell_full_duration(spell_idx, spell_level);
     if (duration > 0)
         duration += world_spell_extra_turns(world_power_caster, spell_idx); /* endless: a keeper's Conceal and Protect levels */
+    duration = world_pentagram_spell_duration(world_power_caster, spell_idx, duration); /* endless: the Pentagram */
     // Reset the spell duration if the spell has a continuous effect.
     if (set_thing_spell_flags(thing, spell_idx, duration, spell_level)
     || spell_is_continuous(spell_idx, duration))
@@ -2542,9 +2547,9 @@ TbBool creature_pick_up_interesting_object_laying_nearby(struct Thing *creatng)
         struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
         if (tgthing->valuable.gold_stored > 0)
         {
-            if (creatng->creature.gold_carried < crconf->gold_hold)
+            if (creatng->creature.gold_carried < world_pentagram_gold_hold(creatng, crconf->gold_hold)) /* endless: Coin Purse */
             {
-                if (crconf->gold_hold < tgthing->valuable.gold_stored + creatng->creature.gold_carried)
+                if (world_pentagram_gold_hold(creatng, crconf->gold_hold) < tgthing->valuable.gold_stored + creatng->creature.gold_carried)
                 {
                     long k = crconf->gold_hold - creatng->creature.gold_carried;
                     creatng->creature.gold_carried += k;
@@ -3596,6 +3601,7 @@ struct Thing *kill_creature(struct Thing *creatng, struct Thing *killertng, Play
     update_kills_counters(creatng, killertng, killer_plyr_idx, flags);
     world_misdeeds_on_kill(creatng, killertng); /* endless: Misdeeds */
     world_record_kill(creatng, thing_exists(killertng) ? killertng->owner : killer_plyr_idx); /* endless: the Keeper panel */
+    world_pentagram_on_kill(creatng, killertng, killer_plyr_idx); /* endless: the Pentagram */
 
     // 'killertng' could be a trap, so verify if it has valid creature control before increasing the kill count and adjusting its anger.
     struct CreatureControl* cctrlgrp = creature_control_get_from_thing(killertng);

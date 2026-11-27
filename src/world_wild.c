@@ -77,6 +77,7 @@
 #include "world_watchfire.h"
 #include "world_wallbreak.h"
 #include "world_dark.h"
+#include "world_pentagram.h"
 #include "post_inc.h"
 
 #define WILD_CYCLE_TURNS 20     /* one spawn cycle a second */
@@ -336,6 +337,8 @@ static TbBool wild_pack_due(PlayerNumber plyr_idx, TbBool burrow)
         return false; /* a safe day and its night: no pack of either kind (world_daynight.c) */
     if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_MAX))
         return true;
+    if (world_pentagram_rest_on(plyr_idx, world_day_number()))
+        return false; /* endless (2026-11-27): the Pentagram's Day of Rest: none near this keeper today */
     GameTurn *last = &wild_last_pack[plyr_idx][burrow ? 1 : 0];
     if (*last > game.play_gameturn)
         *last = 0; /* another world since (its turns begin again) */
@@ -427,8 +430,16 @@ static int wild_pack(struct WildRng *rng, const struct WildPlayer *pl, int *coun
     const long model = season_flies ? get_id(creature_desc, "FLY") : get_id(creature_desc, list[k].name);
     if (model <= 0)
         return 0;
-    const int group = list[k].min_group + wild_rand(rng, list[k].max_group - list[k].min_group + 1) + season_extra +
+    int group = list[k].min_group + wild_rand(rng, list[k].max_group - list[k].min_group + 1) + season_extra +
         (fire_pushed ? 1 : 0);
+    /* endless (2026-11-27): the Pentagram's Wild Bane: a pack within 30 slabs of such a keeper's Heart is one smaller */
+    for (int a = 0; (a < pl->count) && (group > 1); a++)
+        if (pl->heart[a] && (wild_dist2(x, y, pl->ax[a], pl->ay[a]) < 30L * 30L) &&
+            (world_pentagram_fx(pl->plyr[a], WFX_WILD_BANE) > 0))
+        {
+            group--;
+            break;
+        }
     const MapSlabCoord px = x, py = y;
     /* circles (world_circles.c): a pack is as strong as the circle it appears in */
     const int top = world_circles_wild_level_at_slab(x, y, 1, "a wild pack");

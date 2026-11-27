@@ -82,6 +82,7 @@
 /* (engine_render.h names a global my; only this from it) */
 #include "world_level_window.h"
 #include "engine_lenses.h"
+#include "world_pentagram_screen.h"
 #include "post_inc.h"
 
 /* The window in design units. Two layouts: wide (the profile card beside the record) and stacked (the record under
@@ -1207,6 +1208,13 @@ static void kp_tab_click(struct GuiButton *gbtn)
 {
     if (kp_click_was_drag())
         return;
+    /* the Pentagram (2026-11-27): Upgrades opens its own screen, away from the game */
+    if (gbtn->content.lval == KpT_Upgrades)
+    {
+        world_keeper_panel_close();
+        world_pentagram_screen_show();
+        return;
+    }
     kp_tab = gbtn->content.lval;
     kp_picking = false;
     kp_reset_asked = 0;

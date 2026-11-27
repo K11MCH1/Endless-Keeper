@@ -85,6 +85,8 @@
 #include "world_wallbreak.h"
 #include "ui_safe_area.h"
 #include "world_side_panel.h"
+#include "world_pentagram.h"
+#include "world_caretaker.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -144,7 +146,14 @@ long world_day_number(void)
    a day with no enemy spawns. So no Wild packs, no heroes. To give player a breather"). The world's day as the dial
    shows it (days 3, 6, 9 ...), the same for every keeper. Test switch KFX_WORLD_SAFEEVERY=n: every n-th day (0: never). */
 #define DN_SAFE_EVERY 3
+static TbBool dn_safe_day_at(long day);
 TbBool world_safe_day(void)
+{
+    return dn_safe_day_at(world_day_number());
+}
+
+/** Is that world day a safe day (every third)? */
+static TbBool dn_safe_day_at(long day)
 {
     static long every = -2;
     if (every == -2)
@@ -156,7 +165,7 @@ TbBool world_safe_day(void)
     }
     if ((every <= 0) || !world_mode_active())
         return false;
-    return (world_day_number() % every) == 0;
+    return (day % every) == 0;
 }
 
 GameTurn world_daylight_began(void)
@@ -347,9 +356,16 @@ static int dn_draw_day(int x, int y, int size)
         const char *e = getenv("KFX_WORLD_DAYLABEL");
         shown = (e != NULL) ? atol(e) : -1;
     }
-    char text[24];
+    char text[64];
     /* as the dial shows it (the user, 2026-11-15): "Day X" while the sun is up, "Night X" while the moon is */
     snprintf(text, sizeof(text), "%s %ld", world_is_day() ? "Day" : "Night", (shown > 0) ? shown : world_day_number());
+    {
+        /* endless (2026-11-27): the Pentagram's Omen: by night, tomorrow's raids */
+        char omen[32];
+        const size_t len = strlen(text);
+        if (world_pentagram_omen_text(my_player_number, omen, sizeof(omen)))
+            snprintf(text + len, sizeof(text) - len, " - %s", omen);
+    }
     const int own = max(world_window_plain_cap(), 1);
     const int cap = own * max((6 * upp / 16 + own / 2) / own, 1);
     const int gap = max(3 * upp / 16, 2);
@@ -2010,7 +2026,7 @@ static void dn_late_turn(void)
         if (!late->active || (game.play_gameturn < late->at))
             continue;
         late->active = 0;
-        if (world_safe_day())
+        if (world_safe_day() || world_pentagram_rest_on(p, world_day_number()))
         {
             SYNCLOG("World: a raid's late party doesn't land for player %d: a safe day", (int)p);
             continue;
@@ -2087,6 +2103,7 @@ static void dn_threat_outcome(PlayerNumber p)
         a = DN_ADJUST_MIN;
     if (a > DN_ADJUST_MAX)
         a = DN_ADJUST_MAX;
+    world_pentagram_raid_over(p, (int)th->made, (int)th->killed, (double)th->raid_power, (double)th->raid_army); /* XP */
     SYNCLOG("World: the raid on player %d (power %.0f, %d heroes, %d killed) is over: army %.0f -> %.0f (%.0f%% lost), %s:"
         " adjustment %.2f -> %.2f", (int)p, (double)th->raid_power, (int)th->made, (int)th->killed, (double)th->raid_army,
         army.power, loss * 100.0, how, before, a);
@@ -2127,6 +2144,13 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         SYNCLOG("World: day %ld raid %d doesn't come for player %d: a safe day", day, idx + 1, (int)plyr_idx);
         if (idx == 0)
             dn_owed_day[plyr_idx] = 0; /* (and isn't owed after it) */
+        return;
+    }
+    if (world_pentagram_rest_on(plyr_idx, day))
+    {
+        SYNCLOG("World: day %ld raid %d doesn't come for player %d: its Day of Rest", day, idx + 1, (int)plyr_idx);
+        if (idx == 0)
+            dn_owed_day[plyr_idx] = 0;
         return;
     }
     if (dn_invasion_on(plyr_idx))
@@ -2265,6 +2289,11 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         curve = DN_CURVE_TOP;
     const double adjust = dn_adjust(plyr_idx);
     double budget = power * curve * adjust;
+    /* endless (2026-11-27): the Pentagram. Thin the Ranks: raids sized from 95/90/85% of the army; Vigil: 25% smaller
+       while the caretaker keeps the dungeon */
+    budget = budget * (100 + world_pentagram_fx(plyr_idx, WFX_RAID_SIZE_PCT)) / 100.0;
+    if (world_caretaker_active(plyr_idx))
+        budget = budget * (100 - world_pentagram_fx(plyr_idx, WFX_VIGIL)) / 100.0;
     /* (no growth cap any more, 2026-11-22: "at most 25% more than the last raid" kept a fast-growing army's raids
        far below it - level 3 raiders against level 8 creatures; the curve and the adjustment set the budget) */
     const TbBool capped = false;
@@ -2409,6 +2438,7 @@ static void dn_raid(long day, int idx, PlayerNumber plyr_idx)
         if (made == 0)
             continue;
         world_slab_to_world(sx, sy, &inv.spot_x[inv.nspots], &inv.spot_y[inv.nspots]);
+        world_pentagram_raid_landed(plyr_idx, inv.spot_x[inv.nspots], inv.spot_y[inv.nspots]); /* endless: Night Watch */
         inv.nspots++;
         made_all += made;
         const long dist = (long)floor(sqrt((double)(sx - hx) * (sx - hx) + (double)(sy - hy) * (sy - hy)) + 0.5);
@@ -3148,6 +3178,28 @@ void world_daynight_after_turn(void)
     world_autosave("dawn");
 }
 
+/** endless (2026-11-27): the Pentagram's Omen. At nightfall, tomorrow's raids for each keeper who has it (counted
+ *  here, on the machine that has the world's seed; the dial of every machine reads them from struct Game). The first
+ *  raid of a day always comes; the others one time in two. */
+static void dn_omen(long day)
+{
+    for (PlayerNumber p = 0; (p < PLAYERS_COUNT) && (p < PLAYERS_MAX); p++)
+    {
+        struct WorldPentagram *s = world_pentagram_state(p);
+        if ((s == NULL) || (world_pentagram_fx(p, WFX_OMEN) <= 0))
+            continue;
+        int raids = 0;
+        if (!dn_safe_day_at(day + 1) && !world_pentagram_rest_on(p, day + 1) && dn_raid_target(p))
+        {
+            const int n = dn_raids_on_day(world_seat_day(p) + 1) + world_season_extra_raids(p);
+            for (int i = 0; i < n; i++)
+                raids += dn_raid_happens(day + 1, i, p) ? 1 : 0;
+        }
+        s->omen = (uint16_t)((((uint32_t)(day + 1) & 0xFF) << 8) | (uint32_t)min(raids + 1, 255));
+        SYNCLOG("World: Omen for player %d: %d raid%s on day %ld", (int)p, raids, (raids == 1) ? "" : "s", day + 1);
+    }
+}
+
 void world_daynight_turn(void)
 {
     dn_read_lengths();
@@ -3167,6 +3219,7 @@ void world_daynight_turn(void)
     {
         SYNCLOG("World: night %ld begins", day);
         server_admin_log("world", "Night %ld begins", day);
+        dn_omen(day);
     }
     dn_invasions_turn(day, t);
     dn_late_turn();

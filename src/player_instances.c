@@ -71,6 +71,7 @@
 #include "world_sword.h"
 #include "world_hand.h"
 #include "world_fill.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1103,9 +1104,10 @@ struct Room *player_build_room_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, Play
     }
     if (slabs_left < 1)
         slabs_left = 1;
-    if (dungeon->total_money_owned >= roomst->cost * slabs_left)
+    const GoldAmount room_cost = world_pentagram_room_cost(plyr_idx, rkind, roomst->cost); /* endless: Gilded Halls */
+    if (dungeon->total_money_owned >= room_cost * slabs_left)
     {
-        if (take_money_from_dungeon(plyr_idx, roomst->cost, 1) < 0)
+        if (take_money_from_dungeon(plyr_idx, room_cost, 1) < 0)
         {
             output_player_message(player->id_number, SMsg_GoldNotEnough, 0);
             return INVALID_ROOM;

@@ -56,6 +56,7 @@
 #include "net_state.h"
 #include "world_progress.h"
 #include "world_boss.h"
+#include "world_reaper.h"
 #include "world_stream.h"
 #include "post_inc.h"
 
@@ -991,7 +992,7 @@ struct Thing *create_used_effect_or_element(const struct Coord3d *pos, EffectOrE
 
 TbBool destroy_effect_thing(struct Thing *efftng)
 {
-    if (efftng->model == TngEff_Eruption)
+    if ((efftng->model == TngEff_Eruption) && !world_reaper_effect(efftng)) /* endless: the Reaper's change no slab */
     {
         MapSubtlCoord stl_x = efftng->mappos.x.stl.num;
         MapSubtlCoord stl_y = efftng->mappos.y.stl.num;
@@ -1269,6 +1270,8 @@ void word_of_power_affecting_area(struct Thing *efftng, struct Thing *tngsrc, st
     if (efftng->creation_turn != get_gameturn()) {
         return;
     }
+    if (world_reaper_effect(efftng))
+        return; /* endless: the Pentagram's Reaper: his Word of Power blasts harm nothing (he throws back himself) */
 
     struct ShotConfigStats* shotst;
     if (efftng->shot_effect.parent_class_id == TCls_Shot)

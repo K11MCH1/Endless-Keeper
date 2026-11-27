@@ -63,6 +63,7 @@
 #include "world_caretaker.h"
 #include "post_inc.h"
 #include "creature_states_lair.h"
+#include "world_pentagram_hooks.h"
 
 const unsigned char reinforce_edges[] = { 3, 0, 0, 3, 0, 1, 2, 2, 1, };
 
@@ -528,7 +529,7 @@ long check_out_unclaimed_gold(struct Thing *spdigtng, long range)
 {
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(spdigtng);
     // If the creature holds more gold than its able
-    if (spdigtng->creature.gold_carried >= crconf->gold_hold) {
+    if (spdigtng->creature.gold_carried >= world_pentagram_gold_hold(spdigtng, crconf->gold_hold)) {
         return 0;
     }
     const struct StructureList* slist = get_list_for_thing_class(TCls_Object);
@@ -1159,7 +1160,7 @@ short imp_digs_mines(struct Thing *spdigtng)
         world_imp_mined_gold(spdigtng); /* endless worlds: a turn of mining teaches as a turn of training */
         struct CreatureModelConfig* crconf = creature_stats_get_from_thing(spdigtng);
         // If the creature holds more gold than its able
-        if (spdigtng->creature.gold_carried > crconf->gold_hold)
+        if (spdigtng->creature.gold_carried > world_pentagram_gold_hold(spdigtng, crconf->gold_hold))
         {
             if (get_gameturn() - cctrl->tasks_check_turn > 128)
             {
@@ -1169,8 +1170,8 @@ short imp_digs_mines(struct Thing *spdigtng)
                 }
                 cctrl->tasks_check_turn = get_gameturn();
             }
-            drop_gold_pile(spdigtng->creature.gold_carried - crconf->gold_hold, &spdigtng->mappos);
-            spdigtng->creature.gold_carried = crconf->gold_hold;
+            drop_gold_pile(spdigtng->creature.gold_carried - world_pentagram_gold_hold(spdigtng, crconf->gold_hold), &spdigtng->mappos);
+            spdigtng->creature.gold_carried = world_pentagram_gold_hold(spdigtng, crconf->gold_hold);
         }
     }
     return 1;
@@ -1382,7 +1383,7 @@ short imp_picks_up_gold_pile(struct Thing *spdigtng)
     TRACE_THING(spdigtng);
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(spdigtng);
     unsigned char state = CrSt_ImpLastDidJob;
-    if (crconf->gold_hold > spdigtng->creature.gold_carried)
+    if (world_pentagram_gold_hold(spdigtng, crconf->gold_hold) > spdigtng->creature.gold_carried)
     {
         MapSubtlCoord stl_x, stl_y;
         if (user_controls_thing(ANY_USER, spdigtng, UCT_Direct | UCT_PossessionEntryZoom))
@@ -1398,7 +1399,7 @@ short imp_picks_up_gold_pile(struct Thing *spdigtng)
             stl_x = spdigtng->mappos.x.stl.num;
             stl_y = spdigtng->mappos.y.stl.num;
         }
-        long gold_taken = take_from_gold_pile(stl_x, stl_y, crconf->gold_hold - spdigtng->creature.gold_carried);
+        long gold_taken = take_from_gold_pile(stl_x, stl_y, world_pentagram_gold_hold(spdigtng, crconf->gold_hold) - spdigtng->creature.gold_carried);
         spdigtng->creature.gold_carried += gold_taken;
         if (gold_taken > 0)
         {

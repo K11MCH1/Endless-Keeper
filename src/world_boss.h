@@ -43,6 +43,10 @@ void world_boss_turn(void);
 void world_boss_packet_join(PlayerNumber plyr_idx, uint32_t par1, uint32_t par2);
 /** Is this player's dungeon away at a fight (no raids come for it meanwhile)? */
 TbBool world_boss_player_away(PlayerNumber plyr_idx);
+/** The timer strip on the screen as last drawn (x, y, w, h; w 0: not drawn). */
+void world_boss_strip_rect(int *r);
+/** Can the strip be clicked now (the event open to join)? */
+TbBool world_boss_strip_clickable(void);
 /** A World Boss's blows: this percent of the creature's own (100 for anything else). */
 long world_boss_damage_percent(const struct Thing *thing);
 /** The same for its blows by hand (its weapon), which have a percent of their own. */

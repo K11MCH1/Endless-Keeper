@@ -55,6 +55,7 @@
 #include "world_misdeeds.h"
 #include "world_seasons.h"
 #include "world_watchfire.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -160,7 +161,7 @@ TbBool creature_is_being_attacked_by_enemy_creature_not_digger(struct Thing *fig
 TbBool creature_can_see_combat_path(const struct Thing *creatng, const struct Thing *enmtng, MapCoordDelta dist)
 {
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
-    if (dist > subtile_coord(crconf->visual_range,0)) {
+    if (dist > subtile_coord(crconf->visual_range + world_pentagram_sight_bonus(creatng), 0)) { /* endless: Dark Sight */
         return false;
     }
     if (!jonty_creature_can_see_thing_including_lava_check(creatng, enmtng)) {
@@ -261,6 +262,11 @@ TbBool creature_is_actually_scared(const struct Thing *creatng, const struct Thi
         {
             return true;
         }
+    }
+    {
+        const int verdict = world_pentagram_scared(creatng); /* endless: No Retreat, Blood Banner, Dread Lord */
+        if (verdict >= 0)
+            return (verdict > 0);
     }
     // Creature with fear 101 are scared of everything other that their own model
     if (crconf->fear_wounded >= 101)

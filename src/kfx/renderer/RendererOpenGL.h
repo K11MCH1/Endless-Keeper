@@ -71,6 +71,8 @@ public:
 
     bool ScheduleScreenshot(const char* path, int fmt) override;
     bool SubmitUIImage(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t* rgba, uint32_t gen) override;
+    bool SubmitUIImageSized(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t* rgba, uint32_t gen,
+        int32_t dw, int32_t dh) override;
     void FGCaptureScreenshot() override;
 
 private:

@@ -27,6 +27,8 @@
 #include "world_keeper_panel.h"
 #include "world_level_window.h"
 #include "world_side_panel.h"
+#include "world_pentagram_screen.h"
+#include "world_reaper.h"
 #include "gui_frontmenu.h"         /* menu_is_active */
 
 #include "post_inc.h"
@@ -65,28 +67,37 @@ void GameUI::DrawFrame(struct PlayerInfo* player)
        and their top rows */
     const bool window_on_top = world_creature_window_open() || menu_is_active(GMnu_WORLD_BOSS_PICK) || world_keeper_panel_open() ||
         world_level_window_open();
-    if (window_on_top) {
+    /* (the Pentagram's screen hides the game: its menus, message box, dial and chat box are not drawn over it; the
+       message box was, the user 2026-11-27) */
+    const bool pentagram = world_pentagram_screen_open();
+    if (window_on_top && !pentagram) {
         world_daynight_draw();
         message_draw();
     }
-    draw_gui();
-    if (!window_on_top) {
+    if (!pentagram)
+        draw_gui();
+    if (!window_on_top && !pentagram) {
         world_daynight_draw();
     }
-    if (show_sidebar) {
+    if (show_sidebar && !pentagram) {
         if (world_side_panel_on())
             world_side_panel_draw_over(); /* endless, the modern side panel's compass letters */
         else
             draw_overlay_compass(local_state.minimap_pos_x, local_state.minimap_pos_y);
     }
 
-    if (!window_on_top) {
+    if (!window_on_top && !pentagram) {
         message_draw();
     }
     world_circles_draw(); /* endless worlds: a breached circle's name */
-    chat_box_draw_faded();
+    if (!pentagram)
+        world_reaper_hud_draw(); /* endless worlds: the Heart's Reaper icon, top right (once the Heart is unlocked) */
+    if (!pentagram)
+        chat_box_draw_faded();
     world_keeper_panel_draw_last(); /* endless: the Keeper panel over everything but the Hand */
-    world_level_window_draw_last(); /* endless: Rooms & Spells To Level, the same */
+    world_pentagram_screen_draw(); /* endless: the Pentagram's screen over everything */
+    if (!pentagram)
+        world_level_window_draw_last(); /* endless: Rooms & Spells To Level, the same (its slots are the Pentagram's) */
     world_level_book_draw(); /* endless: the spellbook over the Library the Hand is on, under the Hand */
     world_hand_draw_hover(); /* endless: the open Hand over the Soul Container's picture and the book */
     draw_power_hand();

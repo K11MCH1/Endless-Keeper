@@ -1080,10 +1080,25 @@ static void draw_overhead_expeditions(const struct TbRect *map_area, long block_
 {
     static struct WorldExpeditionView view;
     world_expedition_view(plyr_idx, &view);
-    if (view.dots + view.pings + view.marks == 0)
+    if (view.dots + view.pings + view.marks + view.rects == 0)
         return;
     const unsigned char red = world_expedition_colour();
     const long slab = COORD_PER_STL * STL_PER_SLB;
+    /* the Pentagram's Siege Maps: each stronghold's box in the heroes' colour, two pixels thick */
+    {
+        const unsigned char hero = player_room_colours[world_display_colour(PLAYER_GOOD)];
+        for (int i = 0; i < view.rects; i++)
+        {
+            const long x1 = map_area->left + (long)((int64_t)block_size * view.rect_x1[i] / slab);
+            const long y1 = map_area->top + (long)((int64_t)block_size * view.rect_y1[i] / slab);
+            const long x2 = map_area->left + (long)((int64_t)block_size * view.rect_x2[i] / slab);
+            const long y2 = map_area->top + (long)((int64_t)block_size * view.rect_y2[i] / slab);
+            if (parchment_point_hidden((int)((x1 + x2) / 2), (int)((y1 + y2) / 2)))
+                continue;
+            UIRenderer_SubmitOutlineBox(x1, y1, max(2L, x2 - x1), max(2L, y2 - y1), hero);
+            UIRenderer_SubmitOutlineBox(x1 + 1, y1 + 1, max(1L, x2 - x1 - 2), max(1L, y2 - y1 - 2), hero);
+        }
+    }
     for (int i = 0; i < view.pings; i++)
     {
         const long pos_x = map_area->left + (long)((int64_t)block_size * view.ping_x[i] / slab);

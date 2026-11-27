@@ -70,14 +70,16 @@ struct WorldFillMark {
 #define WORLD_EXPEDITIONS_MAX 8 /* at once, per keeper */
 struct WorldExpedition {
     uint8_t used;
-    uint8_t reserved[3];
+    uint8_t imps;           /* Imps sent (0: 3, as before 2026-11-27; the Pentagram's Grand Expedition sends 5) */
+    uint8_t finds;          /* places it marked (the Pentagram's Prospecting Party pays for them at the end) */
+    uint8_t reserved;
     int32_t from_x, from_y; /* where the dots set off: the dungeon's outermost slab on the line towards the place */
     int32_t to_x, to_y;     /* the place */
     int32_t start_turn;     /* when they set off */
     int32_t walk_turns;     /* turns from there to the place */
-    uint16_t imp[3];        /* the Imps away (thing index) */
-    uint16_t reserved2;
-    int32_t imp_made[3];    /* and their creation turns (an index can be used again) */
+    uint16_t imp[5];        /* the Imps away (thing index) */
+    uint16_t carry_model;   /* Grand Expedition: the book or special box its Imps carry home (object model; 0 none) */
+    int32_t imp_made[5];    /* and their creation turns (an index can be used again) */
 };
 /** A place an expedition found (a question mark on the keeper's maps until the keeper's view reaches it). */
 #define WORLD_EXPEDITION_MARKS 64 /* per keeper */

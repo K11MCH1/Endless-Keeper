@@ -48,6 +48,7 @@
 #include "world_stream.h"
 #include "world_misdeeds.h"
 #include "world_truce.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -718,7 +719,7 @@ long compute_creature_work_value_for_room_role(const struct Thing *creatng, Room
     {
         i = compute_creature_work_value(crconf->scavenge_value* game.conf.rules[creatng->owner].rooms.scavenge_efficiency, efficiency, cctrl->exp_level);
     }
-    return process_work_speed_on_work_value(creatng, i);
+    return world_pentagram_work(creatng, rrole, process_work_speed_on_work_value(creatng, i)); /* endless: the Pentagram */
 }
 
 long compute_controlled_speed_increase(long prev_speed, long speed_limit)
@@ -770,6 +771,7 @@ HitPoints calculate_correct_creature_max_health(const struct Thing *thing)
         }
         max_health = compute_max_health;
     }
+    max_health = world_pentagram_max_health(thing, max_health); /* endless: the Pentagram */
     return world_misdeeds_regimen_stat(thing, 4, max_health); /* endless: Regimens */
 }
 
@@ -864,6 +866,7 @@ long calculate_correct_creature_maxspeed(const struct Thing *thing)
         if (player_uses_power_obey(thing->owner))
             speed = 5 * speed / 4;
     }
+    speed = world_pentagram_speed(thing, speed); /* endless: the Pentagram */
     return world_misdeeds_speed(thing, speed); /* endless: the vices */
 }
 
@@ -899,6 +902,7 @@ GoldAmount calculate_correct_creature_pay_base(const struct Thing *thing)
         if (dungeon->tortured_creatures[thing->model] > 0)
             pay = (pay * game.conf.rules[dungeon->owner].gameplay.torture_payday) / 100;
         pay = pay * (100 - world_room_bonus(thing->owner, WRB_TreasuryPay)) / 100; /* endless: the Treasury's level */
+        pay = world_pentagram_pay(thing, pay); /* endless: the Pentagram */
     }
     return pay;
 }
@@ -924,7 +928,7 @@ GoldAmount calculate_correct_creature_training_cost(const struct Thing *thing)
         if (dungeon->tortured_creatures[thing->model] > 0)
             training_cost = (training_cost * game.conf.rules[dungeon->owner].gameplay.torture_training_cost) / 100;
     }
-    return training_cost;
+    return world_pentagram_training_cost(thing, training_cost); /* endless: the Pentagram */
 }
 
 GoldAmount calculate_correct_creature_scavenging_cost(const struct Thing *thing)
@@ -1006,10 +1010,10 @@ HitPoints get_thing_max_health(const struct Thing *thing)
         return cctrl->max_health;
     case TCls_Object:
         struct ObjectConfigStats* objst = get_object_model_stats(thing->model);
-        return objst->health;
+        return thing_is_dungeon_heart(thing) ? world_pentagram_heart_max(thing, objst->health) : objst->health; /* endless: the Pentagram */
     case TCls_Door:
         struct DoorConfigStats* doorst = get_door_model_stats(thing->model);
-        return doorst->health;
+        return world_pentagram_door_max(thing, doorst->health); /* endless: the Pentagram (Bolted Doors) */
     case TCls_Shot:
         struct ShotConfigStats* shotst = get_shot_model_stats(thing->model);
         return shotst->health;
@@ -1056,6 +1060,7 @@ TbBool apply_health_to_thing(struct Thing *thing, HitPoints amount)
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     HitPoints new_health = thing->health;
+    amount = world_pentagram_heal(thing, amount); /* endless: the Pentagram (Second Wind) */
     if ((cctrl->max_health != new_health) && (amount > 0))
     {
         new_health += amount;

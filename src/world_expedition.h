@@ -56,11 +56,15 @@ TbBool world_expedition_pointer_hotspot(long spridx, long *hot_x, long *hot_y);
 
 /** What the maps draw for a keeper (map coordinates of the engine, which may lie off the loaded map). */
 #define WEX_VIEW_MAX 256
+#define WEX_VIEW_RECTS 16
 struct WorldExpeditionView {
     int dots, pings, marks;
     int32_t dot_x[WEX_VIEW_MAX], dot_y[WEX_VIEW_MAX];
     int32_t ping_x[WEX_VIEW_MAX], ping_y[WEX_VIEW_MAX];
     int32_t mark_x[WEX_VIEW_MAX], mark_y[WEX_VIEW_MAX];
+    /* the Pentagram's Siege Maps (2026-11-27): strongholds seen, as boxes (map coordinates of the box's corners) */
+    int rects;
+    int32_t rect_x1[WEX_VIEW_RECTS], rect_y1[WEX_VIEW_RECTS], rect_x2[WEX_VIEW_RECTS], rect_y2[WEX_VIEW_RECTS];
 };
 void world_expedition_view(PlayerNumber plyr_idx, struct WorldExpeditionView *view);
 /** The question mark: a panel sprite for the full map, and palette indexes for the minimap's buffer. */

@@ -42,6 +42,7 @@
 #include "frontmenu_ingame_map.h"
 #include "player_instances.h"
 #include "world_pages.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -128,7 +129,7 @@ struct Thing *create_door(struct Coord3d *pos, ThingModel tngmodel, unsigned cha
     doortng->door.orientation = orient;
     doortng->active_state = DorSt_Closed;
     doortng->creation_turn = get_gameturn();
-    doortng->health = doorst->health;
+    doortng->health = world_pentagram_door_max(doortng, doorst->health); /* endless: the Pentagram (Bolted Doors) */
     doortng->door.is_locked = is_locked;
     if (doorst->model_flags & DoMF_Thick)
     {

@@ -139,6 +139,8 @@
 #include "world_level_window.h"
 #include "world_keeper_ai.h"
 #include "world_rivals.h"
+#include "world_pentagram.h"
+#include "world_reaper.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -201,6 +203,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_DARK 0x314B5244u     /* "DRK1": untended floor's neglect (world_dark.c) */
 #define WORLD_EXTRA_RECORD 0x32434552u   /* "REC2": the Keeper panel's statistics (world_progress.c) */
 #define WORLD_EXTRA_MIGRATE 0x3147494Du  /* "MIG1": Move The Heart (world_migrate.c) */
+#define WORLD_EXTRA_PENTAGRAM 0x31544E50u /* "PNT1": the seats' Pentagrams (world_pentagram.c) */
 #define WORLD_EXTRA_FILL 0x314C4946u     /* "FIL1": the Fill room's marks (world_fill.c) */
 #define WORLD_EXTRA_EXPEDITION 0x31505845u /* "EXP1": the Expedition spell's expeditions and marks (world_expedition.c) */
 #define WORLD_EXTRA_SPAWNPORTAL 0x314F5046u /* "FPO1": the portal each keeper's creatures come from (world_spawn_portal) */
@@ -11558,6 +11561,7 @@ void world_client_turn(void)
     world_boss_local_turn();
     world_sword_local_turn();
     world_alarm_local_turn(); /* the Alarm Bells' horn, wherever the camera is */
+    world_pentagram_local_turn(); /* the Pentagram's points asked for, a packet a turn */
     world_level_window_turn(); /* (its test hook) */
     chat_box_turn();
     world_shots_hook();
@@ -11910,6 +11914,7 @@ void world_process_turn(void)
     world_boss_local_turn();
     world_sword_local_turn();
     world_alarm_local_turn(); /* the Alarm Bells' horn, wherever the camera is */
+    world_pentagram_local_turn(); /* the Pentagram's points asked for, a packet a turn */
     world_level_window_turn(); /* (its test hook) */
     chat_box_turn();
     world_shots_hook();
@@ -11946,6 +11951,8 @@ void world_process_turn(void)
     keepers_alone_turn();
     world_sword_turn();
     world_misdeeds_turn();
+    world_pentagram_turn(); /* the Pentagram's skills that keep time */
+    world_reaper_turn(); /* the Heart's Reaper while he is out */
     world_outposts_turn();
     world_testgold();
     world_tagdig();
@@ -12494,6 +12501,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_DARK, world_dark_save_size, world_dark_save, world_dark_load, world_dark_reset},
     {WORLD_EXTRA_RECORD, world_record_save_size, world_record_save, world_record_load, world_record_reset},
     {WORLD_EXTRA_MIGRATE, world_migrate_save_size, world_migrate_save, world_migrate_load, world_migrate_reset},
+    {WORLD_EXTRA_PENTAGRAM, world_pentagram_save_size, world_pentagram_save, world_pentagram_load, world_pentagram_reset},
     {WORLD_EXTRA_FILL, world_fill_save_size, world_fill_save, world_fill_load, world_fill_reset},
     {WORLD_EXTRA_EXPEDITION, world_expedition_save_size, world_expedition_save, world_expedition_load, world_expedition_reset},
     {WORLD_EXTRA_SPAWNPORTAL, spawn_portal_save_size, spawn_portal_save, spawn_portal_load, spawn_portal_reset_all},

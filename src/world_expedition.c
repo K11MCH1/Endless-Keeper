@@ -74,6 +74,11 @@
 #include "vidfade.h"
 #include "player_instances.h"
 #include "kfx/renderer/RendererManager.h"
+#include "world_pentagram.h"
+#include "power_specials.h"
+#include "player_utils.h"
+#include "thing_objects.h"
+#include "map_data.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -81,7 +86,8 @@ extern "C" {
 #endif
 
 #define WEX_COST_NAME "POWER_EXPEDITION"
-#define WEX_IMPS 3
+#define WEX_IMPS 3            /* Imps an expedition sends (the Pentagram's Grand Expedition: WEX_IMPS_MAX) */
+#define WEX_IMPS_MAX 5
 #define WEX_RADIUS 25        /* slabs round the leading dot where things are found */
 #define WEX_MARK_APART 6     /* slabs: one mark here */
 #define WEX_GAP 12           /* slabs not the keeper's that end the dungeon on the line out */
@@ -212,17 +218,23 @@ static TbBool wex_imp_free(const struct Thing *thing, PlayerNumber p)
     return get_creature_state_type(thing) != CrStTyp_FightCrtr;
 }
 
-/** Up to WEX_IMPS free Imps of the keeper's, idle ones first. */
-static int wex_choose_imps(PlayerNumber p, struct Thing **out)
+/** An expedition's Imps (3, or the Grand Expedition's 5). */
+static int wex_imps(const struct WorldExpedition *e)
+{
+    return ((e->imps >= 1) && (e->imps <= WEX_IMPS_MAX)) ? e->imps : WEX_IMPS;
+}
+
+/** Up to want free Imps of the keeper's, idle ones first. */
+static int wex_choose_imps(PlayerNumber p, struct Thing **out, int want)
 {
     struct Dungeon *dungeon = get_players_num_dungeon(p);
     if (dungeon_invalid(dungeon))
         return 0;
     int n = 0;
-    for (int pass = 0; (pass < 2) && (n < WEX_IMPS); pass++)
+    for (int pass = 0; (pass < 2) && (n < want); pass++)
     {
         long guard = 0;
-        for (ThingIndex i = dungeon->digger_list_start; (i > 0) && (n < WEX_IMPS) && (guard++ <= (long)THINGS_COUNT);)
+        for (ThingIndex i = dungeon->digger_list_start; (i > 0) && (n < want) && (guard++ <= (long)THINGS_COUNT);)
         {
             struct Thing *thing = thing_get(i);
             if (thing_is_invalid(thing))
@@ -275,9 +287,9 @@ static void wex_return_imp(PlayerNumber p, ThingIndex idx, int32_t made, int k)
     TbBool found;
     wex_heart_pos(p, &pos, &found);
     /* round the Heart, as new Imps come */
-    static const int ox[WEX_IMPS] = {-256, 256, 0}, oy[WEX_IMPS] = {192, 192, -256};
-    pos.x.val += ox[k % WEX_IMPS];
-    pos.y.val += oy[k % WEX_IMPS];
+    static const int ox[WEX_IMPS_MAX] = {-256, 256, 0, -320, 320}, oy[WEX_IMPS_MAX] = {192, 192, -256, -128, -128};
+    pos.x.val += ox[k % WEX_IMPS_MAX];
+    pos.y.val += oy[k % WEX_IMPS_MAX];
     pos.z.val = get_floor_height_at(&pos);
     thing->mappos = pos;
     remove_thing_from_creature_controlled_limbo(thing);
@@ -290,10 +302,34 @@ static void wex_end(PlayerNumber p, int i, const char *why)
     struct WorldExpedition *e = &WEX_TAB(p)[i];
     if (!e->used)
         return;
-    for (int k = 0; k < WEX_IMPS; k++)
+    for (int k = 0; k < wex_imps(e); k++)
         wex_return_imp(p, e->imp[k], e->imp_made[k], k);
     SYNCLOG("World: expedition %d of player %d ends (%s) at world slab (%ld,%ld)", i, (int)p, why, (long)e->to_x,
         (long)e->to_y);
+    /* endless (2026-11-27): the Pentagram. Prospecting Party: gold for every place marked (ten at most); Grand
+     * Expedition: the book or special box its Imps carried, set down by the Heart */
+    const long per_find = world_pentagram_fx(p, WFX_PROSPECTING_PARTY);
+    if ((per_find > 0) && (e->finds > 0))
+    {
+        const long gold = world_pentagram_gold_more(p, per_find * min((long)e->finds, 10L));
+        player_add_offmap_gold(p, gold);
+        SYNCLOG("World: expedition %d of player %d brings back %ld gold for %d finds (Prospecting Party)", i, (int)p, gold,
+            (int)e->finds);
+    }
+    if (e->carry_model > 0)
+    {
+        struct Thing *heartng = get_player_soul_container(p);
+        if (thing_exists(heartng))
+        {
+            struct Coord3d pos = heartng->mappos;
+            pos.x.val += 384;
+            pos.y.val += 384;
+            pos.z.val = get_floor_height_at(&pos);
+            struct Thing *obj = create_object(&pos, e->carry_model, p, -1);
+            SYNCLOG("World: expedition %d of player %d carries home object %d (thing %d; Grand Expedition)", i, (int)p,
+                (int)e->carry_model, thing_is_invalid(obj) ? 0 : (int)obj->index);
+        }
+    }
     memset(e, 0, sizeof(*e));
 }
 
@@ -350,10 +386,11 @@ TbResult world_expedition_cast(PlayerNumber p, int64_t wx, int64_t wy, TbBool fr
         tell_keeper(p, "Eight expeditions are out already.");
         return Lb_FAIL;
     }
-    struct Thing *imps[WEX_IMPS] = {NULL};
-    if (wex_choose_imps(p, imps) < WEX_IMPS)
+    struct Thing *imps[WEX_IMPS_MAX] = {NULL};
+    const int want = (world_pentagram_fx(p, WFX_GRAND_EXPEDITION) > 0) ? WEX_IMPS_MAX : WEX_IMPS; /* (Grand Expedition) */
+    if (wex_choose_imps(p, imps, want) < want)
     {
-        tell_keeper(p, "An expedition needs 3 free Imps.");
+        tell_keeper(p, (want > WEX_IMPS) ? "A Grand Expedition needs 5 free Imps." : "An expedition needs 3 free Imps.");
         return Lb_FAIL;
     }
     if (!free && !pay_for_spell(p, kind, 0))
@@ -374,7 +411,8 @@ TbResult world_expedition_cast(PlayerNumber p, int64_t wx, int64_t wy, TbBool fr
     const int speed = max(16, (int)crconf->base_speed);
     const double dist = sqrt((double)(wx - ox) * (wx - ox) + (double)(wy - oy) * (wy - oy));
     e->walk_turns = max(20, (int32_t)(dist * COORD_PER_STL * STL_PER_SLB / speed));
-    for (int k = 0; k < WEX_IMPS; k++)
+    e->imps = (uint8_t)want;
+    for (int k = 0; k < want; k++)
     {
         e->imp[k] = imps[k]->index;
         e->imp_made[k] = (int32_t)imps[k]->creation_turn;
@@ -445,10 +483,12 @@ static TbBool wex_is_book(const struct Thing *thing)
 
 struct WexScan {
     PlayerNumber p;
+    int e;      /* its expedition (WEX_TAB(p)[e]) */
     double x, y; /* the leading dot (world slabs) */
 };
 
-static void wex_add_mark(PlayerNumber p, int64_t wx, int64_t wy, int kind)
+/** true: a new mark (not one already near) */
+static TbBool wex_add_mark(PlayerNumber p, int64_t wx, int64_t wy, int kind)
 {
     struct WorldExpeditionMark *m = WEX_MARKS(p);
     int free_at = -1;
@@ -461,7 +501,7 @@ static void wex_add_mark(PlayerNumber p, int64_t wx, int64_t wy, int kind)
             continue;
         }
         if ((llabs(m[i].x - wx) <= WEX_MARK_APART) && (llabs(m[i].y - wy) <= WEX_MARK_APART))
-            return;
+            return false;
     }
     if (free_at < 0)
     {
@@ -475,11 +515,12 @@ static void wex_add_mark(PlayerNumber p, int64_t wx, int64_t wy, int kind)
     m[free_at].used = 1;
     SYNCLOG("World: expedition of player %d finds a %s at world slab (%ld,%ld)", (int)p, wex_find_names[kind],
         (long)wx, (long)wy);
+    return true;
 }
 
 /** A find at an engine subtile: marked for each expedition within reach whose keeper hasn't seen it. */
 static void wex_found(const struct WexScan *scans, int nscans, MapSubtlCoord stl_x, MapSubtlCoord stl_y, int kind,
-    PlayerNumber owner)
+    PlayerNumber owner, struct Thing *thing)
 {
     int64_t wx, wy;
     wex_world_of_subtile(stl_x, stl_y, &wx, &wy);
@@ -487,7 +528,8 @@ static void wex_found(const struct WexScan *scans, int nscans, MapSubtlCoord stl
     {
         const PlayerNumber p = scans[s].p;
         const double dx = (wx + 0.5) - scans[s].x, dy = (wy + 0.5) - scans[s].y;
-        if (dx * dx + dy * dy > (double)WEX_RADIUS * WEX_RADIUS)
+        const double radius = WEX_RADIUS + ((world_pentagram_fx(p, WFX_KEEN_EYES) > 0) ? 10 : 0); /* (Keen Eyes) */
+        if (dx * dx + dy * dy > radius * radius)
             continue;
         if (owner == p)
             continue;
@@ -495,7 +537,29 @@ static void wex_found(const struct WexScan *scans, int nscans, MapSubtlCoord stl
             continue;
         if (subtile_revealed(stl_x, stl_y, p))
             continue;
-        wex_add_mark(p, wx, wy, kind);
+        if (!wex_add_mark(p, wx, wy, kind))
+            continue;
+        struct WorldExpedition *e = &WEX_TAB(p)[scans[s].e];
+        if (!e->used)
+            continue;
+        if (e->finds < 255)
+            e->finds++;
+        /* endless (2026-11-27): the Pentagram's Grand Expedition: the fog lifts 5 slabs round the find, and its Imps
+         * take one spellbook or special box home (never an Increase Level box) */
+        if (world_pentagram_fx(p, WFX_GRAND_EXPEDITION) > 0)
+        {
+            const MapSlabCoord sx = subtile_slab(stl_x), sy = subtile_slab(stl_y);
+            reveal_map_area(p, slab_subtile(sx - 5, 0), slab_subtile(sx + 5, 2), slab_subtile(sy - 5, 0), slab_subtile(sy + 5, 2));
+            if ((e->carry_model == 0) && (thing != NULL) && thing_exists(thing) && !thing_is_picked_up(thing) &&
+                ((kind == WExF_Book) || ((kind == WExF_Special) && (box_thing_to_special(thing) != SpcKind_IncrseLvl))))
+            {
+                e->carry_model = thing->model;
+                SYNCLOG("World: Grand Expedition %d of player %d takes object %d (thing %d) home", scans[s].e, (int)p,
+                    (int)thing->model, (int)thing->index);
+                delete_thing_structure(thing, 0);
+                return;
+            }
+        }
     }
 }
 
@@ -514,7 +578,7 @@ static void wex_scan(const struct WexScan *scans, int nscans)
         else if (room->owner == PLAYER_GOOD)
             kind = WExF_Structure;
         if (kind != 0)
-            wex_found(scans, nscans, room->central_stl_x, room->central_stl_y, kind, room->owner);
+            wex_found(scans, nscans, room->central_stl_x, room->central_stl_y, kind, room->owner, NULL);
     }
     /* objects: spellbooks and specials not on a keeper's own ground, hero gates */
     const struct StructureList *objects = get_list_for_thing_class(TCls_Object);
@@ -538,7 +602,7 @@ static void wex_scan(const struct WexScan *scans, int nscans)
             continue;
         const PlayerNumber ground = (PlayerNumber)slabmap_owner(get_slabmap_thing_is_on(thing));
         wex_found(scans, nscans, thing->mappos.x.stl.num, thing->mappos.y.stl.num, kind,
-            (kind == WExF_Structure) ? PLAYER_GOOD : ground);
+            (kind == WExF_Structure) ? PLAYER_GOOD : ground, (kind == WExF_Structure) ? NULL : thing);
     }
     /* neutral creatures */
     const struct StructureList *creatures = get_list_for_thing_class(TCls_Creature);
@@ -551,7 +615,7 @@ static void wex_scan(const struct WexScan *scans, int nscans)
         i = thing->next_of_class;
         if (!thing_exists(thing) || thing_is_picked_up(thing) || !is_neutral_thing(thing))
             continue;
-        wex_found(scans, nscans, thing->mappos.x.stl.num, thing->mappos.y.stl.num, WExF_Neutral, thing->owner);
+        wex_found(scans, nscans, thing->mappos.x.stl.num, thing->mappos.y.stl.num, WExF_Neutral, thing->owner, NULL);
     }
 }
 
@@ -593,7 +657,7 @@ static void wex_strays(void)
         for (int e = 0; (e < WORLD_EXPEDITIONS_MAX) && !held; e++)
         {
             const struct WorldExpedition *x = &WEX_TAB(thing->owner)[e];
-            for (int k = 0; (k < WEX_IMPS) && x->used; k++)
+            for (int k = 0; (k < wex_imps(x)) && x->used; k++)
                 held |= (x->imp[k] == thing->index) && (x->imp_made[k] == (int32_t)thing->creation_turn);
         }
         if (!held)
@@ -658,7 +722,7 @@ static void wext_turn(void)
     {
         int have = 0;
         struct Thing *imps[WEX_IMPS];
-        have = wex_choose_imps(p, imps);
+        have = wex_choose_imps(p, imps, WEX_IMPS);
         for (int k = have; k < WEX_IMPS + 1; k++)
             magic_use_available_power_on_subtile(p, PwrK_MKDIGGER, 0, heart->mappos.x.stl.num + 2 * (k - 1),
                 heart->mappos.y.stl.num + 4, PwCast_None, PwMod_CastForFree);
@@ -843,6 +907,35 @@ static void wext_turn(void)
     }
 }
 
+/** endless (2026-11-27): the Pentagram's Keen Eyes: portals no keeper owns within 80 slabs of the Heart (on the
+ *  loaded map) get the question mark, until the keeper's view reaches them. */
+#define WEX_KEEN_PORTALS 80
+static void wex_keen_eyes(PlayerNumber p)
+{
+    if (world_pentagram_fx(p, WFX_KEEN_EYES) <= 0)
+        return;
+    const struct Thing *heartng = get_player_soul_container(p);
+    if (!thing_exists(heartng))
+        return;
+    const MapSlabCoord hx = subtile_slab(heartng->mappos.x.stl.num), hy = subtile_slab(heartng->mappos.y.stl.num);
+    for (struct Room *room = start_rooms; room < end_rooms; room++)
+    {
+        if (!room_exists(room) || !room_role_matches(room->kind, RoRoF_CrPoolSpawn))
+            continue;
+        if ((room->owner >= 0) && (room->owner < PLAYERS_COUNT) && (room->owner != PLAYER_GOOD) &&
+            (room->owner != game.neutral_player_num))
+            continue; /* a keeper's */
+        const long dx = (long)subtile_slab(room->central_stl_x) - hx, dy = (long)subtile_slab(room->central_stl_y) - hy;
+        if (dx * dx + dy * dy > (long)WEX_KEEN_PORTALS * WEX_KEEN_PORTALS)
+            continue;
+        if (subtile_revealed(room->central_stl_x, room->central_stl_y, p))
+            continue;
+        int64_t wx, wy;
+        wex_world_of_subtile(room->central_stl_x, room->central_stl_y, &wx, &wy);
+        wex_add_mark(p, wx, wy, WExF_Portal);
+    }
+}
+
 void world_expedition_turn(void)
 {
     if (!wex_runs())
@@ -866,7 +959,7 @@ void world_expedition_turn(void)
                 continue;
             }
             /* its Imps stay away: a state another system set is put back (its Imps hold still out of the world) */
-            for (int k = 0; k < WEX_IMPS; k++)
+            for (int k = 0; k < wex_imps(e); k++)
             {
                 struct Thing *thing = thing_get(e->imp[k]);
                 if ((e->imp[k] > 0) && thing_exists(thing) && ((int32_t)thing->creation_turn == e->imp_made[k]) &&
@@ -887,12 +980,15 @@ void world_expedition_turn(void)
             if (scan_now && (nscans < (int)(sizeof(scans) / sizeof(scans[0]))))
             {
                 scans[nscans].p = p;
+                scans[nscans].e = i;
                 wex_dot_at(e, 0, &scans[nscans].x, &scans[nscans].y);
                 nscans++;
             }
         }
         if ((game.play_gameturn % 32) == (GameTurn)(p % 32))
             wex_marks_seen(p);
+        if (((game.play_gameturn % 128) == (GameTurn)((p * 7 + 40) % 128)) && player_exists(player))
+            wex_keen_eyes(p);
         /* the spell from a dungeon's start (old worlds too) */
         if (((game.play_gameturn % 64) == 3) && player_exists(player) && !player_is_roaming(p))
         {
@@ -946,9 +1042,28 @@ void world_expedition_seat_reset(PlayerNumber p)
 
 void world_expedition_view(PlayerNumber p, struct WorldExpeditionView *v)
 {
-    v->dots = v->pings = v->marks = 0;
+    v->dots = v->pings = v->marks = v->rects = 0;
     if (!world_mode_active() || !wex_player_ok(p))
         return;
+    /* the Pentagram (2026-11-27): Night Watch's ping on a raid's landing, Night Sentinels' raiders (dots), Siege Maps'
+       strongholds (boxes) */
+    {
+        const struct WorldPentagram *s = world_pentagram_state(p);
+        if (s != NULL)
+        {
+            if ((s->watch_until > (uint32_t)game.play_gameturn) && (v->pings < WEX_VIEW_MAX) &&
+                wex_map_of_world(s->watch_x + 0.5, s->watch_y + 0.5, &v->ping_x[v->pings], &v->ping_y[v->pings]))
+                v->pings++;
+            if (s->seen_until > (uint32_t)game.play_gameturn)
+                for (int i = 0; (i < s->seen_n) && (i < WPG_SEEN_MAX) && (v->dots < WEX_VIEW_MAX); i++)
+                    if (wex_map_of_world(s->seen_x[i] + 0.5, s->seen_y[i] + 0.5, &v->dot_x[v->dots], &v->dot_y[v->dots]))
+                        v->dots++;
+            for (int i = 0; (i < s->siege_n) && (i < WPG_SIEGE_MAX) && (v->rects < WEX_VIEW_RECTS); i++)
+                if (wex_map_of_world(s->siege[i][0], s->siege[i][1], &v->rect_x1[v->rects], &v->rect_y1[v->rects]) &&
+                    wex_map_of_world(s->siege[i][2] + 1.0, s->siege[i][3] + 1.0, &v->rect_x2[v->rects], &v->rect_y2[v->rects]))
+                    v->rects++;
+        }
+    }
     for (int i = 0; i < WORLD_EXPEDITIONS_MAX; i++)
     {
         const struct WorldExpedition *e = &WEX_TAB(p)[i];
@@ -957,7 +1072,7 @@ void world_expedition_view(PlayerNumber p, struct WorldExpeditionView *v)
         if ((v->pings < WEX_VIEW_MAX) &&
             wex_map_of_world(e->to_x + 0.5, e->to_y + 0.5, &v->ping_x[v->pings], &v->ping_y[v->pings]))
             v->pings++;
-        for (int k = 0; k < WEX_IMPS; k++)
+        for (int k = 0; k < wex_imps(e); k++)
         {
             double x, y;
             wex_dot_at(e, k, &x, &y);
@@ -1083,7 +1198,11 @@ void world_expedition_save(uint8_t *buf)
             if (!e->used)
                 continue;
             const int32_t v[16] = {(int32_t)p, i, e->from_x, e->from_y, e->to_x, e->to_y, e->start_turn, e->walk_turns,
-                e->imp[0], e->imp[1], e->imp[2], e->imp_made[0], e->imp_made[1], e->imp_made[2], 0, 0};
+                e->imp[0], e->imp[1], e->imp[2], e->imp_made[0], e->imp_made[1], e->imp_made[2],
+                /* (2026-11-27, the Pentagram: a Grand Expedition's 4th and 5th Imps, without their creation turns: after
+                   a load they come home as strays; its Imp count, finds and the carried object) */
+                (int32_t)((uint32_t)e->imp[3] | ((uint32_t)e->imp[4] << 16)),
+                (int32_t)((uint32_t)(e->imps & 0x0F) | ((uint32_t)e->finds << 4) | ((uint32_t)e->carry_model << 12))};
             memcpy(at, v, sizeof(v));
             at += sizeof(v);
         }
@@ -1129,6 +1248,11 @@ TbBool world_expedition_load(const uint8_t *buf, size_t len)
             e->imp[i] = (uint16_t)v[8 + i];
             e->imp_made[i] = v[11 + i];
         }
+        e->imp[3] = (uint16_t)((uint32_t)v[14] & 0xFFFF);
+        e->imp[4] = (uint16_t)((uint32_t)v[14] >> 16);
+        e->imps = (uint8_t)((uint32_t)v[15] & 0x0F);
+        e->finds = (uint8_t)(((uint32_t)v[15] >> 4) & 0xFF);
+        e->carry_model = (uint16_t)(((uint32_t)v[15] >> 12) & 0xFFFF);
     }
     int fill[PLAYERS_MAX] = {0};
     for (uint32_t k = 0; k < nm; k++, at += 16)

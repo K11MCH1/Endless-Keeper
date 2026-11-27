@@ -43,7 +43,13 @@
 #include "keeperfx.hpp"
 #include "room_util.h"
 #include "map_blocks.h"
+#include "world_pentagram.h"
 #include "post_inc.h"
+
+/* endless (2026-11-27): the Pentagram's Hearthkeeper: 200 gold instead of 300, light 8 slabs instead of 6 */
+#define WF_REACH_OF(o) (WATCHFIRE_REACH + ((world_pentagram_fx((o), WFX_HEARTHKEEPER) > 0) ? 2 : 0))
+#define WF_PRICE_OF(o) (WATCHFIRE_PRICE - ((world_pentagram_fx((o), WFX_HEARTHKEEPER) > 0) ? 100 : 0))
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -85,7 +91,7 @@ static const struct Watchfire *fire_at(MapSlabCoord x, MapSlabCoord y, PlayerNum
         if (!lit(f) || ((owner >= 0) && (f->owner != owner)))
             continue;
         const int64_t dx = wx - f->wx, dy = wy - f->wy;
-        if (dx * dx + dy * dy <= (int64_t)WATCHFIRE_REACH * WATCHFIRE_REACH)
+        if (dx * dx + dy * dy <= (int64_t)WF_REACH_OF(f->owner) * WF_REACH_OF(f->owner))
             return f;
     }
     return NULL;
@@ -116,8 +122,8 @@ TbBool world_watchfire_push(MapSlabCoord *x, MapSlabCoord *y)
         dx = 1;
     /* out along the same line, to one slab past the edge of the light */
     const double len = sqrt((double)dx * dx + (double)dy * dy);
-    *x = fx + (MapSlabCoord)floor(dx * (WATCHFIRE_REACH + 1) / len + 0.5);
-    *y = fy + (MapSlabCoord)floor(dy * (WATCHFIRE_REACH + 1) / len + 0.5);
+    *x = fx + (MapSlabCoord)floor(dx * (WF_REACH_OF(f->owner) + 1) / len + 0.5);
+    *y = fy + (MapSlabCoord)floor(dy * (WF_REACH_OF(f->owner) + 1) / len + 0.5);
     return true;
 }
 
@@ -131,7 +137,8 @@ TbBool world_watchfire_unnerved(const struct Thing *creatng)
         return false;
     const long dx = subtile_slab(creatng->mappos.x.stl.num) - subtile_slab(heart->mappos.x.stl.num);
     const long dy = subtile_slab(creatng->mappos.y.stl.num) - subtile_slab(heart->mappos.y.stl.num);
-    if (dx * dx + dy * dy <= (long)WATCHFIRE_NERVE_SLABS * WATCHFIRE_NERVE_SLABS)
+    const long nerve = (long)WATCHFIRE_NERVE_SLABS + world_pentagram_fx(creatng->owner, WFX_NERVE_SLABS); /* (Steady Nerves) */
+    if (dx * dx + dy * dy <= nerve * nerve)
         return false;
     if (world_misdeeds_fearless_in_dark(creatng))
         return false;
@@ -237,9 +244,9 @@ void world_watchfire_place(PlayerNumber p, MapSubtlCoord stl_x, MapSubtlCoord st
         return;
     }
     struct Dungeon *dungeon = get_players_num_dungeon(p);
-    if (dungeon_invalid(dungeon) || (dungeon->total_money_owned < WATCHFIRE_PRICE))
+    if (dungeon_invalid(dungeon) || (dungeon->total_money_owned < WF_PRICE_OF(p)))
     {
-        tell(p, "A watchfire costs 300 gold.");
+        tell(p, (WF_PRICE_OF(p) < WATCHFIRE_PRICE) ? "A watchfire costs 200 gold." : "A watchfire costs 300 gold.");
         return;
     }
     struct Watchfire *f = NULL;
@@ -248,7 +255,7 @@ void world_watchfire_place(PlayerNumber p, MapSubtlCoord stl_x, MapSubtlCoord st
             f = &wf[i];
     if (f == NULL)
         return;
-    take_money_from_dungeon(p, WATCHFIRE_PRICE, 1);
+    take_money_from_dungeon(p, WF_PRICE_OF(p), 1);
     memset(f, 0, sizeof(*f));
     f->used = 1;
     f->owner = (uint8_t)p;
@@ -468,8 +475,8 @@ void world_watchfire_turn(void)
         /* the ground in its light stays revealed (where it is loaded) */
         MapSlabCoord ex, ey;
         if (world_engine_slab(f->wx, f->wy, &ex, &ey))
-            reveal_map_area(f->owner, slab_subtile(ex - WATCHFIRE_REACH, 0), slab_subtile(ex + WATCHFIRE_REACH, 2),
-                slab_subtile(ey - WATCHFIRE_REACH, 0), slab_subtile(ey + WATCHFIRE_REACH, 2));
+            reveal_map_area(f->owner, slab_subtile(ex - WF_REACH_OF(f->owner), 0), slab_subtile(ex + WF_REACH_OF(f->owner), 2),
+                slab_subtile(ey - WF_REACH_OF(f->owner), 0), slab_subtile(ey + WF_REACH_OF(f->owner), 2));
     }
 }
 

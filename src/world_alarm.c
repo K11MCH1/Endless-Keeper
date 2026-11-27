@@ -71,6 +71,7 @@
 #include "net_state.h"
 #include "power_hand.h"
 #include "gui_parchment.h"
+#include "world_pentagram.h"
 #include "post_inc.h"
 
 static int al_reach = 200;           /* slabs from a fortress's middle its bell hears */
@@ -275,7 +276,9 @@ void world_alarm_gold_mined(const struct Thing *creatng, MapSubtlCoord stl_x, Ma
         e->fy = c->fy[i];
         e->seam_x = sx;
         e->seam_y = sy;
-        e->gold += (uint32_t)gold;
+        /* endless (2026-11-27): the Pentagram's Quiet Mining fills the bell 25% slower */
+        const long pct = 100 + world_pentagram_fx(p, WFX_ALARM_PCT);
+        e->gold += (uint32_t)max(0L, gold * pct / 100);
     }
 }
 
@@ -604,6 +607,7 @@ static void al_check_razed(void)
         }
         SYNCLOG("World alarm: player %d has razed the fortress at chunk (%d,%d): its bell is silent for good", (int)who,
             (int)al[i].fcx, (int)al[i].fcy);
+        world_pentagram_fortress_razed(who, mx, my); /* endless (2026-11-27): XP; the Pentagram's Crusade's End */
         const int32_t fcx = al[i].fcx, fcy = al[i].fcy;
         for (int k = 0; k < AL_MAX; k++)
             if (al[k].used && (al[k].fcx == fcx) && (al[k].fcy == fcy))

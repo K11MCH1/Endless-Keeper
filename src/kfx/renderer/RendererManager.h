@@ -164,6 +164,9 @@ TbBool RendererScheduleScreenshot(const char* path, int fmt);
  *  shows; its pixels are copied only when gen changes. False when the active backend cannot (software): draw the
  *  palette version instead. */
 TbBool RendererSubmitUIImage(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const unsigned char* rgba, uint32_t gen);
+/** The same, drawn dw x dh, smoothly scaled by the GPU (the Pentagram's web while it zooms). */
+TbBool RendererSubmitUIImageSized(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const unsigned char* rgba, uint32_t gen,
+    int32_t dw, int32_t dh);
 
 /** True when the active backend composites the minimap over the panel
  *  artwork itself (draw-order layering) -- index 0 in its minimap buffer is

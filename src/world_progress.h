@@ -214,7 +214,7 @@ void world_progress_save(uint8_t *buf);
 TbBool world_progress_load(const uint8_t *buf, size_t len);
 
 /* Player levels (endless worlds): 1000 XP for every keeper or heroes heart a player destroys; level 10 at most. */
-#define WORLD_PLAYER_LEVEL_MAX 10
+#define WORLD_PLAYER_LEVEL_MAX 262 /* (2026-11-27: the Pentagram, world_pentagram.c: the whole web at 261, the Heart at 262) */
 /** A heart took damage from a player (shots, explosions): who hit it last gets it when it goes. */
 void world_heart_hit(const struct Thing *heartng, PlayerNumber by);
 /** A heart is destroyed: who hit it last gets the XP. */

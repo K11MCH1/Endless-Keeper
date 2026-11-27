@@ -503,9 +503,34 @@ static void draw_overlay_expeditions(const struct MinimapOverlay *ov, int32_t un
         return;
     static struct WorldExpeditionView view;
     world_expedition_view(ov->player->id_number, &view);
-    if (view.dots + view.pings + view.marks == 0)
+    if (view.dots + view.pings + view.marks + view.rects == 0)
         return;
     const TbPixel red = world_expedition_colour();
+    /* the Pentagram's Siege Maps: each stronghold's box, its four sides in the heroes' colour (the map turns with the
+       camera: the corners are turned, the sides drawn point by point) */
+    {
+        const TbPixel hero = player_room_colours[world_display_colour(PLAYER_GOOD)];
+        for (int i = 0; i < view.rects; i++)
+        {
+            const MapCoord cxs[4] = {view.rect_x1[i], view.rect_x2[i], view.rect_x2[i], view.rect_x1[i]};
+            const MapCoord cys[4] = {view.rect_y1[i], view.rect_y1[i], view.rect_y2[i], view.rect_y2[i]};
+            MapCoord sx[4], sy[4];
+            for (int k = 0; k < 4; k++)
+            {
+                sx[k] = cxs[k];
+                sy[k] = cys[k];
+                map_to_minimap(&sx[k], &sy[k], ov->cam, ov->zoom);
+            }
+            for (int k = 0; k < 4; k++)
+            {
+                const int k2 = (k + 1) & 3;
+                const int steps = max(1, (int)max(labs((long)(sx[k2] - sx[k])), labs((long)(sy[k2] - sy[k]))));
+                for (int t = 0; t <= steps; t++)
+                    panel_map_draw_pixel(sx[k] + (sx[k2] - sx[k]) * t / steps + ov->basepos,
+                        sy[k] + (sy[k2] - sy[k]) * t / steps + ov->basepos, hero);
+            }
+        }
+    }
     const struct PowerConfigStats *ctast = get_power_model_stats(PwrK_CALL2ARMS);
     float circle_time = (float)(get_gameturn() & 7);
     if ((game.operation_flags & GOF_Paused) == 0)

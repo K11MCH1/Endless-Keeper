@@ -31,6 +31,7 @@
 #include "room_util.h"
 #include "world_pages.h"
 #include "world_stream.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -868,6 +869,12 @@ TbBool subtile_is_diggable_for_player(PlayerNumber plyr_idx, MapSubtlCoord stl_x
     if (((slabst->block_flags & (SlbAtFlg_Filled|SlbAtFlg_Digable|SlbAtFlg_Valuable)) != 0))
     {
         if (enemy_wall_diggable)
+        {
+            return true;
+        }
+        /* endless: Deep Delvers - another keeper's or the heroes' fortified wall (not rock or gems) */
+        if ((slabst->is_diggable != 0) && (slabmap_owner(slb) != plyr_idx) && (slabmap_owner(slb) != game.neutral_player_num) &&
+            slab_kind_is_fortified_wall(slb->kind) && world_pentagram_digs_enemy_walls(plyr_idx))
         {
             return true;
         }

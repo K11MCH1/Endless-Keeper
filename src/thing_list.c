@@ -60,6 +60,7 @@
 #include "world_stream.h"
 #include "world_truce.h"
 #include "world_rivals.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -428,7 +429,8 @@ long highest_score_thing_filter_is_enemy_within_distance_which_can_be_attacked_b
     if (thing_is_creature(creatng))
     {
         const struct CreatureModelConfig *crconf = creature_stats_get_from_thing(creatng);
-        if ((distance > subtile_coord(crconf->hearing, 0)) && (distance > subtile_coord(crconf->visual_range, 0)))
+        if ((distance > subtile_coord(crconf->hearing, 0)) &&
+            (distance > subtile_coord(crconf->visual_range + world_pentagram_sight_bonus(creatng), 0))) /* endless: Dark Sight */
             return -1;
     }
 
@@ -2426,7 +2428,8 @@ struct Thing *get_highest_score_enemy_creature_within_distance_possible_to_attac
     {
         /* the filter turns down what is as far as dist, or farther than the creature hears and sees */
         const struct CreatureModelConfig *crconf = creature_stats_get_from_thing(creatng);
-        const MapCoordDelta senses = max(subtile_coord(crconf->hearing, 0), subtile_coord(crconf->visual_range, 0));
+        const MapCoordDelta senses = max(subtile_coord(crconf->hearing, 0),
+            subtile_coord(crconf->visual_range + world_pentagram_sight_bonus(creatng), 0)); /* endless: Dark Sight */
         return near_or_whole(&near_grids[0], filter, &param, creatng, min((MapCoordDelta)(dist - 1), senses));
     }
     return get_nth_thing_of_class_with_filter(filter, &param, 0);

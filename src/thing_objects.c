@@ -62,6 +62,7 @@
 #include "world_colours.h"
 #include "world_progress.h"
 #include "world_misdeeds.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1141,7 +1142,8 @@ void update_dungeon_heart_beat(struct Thing *heartng)
         long long k = 1;
         if (objst->health != 0)
         {
-            k = 384 * (long)(objst->health - heartng->health) / objst->health;
+            const HitPoints top = world_pentagram_heart_max(heartng, objst->health); /* endless: the Pentagram */
+            k = 384 * (long)(top - heartng->health) / top;
         }
         if ((k + 128) > 0)
         {
@@ -1208,14 +1210,14 @@ static TngUpdateRet object_update_dungeon_heart(struct Thing *heartng)
             {
               heartng->health = 0;
             } else
-            if (heartng->health > objst->health)
+            if (heartng->health > world_pentagram_heart_max(heartng, objst->health)) /* endless: the Pentagram */
             {
-              heartng->health = objst->health;
+              heartng->health = world_pentagram_heart_max(heartng, objst->health);
             }
         }
         if (objst->health > 0) //prevent divide by 0 crash
         {
-            long long k = ((heartng->health << 8) / objst->health) << 7;
+            long long k = ((heartng->health << 8) / world_pentagram_heart_max(heartng, objst->health)) << 7; /* endless */
             long i = (saturate_set_signed(k, 32) >> 8) + 128;
             heartng->sprite_size = i * (long)objst->sprite_size_max >> 8;
             heartng->solid_size_xy = i * (long)objst->size_xy >> 8;
@@ -1935,8 +1937,8 @@ int get_wealth_size_types_count(void)
  */
 struct Thing *create_gold_hoard_object(const struct Coord3d *pos, PlayerNumber plyr_idx, GoldAmount value)
 {
-    if (value >= game.conf.rules[plyr_idx].gameplay.gold_per_hoard)
-        value = game.conf.rules[plyr_idx].gameplay.gold_per_hoard;
+    if (value >= world_pentagram_gold_per_hoard(plyr_idx, game.conf.rules[plyr_idx].gameplay.gold_per_hoard))
+        value = world_pentagram_gold_per_hoard(plyr_idx, game.conf.rules[plyr_idx].gameplay.gold_per_hoard);
     int wealth_size = get_wealth_size_of_gold_amount(value);
     struct Thing* gldtng = create_object(pos, gold_hoard_objects[wealth_size-1], plyr_idx, -1);
     if (thing_is_invalid(gldtng))

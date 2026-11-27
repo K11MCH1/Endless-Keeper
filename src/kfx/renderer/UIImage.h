@@ -28,6 +28,7 @@
 struct UIImageFrame {
     bool on = false;
     int32_t x = 0, y = 0, w = 0, h = 0;
+    int32_t dw = 0, dh = 0;  /* drawn this size (smoothly), when not 0 (2026-11-27: the Pentagram's web, scaled by the GPU) */
     uint32_t gen = 0;
     std::shared_ptr<const std::vector<uint8_t>> rgba; // premultiplied, top row first, w*h*4 bytes
 };
@@ -78,6 +79,8 @@ struct UIImageSource {
         slot.y = y;
         slot.w = w;
         slot.h = h;
+        slot.dw = 0;
+        slot.dh = 0;
         slot.gen = gen;
         slot.rgba = last;
         return true;

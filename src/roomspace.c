@@ -37,6 +37,7 @@
 #include "keeperfx.hpp"
 #include "world_pages.h"
 #include "world_fill.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -132,7 +133,7 @@ TbBool can_afford_roomspace(PlayerNumber plyr_idx, RoomKind rkind, int slab_coun
     struct PlayerInfo* player = get_player(plyr_idx);
     struct Dungeon* dungeon = get_players_dungeon(player);
     struct RoomConfigStats* roomst = get_room_kind_stats(rkind);
-    return (slab_count * roomst->cost <= dungeon->total_money_owned);
+    return (slab_count * world_pentagram_room_cost(plyr_idx, rkind, roomst->cost) <= dungeon->total_money_owned); /* endless: Gilded Halls */
 }
 
 int calc_distance_from_roomspace_centre(int total_distance, TbBool offset)

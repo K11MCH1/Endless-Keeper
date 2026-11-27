@@ -87,6 +87,13 @@ public:
         (void)slot; (void)x; (void)y; (void)w; (void)h; (void)rgba; (void)gen;
         return false;
     }
+    /** The same, drawn dw x dh (smoothly scaled by the GPU; the picture is not copied again for a new size). */
+    virtual bool SubmitUIImageSized(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t* rgba, uint32_t gen,
+        int32_t dw, int32_t dh)
+    {
+        (void)dw; (void)dh;
+        return SubmitUIImage(slot, x, y, w, h, rgba, gen);
+    }
 
     // Sub-renderers. Every backend provides all four once initialised.
     virtual class ITextRenderer*      GetTextRenderer()      = 0;

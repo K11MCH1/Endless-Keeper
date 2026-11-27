@@ -96,6 +96,7 @@
 #include "world_wallbreak.h"
 #include "world_fill.h"
 #include "world_expedition.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -2519,6 +2520,11 @@ short setup_creature_leaves_or_dies(struct Thing *creatng)
 {
     TRACE_THING(creatng);
     // Try heading for nearest entrance
+    if (world_pentagram_never_leaves(creatng)) /* endless: Reign of Terror, Mind Shackle */
+    {
+        set_start_state(creatng);
+        return 0;
+    }
     struct Room* room = find_nearest_room_of_role_for_thing(creatng, creatng->owner, RoRoF_CrPoolLeave, NavRtF_Default);
     if (room_is_invalid(room))
     {
@@ -3625,7 +3631,7 @@ long setup_head_for_empty_treasure_space(struct Thing *thing, struct Room *room)
     struct Thing* gldtng = find_gold_hoarde_at(slab_subtile_center(slb_x), slab_subtile_center(slb_y));
 
     // If the random slab has enough space to drop all gold, go there to drop it
-    long wealth_size_holds = game.conf.rules[room->owner].gameplay.gold_per_hoard / get_wealth_size_types_count();
+    long wealth_size_holds = world_pentagram_gold_per_hoard(room->owner, game.conf.rules[room->owner].gameplay.gold_per_hoard) / get_wealth_size_types_count();
     GoldAmount max_hoard_size_in_room = wealth_size_holds * room->total_capacity / room->slabs_count;
     if ((max_hoard_size_in_room - gldtng->valuable.gold_stored) >= thing->creature.gold_carried)
     {
@@ -4393,7 +4399,8 @@ TbBool process_creature_hunger(struct Thing *thing)
             /* endless: a Prison's level starves its prisoners (and so turns them to skeletons) sooner */
             const struct Room *prison = get_room_thing_is_on(thing);
             if (!room_is_invalid(prison))
-                hunger_every = max(1L, hunger_every * 100 / (100 + world_room_bonus(prison->owner, WRB_PrisonSkeleton)));
+                hunger_every = world_pentagram_prison_hunger(prison->owner, /* (Gaoler) */
+                    max(1L, hunger_every * 100 / (100 + world_room_bonus(prison->owner, WRB_PrisonSkeleton))));
         }
         if (((get_gameturn() + thing->index) % hunger_every) == 0) {
             SYNCDBG(9,"The %s index %d lost %d health due to hunger",thing_model_name(thing), (int)thing->index, (int)game.conf.rules[thing->owner].health.hunger_health_loss);

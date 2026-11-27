@@ -29,6 +29,7 @@
 #include "net_state.h"
 #include "keeperfx.hpp"
 #include "world_caretaker.h"
+#include "world_pentagram.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -84,6 +85,8 @@ TbBool world_season_harsh_for(PlayerNumber p)
         return true;
     if (world_caretaker_active(p))
         return false; /* away: the caretaker's dungeon must not get harder */
+    if (world_pentagram_fx(p, WFX_SEASON_GRACE))
+        return false; /* the Pentagram's Season's Grace: only the kinder half */
     return world_seat_day(p) > SEASON_SPARED_DAYS;
 }
 
@@ -92,7 +95,7 @@ TbBool world_season_long_night(long day)
     return world_mode_active() && (world_season_of_day(day) == WSe_LongNight);
 }
 
-int world_season_hatch_pct(PlayerNumber p)
+static int season_hatch_pct(PlayerNumber p)
 {
     if (!world_mode_active())
         return 0;
@@ -105,6 +108,11 @@ int world_season_hatch_pct(PlayerNumber p)
     default:
         return 0;
     }
+}
+
+int world_season_hatch_pct(PlayerNumber p)
+{
+    return season_hatch_pct(p) + world_pentagram_fx(p, WFX_HATCH_PCT); /* (and the Pentagram's Feast) */
 }
 
 int world_season_extra_raids(PlayerNumber p)

@@ -80,6 +80,8 @@
 #include "local_possession.h"
 #include "world_misdeeds.h"
 #include "world_creature_window.h"
+#include "world_pentagram_hooks.h"
+#include "world_pentagram.h"
 #include "post_inc.h"
 
 /* the game's draw functions of the buttons painted here (frontmenu_ingame_tabs.c, frontmenu_ingame_evnt.c) */
@@ -727,7 +729,7 @@ static TbBool sp_strip_of(const struct GuiButton *gbtn, struct SpStrip *s)
             return false;
         const struct RoomConfigStats *roomst = get_room_kind_stats(rkind);
         const int boxsize = max(1, (int)ustate->boxsize);
-        long cost = (long)roomst->cost;
+        long cost = (long)world_pentagram_room_cost(my_player_number, rkind, roomst->cost); /* (Gilded Halls) */
         if ((ustate->work_state == PSt_BuildRoom) && (boxsize > 1))
             cost *= boxsize;
         s->dim = (ustate->render_roomspace.total_roomspace_cost > dungeon->total_money_owned);
@@ -2607,7 +2609,7 @@ void world_side_panel_draw(void)
         const struct RoomConfigStats *roomst = get_room_kind_stats(rkind);
         strip.spr = roomst->bigsym_sprite_idx;
         snprintf(strip.name, sizeof(strip.name), "%s", get_string(roomst->name_stridx));
-        snprintf(strip.value, sizeof(strip.value), "%ld", (long)roomst->cost);
+        snprintf(strip.value, sizeof(strip.value), "%ld", (long)world_pentagram_room_cost(my_player_number, rkind, roomst->cost));
         strip.bar = 0.62f;
         has_strip = true;
     }
@@ -2804,14 +2806,16 @@ int world_side_dial_draw(const struct TbSprite *disc, int frame)
     }
     char text[32];
     snprintf(text, sizeof(text), "%s %ld", world_is_day() ? "Day" : "Night", (shown > 0) ? shown : world_day_number());
+    char omen[32];
+    const TbBool has_omen = world_pentagram_omen_text(my_player_number, omen, sizeof(omen)); /* (the Pentagram's Omen) */
     const TbBool safe = world_safe_day();
     const long today = world_day_number();
     const int today_i = (int)((max(today, 1L) - 1) % SEASON_YEAR_DAYS);
     const int m = (int)ceilf(20.0f * u);
     const int x0 = (int)floorf(cx_s - r) - m, y0 = max(0, (int)floorf(cy_s - r) - m);
-    const int w = (int)ceilf(2.0f * r) + 2 * m, h = (int)ceilf(cy_s + r + 30.0f * u) + m - y0;
-    char key[128];
-    snprintf(key, sizeof(key), "%d %s %d %d %.4f %d", frame, text, (int)safe, today_i, (double)u, (int)flat);
+    const int w = (int)ceilf(2.0f * r) + 2 * m, h = (int)ceilf(cy_s + r + (has_omen ? 48.0f : 30.0f) * u) + m - y0;
+    char key[160];
+    snprintf(key, sizeof(key), "%d %s %d %d %.4f %d %s", frame, text, (int)safe, today_i, (double)u, (int)flat, has_omen ? omen : "");
     sp_dial_host.name = "side_dial";
     sp_dial_host.slot = UmSl_Dial;
     if (um_host_begin(&sp_dial_host, w, h, key))
@@ -2856,10 +2860,14 @@ int world_side_dial_draw(const struct TbSprite *disc, int frame)
         /* "Day N": green on a safe day and its night (no raids, no wild packs: the user, 2026-11-19) */
         ui_text_box(c, UiF_Head, 15.0f * u, 0.0f, cy + r + 6.0f * u, (float)w, 20.0f * u, 1,
             safe ? UIC(130, 230, 110, 255) : UM_BRIGHT, 0.0f, !flat, text);
+        /* the Pentagram's Omen: by night, tomorrow's raids, a smaller line under it */
+        if (has_omen)
+            ui_text_box(c, UiF_Body, max(11.0f, 12.0f * u), 0.0f, cy + r + 26.0f * u, (float)w, 16.0f * u, 1, UM_GOLD_HI, 0.0f,
+                !flat, omen);
         um_host_painted(&sp_dial_host, t0);
     }
     um_host_show(&sp_dial_host, x0 + sp_right_slide(u), y0);
-    return top + (int)floorf(116.0f * u + 0.5f); /* (air between the day and the strip: the user) */
+    return top + (int)floorf((has_omen ? 134.0f : 116.0f) * u + 0.5f); /* (air between the day and the strip: the user) */
 }
 
 void world_side_boss_strip(int y, const char *left, const char *right, TbBool clickable, TbBool hover, int *box)

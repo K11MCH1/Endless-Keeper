@@ -79,6 +79,7 @@
 #include "world_migrate.h"
 #include "world_fill.h"
 #include "world_progress.h"
+#include "world_reaper.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -6850,6 +6851,7 @@ void draw_view(struct Camera *cam, unsigned char a2)
     getpoly = poly_pool;
     memset(buckets, 0, sizeof(buckets));
     world_migrate_cursor_box(); /* endless worlds: the 5x5 highlight of Move The Heart's placing */
+    world_reaper_cursor_box(); /* endless worlds: the Reaper's placing (green: he can be summoned there) */
     if (map_volume_box.visible)
     {
         poly_pool_end_reserve(14);
@@ -7962,7 +7964,9 @@ void process_keeper_sprite(short x, short y, unsigned short kspr_base, short ksp
         {
             get_keepsprite_unscaled_dimensions(kspr_base, thing_being_displayed->move_angle_xy, sprgroup, &dim_ow, &dim_oh, &dim_tw, &dim_th);
             cctrl = creature_control_get_from_thing(thing_being_displayed);
-            lltemp = dim_oh * (48 - (long)cctrl->sacrifice.animation_counter);
+            /* endless: by the state's own length (the Temple's is 48 turns, as before; the Pentagram's Reaper rises in 4 s) */
+            const long sdur = (cctrl->sacrifice.animation_duration > 0) ? (long)cctrl->sacrifice.animation_duration : 48;
+            lltemp = dim_oh * max(0L, sdur - (long)cctrl->sacrifice.animation_counter) * 48 / sdur;
             cutoff = ((((lltemp >> 24) & 0x1F) + (long)lltemp) >> 5) / 2;
         }
         if ((get_local_view_type() == PVT_CreatureContrl) || (get_local_view_type() == PVT_CreaturePasngr))
@@ -9264,6 +9268,7 @@ void draw_frontview_engine(struct Camera *cam)
     update_frontview_pointed_block(zoom, qdrant, px, py, qx, qy);
     update_local_mouse_light();
     world_migrate_cursor_box(); /* endless worlds: the 5x5 highlight of Move The Heart's placing */
+    world_reaper_cursor_box(); /* endless worlds: the Reaper's placing (green: he can be summoned there) */
     if (map_volume_box.visible && should_draw_cursor_box(get_displayed_user())) {
         if (world_migrate_armed())
             create_frontview_map_volume_box(cam, ((zoom >> 8) & 0xFF), map_volume_box.color); /* endless: Move The Heart */

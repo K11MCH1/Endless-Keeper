@@ -63,6 +63,7 @@
 #include "world_stream.h"
 #include "world_misdeeds.h"
 #include "world_sword.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -575,6 +576,7 @@ TbBool shot_hit_wall_at(struct Thing *shotng, struct Coord3d *pos)
             if (!shotst->hit_door.withstand)
               destroy_shot = 1;
             i = calculate_shot_real_damage_to_door(doortng, shotng);
+            i = world_pentagram_door_damage(doortng, shotng, i); /* endless: the Pentagram */
             apply_damage_to_thing(doortng, i, -1);
             reveal_secret_door_to_player(doortng,shotng->owner);
         } else
@@ -635,6 +637,7 @@ TbBool shot_hit_wall_at(struct Thing *shotng, struct Coord3d *pos)
                 if (!shotst->hit_door.withstand)
                     destroy_shot = 1;
                 i = calculate_shot_real_damage_to_door(doortng, shotng);
+                i = world_pentagram_door_damage(doortng, shotng, i); /* endless: the Pentagram */
                 apply_damage_to_thing(doortng, i, -1);
                 reveal_secret_door_to_player(doortng,shotng->owner);
             } else
@@ -733,6 +736,7 @@ long shot_hit_door_at(struct Thing *shotng, struct Coord3d *pos)
             }
             // Apply damage to the door
             i = calculate_shot_real_damage_to_door(doortng, shotng);
+            i = world_pentagram_door_damage(doortng, shotng, i); /* endless: the Pentagram */
             apply_damage_to_thing(doortng, i, -1);
             reveal_secret_door_to_player(doortng,shotng->owner);
       }
@@ -784,6 +788,7 @@ TbBool apply_shot_experience_from_hitting_creature(struct Thing *shooter, struct
     long exp_factor = tgcrconf->exp_for_hitting;
     if (world_sword_driven(target) && (shooter->owner == tgcctrl->party.target_plyr_idx))
         exp_factor *= 2; /* endless worlds: the hero a guest drives is worth twice (Take Up the Sword) */
+    exp_factor = world_pentagram_combat_xp(shooter, target, exp_factor); /* endless: the Pentagram */
     return apply_shot_experience(shooter, exp_factor, tgcctrl->exp_level, shot_model);
 }
 
@@ -949,7 +954,8 @@ static TbBool shot_hit_object_at(struct Thing *shotng, struct Thing *target, str
         {
             if (thing_is_dungeon_heart(target))
                 world_heart_hit(target, shotng->owner); /* endless worlds: who destroys it gets XP */
-            damage_done = apply_damage_to_thing(target, shotng->shot.damage, -1);
+            damage_done = apply_damage_to_thing(target, thing_is_dungeon_heart(target) ?
+                world_pentagram_heart_damage(target, shotng, shotng->shot.damage) : shotng->shot.damage, -1); /* endless: the Pentagram */
 
             // Drain allows caster to regain half of damage
             if ((shotst->model_flags & ShMF_LifeDrain) && thing_is_creature(shootertng))
@@ -1126,6 +1132,7 @@ long melee_shot_hit_creature_at(struct Thing *shotng, struct Thing *trgtng, stru
     long damage = get_damage_of_melee_shot(shotng, trgtng, flag_is_set(shotst->model_flags, ShMF_NeverBlock));
     damage = world_misdeeds_adjust_damage(trgtng, shooter, damage); /* endless: the vices */
     damage = world_misdeeds_shot_damage(shotng, shooter, trgtng, damage); /* endless: Lessons, Breeds */
+    damage = world_pentagram_adjust_damage(trgtng, shooter, damage); /* endless: the Pentagram */
     if (flag_is_set(shotst->model_flags, ShMF_Fire))
         damage = creature_fire_adjust_damage(trgtng, damage);
     if (damage > 0)
@@ -1323,6 +1330,7 @@ long shot_hit_creature_at(struct Thing *shotng, struct Thing *trgtng, struct Coo
         HitPoints damage_done;
         HitPoints vice_damage = world_misdeeds_adjust_damage(trgtng, shooter, shotng->shot.damage); /* endless: the vices */
         vice_damage = world_misdeeds_shot_damage(shotng, shooter, trgtng, vice_damage); /* endless: Lessons, Breeds */
+        vice_damage = world_pentagram_adjust_damage(trgtng, shooter, vice_damage); /* endless: the Pentagram */
         if (flag_is_set(shotst->model_flags, ShMF_Fire))
             vice_damage = creature_fire_adjust_damage(trgtng, vice_damage);
         if (thing_exists(shooter)) {

@@ -343,6 +343,12 @@ TbBool RendererSubmitUIImage(int slot, int32_t x, int32_t y, int32_t w, int32_t 
     return (s_active_renderer != nullptr) ? s_active_renderer->SubmitUIImage(slot, x, y, w, h, rgba, gen) : 0;
 }
 
+TbBool RendererSubmitUIImageSized(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const unsigned char* rgba, uint32_t gen,
+    int32_t dw, int32_t dh)
+{
+    return (s_active_renderer != nullptr) ? s_active_renderer->SubmitUIImageSized(slot, x, y, w, h, rgba, gen, dw, dh) : 0;
+}
+
 /******************************************************************************/
 /* Fade-cache preservation / forced UI flip                                   */
 /******************************************************************************/

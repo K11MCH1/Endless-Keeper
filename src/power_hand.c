@@ -75,6 +75,7 @@
 #include "world_hand.h"
 #include "world_migrate.h"
 #include "world_rivals.h"
+#include "world_reaper.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -233,6 +234,8 @@ TbBool armageddon_blocks_creature_pickup(const struct Thing *thing, PlayerNumber
 
 long can_thing_be_picked_up_by_player(const struct Thing *thing, PlayerNumber plyr_idx)
 {
+    if (world_reaper_is(thing)) /* endless: the Heart's Reaper is never picked up */
+        return false;
     if (flag_is_set(thing->state_flags, TF1_FallingIntoAbyss)) {
         return false;
     }
@@ -632,6 +635,8 @@ void draw_power_hand(void)
     }
     if (!gameplay_cursor_is_over_gui() && world_migrate_draw_hand(cursor_x, cursor_y))
         return; /* endless worlds: placing the Soul Container (Move The Heart) */
+    if (!gameplay_cursor_is_over_gui() && world_reaper_draw_hand(cursor_x, cursor_y))
+        return; /* endless worlds: placing the Reaper: his icon is the hand */
     if (gameplay_cursor_is_over_gui()) {
         SYNCDBG(7,"Drawing while GUI busy");
         draw_mini_things_in_hand(cursor_x+scale_ui_value(10*global_hand_scale), cursor_y+scale_ui_value(10*global_hand_scale));

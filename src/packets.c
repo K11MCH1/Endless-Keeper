@@ -120,6 +120,8 @@
 #include "world_keeper_panel.h"
 #include "world_fill.h"
 #include "world_expedition.h"
+#include "world_pentagram.h"
+#include "world_reaper.h"
 #include "post_inc.h"
 
 /* the double-click arrays (frontend.h) are indexed by user: one for every packet */
@@ -212,7 +214,7 @@ struct Room *keeper_build_room(NetUserId user,long stl_x,long stl_y,long plyr_id
             dungeon->camera_deviate_jump = (ustate->boxsize > 1) ? 240 : 192;
             struct Coord3d pos;
             set_coords_to_slab_center(&pos, subtile_slab(stl_x), subtile_slab(stl_y));
-            create_price_effect(&pos, plyr_idx, roomst->cost);
+            create_price_effect(&pos, plyr_idx, world_pentagram_fill_cost(plyr_idx, roomst->cost));
         }
         return INVALID_ROOM;
     }
@@ -231,7 +233,7 @@ struct Room *keeper_build_room(NetUserId user,long stl_x,long stl_y,long plyr_id
         }
         struct Coord3d pos;
         set_coords_to_slab_center(&pos, subtile_slab(stl_x), subtile_slab(stl_y));
-        create_price_effect(&pos, plyr_idx, roomst->cost);
+        create_price_effect(&pos, plyr_idx, world_pentagram_room_cost(plyr_idx, rkind, roomst->cost));
     }
     return room;
 }
@@ -335,7 +337,7 @@ TbBool player_sell_room_at_subtile(long plyr_idx, long stl_x, long stl_y)
         return false;
     }
     struct RoomConfigStats* roomst = get_room_kind_stats(room->kind);
-    long revenue = compute_value_percentage(roomst->cost, game.conf.rules[plyr_idx].gameplay.room_sale_percent);
+    long revenue = world_pentagram_room_sale(plyr_idx, room->kind, roomst->cost, game.conf.rules[plyr_idx].gameplay.room_sale_percent); /* endless: Gilded Halls */
     if (room->owner != game.neutral_player_num)
     {
         struct Dungeon* dungeon = get_players_num_dungeon(room->owner);
@@ -915,6 +917,15 @@ TbBool process_user_global_packet_action(NetUserId user)
   case PckA_WorldLevelFocus:
       if (!netstate_thin_mode() || network_is_host())
           world_level_focus_packet(plyr_idx, (int)pckt->actn_par1);
+      return 1;
+  case PckA_WorldPentagramLearn:
+  case PckA_WorldPentagramReset:
+      if (!netstate_thin_mode() || network_is_host())
+          world_pentagram_packet(plyr_idx, pckt->action, (uint32_t)pckt->actn_par1, (uint32_t)pckt->actn_par2);
+      return 1;
+  case PckA_WorldReaperSummon:
+      if (!netstate_thin_mode() || network_is_host())
+          world_reaper_summon_packet(plyr_idx, (MapSubtlCoord)pckt->actn_par1, (MapSubtlCoord)pckt->actn_par2);
       return 1;
   case PckA_WorldKeeperPanel:
       /* the Keeper panel: migrate, call it off, portrait, reset (game state: the server, or every lockstep machine) */

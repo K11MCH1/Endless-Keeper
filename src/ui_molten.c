@@ -525,6 +525,14 @@ void um_host_show(struct UmHost *h, int x, int y)
     h->idx_stale = false;
 }
 
+TbBool um_host_show_sized(struct UmHost *h, int x, int y, int dw, int dh)
+{
+    struct UiCanvas *c = &h->canvas;
+    if ((c->px == NULL) || um_host_flat() || um_dumping())
+        return false;
+    return RendererSubmitUIImageSized(h->slot, x, y, c->w, c->h, c->px, h->gen, dw, dh);
+}
+
 void um_host_forget(struct UmHost *h)
 {
     ui_canvas_free(&h->canvas);

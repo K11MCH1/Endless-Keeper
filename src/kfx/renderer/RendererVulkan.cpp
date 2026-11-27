@@ -874,6 +874,17 @@ bool RendererVulkan::SubmitUIImage(int slot, int32_t x, int32_t y, int32_t w, in
     return m_impl->ui_image_src[slot].Submit(m_impl->frames[m_impl->write_idx].ui_image[slot], x, y, w, h, rgba, gen);
 }
 
+bool RendererVulkan::SubmitUIImageSized(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t* rgba, uint32_t gen,
+    int32_t dw, int32_t dh)
+{
+    if (!SubmitUIImage(slot, x, y, w, h, rgba, gen))
+        return false;
+    UIImageFrame& f = m_impl->frames[m_impl->write_idx].ui_image[slot];
+    f.dw = dw;
+    f.dh = dh;
+    return true;
+}
+
 // Render thread: the true-colour window over the UI (uploaded when it is a new copy; an upload goes in the upload
 // command buffer, before the frame's draws, as the Android overlay's).
 void RendererVulkan::Impl::DrawUIImages(VkFrameData& fd, int first, int last)
@@ -918,13 +929,16 @@ void RendererVulkan::Impl::DrawUIImage(VkFrameData& fd, int slot)
         ui_image_uploaded_gen[slot] = pic.gen;
     }
     core.SetScissorEnabled(false);
-    const float x0 = (float)pic.x, y0 = (float)pic.y, x1 = (float)(pic.x + pic.w), y1 = (float)(pic.y + pic.h);
+    /* drawn at its own size (each texel a pixel), or scaled smoothly (dw x dh) */
+    const bool scaled = (pic.dw > 0) && (pic.dh > 0) && ((pic.dw != pic.w) || (pic.dh != pic.h));
+    const float x0 = (float)pic.x, y0 = (float)pic.y;
+    const float x1 = (float)(pic.x + (scaled ? pic.dw : pic.w)), y1 = (float)(pic.y + (scaled ? pic.dh : pic.h));
     const float verts[] = {
         x0, y0, 0, 0,   x1, y0, 1, 0,   x1, y1, 1, 1,
         x0, y0, 0, 0,   x1, y1, 1, 1,   x0, y1, 0, 1,
     };
     overlay_prog.Set2f("u_screen_size", (float)fd.screen_w, (float)fd.screen_h);
-    overlay_prog.SetTexture("u_image", &ui_image_img[slot]);
+    overlay_prog.SetTexture("u_image", &ui_image_img[slot], scaled ? core.GetSampler(true, false) : VK_NULL_HANDLE);
     VkPipeState st;
     st.Blend(VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
     st.layout_id = overlay_layout;

@@ -49,6 +49,7 @@
 #include "room_workshop.h"
 #include "world_pages.h"
 #include "world_progress.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -830,7 +831,7 @@ TbBool update_trap_trigger_line_of_sight(struct Thing* traptng)
 void process_trap_charge(struct Thing* traptng)
 {
     struct TrapConfigStats *trapst = get_trap_model_stats(traptng->model);
-    traptng->trap.rearm_turn = get_gameturn() + trapst->shots_delay;
+    traptng->trap.rearm_turn = get_gameturn() + world_pentagram_trap_delay(traptng->owner, trapst->shots_delay); /* endless: Trapmaster */
     if (trapst->attack_sprite_anim_idx != 0)
     {
         GameTurnDelta trigger_duration;

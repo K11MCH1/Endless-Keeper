@@ -94,6 +94,7 @@
 #include "world_fill_icons.h"
 #include "custom_sprites.h"
 #include "bflib_video.h"
+#include "world_pentagram_hooks.h"
 #include "kfx/renderer/RendererManager.h"
 #include "post_inc.h"
 
@@ -261,8 +262,25 @@ TbBool world_fill_can_mark(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoo
 {
     /* the cave-in fill (2026-11-22): the keeper's own claimed floor only, with nothing on it (red otherwise) */
     const struct SlabMap *slb = get_slabmap_block(slb_x, slb_y);
-    if (slabmap_block_invalid(slb) || (slb->room_index > 0) || (slb->kind != SlbT_CLAIMED) || (slabmap_owner(slb) != plyr_idx))
+    if (slabmap_block_invalid(slb) || (slb->room_index > 0))
         return false;
+    if ((slb->kind != SlbT_CLAIMED) || (slabmap_owner(slb) != plyr_idx))
+    {
+        /* endless (2026-11-27): the Pentagram's Rockfall and Sappers: unclaimed dug floor up to 3 slabs (each) beyond
+         * the keeper's own claimed ground may fill too */
+        const int reach = world_pentagram_fill_reach(plyr_idx);
+        if ((slb->kind != SlbT_PATH) || (reach <= 0))
+            return false;
+        TbBool near_own = false;
+        for (int dy = -reach; (dy <= reach) && !near_own; dy++)
+            for (int dx = -reach; (dx <= reach) && !near_own; dx++)
+            {
+                const struct SlabMap *o = get_slabmap_block(slb_x + dx, slb_y + dy);
+                near_own = !slabmap_block_invalid(o) && (o->kind == SlbT_CLAIMED) && (slabmap_owner(o) == plyr_idx);
+            }
+        if (!near_own)
+            return false;
+    }
     if (wf_find(slb_x, slb_y) >= 0)
         return false;
     return !wf_slab_has_things(slb_x, slb_y, WfT_All);
@@ -299,7 +317,8 @@ TbBool world_fill_place(int user, PlayerNumber plyr_idx, MapSlabCoord slb_x, Map
         return false;
     }
     const struct RoomConfigStats *roomst = get_room_kind_stats(rk);
-    if ((dungeon->total_money_owned < roomst->cost) || (take_money_from_dungeon(plyr_idx, roomst->cost, 1) < 0))
+    const GoldAmount fill_cost = world_pentagram_fill_cost(plyr_idx, roomst->cost); /* endless: Rockfall */
+    if ((dungeon->total_money_owned < fill_cost) || (take_money_from_dungeon(plyr_idx, fill_cost, 1) < 0))
     {
         output_player_message(plyr_idx, SMsg_GoldNotEnough, 0);
         return false;

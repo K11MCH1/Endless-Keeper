@@ -63,6 +63,7 @@
 #include "world_fill.h"
 #include "world_wild.h"
 #include "world_daynight.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -676,6 +677,7 @@ long instf_dig(struct Thing *creatng, int32_t *param)
         return 0;
     }
     long dig_damage = calculate_damage_did_to_slab_with_single_hit(creatng, slb);
+    dig_damage = world_pentagram_dig_damage(creatng, stl_x, stl_y, (taskkind == SDDigTask_MineGold), dig_damage); /* endless: the Pentagram */
     if ((slb->health > dig_damage) || slab_kind_is_indestructible(slb->kind))
     {
         if (!slab_kind_is_indestructible(slb->kind))
@@ -689,6 +691,7 @@ long instf_dig(struct Thing *creatng, int32_t *param)
             creatng->creature.gold_carried += gold;
             dungeon->lvstats.gold_mined += gold;
             world_alarm_gold_mined(creatng, stl_x, stl_y, gold); /* endless worlds: a fortress's bell hears it */
+            creatng->creature.gold_carried += world_pentagram_mined_gold(creatng, gold); /* endless: Prospector (after the bell) */
         }
         return 0;
     }
@@ -702,6 +705,7 @@ long instf_dig(struct Thing *creatng, int32_t *param)
         creatng->creature.gold_carried += gold;
         dungeon->lvstats.gold_mined += gold;
         world_alarm_gold_mined(creatng, stl_x, stl_y, gold); /* endless worlds: a fortress's bell hears it */
+        creatng->creature.gold_carried += world_pentagram_mined_gold(creatng, gold); /* endless: Prospector (after the bell) */
         mine_out_block(stl_x, stl_y, creatng->owner);
         world_circles_dug(creatng->owner, stl_x, stl_y); /* endless worlds: digging through a circle's line */
         if (dig_has_revealed_area(stl_x, stl_y, creatng->owner))
@@ -718,6 +722,7 @@ long instf_dig(struct Thing *creatng, int32_t *param)
     {
         dig_out_block(stl_x, stl_y, creatng->owner);
         world_circles_dug(creatng->owner, stl_x, stl_y); /* endless worlds: digging through a circle's line */
+        world_pentagram_dug(creatng, subtile_slab(stl_x), subtile_slab(stl_y)); /* endless: Lantern */
 
         if (dig_has_revealed_area(stl_x, stl_y, creatng->owner))
         {
@@ -751,6 +756,8 @@ long instf_destroy(struct Thing *creatng, int32_t *param)
         if (room->health > 1)
         {
             room->health--;
+            if ((room->health > 1) && world_pentagram_claim_extra(creatng)) /* endless: Quick Claim */
+                room->health--;
             if (my_view_type == PVT_CreatureContrl || my_view_type == PVT_CreaturePasngr)
             {
                 volume = FULL_LOUDNESS;
@@ -769,6 +776,7 @@ long instf_destroy(struct Thing *creatng, int32_t *param)
             MapCoord ccor_x = subtile_coord_center(room->central_stl_x);
             MapCoord ccor_y = subtile_coord_center(room->central_stl_y);
             event_create_event_or_update_nearby_existing_event(ccor_x, ccor_y, EvKind_RoomLost, room->owner, room->kind);
+            world_pentagram_room_taken(room, creatng); /* endless: the Pentagram's Plunder */
             claim_enemy_room(room, creatng);
         }
         thing_play_sample(creatng, snd_spell_stars, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
@@ -777,6 +785,8 @@ long instf_destroy(struct Thing *creatng, int32_t *param)
     if (slb->health > 1)
     {
         slb->health--;
+        if ((slb->health > 1) && world_pentagram_claim_extra(creatng)) /* endless: Quick Claim */
+            slb->health--;
         if (my_view_type == PVT_CreatureContrl || my_view_type == PVT_CreaturePasngr)
         {
             volume = FULL_LOUDNESS;
@@ -1097,7 +1107,7 @@ long instf_reinforce(struct Thing *creatng, int32_t *param)
     if (check_place_to_reinforce(creatng, slb_x, slb_y) <= 0) {
         return 0;
     }
-    if (cctrl->digger.consecutive_reinforcements <= 25)
+    if (cctrl->digger.consecutive_reinforcements <= world_pentagram_reinforce_hits(creatng, 25)) /* endless: Fortifier */
     {
         cctrl->digger.consecutive_reinforcements++;
         if (!S3DEmitterIsPlayingSample(creatng->snd_emitter_id, 63))

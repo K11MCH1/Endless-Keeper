@@ -25,6 +25,7 @@
 #include "dungeon_data.h"
 #include "thing_data.h"
 #include "game_legacy.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -151,7 +152,7 @@ struct Thing *treasure_room_eats_gold_piles(struct Room *room, MapSlabCoord slb_
 
 void count_gold_hoardes_in_room(struct Room *room)
 {
-    int32_t wealth_size_holds = game.conf.rules[room->owner].gameplay.gold_per_hoard / get_wealth_size_types_count();
+    int32_t wealth_size_holds = world_pentagram_gold_per_hoard(room->owner, game.conf.rules[room->owner].gameplay.gold_per_hoard) / get_wealth_size_types_count();
     GoldAmount max_hoard_size_in_room = wealth_size_holds * room->total_capacity / room->slabs_count;
     room->used_capacity = 0;
     room->capacity_used_for_storage = 0;

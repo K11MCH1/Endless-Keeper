@@ -62,6 +62,7 @@
 #include "net_game.h"
 #include "packets.h"
 #include "world_keeper_record.h"
+#include "world_pentagram.h"
 #include "replay.h"
 #include "sounds.h"
 #include "game_lghtshdw.h"
@@ -387,6 +388,9 @@ struct Game {
     /** Endless worlds: each player's XP (player levels; saved with the world). Here, not with the rewindable
      *  statics, so that a thin client on another platform gets it too (2026-11-08). */
     uint32_t world_player_xp[PLAYERS_MAX];
+    /** Endless worlds (2026-11-27): each seat's Pentagram (the skill web, world_pentagram.c). Here for the same
+     *  reason as the XP: a thin client sees its web and every keeper's effects as the server has them. */
+    struct WorldPentagram world_pentagram[PLAYERS_MAX];
     /** Endless worlds (2026-11-19): each player's lifetime record (the Keeper panel's Profile; world_progress.c) and
      *  its Heart's migration (Move The Heart; world_migrate.c). Here for the same reason as the XP. */
     struct WorldPlayerStats world_player_record[PLAYERS_MAX];

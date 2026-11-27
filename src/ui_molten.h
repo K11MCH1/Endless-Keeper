@@ -134,6 +134,8 @@ TbBool um_host_parts(struct UmHost *h, const struct UmPart *parts, int n, TbBool
 void um_host_parts_end(struct UmHost *h);
 /** Shows the canvas this frame with its top left corner at (x, y) on the screen. */
 void um_host_show(struct UmHost *h, int x, int y);
+/** OpenGL/Vulkan: shown dw x dh, scaled smoothly by the GPU (the software renderer: false, nothing shown). */
+TbBool um_host_show_sized(struct UmHost *h, int x, int y, int dw, int dh);
 void um_host_forget(struct UmHost *h);
 
 #ifdef __cplusplus

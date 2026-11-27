@@ -101,6 +101,8 @@ void KfxAndroidNotePacket(const struct Packet *pckt); /* android/native/TouchBri
 #include "world_side_panel.h"
 #include "world_level_window.h"
 #include "world_expedition.h"
+#include "world_pentagram_screen.h"
+#include "world_reaper.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -3237,6 +3239,8 @@ static short get_inputs(void)
         }
     }
     TbBool inp_handled = false;
+    if (world_pentagram_screen_inputs()) /* endless: the Pentagram's screen takes everything while it is open */
+        return true;
     if (!flag_is_set(game.operation_flags,GOF_Paused) || active_menu_functions_while_paused() || flag_is_set(game.operation_flags,GOF_WorldInfluence))
         inp_handled = get_gui_inputs(1);
     if (!inp_handled)
@@ -3249,6 +3253,8 @@ static short get_inputs(void)
     switch (view_type)
     {
     case PVT_DungeonTop:
+        if (!inp_handled)
+            inp_handled = world_reaper_inputs(); /* endless worlds: the Reaper's icon and his placing */
         if (!inp_handled)
             inp_handled = world_level_window_inputs(); /* endless worlds: a click on the Library's spellbook */
         if (!inp_handled)
@@ -3370,6 +3376,8 @@ short get_gui_inputs(short gameplay_on)
   }
   update_busy_doing_gui_on_menu();
   world_side_panel_place(); /* endless, the modern side panel: its buttons where they are drawn */
+  if (world_reaper_hud_mouse())
+      busy_doing_gui = 1; /* endless: the Reaper's icon and the World Boss strip are the HUD's (no click through them) */
   if (world_side_tab_over())
   {
       /* endless: the side panel's tab (its own click, not the dungeon's) */

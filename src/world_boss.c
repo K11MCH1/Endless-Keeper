@@ -147,6 +147,7 @@
 #include "world_curtain.h"
 #include "ui_safe_area.h"
 #include "world_side_panel.h"
+#include "world_pentagram.h"
 #include "post_inc.h"
 
 #define WB_EVERY_DEFAULT (24L * 60 * 60 * 20)  /* turns between two fights: 24 hours of game time */
@@ -1449,7 +1450,8 @@ static void wb_drop_loot(void)
         pos.x.val = subtile_coord_center(slab_subtile_center(lx));
         pos.y.val = subtile_coord_center(slab_subtile_center(ly));
         pos.z.val = 0;
-        struct Thing *gold = drop_gold_pile(wb_share_gold(p), &pos);
+        /* (the Pentagram's Boss Slayer: half again as much gold) */
+        struct Thing *gold = drop_gold_pile((world_pentagram_fx(p, WFX_BOSS_SLAYER) > 0) ? wb_share_gold(p) * 3 / 2 : wb_share_gold(p), &pos);
         if (thing_exists(gold))
             game.world_boss_loot[p][n++] = gold->index;
         world_progress_drop_books(slab_subtile_center(lx + 2), slab_subtile_center(ly), wb_share_grade(p), -1, 2);
@@ -1554,6 +1556,8 @@ static void wb_end(TbBool won)
                 (int)p, (int)wb_got_books[p], (int)wb_got_box[p], stored, home);
         } else
             SYNCLOG("World boss: %d of player %d's creatures come home%s", home, (int)p, won ? " (no loot collected)" : "");
+        if (won)
+            world_pentagram_boss_won(p, wb_share_grade(p)); /* XP; the Pentagram's Boss Slayer */
         /* what lies uncollected is lost */
         for (int k = 0; k < 4; k++)
         {
@@ -2451,6 +2455,11 @@ static void wb_stone_box(int x, int y, int w, int h, TbPixel frame, TbBool dim)
 }
 
 static int wb_strip_box[4];             /* the timer strip on the screen (x, y, w, h); w 0: not drawn */
+
+void world_boss_strip_rect(int *r)
+{
+    memcpy(r, wb_strip_box, sizeof(wb_strip_box));
+}
 static TbBool wb_strip_hover;           /* the mouse is over the strip while it can be clicked */
 static long wb_tapped_event = -1;       /* the event (world_boss_number) whose strip this player has tapped */
 static TbBool wb_sent;
@@ -2481,6 +2490,12 @@ static TbBool wb_i_am_ready(void)
 
 /** The World Boss button can be clicked while the event is ready: it opens the window (and shuts it again). A keeper
  *  who is ready opens it to be not ready any more; one who is not cannot open it while the event is full. */
+static TbBool wb_strip_clickable(void);
+TbBool world_boss_strip_clickable(void)
+{
+    return wb_strip_clickable();
+}
+
 static TbBool wb_strip_clickable(void)
 {
     const PlayerNumber me = my_player_number;

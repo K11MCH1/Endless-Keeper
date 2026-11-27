@@ -45,6 +45,7 @@
 #include "frontend.h"
 #include <math.h>
 #include "world_colours.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -184,7 +185,7 @@ void sell_room_slab_when_no_free_room_structures(struct Room *room, long slb_x, 
 {
     delete_room_slab_when_no_free_room_structures(slb_x, slb_y, gnd_slab);
     struct RoomConfigStats* roomst = get_room_kind_stats(room->kind);
-    long revenue = compute_value_percentage(roomst->cost, game.conf.rules[room->owner].gameplay.room_sale_percent);
+    long revenue = world_pentagram_room_sale(room->owner, room->kind, roomst->cost, game.conf.rules[room->owner].gameplay.room_sale_percent); /* endless: Gilded Halls */
     if (revenue != 0)
     {
         struct Coord3d pos;
@@ -420,7 +421,7 @@ TbBool check_and_asimilate_thing_by_room(struct Thing *thing)
     if (thing_is_gold_hoard(thing))
     {
         room = get_room_thing_is_on(thing);
-        GoldAmount wealth_size_holds = game.conf.rules[room->owner].gameplay.gold_per_hoard / get_wealth_size_types_count();
+        GoldAmount wealth_size_holds = world_pentagram_gold_per_hoard(room->owner, game.conf.rules[room->owner].gameplay.gold_per_hoard) / get_wealth_size_types_count();
         GoldAmount gold_value = thing->valuable.gold_stored;
         if (gold_value == 0)
         {

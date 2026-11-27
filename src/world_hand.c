@@ -34,6 +34,7 @@
 #include <string.h>
 #include "net_state.h"
 #include "player_instances.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -77,7 +78,7 @@ int world_hand_capacity(PlayerNumber plyr_idx, int stock)
 {
     if (!world_mode_active() || (plyr_idx < 0) || (plyr_idx >= PLAYERS_COUNT) || (plyr_idx >= PLAYERS_MAX))
         return stock;
-    return grip_at_level(hand_level(plyr_idx), stock);
+    return world_pentagram_hand_cap(plyr_idx, grip_at_level(hand_level(plyr_idx), stock)); /* (Iron Grip) */
 }
 
 int world_hand_level_for_grip(int grip)
@@ -138,7 +139,7 @@ static TbBool hurry_creature(struct Thing *creatng, PlayerNumber plyr_idx)
     const CctrlIndex i = creatng->ccontrol_idx;
     if ((i <= 0) || (i >= CREATURES_COUNT))
         return false;
-    hurry_until[i] = (uint32_t)game.play_gameturn + WORLD_HAND_HURRY_TURNS;
+    hurry_until[i] = (uint32_t)game.play_gameturn + world_pentagram_slap_hurry(plyr_idx, WORLD_HAND_HURRY_TURNS); /* (Cruel Slap) */
     hurry_born[i] = creatng->creation_turn;
     return true;
 }
@@ -147,9 +148,10 @@ static int slap_neighbours(PlayerNumber plyr_idx, struct Thing *slapped)
 {
     const MapSubtlCoord cx = slapped->mappos.x.stl.num, cy = slapped->mappos.y.stl.num;
     int n_hurried = 0;
-    for (MapSubtlCoord y = cy - WORLD_HAND_SLAP_REACH; y <= cy + WORLD_HAND_SLAP_REACH; y++)
+    const int reach = world_pentagram_slap_reach(plyr_idx, WORLD_HAND_SLAP_REACH); /* (Cruel Slap) */
+    for (MapSubtlCoord y = cy - reach; y <= cy + reach; y++)
     {
-        for (MapSubtlCoord x = cx - WORLD_HAND_SLAP_REACH; x <= cx + WORLD_HAND_SLAP_REACH; x++)
+        for (MapSubtlCoord x = cx - reach; x <= cx + reach; x++)
         {
             if ((x < 0) || (y < 0) || (x >= game.map_subtiles_x) || (y >= game.map_subtiles_y))
                 continue;

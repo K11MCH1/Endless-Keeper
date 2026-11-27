@@ -683,6 +683,17 @@ bool RendererOpenGL::SubmitUIImage(int slot, int32_t x, int32_t y, int32_t w, in
     return m_impl->ui_image_src[slot].Submit(m_impl->frames[m_impl->write_idx].ui_image[slot], x, y, w, h, rgba, gen);
 }
 
+bool RendererOpenGL::SubmitUIImageSized(int slot, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t* rgba, uint32_t gen,
+    int32_t dw, int32_t dh)
+{
+    if (!SubmitUIImage(slot, x, y, w, h, rgba, gen))
+        return false;
+    UIImageFrame& f = m_impl->frames[m_impl->write_idx].ui_image[slot];
+    f.dw = dw;
+    f.dh = dh;
+    return true;
+}
+
 // Render thread: the true-colour window over the UI (uploaded when it is a new copy).
 void RendererOpenGL::Impl::DrawUIImages(const GLFrameData& fd, int first, int last)
 {
@@ -730,7 +741,12 @@ void RendererOpenGL::Impl::DrawUIImage(const GLFrameData& fd, int slot)
         ui_image_uploaded[slot] = im.rgba.get();
         ui_image_uploaded_gen[slot] = im.gen;
     }
-    const float x0 = (float)im.x, y0 = (float)im.y, x1 = (float)(im.x + im.w), y1 = (float)(im.y + im.h);
+    /* drawn at its own size (each texel a pixel), or scaled smoothly (dw x dh) */
+    const bool scaled = (im.dw > 0) && (im.dh > 0) && ((im.dw != im.w) || (im.dh != im.h));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, scaled ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, scaled ? GL_LINEAR : GL_NEAREST);
+    const float x0 = (float)im.x, y0 = (float)im.y;
+    const float x1 = (float)(im.x + (scaled ? im.dw : im.w)), y1 = (float)(im.y + (scaled ? im.dh : im.h));
     const float verts[] = {
         x0, y0, 0.0f, 0.0f,   x1, y0, 1.0f, 0.0f,   x1, y1, 1.0f, 1.0f,
         x0, y0, 0.0f, 0.0f,   x1, y1, 1.0f, 1.0f,   x0, y1, 0.0f, 1.0f,

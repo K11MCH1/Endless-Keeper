@@ -45,6 +45,7 @@
 #include "world_progress.h"
 #include "world_misdeeds.h"
 #include "world_caretaker.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -597,6 +598,7 @@ CrStateRet training(struct Thing *thing)
         long work_value = compute_creature_work_value_for_room_role(thing, RoRoF_CrTrainExp, room->efficiency);
         work_value = work_value * (100 + world_room_bonus(room->owner, WRB_TrainingXp)) / 100; /* endless: its level */
         work_value = work_value * (100 + world_misdeeds_train_bonus(thing)) / 100; /* endless: Bad Influence */
+        work_value = world_pentagram_training_xp(thing, work_value); /* endless: the Pentagram (Drill Yard) */
         SYNCDBG(19,"The %s index %d produced %d training points",thing_model_name(thing),(int)thing->index,(int)work_value);
         if (world_creature_growth_frozen(thing))
             work_value = 0; /* endless: the caretaker keeps the dungeon */

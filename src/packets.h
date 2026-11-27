@@ -214,6 +214,9 @@ enum TbPacketAction {
         PckA_WorldKeeperPanel,   /* endless world: the Keeper panel (what in par1's top 4 bits; world_keeper_panel.c) */
         PckA_WorldExpedition,    /* endless world: the Expedition spell cast from the full map, at world slab (par1, par2) */
         PckA_WorldLevelFocus,    /* endless world: the room or spell the Library levels (par1 its entry; world_level_window.c) */
+        PckA_WorldPentagramLearn, /* endless world: Pentagram points (8 node numbers, a byte each, in par1 and par2; 255 none) */
+        PckA_WorldPentagramReset, /* endless world: Reset Tree (world_pentagram.c) */
+        PckA_WorldReaperSummon,   /* endless world: the Heart's Reaper summoned at subtile (par1, par2) (world_reaper.c) */
 };
 
 /** Packet flags for non-action player operation. **/

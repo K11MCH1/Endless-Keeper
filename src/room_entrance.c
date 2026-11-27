@@ -40,6 +40,7 @@
 #include "world_pools.h"
 #include "world_seasons.h"
 #include "world_stream.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 #include <stdint.h>
 
@@ -74,6 +75,7 @@ struct Thing *create_creature_at_entrance(struct Room * room, ThingModel crkind)
     }
     mark_creature_joined_dungeon(creatng);
     world_misdeeds_attracted(creatng); /* endless: Bad Blood */
+    world_pentagram_portal_arrival(creatng); /* endless: Legion, Patron of the Damned */
     if (room->owner != game.neutral_player_num)
     {
         dungeon->lvstats.creatures_attracted++;
@@ -107,8 +109,8 @@ TbBool generation_due_for_dungeon(struct Dungeon * dungeon)
     {
         if ( (dungeon->turns_between_entrance_generation != -1) &&
              (get_gameturn() - dungeon->last_entrance_generation_gameturn >=
-              world_misdeeds_entrance_wait(dungeon->owner, dungeon->turns_between_entrance_generation
-                * (100 + world_season_portal_pct(dungeon->owner)) / 100)) ) { /* endless: the Long Night, then Alumni */
+              world_pentagram_portal_wait(dungeon->owner, world_misdeeds_entrance_wait(dungeon->owner, dungeon->turns_between_entrance_generation
+                * (100 + world_season_portal_pct(dungeon->owner)) / 100))) ) { /* endless: the Long Night, then Alumni, then Gatekeeper */
             SYNCDBG(9,"Due confirmed");
             return true;
         }

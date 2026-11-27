@@ -42,6 +42,7 @@
 #include "game_legacy.h"
 #include "world_pages.h"
 #include "world_progress.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -548,6 +549,7 @@ void update_torture_points(const struct Thing *thing, const struct Room *room)
         turn_val = turn_val * 4 / 3;
     }
 
+    turn_val = world_pentagram_torture(room->owner, turn_val); /* endless: Chains */
     cctrl->tortured.accumulated_torture_points += turn_val * room->efficiency;
 }
 

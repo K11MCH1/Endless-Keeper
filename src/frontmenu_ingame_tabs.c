@@ -89,6 +89,7 @@
 #include "world_side_panel.h"
 #include "post_inc.h"
 #include "room_workshop.h"
+#include "world_pentagram_hooks.h"
 
 struct Around const draw_square[] = {
 { 0, 0},
@@ -660,11 +661,11 @@ void gui_area_big_room_button(struct GuiButton *gbtn)
     }
     if ((ustate->work_state == PSt_BuildRoom) && (boxsize > 1))
     {
-        snprintf(gui_textbuf, sizeof(gui_textbuf), "%ld", (long)roomst->cost * boxsize);
+        snprintf(gui_textbuf, sizeof(gui_textbuf), "%ld", (long)world_pentagram_room_cost(my_player_number, rkind, roomst->cost) * boxsize);
     }
     else
     {
-        snprintf(gui_textbuf, sizeof(gui_textbuf), "%ld", (long)roomst->cost);
+        snprintf(gui_textbuf, sizeof(gui_textbuf), "%ld", (long)world_pentagram_room_cost(my_player_number, rkind, roomst->cost));
     }
     if (ustate->render_roomspace.total_roomspace_cost <= dungeon->total_money_owned)
     {

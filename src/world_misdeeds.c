@@ -92,6 +92,7 @@
 #include "world_creature_window.h"
 #include "world_defectors.h"
 #include "config_keeperfx.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #define MD_SAMPLE 32            /* a creature is sampled one turn in this many */
@@ -1055,7 +1056,7 @@ static int md_slots_for_level(int level)
 /** A slot is waiting and nothing is offered yet: offer the vices of its two strongest misdeeds. */
 static void md_check_offer(struct MdRec *rec, const struct Thing *thing, int level)
 {
-    if ((rec->offer[0] != MdV_None) || (md_used_slots(rec) >= md_slots_for_level(level)))
+    if ((rec->offer[0] != MdV_None) || (md_used_slots(rec) >= md_slots_for_level(world_pentagram_vice_level(thing, level)))) /* (Infamy) */
         return;
     if ((rec->blood != MdV_None) && (rec->blood < MdV_COUNT))
     {
@@ -3380,7 +3381,7 @@ void world_misdeeds_packet_pick(PlayerNumber plyr_idx, ThingIndex idx, int choic
     }
     const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
     const int count = md_vice_count(rec);
-    if ((count >= MD_VICE_SLOTS) || (md_used_slots(rec) >= md_slots_for_level(cctrl->exp_level + 1)))
+    if ((count >= MD_VICE_SLOTS) || (md_used_slots(rec) >= md_slots_for_level(world_pentagram_vice_level(thing, cctrl->exp_level + 1))))
         return;
     rec->vices[count] = rec->offer[choice];
     md_slot_start(rec, count);

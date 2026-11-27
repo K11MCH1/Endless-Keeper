@@ -79,6 +79,8 @@
 #include "bflib_video.h"
 #include "custom_sprites.h"
 #include "world_progress_icons.h"
+#include "world_pentagram.h"
+#include "world_pentagram_hooks.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -1143,6 +1145,7 @@ static void wrl_add_xp(PlayerNumber p, int r, long xp)
             break;
         bar -= need;
         game.world_room_level[p][r] = (uint8_t)to;
+        world_pentagram_level_gained(p); /* (player XP, 2026-11-27) */
         output_player_message(p, WRL_IS_TRAP(r) ? SMsg_ManufacturedTrap : WRL_IS_POWER(r) ? SMsg_ResearchedSpell :
             SMsg_ResearchedRoom, 0);
         SYNCLOG("World progress: player %d's %s is now level %d", (int)p, wrl_labels[r], to);
@@ -1220,14 +1223,28 @@ static void wrl_time_turn(void)
         const int r = world_level_focus(p);
         if (r >= 0)
         {
-            const int sp = world_level_speed(p, 0, NULL);
+            const int sp = world_pentagram_level_speed(p, 0, world_level_speed(p, 0, NULL)); /* (Tutor) */
             if (sp > 0)
+            {
                 wrl_add_xp(p, r, 4L * sp / 10); /* (speeds are whole tenths) */
+                /* the Pentagram's Academy: the next room or spell in line levels too, at half the speed */
+                if (world_pentagram_academy(p))
+                {
+                    int r2 = -1;
+                    if ((r != WRL_TRAINING_ENTRY) && wrl_owned(p, WRL_TRAINING_ENTRY) && (wrl_level(p, WRL_TRAINING_ENTRY) < WRL_TRAINING_TOP))
+                        r2 = WRL_TRAINING_ENTRY;
+                    for (int k = 0; (r2 < 0) && (k < WRL_FIRST_TRAP); k++)
+                        if ((k != r) && wrl_owned(p, k) && (wrl_level(p, k) < wrl_top_of(k)))
+                            r2 = k;
+                    if (r2 >= 0)
+                        wrl_add_xp(p, r2, 2L * sp / 10);
+                }
+            }
         }
         if (dungeon->manufacture_class == TCls_Trap)
         {
             const int t = wrl_of_trap(dungeon->manufacture_kind);
-            const int sp = (t >= 0) ? world_level_speed(p, 1, NULL) : 0;
+            const int sp = (t >= 0) ? world_pentagram_level_speed(p, 1, world_level_speed(p, 1, NULL)) : 0;
             if (sp > 0)
                 wrl_add_xp(p, t, 4L * sp / 10);
         }
@@ -1386,7 +1403,7 @@ int world_creature_level_cap(PlayerNumber p)
 {
     if (!world_mode_active() || (p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX))
         return CREATURE_MAX_LEVEL_LIMIT;
-    return min(CREATURE_MAX_LEVEL_LIMIT, 5 * max(1, wrl_level(p, WRL_TRAINING_ENTRY)));
+    return world_pentagram_level_cap(p, min(CREATURE_MAX_LEVEL_LIMIT, 5 * max(1, wrl_level(p, WRL_TRAINING_ENTRY)))); /* (Legion) */
 }
 
 int world_room_bonus(PlayerNumber plyr_idx, enum WorldRoomBonus what)
@@ -1548,7 +1565,8 @@ int world_power_bonus(PlayerNumber plyr_idx, enum WorldPowerBonus what)
     if (!world_mode_active() || (plyr_idx < 0) || (plyr_idx >= PLAYERS_COUNT) || (plyr_idx >= PLAYERS_MAX) ||
         ((int)what < 0) || ((int)what >= WPB_COUNT))
         return 0;
-    return wrl_numbers()->power[what][min(wrl_level(plyr_idx, entry_of[what]), WRL_MAX)];
+    return world_pentagram_power_bonus(plyr_idx, (int)what,
+        wrl_numbers()->power[what][min(wrl_level(plyr_idx, entry_of[what]), WRL_MAX)]); /* (the Pentagram on top) */
 }
 
 PlayerNumber world_power_caster = -1;
@@ -1571,11 +1589,11 @@ long world_heal_amount(PlayerNumber plyr_idx, long configured, const int32_t *st
 {
     const int top = world_power_bonus(plyr_idx, WPB_HealTop);
     if (top <= 0)
-        return configured;
+        return world_pentagram_heal_amount(plyr_idx, configured); /* (Mending) */
     long strongest = 0;
     for (int i = 0; i < count; i++)
         strongest = max(strongest, (long)strengths[i]);
-    return (strongest > 0) ? (configured * top / strongest) : configured;
+    return world_pentagram_heal_amount(plyr_idx, (strongest > 0) ? (configured * top / strongest) : configured);
 }
 
 TbBool world_room_level_research_bar(PlayerNumber p, int *required, int *progress)
@@ -3230,7 +3248,7 @@ static struct {
 static int wpl_hits_next;
 
 /* this machine's presentation */
-static uint8_t wpl_seen[PLAYERS_MAX];
+static uint16_t wpl_seen[PLAYERS_MAX]; /* (levels go to 262) */
 static int wpl_watch;
 static uint8_t crtr_seen[CREATURE_TYPES_MAX]; /* this machine's keeper's creature_allowed, as last seen */
 static uint8_t research_seen[WPR_ITEMS];      /* this machine's keeper's open research, as last seen */
@@ -3238,10 +3256,8 @@ static uint8_t wrl_seen_level[WRL_ROOMS], wrl_seen_allowed[WRL_ROOMS]; /* its ro
 
 static int wpl_level_of(uint32_t xp)
 {
-    int level = 1;
-    while ((level < WORLD_PLAYER_LEVEL_MAX) && (xp >= (uint32_t)WPL_XP_PER_HEART / 2 * (uint32_t)level * (uint32_t)(level + 1)))
-        level++;
-    return level;
+    /* the user, 2026-11-27: the Pentagram's curve (quick to level 20, then 4,000 XP a level; cap 262) */
+    return world_pentagram_level_of(xp);
 }
 
 uint32_t world_player_xp(PlayerNumber plyr_idx)
@@ -3305,6 +3321,7 @@ void world_player_portal_captured(PlayerNumber plyr_idx, int biome)
         return;
     wps[plyr_idx].portals++;
     SYNCLOG("World: player %d captured a portal (%d so far)", (int)plyr_idx, (int)wps[plyr_idx].portals);
+    world_pentagram_portal_captured(plyr_idx, biome); /* (the first in a biome: XP; the Pentagram's Scout's Reward) */
     server_admin_player_event(plyr_idx, "%s captured a portal (%s)", server_admin_player_name(plyr_idx),
         ((biome >= 0) && (biome < WgB_COUNT)) ? wg_biome_name(biome) : "?");
 }
@@ -3321,9 +3338,7 @@ static TbBool wrec_counts(PlayerNumber p)
 
 uint32_t world_player_level_xp(int level)
 {
-    if (level <= 1)
-        return 0;
-    return (uint32_t)WPL_XP_PER_HEART / 2 * (uint32_t)(level - 1) * (uint32_t)level;
+    return world_pentagram_level_xp(level); /* (the Pentagram's curve, 2026-11-27) */
 }
 
 void world_record_heart_lost(const struct Thing *heartng)
@@ -3489,6 +3504,7 @@ void world_progress_seat_reset(PlayerNumber plyr_idx, TbBool keep_record)
     pmask_del(&wpr_kit_players, plyr_idx); /* the kit is given again when it starts */
     world_misdeeds_strays_seat_reset(plyr_idx); /* Strays: the old keeper's strays go wild again */
     world_watchfire_seat_reset(plyr_idx); /* and the watchfires */
+    world_pentagram_seat_reset(plyr_idx, keep_record); /* the Pentagram is the player's, as the level is */
     SYNCLOG("World: player %d's research progress starts again from zero; level, XP and records %s", (int)plyr_idx,
         keep_record ? "kept" : "too");
 }
@@ -3627,7 +3643,10 @@ void world_heart_destroyed(const struct Thing *heartng)
         || !player_exists(get_player(by)) || (get_player(by)->victory_state == VicS_LostLevel))
         return;
     const int before = wpl_level_of(wpl_xp[by]);
-    wpl_xp[by] += WPL_XP_PER_HEART;
+    /* (2026-11-27: through the Pentagram's XP rules: a keeper's Heart by the armies, an outpost's flat; the circle) */
+    world_pentagram_xp(by, (victim == PLAYER_GOOD) ? WpgXp_OutpostHeart : WpgXp_KeeperHeart, WPL_XP_PER_HEART, 0, victim,
+        subtile_slab(heartng->mappos.x.stl.num), subtile_slab(heartng->mappos.y.stl.num));
+    world_pentagram_heart_destroyed(by, heartng); /* (the Pentagram's Pillager) */
     const int after = wpl_level_of(wpl_xp[by]);
     SYNCLOG("World: player %d destroyed the heart of player %d: %u XP, level %d%s", (int)by, (int)heartng->owner,
         (unsigned)wpl_xp[by], after, (after > before) ? " (up)" : "");
@@ -3719,7 +3738,9 @@ void world_progress_present(void)
         {
             if (p == my_player_number)
             {
-                message_add_fmt(MsgType_Player, p, "Player level %d!", level);
+                message_add_fmt(MsgType_Player, p, "Player level %d! +%d Ability Point%s", level, level - wpl_seen[p],
+                    (level - wpl_seen[p] == 1) ? "" : "s"); /* (the Pentagram, 2026-11-27) */
+                play_non_3d_sample(WPG_LEVEL_SOUND);
                 world_hand_level_news(wpl_seen[p], level);
             }
             else
@@ -3728,7 +3749,7 @@ void world_progress_present(void)
                 message_add_fmt(MsgType_Player, p, "%s reached player level %d", wpl_name(p, name, sizeof(name)), level);
             }
         }
-        wpl_seen[p] = (uint8_t)level;
+        wpl_seen[p] = (uint16_t)level;
     }
     world_seasons_turn(); /* every machine: the season's change, told to its keeper */
 }
@@ -3770,9 +3791,9 @@ TbBool world_imp_cap_refuses(PlayerNumber plyr_idx, int power_kind)
     if ((powerst == NULL) || (powerst->creature_model != get_players_special_digger_model(plyr_idx)))
         return false;
     const int imps = world_imp_count(plyr_idx);
-    if (imps < WORLD_MAX_IMPS)
+    if (imps < world_pentagram_imp_cap(plyr_idx, WORLD_MAX_IMPS)) /* (Swarm) */
         return false;
-    SYNCLOG("World: player %d has %d Imps (at most %d): Create Imp refused", (int)plyr_idx, imps, WORLD_MAX_IMPS);
+    SYNCLOG("World: player %d has %d Imps (at most %d): Create Imp refused", (int)plyr_idx, imps, world_pentagram_imp_cap(plyr_idx, WORLD_MAX_IMPS));
     if (plyr_idx == my_player_number)
         wimp_tell_here(power_kind);
     else if (netstate_is_server())
