@@ -34,7 +34,8 @@ LZMA_SOURCES = ['Bcj2.c', 'Bra.c', 'Bra86.c', 'BraIA64.c', 'CpuArch.c', 'Delta.c
 LZMA_URL = 'https://codeload.github.com/ip7z/7zip/tar.gz/refs/tags/25.01'
 LZMA_SHA256 = '8772e4ef86540c98bf4c23a6d9e13b3a25794d4bb30986ef0b1b9f20075b34c9'
 ABI, TRIPLE = 'arm64-v8a', 'aarch64-linux-android'
-MIN_SDK, TARGET_SDK = 35, 35
+# Android 13 (API 33) and newer install the app; built against Android 15 (API 35).
+MIN_SDK, TARGET_SDK = 33, 35
 EXE = '.exe' if os.name == 'nt' else ''
 LOCAL = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData/Local'))
 

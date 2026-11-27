@@ -258,6 +258,8 @@ def main():
     p.add_argument('--native', type=Path, help='folder of the kit\'s native sources adapted to this KeeperFX revision '
                    '(same names; they replace the kit\'s copies)')
     p.add_argument('--ndk', type=Path, default=LOCAL / 'Android/Sdk/ndk/27.3.13750724')
+    p.add_argument('--api', type=int, default=33, help='Android API level the engine is built for (default 33,'
+                   ' the lowest the app installs on; the kit says 35, the level its phone-side compiler links against)')
     p.add_argument('--jobs', type=int, default=os.cpu_count() or 8)
     p.add_argument('--install', metavar='SERIAL', help='install on this phone as its phone-built engine')
     p.add_argument('--for', dest='version', help='KeeperFX data version it is for (default 1.4.0.<build>)')
@@ -278,6 +280,7 @@ def main():
                                    ROOT / 'build/android/native/arm64-v8a')):
                 (libs / n).write_bytes((d / n).read_bytes())
     kit, recipe = unpack_kit(kit_zip, work / 'kit')
+    recipe['api'] = a.api
     print(f"kit {recipe['kit_id']} (kit {recipe['kit']}, API {recipe['api']})")
     if a.native:
         for f in sorted(a.native.iterdir()):

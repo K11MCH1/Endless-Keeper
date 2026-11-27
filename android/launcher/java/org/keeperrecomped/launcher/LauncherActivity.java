@@ -71,13 +71,15 @@ public final class LauncherActivity extends Activity {
         AppLog.init(this);
         getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        getWindow().setDecorFitsSystemWindows(false);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(0xFF0E0907);
         web = new WebView(this);
         web.setBackgroundColor(0xFF0E0907);
         root.addView(web, new FrameLayout.LayoutParams(-1, -1));
-        // Android 15 draws edge to edge: keep the page clear of the system bars and cutout.
+        // Android 15 draws edge to edge: keep the page clear of the system bars and cutout. Android 13 and 14 do it
+        // only when asked, so the launcher asks and looks the same there.
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
