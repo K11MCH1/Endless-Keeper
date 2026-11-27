@@ -73,6 +73,13 @@
 #include "map_events.h"
 #include "world_seasons.h"
 #include "ui_safe_area.h"
+#include "ui_front.h"
+#include "thing_creature.h"
+#include "thing_stats.h"
+#include "creature_instances.h"
+#include "local_possession.h"
+#include "world_misdeeds.h"
+#include "world_creature_window.h"
 #include "post_inc.h"
 
 /* the game's draw functions of the buttons painted here (frontmenu_ingame_tabs.c, frontmenu_ingame_evnt.c) */
@@ -82,6 +89,7 @@ void gui_area_trap_button(struct GuiButton *gbtn);
 void gui_area_event_button(struct GuiButton *gbtn);
 void gui_area_trap_build_info_button(struct GuiButton *gbtn);
 long find_room_type_capacity_total_percentage(PlayerNumber plyr_idx, RoomKind rkind);
+long anger_get_creature_highest_anger_type_and_byte_percentage(struct Thing *creatng, int32_t *out_angr_typ, int32_t *out_angr_prct);
 
 /******************************************************************************/
 /* The layout, in panel units from the menu's origin (the minimap's middle is at 103.5, 103.5) */
@@ -118,7 +126,8 @@ enum SpRole {
     SpR_Ev0 = SpR_Cell0 + 16, /* the event buttons, .. SpR_Ev0 + 12 (EV01 the lowest) */
     SpR_Q0 = SpR_Ev0 + 13,    /* the Information tab's buttons in their list's order, .. SpR_Q0 + 18 */
     SpR_C0 = SpR_Q0 + 19,     /* the Creatures tab's, .. SpR_C0 + 28 */
-    SpR_Count = SpR_C0 + 29
+    SpR_P0 = SpR_C0 + 29,     /* a creature's pages (taken over; queried outside endless worlds), .. SpR_P0 + 12 */
+    SpR_Count = SpR_P0 + 13
 };
 
 static float sp_u = 2.0f;                   /* pixels a panel unit */
@@ -126,7 +135,7 @@ static float sp_ox, sp_oy;                  /* the menu's origin on the screen *
 static float sp_map_cx, sp_map_cy, sp_map_r; /* the minimap on the screen (the game's) */
 static struct GuiButton *sp_btn[SpR_Count]; /* this frame's buttons by role */
 static int sp_tab_menu = -1;                /* the tab whose grid is up (GMnu_ROOM...), -1: none of those */
-static int sp_info_menu = -1;               /* GMnu_QUERY or GMnu_CREATURE when up */
+static int sp_info_menu = -1;               /* GMnu_QUERY, GMnu_CREATURE or a creature's page (sp_cq_ident) when up */
 static TbBool sp_placed;
 struct SpQuery;
 struct SpCrRow;
@@ -159,6 +168,19 @@ static TbBool sp_tab_menu_ident(int ident)
 {
     return (ident == GMnu_ROOM) || (ident == GMnu_ROOM2) || (ident == GMnu_SPELL) || (ident == GMnu_SPELL2) ||
         (ident == GMnu_SPELL_LOST) || (ident == GMnu_TRAP) || (ident == GMnu_TRAP2);
+}
+
+/** A creature's pages in the side panel: its abilities (1, 2) and its statistics (3, 4); the Rap Sheet (5) keeps the
+ *  game's drawing. */
+static TbBool sp_cq_ident(int ident)
+{
+    return (ident == GMnu_CREATURE_QUERY1) || (ident == GMnu_CREATURE_QUERY2) || (ident == GMnu_CREATURE_QUERY3) ||
+        (ident == GMnu_CREATURE_QUERY4);
+}
+
+static TbBool sp_cq_stats_page(void)
+{
+    return (sp_info_menu == GMnu_CREATURE_QUERY3) || (sp_info_menu == GMnu_CREATURE_QUERY4);
 }
 
 /** A tab menu's button by the place the game gives it (its init's units): its role. */
@@ -207,7 +229,7 @@ static int sp_main_role(const struct GuiButtonInit *init)
 
 static float sp_glass_bottom(void)
 {
-    if ((sp_info_menu == GMnu_QUERY) || (sp_info_menu == GMnu_CREATURE))
+    if ((sp_info_menu == GMnu_QUERY) || (sp_info_menu == GMnu_CREATURE) || sp_cq_ident(sp_info_menu))
         return 576.0f;
     return ((sp_btn[SpR_Next] != NULL) && (sp_btn[SpR_Next]->flags & LbBtnF_Visible)) ? SP_NEXT_Y + SP_NEXT_H + 8.0f :
         SP_GRID_Y + 3.0f * SP_CELL_STEP + SP_CELL + 8.0f;
@@ -287,6 +309,54 @@ static void sp_role_rect(int role, float *r)
             } else
             {
                 r[0] = 54.0f + (float)(col - 1) * 46.0f; r[2] = 43.5f;
+            }
+        }
+        return;
+    }
+    if ((role >= SpR_P0) && (role < SpR_P0 + 13))
+    {
+        /* a creature's pages: the page button at the foot, as the tabs' "next" */
+        const int n = role - SpR_P0;
+        r[0] = r[1] = r[2] = r[3] = 0.0f;
+        if (n == 0)
+        {
+            r[0] = SP_MAP_C - SP_NEXT_W * 0.5f; r[1] = 536.0f; r[2] = SP_NEXT_W; r[3] = 22.0f;
+        } else if (sp_cq_stats_page())
+        {
+            /* the statistics: the name (and the pencil while it can rename), ten statistics in two columns */
+            const TbBool pencil = (sp_btn[SpR_P0 + 2] != NULL) && ((sp_btn[SpR_P0 + 2]->flags & LbBtnF_Visible) != 0);
+            if (n == 1)
+            {
+                r[0] = 17.5f; r[1] = 288.0f; r[2] = pencil ? 140.0f : 172.0f; r[3] = 28.0f;
+            }
+            else if (n == 2)
+            {
+                r[0] = 161.5f; r[1] = 288.0f; r[2] = r[3] = 28.0f;
+            }
+            else
+            {
+                const int k = n - 3;
+                r[0] = 17.5f + (float)(k % 2) * 88.0f; r[1] = 326.0f + (float)(k / 2) * 40.0f; r[2] = 84.0f; r[3] = 34.0f;
+            }
+        } else if (n <= 9)
+        {
+            /* the abilities: the mood and the level beside the portrait (sp_cq_portrait), the name, six abilities */
+            if (n == 1)
+            {
+                r[0] = 101.5f; r[1] = 288.0f; r[2] = 88.0f; r[3] = 36.0f;
+            }
+            else if (n == 2)
+            {
+                r[0] = 101.5f; r[1] = 330.0f; r[2] = 88.0f; r[3] = 36.0f;
+            }
+            else if (n == 3)
+            {
+                r[0] = 17.5f; r[1] = 374.0f; r[2] = 172.0f; r[3] = 28.0f;
+            }
+            else
+            {
+                const int k = n - 4;
+                r[0] = 17.5f + (float)(k % 2) * 88.0f; r[1] = 410.0f + (float)(k / 2) * 40.0f; r[2] = 84.0f; r[3] = 34.0f;
             }
         }
         return;
@@ -438,7 +508,8 @@ void world_side_panel_place(void)
         if ((gmnu->visual_state == 0) || (gmnu->buttons == NULL))
             continue;
         const TbBool main = (gmnu->ident == GMnu_MAIN);
-        const TbBool info = ((gmnu->ident == GMnu_QUERY) || (gmnu->ident == GMnu_CREATURE)) && gmnu->is_turned_on;
+        const TbBool info = ((gmnu->ident == GMnu_QUERY) || (gmnu->ident == GMnu_CREATURE) || sp_cq_ident(gmnu->ident)) &&
+            gmnu->is_turned_on;
         if (!main && !info && (!sp_tab_menu_ident(gmnu->ident) || !gmnu->is_turned_on))
             continue;
         if (info)
@@ -455,7 +526,8 @@ void world_side_panel_place(void)
             if (gmnu->buttons[n].gbtype == -1)
                 break;
             const int role = main ? sp_main_role(&gmnu->buttons[n]) : (gmnu->ident == GMnu_QUERY) ? ((n < 19) ? SpR_Q0 + n : SpR_None) :
-                (gmnu->ident == GMnu_CREATURE) ? ((n < 29) ? SpR_C0 + n : SpR_None) : sp_tab_role(&gmnu->buttons[n]);
+                (gmnu->ident == GMnu_CREATURE) ? ((n < 29) ? SpR_C0 + n : SpR_None) :
+                sp_cq_ident(gmnu->ident) ? ((n < 13) ? SpR_P0 + n : SpR_None) : sp_tab_role(&gmnu->buttons[n]);
             n++;
             if (role == SpR_None)
                 continue;
@@ -1467,6 +1539,7 @@ static void sp_paint_round(struct UiCanvas *c, const struct UmStyle *st, int rol
 
 static void sp_paint_query(struct UiCanvas *c, const struct UmStyle *st, const struct SpQuery *q);
 static void sp_paint_creatures(struct UiCanvas *c, const struct UmStyle *st, const struct SpCrRow *rows);
+static void sp_paint_cq(struct UiCanvas *c, const struct UmStyle *st);
 
 static void sp_paint(TbBool base, const struct SpCell *cells, const struct SpStrip *strip, TbBool has_strip, int tab)
 {
@@ -1516,6 +1589,8 @@ static void sp_paint(TbBool base, const struct SpCell *cells, const struct SpStr
         sp_paint_query(c, st, sp_q_now);
     if ((sp_info_menu == GMnu_CREATURE) && (sp_rows_now != NULL))
         sp_paint_creatures(c, st, sp_rows_now);
+    if (sp_cq_ident(sp_info_menu))
+        sp_paint_cq(c, st);
     if (tab >= 1 && tab <= 3)
     {
         const TbBool blink = sp_blink();
@@ -1965,6 +2040,245 @@ static uint32_t sp_creature_hash(int n, const struct SpCrRow *rows)
 
 float interpolate_synced(float previous, float current); /* (engine_render.h) */
 
+/******************************************************************************/
+/* A creature's pages (the one taken over; the one queried outside endless worlds): the creature window's look
+   (world_creature_window.c) in the panel's column (the user, 2026-11-27: "the panel during creature possession needs to
+   be modernized into the Molten design") */
+
+static void sp_cq_portrait(float *r)
+{
+    r[0] = 17.5f; r[1] = 288.0f; r[2] = 78.0f; r[3] = 78.0f;
+}
+
+static struct Thing *sp_cq_thing(void)
+{
+    struct Thing *thing = thing_get(get_user_state(get_displayed_user())->controlled_thing_idx);
+    return (thing_is_creature(thing) && (thing->ccontrol_idx > 0)) ? thing : NULL;
+}
+
+static const char *sp_cq_kind_name(ThingModel model)
+{
+    const struct CreatureModelConfig *crconf = creature_stats_get(model);
+    const char *name = (crconf != NULL) ? get_string(crconf->namestr_idx) : NULL;
+    return ((name != NULL) && (name[0] != 0)) ? name : creature_code_name(model);
+}
+
+/** An ability's slot (0-9) on the page: its kind, whether the creature has it, its clock (1: ready) and whether it is the
+ *  one chosen (possession: the one the mouse uses). */
+static CrInstance sp_cq_ability(struct Thing *thing, int slot, TbBool *avail, float *clock, TbBool *chosen)
+{
+    const CrInstance inst = creature_instance_get_available_id_for_pos(thing, slot);
+    *avail = creature_instance_is_available(thing, inst);
+    *clock = 1.0f;
+    *chosen = false;
+    if (!*avail)
+        return inst;
+    const struct CreatureControl *lcc = get_local_creature_control(thing);
+    if (creature_control_invalid(lcc))
+        return inst;
+    const GameTurn turn = get_local_creature_turn(thing);
+    const struct InstanceInfo *inf = creature_instance_info_get(inst);
+    if (lcc->instance_id == inst)
+        *clock = 0.0f;
+    else if (!creature_instance_has_reset_at(thing, lcc, inst, turn))
+    {
+        const int32_t need = ((thing->alloc_flags & TAlF_IsControlled) != 0) ? inf->fp_reset_time : inf->reset_time;
+        const int32_t done = (GameTurnDelta)(turn - lcc->instance_use_turn[inst]) + lcc->inst_action_turns - lcc->inst_total_turns;
+        *clock = (need > 0) ? (float)max(0, min(need, done)) / (float)need : 1.0f;
+    }
+    *chosen = (lcc->active_instance_id == inst);
+    return inst;
+}
+
+static struct GuiButton *sp_cq_pencil_btn(void)
+{
+    return sp_cq_stats_page() ? sp_btn[SpR_P0 + 2] : NULL;
+}
+
+/** What the page shows now, as a key. */
+static uint32_t sp_cq_hash(void)
+{
+    struct Thing *thing = sp_cq_thing();
+    if (thing == NULL)
+        return um_hash("none %d", sp_info_menu);
+    char key[768];
+    int kn = 0;
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    int32_t angr_typ = 0, angr_prct = 0;
+    anger_get_creature_highest_anger_type_and_byte_percentage(thing, &angr_typ, &angr_prct);
+    const char *given = world_misdeeds_shown_name(thing);
+    const struct GuiButton *pencil = sp_cq_pencil_btn();
+    const TbBool typing = (pencil != NULL) && (pencil == input_button);
+    kn += snprintf(key + kn, sizeof(key) - kn, "%d %d %d %d %ld %ld %d %ld %ld %d|%s|%s|%d|", sp_info_menu, (int)thing->index, (int)thing->model,
+        (int)thing->owner, (long)thing->health, creature_control_invalid(cctrl) ? 0L : (long)cctrl->max_health,
+        creature_control_invalid(cctrl) ? 0 : (int)cctrl->exp_level, creature_control_invalid(cctrl) ? 0L : (long)cctrl->exp_points,
+        (long)creature_thing_exp_to_next_level(thing), (int)(5 * angr_prct / 256), (given != NULL) ? given : "",
+        typing ? world_misdeeds_name_typed() : "", typing && ((LbTimerClock() / 250) & 1));
+    for (int n = 3; (n < 13) && (kn < (int)sizeof(key) - 48); n++)
+    {
+        const struct GuiButton *b = sp_btn[SpR_P0 + n];
+        if (b == NULL)
+            continue;
+        if (sp_cq_stats_page())
+            kn += snprintf(key + kn, sizeof(key) - kn, "|%s", creature_statistic_text(thing, (CreatureLiveStatId)b->content.lval));
+        else if (n >= 4)
+        {
+            TbBool avail, chosen;
+            float clock;
+            const CrInstance inst = sp_cq_ability(thing, (int)b->content.lval, &avail, &clock, &chosen);
+            kn += snprintf(key + kn, sizeof(key) - kn, ";%d,%d,%d,%d", (int)inst, (int)avail, (int)(clock * 64.0f), (int)chosen);
+        }
+    }
+    return um_hash("%s", key);
+}
+
+static void sp_paint_cq(struct UiCanvas *c, const struct UmStyle *st)
+{
+    const float u = st->u;
+    struct Thing *thing = sp_cq_thing();
+    float x0, y0, x1, y1;
+    /* the page button */
+    if (sp_shown(SpR_P0))
+    {
+        sp_rect_px(SpR_P0, &x0, &y0, &x1, &y1);
+        sp_icon_tile(c, st, x0, y0, x1, y1, sp_normal_spr(sp_btn[SpR_P0]), sp_hot(SpR_P0), sp_down(SpR_P0),
+            (sp_btn[SpR_P0]->flags & LbBtnF_Enabled) != 0, false, 0.8f, 1.0f);
+    }
+    if (thing == NULL)
+        return;
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    const TbBool stats = sp_cq_stats_page();
+    if (!stats)
+    {
+        /* the portrait */
+        float r[4];
+        sp_cq_portrait(r);
+        x0 = X(r[0]); y0 = Y(r[1]); x1 = X(r[0] + r[2]); y1 = Y(r[1] + r[3]);
+        const float rad = S(14.0f);
+        um_well(c, st, x0, y0, x1, y1, rad);
+        const long spr_idx = get_creature_model_graphics(thing->model, CGI_QuerySymbol);
+        const struct TbSprite *spr = (spr_idx > 0) ? get_button_sprite_for_player(spr_idx, thing->owner) : NULL;
+        const unsigned char *px = (spr != NULL) ? uf_sprite_true(spr) : NULL;
+        if ((px != NULL) && (spr->SWidth > 0) && (spr->SHeight > 0))
+        {
+            const float k = min((x1 - x0 - S(14.0f)) / (float)spr->SWidth, (y1 - y0 - S(14.0f)) / (float)spr->SHeight);
+            const int dw = max(1, (int)((float)spr->SWidth * k)), dh = max(1, (int)((float)spr->SHeight * k));
+            ui_image_gain(c, (int)((x0 + x1) * 0.5f - (float)dw * 0.5f), (int)((y0 + y1) * 0.5f - (float)dh * 0.5f), dw, dh, px, spr->SWidth,
+                spr->SHeight, 1.0f);
+        }
+        um_frame(c, st, x0, y0, x1, y1, rad, false);
+        /* the mood: its face and its word */
+        if (sp_btn[SpR_P0 + 1] != NULL)
+        {
+            sp_rect_px(SpR_P0 + 1, &x0, &y0, &x1, &y1);
+            const TbBool hot = sp_hot(SpR_P0 + 1);
+            um_card(c, st, x0, y0, x1, y1);
+            int32_t angr_typ = 0, angr_prct = 0;
+            anger_get_creature_highest_anger_type_and_byte_percentage(thing, &angr_typ, &angr_prct);
+            const int pos = max(0, min(4, 5 * (int)angr_prct / 256));
+            static const char *const moods[5] = {"Very happy", "Happy", "Content", "Unhappy", "Angry"};
+            um_icon_draw(c, GPS_symbols_creatr_mood_vhappy_std + pos, x0 + S(3.0f), y0 + S(3.0f), x0 + S(31.0f), y1 - S(3.0f), 0.9f,
+                hot ? 1.15f : 1.0f);
+            ui_text_box(c, UiF_Body, S(10.0f), x0 + S(33.0f), y0 + S(3.0f), x1 - x0 - S(37.0f), S(13.0f), 0, UM_DIM, 0.0f, !st->flat, "Mood");
+            ui_text_box(c, UiF_Body, ui_text_fit(UiF_Body, S(12.0f), 0.0f, x1 - x0 - S(37.0f), moods[pos]), x0 + S(33.0f), y0 + S(17.0f),
+                x1 - x0 - S(37.0f), S(15.0f), 0, (pos >= 3) ? UM_EMBER : UM_TEXT, 0.0f, !st->flat, moods[pos]);
+        }
+        /* the level and the way to the next */
+        if ((sp_btn[SpR_P0 + 2] != NULL) && !creature_control_invalid(cctrl))
+        {
+            sp_rect_px(SpR_P0 + 2, &x0, &y0, &x1, &y1);
+            const TbBool hot = sp_hot(SpR_P0 + 2);
+            um_card(c, st, x0, y0, x1, y1);
+            char lv[24];
+            snprintf(lv, sizeof(lv), "Level %d", (int)cctrl->exp_level + 1);
+            ui_text_box(c, UiF_Head, ui_text_fit(UiF_Head, S(14.0f), 0.0f, x1 - x0 - S(16.0f), lv), x0 + S(8.0f), y0 + S(3.0f), x1 - x0 - S(16.0f),
+                S(18.0f), 0, hot ? UM_GOLD_HI : UM_GOLD, 0.0f, !st->flat, lv);
+            const long need = creature_thing_exp_to_next_level(thing) << 8;
+            const float frac = (need > 0) ? (float)min((long)cctrl->exp_points, need) / (float)need : 1.0f;
+            um_bar(c, st, x0 + S(8.0f), y1 - S(11.0f), x1 - S(8.0f), y1 - S(6.0f), frac);
+        }
+    }
+    /* the name, over its health (a click: the keeper's next creature) */
+    const int name_role = stats ? SpR_P0 + 1 : SpR_P0 + 3;
+    if (sp_btn[name_role] != NULL)
+    {
+        sp_rect_px(name_role, &x0, &y0, &x1, &y1);
+        const float rad = S(8.0f);
+        um_well(c, st, x0, y0, x1, y1, rad);
+        float frac = 0.0f;
+        if (!creature_control_invalid(cctrl) && (cctrl->max_health > 0))
+            frac = (float)max((HitPoints)0, min(thing->health, cctrl->max_health)) / (float)cctrl->max_health;
+        if (frac > 0.0f)
+        {
+            const float hx = x0 + S(2.5f) + (x1 - x0 - S(5.0f)) * frac;
+            const UiColour top = (frac > 0.5f) ? UIC(150, 30, 20, 255) : UIC(190, 40, 20, 255);
+            ui_fill_rrect(c, x0 + S(2.5f), y0 + S(2.5f), hx, y1 - S(2.5f), rad - S(2.5f), top, UIC(90, 14, 10, 255), false);
+        }
+        const char *given = world_misdeeds_shown_name(thing);
+        const char *name = (given != NULL) ? given : sp_cq_kind_name(thing->model);
+        const struct GuiButton *pencil = sp_cq_pencil_btn();
+        if ((pencil != NULL) && (pencil == input_button))
+        {
+            char line[WORLD_MISDEED_NAME_MAX + 8];
+            snprintf(line, sizeof(line), "%s%s", world_misdeeds_name_typed(), ((LbTimerClock() / 250) & 1) ? "_" : "");
+            ui_stroke_rrect(c, x0, y0, x1, y1, rad, max(1.0f, S(1.0f)), UIC(255, 200, 120, 220));
+            ui_text_box(c, UiF_Body, ui_text_fit(UiF_Body, S(13.0f), 0.0f, x1 - x0 - S(14.0f), line), x0 + S(7.0f), y0, x1 - x0 - S(14.0f),
+                y1 - y0, 1, UM_BRIGHT, 0.0f, !st->flat, line);
+        } else
+            ui_text_box(c, UiF_Head, ui_text_fit(UiF_Head, S(14.0f), 0.0f, x1 - x0 - S(14.0f), name), x0 + S(7.0f), y0, x1 - x0 - S(14.0f),
+                y1 - y0, 1, sp_hot(name_role) ? UM_GOLD_HI : UM_BRIGHT, 0.0f, !st->flat, name);
+        if (stats && sp_shown(SpR_P0 + 2))
+        {
+            sp_rect_px(SpR_P0 + 2, &x0, &y0, &x1, &y1);
+            um_button(c, st, x0, y0, x1, y1, UmB_Normal, sp_hot(SpR_P0 + 2) ? UmS_Hot : UmS_Normal, 1.0f, "");
+            world_window_pencil(c, x0, y0, x1, y1, sp_hot(SpR_P0 + 2));
+        }
+    }
+    for (int n = stats ? 3 : 4; n < 13; n++)
+    {
+        const struct GuiButton *b = sp_btn[SpR_P0 + n];
+        if (b == NULL)
+            continue;
+        sp_rect_px(SpR_P0 + n, &x0, &y0, &x1, &y1);
+        const TbBool hot = sp_hot(SpR_P0 + n);
+        if (stats)
+        {
+            /* a statistic: its picture and its value */
+            um_card(c, st, x0, y0, x1, y1);
+            if (hot && !st->flat)
+                ui_stroke_rrect(c, x0, y0, x1, y1, S(10.0f), max(1.0f, S(1.0f)), UIC(255, 214, 150, 170));
+            um_icon_draw(c, b->sprite_idx, x0 + S(3.0f), y0 + S(3.0f), x0 + S(31.0f), y1 - S(3.0f), 0.86f, hot ? 1.15f : 1.0f);
+            const char *v = creature_statistic_text(thing, (CreatureLiveStatId)b->content.lval);
+            ui_text_box(c, UiF_Num, ui_text_fit(UiF_Num, S(14.0f), 0.0f, x1 - x0 - S(40.0f), v), x0 + S(32.0f), y0, x1 - x0 - S(39.0f), y1 - y0, 2,
+                hot ? UM_GOLD_HI : UM_TEXT, 0.0f, !st->flat, v);
+            continue;
+        }
+        /* an ability: its picture, its key, its clock; lit while chosen */
+        TbBool avail, chosen;
+        float clock;
+        const int slot = (int)b->content.lval;
+        const CrInstance inst = sp_cq_ability(thing, slot, &avail, &clock, &chosen);
+        if (!avail)
+        {
+            um_well(c, st, x0, y0, x1, y1, S(9.0f));
+            continue;
+        }
+        const struct InstanceInfo *inf = creature_instance_info_get(inst);
+        um_button(c, st, x0, y0, x1, y1, UmB_Normal, hot ? UmS_Hot : (chosen ? UmS_Armed : UmS_Normal), 1.0f, "");
+        um_icon_draw(c, inf->symbol_spridx, x0 + S(3.0f), y0 + S(3.0f), x0 + S(31.0f), y1 - S(3.0f), 0.86f, (clock >= 1.0f) ? 1.0f : 0.5f);
+        char key[4];
+        snprintf(key, sizeof(key), "%d", (slot + 1) % 10);
+        ui_text_box(c, UiF_Num, S(12.0f), x0 + S(33.0f), y0 + S(3.0f), x1 - x0 - S(40.0f), S(14.0f), 2, UM_DIM, 0.0f, !st->flat, key);
+        um_bar(c, st, x0 + S(34.0f), y1 - S(11.0f), x1 - S(7.0f), y1 - S(6.0f), clock);
+    }
+}
+
+/** The page's own drawing (the menu's background: portrait, frame, name box) is left out where the panel paints it. */
+TbBool world_side_panel_paints_page(const struct GuiMenu *gmnu)
+{
+    return sp_placed && (gmnu != NULL) && sp_cq_ident(gmnu->ident) && (gmnu->ident == sp_info_menu);
+}
+
 static struct UmHost sp_ev_host;
 #define SP_EV_PICS 4096
 static unsigned char *sp_ev_px[SP_EV_PICS];
@@ -2233,6 +2547,7 @@ void world_side_panel_draw(void)
     /* test switch KFX_WORLD_SIDETEST=1: the first room chosen (its strip, flashing), the second under the pointer, levels
        on both and a bar on the second (a windowless run has no mouse and no build) */
     static int sp_test = -1;
+    static GameTurn sp_test_turn = 0;
     if (sp_test < 0)
     {
         /* (=q, =s, =w, =c: that tab is opened instead: Information, Research, Workshop, Creatures) */
@@ -2247,11 +2562,35 @@ void world_side_panel_draw(void)
                     (k == 'l') ? GMnu_LOAD : (k == 'e') ? GMnu_SAVE : GMnu_AUTOPILOT);
             else if (k == 't')
                 sp_test = 2;
+            else if ((k == 'g') || (k == 'h') || (k == 'i')) /* (a creature taken over: its first page, its third, or */
+                sp_test = (k == 'g') ? 3 : (k == 'h') ? 4 : 5;  /*  its fourth and the wheel on: no Rap Sheet then) */
             else if (k == 'u') /* (paused: the Paused button) */
                 set_packet_pause_toggle();
             else
                 set_menu_mode((k == 'q') ? GMnu_QUERY : (k == 's') ? GMnu_SPELL : (k == 'w') ? GMnu_TRAP : GMnu_CREATURE);
         }
+    }
+    if ((sp_test >= 3) && (sp_test <= 5) && (game.play_gameturn > 30) && (get_user_view_type(get_my_user()) == PVT_CreatureContrl) && (sp_cq_thing() != NULL))
+    {
+        /* (the test hook takes the creature over without the instance that opens its page) */
+        const MenuID page = (sp_test == 3) ? GMnu_CREATURE_QUERY1 : (sp_test == 4) ? GMnu_CREATURE_QUERY3 : GMnu_CREATURE_QUERY4;
+        turn_on_menu(page);
+        set_menu_visible_on(page); /* (as toggle_first_person_menu: the test's takeover leaves it hidden) */
+        sp_test_turn = game.play_gameturn;
+        sp_test = (sp_test == 5) ? 6 : 0;
+    }
+    if ((sp_test == 6) && (game.play_gameturn > sp_test_turn + 20))
+    {
+        wheel_scrolled_down = true; /* (the page cycle as the input turn runs it) */
+        update_query_menu();
+        sp_test_turn = game.play_gameturn;
+        sp_test = 7;
+    }
+    if ((sp_test == 7) && (game.play_gameturn > sp_test_turn + 20))
+    {
+        SYNCLOG("World: side panel test - after the fourth page the wheel opens: page 1 %d, Rap Sheet %d",
+            (int)menu_is_active(GMnu_CREATURE_QUERY1), (int)menu_is_active(GMnu_CREATURE_QUERY5));
+        sp_test = 0;
     }
     if (sp_test == 2)
         world_ui_tooltip("Treasure Room: stores your gold. Imps take gold here; a fuller room holds more of it.", (long)(MyScreenWidth / 2),
@@ -2350,6 +2689,25 @@ void world_side_panel_draw(void)
             float r[4];
             sp_role_rect(SpR_C0 + n, r);
             um_part(parts, &np, u, 0.0f, r[0] + offx, r[1] + offy, r[2], r[3], 12.0f, sp_creature_hash(n, rows));
+        }
+    } else if (sp_cq_ident(sp_info_menu))
+    {
+        /* (what the page shows as one key: a part is painted again when it or its own button's state changes) */
+        const uint32_t all = sp_cq_hash();
+        for (int n = 0; n < 13; n++)
+        {
+            float r[4];
+            sp_role_rect(SpR_P0 + n, r);
+            if (r[2] <= 0.0f)
+                continue;
+            um_part(parts, &np, u, 0.0f, r[0] + offx, r[1] + offy, r[2], r[3], 10.0f,
+                um_hash("p%d %08x %d %d %d", n, (unsigned)all, (int)sp_shown(SpR_P0 + n), (int)sp_hot(SpR_P0 + n), (int)sp_down(SpR_P0 + n)));
+        }
+        if (!sp_cq_stats_page())
+        {
+            float r[4];
+            sp_cq_portrait(r);
+            um_part(parts, &np, u, 0.0f, r[0] + offx, r[1] + offy, r[2], r[3], 10.0f, um_hash("pp %08x", (unsigned)all));
         }
     }
     if (um_host_parts(&sp_host, parts, np, full))

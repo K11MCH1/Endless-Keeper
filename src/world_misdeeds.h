@@ -139,6 +139,8 @@ TbBool world_misdeeds_load(const uint8_t *buf, size_t len);
 
 /** The Rap Sheet tab and the pencil. */
 void world_misdeeds_rap_background(struct GuiMenu *gmnu);
+/** True where the creature pages go on to the Rap Sheet after the fourth: endless worlds, not while possessing. */
+TbBool world_misdeeds_rap_page_shown(void);
 /** The Rap Sheet for the creature window (world_creature_window.c): the same record in the window's lettering, in the
  *  box (x, y, w, h) in pixels; upp is the window's scale (16: one pixel a unit). Its clickable rows and picks are the
  *  buttons of the panel's page (the same callbacks), placed where this draws them. */

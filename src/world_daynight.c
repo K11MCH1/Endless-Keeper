@@ -388,6 +388,14 @@ void world_daynight_draw(void)
         return; /* the launcher's background: the picture alone */
     if (!world_mode_active())
         return;
+    /* (not while a creature is taken over: the user, 2026-11-27; world_boss_draw is still asked, so the strip's
+       button goes with it) */
+    const unsigned char view = get_user_view_type(get_my_user());
+    if ((view == PVT_CreatureContrl) || (view == PVT_CreaturePasngr))
+    {
+        world_boss_draw(0, -1, -1);
+        return;
+    }
     dn_read_lengths();
     dn_prepare_art();
     if (dn_rim_data == NULL)

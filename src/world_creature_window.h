@@ -35,6 +35,9 @@ int world_creature_window_panel_menu(int menu);
 /** Every turn, on the machine that shows the game: the window is open exactly while this player looks at a creature
  *  with the Information tool. */
 void world_creature_window_turn(void);
+/** The pencil by a creature's name (renaming) on a Molten canvas. */
+struct UiCanvas;
+void world_window_pencil(struct UiCanvas *c, float x0, float y0, float x1, float y1, TbBool hot);
 
 /* The window's lettering, for what is drawn into it from elsewhere (the Rap Sheet, world_misdeeds.c).
  * Places are in pixels: (x, y) is the top left corner of the capitals themselves, `cap` their height, `w` the room

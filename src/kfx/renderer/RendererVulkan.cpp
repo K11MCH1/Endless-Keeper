@@ -51,7 +51,9 @@
 #endif
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -94,6 +96,9 @@ struct VkFrameData {
     int32_t overlay_y0 = 0;
     int32_t overlay_rows = 0;
     std::vector<unsigned char> overlay_rgba;
+    // Android: the possession controls (stick, attack, exit) as triangles drawn straight onto the frame:
+    // x, y (pixels, top row 0), r, g, b, a (straight alpha) per vertex, three vertices a triangle
+    std::vector<float> touch_tris;
 
     // Endless Keeper: the true-colour window of this frame (UIImage.h)
     UIImageFrame ui_image[UI_IMAGE_SLOTS];
@@ -162,6 +167,11 @@ struct RendererVulkan::Impl {
     VkImageObj    overlay_img;
     int32_t overlay_drawn_y0 = 0, overlay_drawn_y1 = 0;   // the surface's rows drawn on last time (cleared next)
     int32_t overlay_img_y0 = 0, overlay_img_y1 = 0;       // the image's rows that may not be empty
+    // the possession controls' triangles (overlay_color): set before init_ok, read by the game thread after it
+    VkProgram     tris_prog;
+    uint8_t       tris_layout = 0;
+    bool          tris_ok = false;
+    void DrawTouchTriangles(VkFrameData& fd);
 
     // Endless Keeper: the true-colour window (UIImage.h), drawn with overlay_prog. Game thread: the source.
     UIImageSource ui_image_src[UI_IMAGE_SLOTS];
@@ -197,16 +207,90 @@ struct RendererVulkan::Impl {
     void DrawAndroidOverlay(VkFrameData& fd);
 };
 
+#ifdef KFX_ANDROID
+// 2026-11-27: the app hands over the possession controls as triangles and draws only the FPS counter in software.
+// (Weak: an app without them keeps the whole overlay on the software picture.)
+extern "C" int KfxAndroidTouchOverlayGeometry(int out_w, const SDL_Vertex** verts, int* nverts, const int** indices,
+                                              int* nindices) __attribute__((weak));
+extern "C" int KfxAndroidDrawOverlayText(SDL_Renderer* renderer) __attribute__((weak));
+#endif
+
+// Game thread: an indexed triangle list -> x, y, r, g, b, a per vertex
+static void touch_tris_append(std::vector<float>& out, const SDL_Vertex* v, int nv, const int* idx, int ni)
+{
+    if (v == nullptr || idx == nullptr || nv <= 0 || ni < 3)
+        return;
+    out.reserve(out.size() + (size_t)ni * 6);
+    for (int i = 0; i + 2 < ni; i += 3)
+    {
+        if (idx[i] < 0 || idx[i] >= nv || idx[i + 1] < 0 || idx[i + 1] >= nv || idx[i + 2] < 0 || idx[i + 2] >= nv)
+            continue;
+        for (int j = 0; j < 3; j++)
+        {
+            const SDL_Vertex& p = v[idx[i + j]];
+            out.insert(out.end(), { p.position.x, p.position.y, p.color.r, p.color.g, p.color.b, p.color.a });
+        }
+    }
+}
+
+// Test switch KFX_VK_TEST_TRIS=1 (any platform): discs like the possession controls' in three corners, to check the
+// triangle path on a PC (KFX_RENDER_SHOTS shows them)
+static void touch_tris_test(std::vector<float>& out, int w, int h)
+{
+    static const int on = (getenv("KFX_VK_TEST_TRIS") != nullptr && atoi(getenv("KFX_VK_TEST_TRIS")) != 0) ? 1 : 0;
+    if (!on || w <= 0 || h <= 0)
+        return;
+    std::vector<SDL_Vertex> v;
+    std::vector<int> idx;
+    auto disc = [&](float cx, float cy, float inner, float outer, SDL_FColor c) {
+        const int segments = 48, base = (int)v.size();
+        if (inner <= 0) v.push_back({{cx, cy}, c, {0, 0}});
+        for (int i = 0; i <= segments; i++)
+        {
+            const float a = i * 6.2831853f / segments, cs = cosf(a), sn = sinf(a);
+            v.push_back({{cx + cs * outer, cy + sn * outer}, c, {0, 0}});
+            if (inner > 0) v.push_back({{cx + cs * inner, cy + sn * inner}, c, {0, 0}});
+        }
+        for (int i = 0; i < segments; i++)
+        {
+            if (inner <= 0) { idx.insert(idx.end(), {base, base + i + 1, base + i + 2}); continue; }
+            const int o = base + i * 2;
+            idx.insert(idx.end(), {o, o + 1, o + 2, o + 1, o + 3, o + 2});
+        }
+    };
+    const float r = h * 0.15f;
+    const SDL_FColor light{1, .93f, .8f, .45f}, shade{0, 0, 0, .28f};
+    disc(r * 1.4f, h - r * 1.4f, 0, r, shade);                       // the stick, bottom left
+    disc(r * 1.4f, h - r * 1.4f, r * .94f, r, light);
+    disc(w - r * 1.4f, h - r * 1.4f, 0, r, SDL_FColor{.6f, .08f, .03f, .5f}); // attack, bottom right
+    disc(w - r * 0.8f, r * 0.8f, 0, r * .5f, shade);                 // exit, top right
+    disc(w - r * 0.8f, r * 0.8f, r * .44f, r * .5f, light);
+    touch_tris_append(out, v.data(), (int)v.size(), idx.data(), (int)idx.size());
+}
+
 // Game thread. The Android app's touch overlay (KfxAndroidDrawOverlay) draws with an SDL_Renderer; the software
 // renderer path hands it the window's. Here it gets a software renderer over a transparent picture of the frame's
-// size, which the render thread lays over the frame.
+// size, which the render thread lays over the frame. The possession controls go as triangles instead (2026-11-27:
+// on the software picture they cost 10.5 ms a frame on a 2260x1200 phone, 60 -> 44 FPS while possessing).
 void RendererVulkan::Impl::DrawAndroidOverlay(VkFrameData& fd)
 {
     fd.overlay_on = false;
+    fd.touch_tris.clear();
+    if (tris_ok)
+        touch_tris_test(fd.touch_tris, fd.screen_w, fd.screen_h);
 #ifdef KFX_ANDROID
     const int w = fd.screen_w, h = fd.screen_h;
     if (w <= 0 || h <= 0)
         return;
+    const bool gpu_touch = tris_ok && (KfxAndroidTouchOverlayGeometry != nullptr) && (KfxAndroidDrawOverlayText != nullptr);
+    if (gpu_touch)
+    {
+        const SDL_Vertex* v = nullptr;
+        const int* idx = nullptr;
+        int nv = 0, ni = 0;
+        if (KfxAndroidTouchOverlayGeometry(w, &v, &nv, &idx, &ni))
+            touch_tris_append(fd.touch_tris, v, nv, idx, ni);
+    }
     if (overlay_surface == nullptr || overlay_surface->w != w || overlay_surface->h != h)
     {
         if (overlay_renderer) SDL_DestroyRenderer(overlay_renderer);
@@ -235,8 +319,17 @@ void RendererVulkan::Impl::DrawAndroidOverlay(VkFrameData& fd)
     if (overlay_drawn_y1 > overlay_drawn_y0)
         memset(px + (size_t)overlay_drawn_y0 * pitch, 0, (size_t)(overlay_drawn_y1 - overlay_drawn_y0) * pitch);
     SDL_SetRenderDrawBlendMode(overlay_renderer, SDL_BLENDMODE_BLEND);
-    KfxAndroidDrawOverlay(overlay_renderer);
+    int drew = 1;
+    if (gpu_touch)
+        drew = KfxAndroidDrawOverlayText(overlay_renderer); // (says whether it drew: no scan of an empty picture)
+    else
+        KfxAndroidDrawOverlay(overlay_renderer);
     SDL_FlushRenderer(overlay_renderer);
+    if (!drew)
+    {
+        overlay_drawn_y0 = overlay_drawn_y1 = 0;
+        return;
+    }
     int y0 = -1, y1 = -1;
     for (int y = 0; y < h; y++)
     {
@@ -520,6 +613,17 @@ void RendererVulkan::render_thread_init()
         };
         im.overlay_layout = im.overlay_prog.AddLayout(l);
     }
+    if (im.tris_prog.Create(&im.core, "overlay_color"))
+    {
+        VkVertexLayout l;
+        l.stride = 6 * sizeof(float);
+        l.attrs = {
+            { "a_pos",   VK_FORMAT_R32G32_SFLOAT,       0,                 0 },
+            { "a_color", VK_FORMAT_R32G32B32A32_SFLOAT, 2 * sizeof(float), 0 },
+        };
+        im.tris_layout = im.tris_prog.AddLayout(l);
+        im.tris_ok = true;
+    }
     im.init_ok = true;
     SYNCLOG("RendererVulkan: ready on '%s'%s", im.core.device_name.c_str(),
             im.want_present ? "" : " (no swapchain: the launcher's background)");
@@ -624,6 +728,7 @@ void RendererVulkan::render_thread_cleanup()
         im.zoomboxtiles.Shutdown();
         im.resource_mapper.ShutdownAll();
         im.overlay_prog.Destroy();
+        im.tris_prog.Destroy();
         im.core.DestroyImage(im.overlay_img);
         for (VkImageObj& img : im.ui_image_img)
             im.core.DestroyImage(img);
@@ -840,10 +945,33 @@ void RendererVulkan::FGExecuteCursor()
         im.cursor.DrawSnapshot(fd.cursor_snapshot);
 }
 
+// Render thread: the possession controls, straight onto the frame (SDL's blend: colour times alpha over the frame)
+void RendererVulkan::Impl::DrawTouchTriangles(VkFrameData& fd)
+{
+    const size_t floats = fd.touch_tris.size();
+    if (floats < 18 || !tris_prog.Valid() || fd.screen_w <= 0 || fd.screen_h <= 0)
+        return;
+    core.last_pass = "touch controls";
+    resource_mapper.BindScreen();
+    core.SetViewport(0.0f, 0.0f, (float)fd.screen_w, (float)fd.screen_h);
+    core.SetScissorEnabled(false);
+    tris_prog.Set2f("u_screen_size", (float)fd.screen_w, (float)fd.screen_h);
+    VkPipeState st;
+    st.Blend(VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
+    st.src_alpha = VK_BLEND_FACTOR_ONE; // the frame stays opaque (alpha 1), as under the overlay picture's ONE blend
+    st.layout_id = tris_layout;
+    if (!tris_prog.Bind(st))
+        return;
+    if (!core.BindVertices(fd.touch_tris.data(), floats * sizeof(float)))
+        return;
+    vkCmdDraw(core.Cmd(), (uint32_t)(floats / 6 / 3 * 3), 1, 0, 0);
+}
+
 void RendererVulkan::FGDrawDevToolsOverlay()
 {
     Impl& im = *m_impl;
     VkFrameData& fd = im.frames[im.render_idx];
+    im.DrawTouchTriangles(fd); // under the FPS counter, as the app draws them
     if (!fd.overlay_on || !im.overlay_prog.Valid() || fd.screen_w <= 0 || fd.screen_h <= 0)
         return;
     if (fd.overlay_rows <= 0 || fd.overlay_y0 < 0 || fd.overlay_y0 + fd.overlay_rows > fd.screen_h

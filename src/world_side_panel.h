@@ -29,6 +29,9 @@ void world_side_panel_draw(void);
 void world_side_panel_draw_over(void);
 /** True when the modern panel paints this button itself (the game's drawing of it is left out). */
 TbBool world_side_panel_paints(const struct GuiButton *gbtn);
+/** Whether a creature's page (GMnu_CREATURE_QUERY1-4) is painted by the side panel (its own background left out). */
+struct GuiMenu;
+TbBool world_side_panel_paints_page(const struct GuiMenu *gmnu);
 
 struct TbSprite;
 /** Whether the view's own pieces (the day's dial, the World Boss strip) are in the modern look (endless, modern). */

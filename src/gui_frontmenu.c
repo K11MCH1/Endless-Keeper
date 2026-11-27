@@ -33,6 +33,7 @@
 
 #include "keeperfx.hpp"
 #include "world_stream.h"
+#include "world_misdeeds.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -478,7 +479,7 @@ void update_query_menu()
         if (wheel_scrolled_down)
         {
             turn_off_menu(GMnu_CREATURE_QUERY4);
-            turn_on_menu(world_mode_active() ? GMnu_CREATURE_QUERY5 : GMnu_CREATURE_QUERY1);
+            turn_on_menu(world_misdeeds_rap_page_shown() ? GMnu_CREATURE_QUERY5 : GMnu_CREATURE_QUERY1);
             fake_button_click(0);
             update_wheel_scrolled();
         }

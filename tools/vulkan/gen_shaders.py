@@ -71,8 +71,29 @@ void main()
     fragColor = texture(u_image, v_uv); // premultiplied (drawn over transparent black)
 }
 """,
+    # the Android possession controls: coloured triangles in pixels (top row 0), straight alpha
+    "OVERLAY_COLOR_VERTEX_SHADER": """#version 330 core
+layout(location = 0) in vec2 a_pos;
+layout(location = 1) in vec4 a_color;
+uniform vec2 u_screen_size;
+out vec4 v_color;
+void main()
+{
+    gl_Position = vec4((a_pos.x / u_screen_size.x) * 2.0 - 1.0, 1.0 - (a_pos.y / u_screen_size.y) * 2.0, 0.0, 1.0);
+    v_color = a_color;
+}
+""",
+    "OVERLAY_COLOR_FRAGMENT_SHADER": """#version 330 core
+in vec4 v_color;
+out vec4 fragColor;
+void main()
+{
+    fragColor = v_color;
+}
+""",
 }
 PROGRAMS.append(("overlay_rgba", "OVERLAY_VERTEX_SHADER", "OVERLAY_FRAGMENT_SHADER"))
+PROGRAMS.append(("overlay_color", "OVERLAY_COLOR_VERTEX_SHADER", "OVERLAY_COLOR_FRAGMENT_SHADER"))
 
 def run(cmd, cwd):
     r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)

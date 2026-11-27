@@ -1599,6 +1599,8 @@ void draw_name_box(long x, long y, int width, struct Thing *thing)
 void gui_creature_query_background1(struct GuiMenu *gmnu)
 {
     SYNCDBG(19,"Starting");
+    if (world_side_panel_paints_page(gmnu)) /* endless, the modern side panel paints the page */
+        return;
     int units_per_px = (gmnu->width * 16 + 140 / 2) / 140;
     struct Thing* ctrltng = thing_get(get_user_state(get_displayed_user())->controlled_thing_idx);
     draw_name_box(gmnu->pos_x + 4*units_per_px/16, gmnu->pos_y + 262*units_per_px/16, gmnu->width, ctrltng);
@@ -1624,6 +1626,8 @@ void gui_creature_query_background1(struct GuiMenu *gmnu)
 void gui_creature_query_background2(struct GuiMenu *gmnu)
 {
     SYNCDBG(19,"Starting");
+    if (world_side_panel_paints_page(gmnu)) /* endless, the modern side panel paints the page */
+        return;
     int units_per_px = (gmnu->width * 16 + 140 / 2) / 140;
     struct Thing* ctrltng = thing_get(get_user_state(get_displayed_user())->controlled_thing_idx);
     int nambox_x = gmnu->pos_x + 4 * units_per_px / 16;

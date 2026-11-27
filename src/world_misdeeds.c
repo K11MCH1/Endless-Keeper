@@ -3487,6 +3487,14 @@ static void md_lesson_text(const struct MdRec *rec, const struct CreatureModelCo
             md_roman[min(rec->mastery[slot] + 1, MD_RANKS)]);
 }
 
+TbBool world_misdeeds_rap_page_shown(void)
+{
+    if (!world_mode_active())
+        return false;
+    const unsigned char view = get_user_view_type(get_my_user());
+    return (view != PVT_CreatureContrl) && (view != PVT_CreaturePasngr);
+}
+
 void world_misdeeds_rap_background(struct GuiMenu *gmnu)
 {
     gui_creature_query_background2(gmnu);

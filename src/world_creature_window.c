@@ -847,6 +847,12 @@ static void cwm_pencil(struct UiCanvas *c, float x0, float y0, float x1, float y
     ui_fill_path(c, rubber, c4, 1, UIC(206, 82, 64, 255));
 }
 
+/** The pencil the creature window paints by the name: also the side panel's creature pages. */
+void world_window_pencil(struct UiCanvas *c, float x0, float y0, float x1, float y1, TbBool hot)
+{
+    cwm_pencil(c, x0, y0, x1, y1, hot);
+}
+
 static void cwm_paint(struct Thing *thing)
 {
     struct UiCanvas *c = &cwm_host.canvas;

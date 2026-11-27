@@ -402,10 +402,11 @@ struct GuiButtonInit creature_query_buttons2[] = {
   {              -1,    BID_DEFAULT, 0, 0, NULL,                                NULL,                                               NULL,               0,   0,   0,   0,   0,  0,  0, NULL,                              0,   0,                     0,       {0},               0, NULL },
 };
 
-/** The fourth tab's "more" button: on to the Rap Sheet in endless worlds, else back to the first tab as ever. */
+/** The fourth tab's "more" button: on to the Rap Sheet in endless worlds (not while possessing), else back to the
+ *  first tab as ever. */
 static void query4_more_maintain(struct GuiButton *gbtn)
 {
-    gbtn->parent_menu = world_mode_active() ? &creature_query_menu5 : &creature_query_menu1;
+    gbtn->parent_menu = world_misdeeds_rap_page_shown() ? &creature_query_menu5 : &creature_query_menu1;
 }
 
 struct GuiButtonInit creature_query_buttons3[] = {

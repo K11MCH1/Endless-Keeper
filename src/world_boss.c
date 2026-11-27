@@ -2612,7 +2612,7 @@ static int wb_half_bar(int x, int y, int units, TbBool lit)
 void world_boss_draw(int x, int y, int w)
 {
     wb_strip_box[2] = 0; /* (not drawn: its button goes too) */
-    if (!world_mode_active() || (game.world_boss_until == 0))
+    if (!world_mode_active() || (game.world_boss_until == 0) || (w < 0)) /* (w < 0: hidden, its button gone) */
         return;
     const PlayerNumber me = my_player_number;
     const uint8_t mine = ((me >= 0) && (me < PLAYERS_MAX)) ? game.world_boss_joined[me] : 0;
