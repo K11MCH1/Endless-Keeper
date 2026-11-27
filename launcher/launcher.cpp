@@ -330,7 +330,7 @@ static float g_game_sfx_volume = 1.0f; /* the game's sound-effect volume (save\s
 /** The heartbeat's switch and volume from these launcher settings (the saved ones, or the Settings window's own). */
 static void heart_sound_from(const CfgFile &lcfg)
 {
-    const float percent = (float)std::max(0, std::min(100, atoi(lcfg.get("LAUNCHER_HEART_VOLUME", "100").c_str())));
+    const float percent = (float)std::max(0, std::min(100, atoi(lcfg.get("LAUNCHER_HEART_VOLUME", "15").c_str())));
     heart_sound_settings(!lcfg.flag("GAME_PARAM_NO_SOUND", false) && lcfg.flag("LAUNCHER_HEART_SOUND", true),
         g_game_sfx_volume * percent / 100.0f);
 }
@@ -1403,7 +1403,7 @@ static void settings_window(float w, float h)
             cfg_check(s_lcfg, "Animated effects", "LAUNCHER_EFFECTS", true);
             cfg_check(s_lcfg, "Heartbeat sound", "LAUNCHER_HEART_SOUND", true);
             ImGui::BeginDisabled(!s_lcfg.flag("LAUNCHER_HEART_SOUND", true));
-            cfg_int(s_lcfg, "Heartbeat volume", "LAUNCHER_HEART_VOLUME", 100, 0, 100, true, "%d%%");
+            cfg_int(s_lcfg, "Heartbeat volume", "LAUNCHER_HEART_VOLUME", 15, 0, 100, true, "%d%%");
             ImGui::EndDisabled();
             heart_sound_from(s_lcfg); /* heard as it is set; Cancel puts the saved one back */
             ImGui::Dummy(ImVec2(0, 6 * S));
