@@ -26,5 +26,7 @@ void start_mark(const char *what);
 std::string start_timing_line();
 /** A line in endlesskeeper-launcher.log, beside the game. */
 void engine_view_note(const char *text);
+/** The game's folder for that log, also when no background runs (--no-battle: its lines were lost, 2026-11-27). */
+void engine_view_set_dir(const std::wstring &game_dir);
 /** What is going on in the picture, in a line. */
 const char *engine_view_caption();

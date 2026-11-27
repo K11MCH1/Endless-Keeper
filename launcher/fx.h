@@ -16,6 +16,9 @@ float fx_time();
 float fx_ease_out(float t);
 /** The Dungeon Heart's beat (two pulses, then a rest): 0 at rest, 1 on the beat. The one rhythm all the glows keep. */
 float fx_heartbeat();
+/** Its rhythm: a beat every FX_BEAT_PERIOD seconds of fx_time(), the first pulse's peak FX_BEAT_FIRST into it (the
+    Soul Container's sound keeps the same: heart_sound.cpp). */
+const float FX_BEAT_PERIOD = 1.7f, FX_BEAT_FIRST = 0.10f;
 /** A value that follows its target (it is there after about `seconds`); the first time, and without motion, at once. */
 float fx_follow(ImGuiID id, float target, float seconds);
 

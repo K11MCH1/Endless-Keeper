@@ -38,6 +38,7 @@ WARN="-Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers"
 compile "$HERE/launcher.cpp" "$OBJ/launcher.o" "$WARN -Wno-unused-function"
 compile "$HERE/engine_view.cpp" "$OBJ/engine_view.o" "$WARN"
 compile "$HERE/fx.cpp" "$OBJ/fx.o" "$WARN"
+compile "$HERE/heart_sound.cpp" "$OBJ/heart_sound.o" "$WARN"
 compile "$HERE/net.cpp" "$OBJ/net.o" "$WARN"
 (cd "$HERE" && i686-w64-mingw32-windres -c 65001 launcher.rc -O coff -o "$OBJ/launcher_res.o")
 $CXX -o "$OUT/EndlessKeeper.exe" "${objs[@]}" "$OBJ/launcher_res.o" "$SDL/lib/libSDL3.dll.a"     -mwindows -static -lwinhttp -lbcrypt -lshell32 -ladvapi32 -luser32 -lgdi32 -limm32 -lole32 -loleaut32 -lversion -lsetupapi -luuid

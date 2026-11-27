@@ -156,6 +156,8 @@ bool WindowSystemSDL::GetCursorPosition(int* out_x, int* out_y) const
 {
     if (!m_window)
         return false;
+    if (world_attract_active())
+        return false; // the launcher's background has no pointer: the real one over its unseen window is not its own
     float wx = 0.0f, wy = 0.0f;
     SDL_GetMouseState(&wx, &wy);
     int px = 0, py = 0, pw = 0, ph = 0;
@@ -194,6 +196,8 @@ bool WindowSystemSDL::IsCursorInWindow() const
 {
     if (!m_window)
         return false;
+    if (world_attract_active())
+        return false; // (see GetCursorPosition)
     float gx = 0.0f, gy = 0.0f;
     SDL_GetGlobalMouseState(&gx, &gy);
     int wx = 0, wy = 0, ww = 0, wh = 0;

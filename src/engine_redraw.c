@@ -79,6 +79,7 @@
 #include "ui_safe_area.h"
 #include "world_keeper_panel.h"
 #include "world_side_panel.h"
+#include "world_attract.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -903,7 +904,8 @@ void redraw_display(void)
     local_state.display_needs_update = false;
     if (game.game_kind == GKind_NonInteractiveState)
       return;
-    if (game.small_map_state == 2)
+    /* the launcher's background (attract mode) has no pointer at all (launcher change 2026-11-27) */
+    if ((game.small_map_state == 2) || world_attract_active())
       set_pointer_graphic_none();
     else
       process_pointer_graphic();
@@ -968,6 +970,8 @@ void redraw_display(void)
         }
         LbTextDrawResized(pos_x, pos_y, chat_units_per_px, text);
     }
+    if (world_attract_active())
+        draw_spell_cost = 0; /* the launcher's background: nothing follows a pointer */
     if (draw_spell_cost) {
         int32_t cursor_x;
         int32_t cursor_y;
@@ -1056,14 +1060,19 @@ void redraw_display(void)
         LbTextDrawResized(0/pixel_size, 0/pixel_size, tx_units_per_px, text);
         LbTextSetWindow(0/pixel_size, 0/pixel_size, MyScreenWidth/pixel_size, MyScreenHeight/pixel_size);
     }
-    world_misdeeds_draw_overlay(); /* endless worlds: the hovered creature's name above its flower */
+    /* the launcher's background (attract mode): no hover name, tooltip or pointer of any kind over the picture - the
+       hidden game's mouse sat wherever the real pointer was over its unseen window (launcher change 2026-11-27) */
+    const TbBool pointer_shown = !world_attract_active();
+    if (pointer_shown)
+        world_misdeeds_draw_overlay(); /* endless worlds: the hovered creature's name above its flower */
     draw_eastegg();
-    if (map_fade == PVT_None) {
+    if ((map_fade == PVT_None) && pointer_shown) {
         RendererBeginOverlayCapture(OVERLAY_CAPTURE_TOOLTIP);
         draw_tooltip();
         RendererEndOverlayCapture(OVERLAY_CAPTURE_TOOLTIP);
     }
-    observer_draw_faded_cursor();
+    if (pointer_shown)
+        observer_draw_faded_cursor();
   //show_onscreen_msg(8, "Physical(%d,%d) Graphics(%d,%d) Lens(%d,%d)", (int)RendererPhysicalWidth(), (int)lbDisplay.PhysicalScreenHeight, (int)RendererScreenHeight(), (int)RendererScreenWidth(), (int)eye_lens_width, (int)eye_lens_height);
     SYNCDBG(7,"Finished");
 }

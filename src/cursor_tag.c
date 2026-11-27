@@ -35,6 +35,7 @@
 #include "thing_creature.h"
 #include "packets.h"
 #include "local_camera.h"
+#include "world_attract.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -49,6 +50,8 @@ extern "C" {
 /******************************************************************************/
 TbBool should_draw_cursor_box(NetUserId user)
 {
+    if (world_attract_active())
+        return false; /* the launcher's background has no pointer, so no box under it either */
     if (user != get_displayed_user() || game.small_map_state == 2 || is_observer_camera_active()) {
         return false;
     }

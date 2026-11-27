@@ -25,6 +25,7 @@
 #include <vector>
 #include "engine_view.h"
 #include "fx.h"
+#include "heart_sound.h"
 #include "net.h"
 #include "../src/ver_defs.h"
 
@@ -323,6 +324,16 @@ static bool t_fake_install = false; /* test key "fakeinstall=1": the update box 
 static int t_look = -1;             /* test key "look=<0|1|2>": that look, whatever the settings say */
 static bool t_still = false;        /* test key "fx=0": no motion */
 static bool g_restyle = false;      /* the look changed: the style is set again */
+static bool g_mute_unfocused = false; /* keeperfx.cfg's "mute audio when not focused": the heartbeat too */
+static float g_game_sfx_volume = 1.0f; /* the game's sound-effect volume (save\settings.toml), 0 .. 1 */
+
+/** The heartbeat's switch and volume from these launcher settings (the saved ones, or the Settings window's own). */
+static void heart_sound_from(const CfgFile &lcfg)
+{
+    const float percent = (float)std::max(0, std::min(100, atoi(lcfg.get("LAUNCHER_HEART_VOLUME", "100").c_str())));
+    heart_sound_settings(!lcfg.flag("GAME_PARAM_NO_SOUND", false) && lcfg.flag("LAUNCHER_HEART_SOUND", true),
+        g_game_sfx_volume * percent / 100.0f);
+}
 static int look_from(const std::string &name);
 static float box_alpha(const char *name);
 
@@ -334,6 +345,12 @@ static void apply_look()
     SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animations, 0);
     fx_motion = (g_look != LOOK_CLASSIC) && g_lcfg.flag("LAUNCHER_EFFECTS", true) && (animations != FALSE) && !t_still;
     g_restyle = true;
+    /* the Soul Container's beat with the glows: the game's sound on, the launcher's switch on, at the game's own
+       sound-effect volume times the launcher's heartbeat volume (the game's is read again when the game has closed:
+       it may have been changed there) */
+    g_game_sfx_volume = heart_sound_game_volume(g_game_dir);
+    heart_sound_from(g_lcfg);
+    g_mute_unfocused = g_cfg.flag("MUTE_AUDIO_ON_FOCUS_LOST", false);
 }
 
 static ImFont *head_font()
@@ -1097,9 +1114,15 @@ static void cfg_text(CfgFile &f, const char *label, const char *key)
 }
 
 static std::vector<std::string> g_resolutions;
+static bool g_resolutions_listed = false;
 
+/** Asking Windows for every display's modes takes ~0.3 s: done while the window waits for the background's first
+    scene, or (no background) when the settings first show them - never before the window (2026-11-27). */
 static void list_resolutions()
 {
+    if (g_resolutions_listed)
+        return;
+    g_resolutions_listed = true;
     std::vector<std::pair<int, int>> modes = {{640, 480}, {800, 600}, {1024, 768}, {1280, 720}, {1280, 1024}, {1366, 768}, {1600, 900},
         {1920, 1080}, {2560, 1440}, {3840, 2160}};
     int count = 0;
@@ -1160,6 +1183,7 @@ static void resolution_row(const char *label, std::string &token, bool optional)
     ImGui::BeginDisabled((kind != 2) && (kind != 3));
     if (ImGui::BeginCombo("##res", ((kind == 2) || (kind == 3)) ? res.c_str() : "-"))
     {
+        list_resolutions();
         for (const std::string &r : g_resolutions)
             if (ImGui::Selectable(r.c_str(), r == res))
             {
@@ -1377,6 +1401,11 @@ static void settings_window(float w, float h)
             /* the looks (test branch 2026-11-23), and their motion: off = the still look */
             cfg_combo(s_lcfg, "Launcher look", "LAUNCHER_LOOK", "MOLTEN", {{"MOLTEN", "Molten"}, {"OBSIDIAN", "Obsidian"}, {"CLASSIC", "Classic"}});
             cfg_check(s_lcfg, "Animated effects", "LAUNCHER_EFFECTS", true);
+            cfg_check(s_lcfg, "Heartbeat sound", "LAUNCHER_HEART_SOUND", true);
+            ImGui::BeginDisabled(!s_lcfg.flag("LAUNCHER_HEART_SOUND", true));
+            cfg_int(s_lcfg, "Heartbeat volume", "LAUNCHER_HEART_VOLUME", 100, 0, 100, true, "%d%%");
+            ImGui::EndDisabled();
+            heart_sound_from(s_lcfg); /* heard as it is set; Cancel puts the saved one back */
             ImGui::Dummy(ImVec2(0, 6 * S));
             if (ImGui::Button(titled("Show launcher command line options").c_str()))
                 g_show_options = true;
@@ -1455,7 +1484,10 @@ static void settings_window(float w, float h)
         ImGui::CloseCurrentPopup();
     }
     if (button("cancel", T("Cancel"), ImVec2(right - bs.x, base.y + 4 * S), bs, false, 18 * S))
+    {
+        heart_sound_from(g_lcfg); /* (the heartbeat as saved, not as the window had it) */
         ImGui::CloseCurrentPopup();
+    }
     if (g_show_options)
     {
         ImGui::OpenPopup(titled("Launcher command line options").c_str());
@@ -2148,6 +2180,7 @@ int main(int, char **)
             return 0;
         }
     }
+    engine_view_set_dir(g_game_dir);
     /* the background's game first: its load is most of the wait for the window, and needs nothing of the launcher's */
     const bool battle_started = !opt_no_battle && engine_view_start(game_exe(), g_game_dir);
     if (!SDL_Init(SDL_INIT_VIDEO))
@@ -2248,8 +2281,6 @@ int main(int, char **)
     g_battle = battle_started;
     if (g_battle)
         engine_view_attach(g_renderer);
-    list_resolutions();
-    start_mark("resolutions");
     {
         const char *test = getenv("EKL_TEST");
         std::string spec = (test != nullptr) ? test : "";
@@ -2275,6 +2306,7 @@ int main(int, char **)
                 else if (key == "fx") t_still = (atoi(val.c_str()) == 0);
                 else if (key == "hover") t_hover = val;
                 else if (key == "fakeinstall") t_fake_install = true;
+                else if (key == "beatlog") heart_sound_test_log(atoi(val.c_str()) != 0);
             }
             at = end + 1;
         }
@@ -2307,13 +2339,15 @@ int main(int, char **)
         }
         if (g_game_process != nullptr)
         {
-            /* the game is on: the launcher waits, hidden, and comes back when it has closed */
+            /* the game is on: the launcher waits, hidden and silent, and comes back when it has closed */
+            heart_sound_frame(false, 0);
             if (WaitForSingleObject(g_game_process, 200) == WAIT_OBJECT_0)
             {
                 CloseHandle(g_game_process);
                 g_game_process = nullptr;
                 engine_view_note("Play: the game has closed; the launcher is back");
                 g_cfg.load(g_cfg.path);
+                apply_look(); /* (the sound-effect volume may have been changed in the game) */
                 engine_view_resume();
                 g_intro = 0; /* the window comes back as it first came */
                 if (!t_hidden)
@@ -2344,12 +2378,18 @@ int main(int, char **)
                 g_intro = 0;
             } else
             {
+                if (!g_resolutions_listed)
+                {
+                    list_resolutions(); /* (the wait for the background's first scene is longer: it costs nothing here) */
+                    start_mark("resolutions");
+                }
                 SDL_Delay(15);
                 continue;
             }
         }
         if ((SDL_GetWindowFlags(g_window) & SDL_WINDOW_MINIMIZED) != 0)
         {
+            heart_sound_frame(false, 0);
             SDL_Delay(100);
             last = SDL_GetPerformanceCounter();
             continue;
@@ -2368,6 +2408,7 @@ int main(int, char **)
         const float dt = (float)((double)(now - last) / (double)SDL_GetPerformanceFrequency());
         last = now;
         fx_frame(dt);
+        heart_sound_frame(!g_mute_unfocused || ((SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS) != 0), dt);
         g_intro += std::min(dt, 0.05f); /* (a slow first frame doesn't eat the entrance) */
         if (g_look == LOOK_MOLTEN)
             fx_target_begin(pw, ph); /* its glass needs the frame as a picture */
@@ -2415,8 +2456,20 @@ int main(int, char **)
             }
         }
         SDL_RenderPresent(g_renderer);
+        static int frames_shown = 0;
+        if (++frames_shown == 2)
+        {
+            /* the sound device once the window has its first pictures: its start (~tens of ms) never holds the window */
+            const Uint64 at = SDL_GetPerformanceCounter();
+            heart_sound_start(g_game_dir);
+            char line[96];
+            snprintf(line, sizeof(line), "Launcher: the sound device started in %.1f ms",
+                (double)(SDL_GetPerformanceCounter() - at) * 1000.0 / (double)SDL_GetPerformanceFrequency());
+            engine_view_note(line);
+        }
     }
     g_cancel = true;
+    heart_sound_shutdown();
     engine_view_shutdown();
     fx_shutdown();
     ImGui_ImplSDLRenderer3_Shutdown();

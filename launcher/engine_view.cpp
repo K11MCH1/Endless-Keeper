@@ -376,6 +376,11 @@ void engine_view_note(const char *text)
     note("%s", text);
 }
 
+void engine_view_set_dir(const std::wstring &game_dir)
+{
+    g_dir = game_dir;
+}
+
 const char *engine_view_caption()
 {
     return ((g_shared != nullptr) && g_have_picture) ? g_shared->caption : "";

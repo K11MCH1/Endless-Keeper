@@ -94,8 +94,8 @@ float fx_heartbeat()
 {
     if (!fx_motion)
         return 0.35f;
-    const float p = fmodf(g_time, 1.7f);
-    const float a = (p - 0.10f) / 0.085f, b = (p - 0.40f) / 0.11f;
+    const float p = fmodf(g_time, FX_BEAT_PERIOD);
+    const float a = (p - FX_BEAT_FIRST) / 0.085f, b = (p - (FX_BEAT_FIRST + 0.30f)) / 0.11f;
     return clamp01(expf(-a * a) + 0.62f * expf(-b * b));
 }
 
