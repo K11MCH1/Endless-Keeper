@@ -669,6 +669,19 @@ public final class LauncherActivity extends Activity {
         @JavascriptInterface
         public void open(String url) { ui.post(() -> openExternal(url)); }
 
+        /** Settings, "Download" beside the creator's set pieces: fetches them now (it says when they are the latest). */
+        @JavascriptInterface
+        public String downloadSetPieces() {
+            if (PrepareService.isRunning())
+                return "A task is already running.";
+            if (!new File(Paths.kfx(LauncherActivity.this), "fxdata").isDirectory())
+                return "Prepare the game first.";
+            settings.set("official_set_pieces", "1");
+            askNotifications();
+            PrepareService.start(LauncherActivity.this, new Intent().putExtra(PrepareService.EXTRA_TASK, "setpieces"));
+            return "";
+        }
+
         /** Text of a bundled licence (assets/licenses/name), for the Credits tab. */
         @JavascriptInterface
         public String license(String name) {

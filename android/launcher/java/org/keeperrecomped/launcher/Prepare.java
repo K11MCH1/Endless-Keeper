@@ -10,6 +10,7 @@ import android.webkit.MimeTypeMap;
 import android.net.Uri;
 import android.util.Log;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -668,7 +669,16 @@ final class Prepare {
         copyDkSubset(Paths.dk(ctx), Paths.kfx(ctx));
         if ("ALPHA".equals(settings.get("release_channel")))
             applyAlpha(60, 85);
-        applyEndless(85, 95);
+        applyEndless(85, 93);
+        if (settings.bool("official_set_pieces")) {
+            try {
+                AppLog.i("Set pieces: " + applySetPieces(93, 95));
+            } catch (Cancelled c) {
+                throw c;
+            } catch (Exception e) {
+                AppLog.w("Set pieces not updated: " + e); // the update itself is done
+            }
+        }
         step(95, 100, "Writing settings");
         fromTemplates(Paths.kfx(ctx));
         ConfigWriter.write(Paths.kfx(ctx), settings);
@@ -769,6 +779,133 @@ final class Prepare {
         ConfigWriter.write(kfx, settings);
         syncClassic(ctx);
         base = 100; span = 0; label = "Ready";
+        emit(1, null);
+    }
+
+    // ---- the creator's set pieces (2026-11-25) ----
+
+    static final String ENDLESS_API = "https://api.github.com/repos/K11MCH1/Endless-Keeper/releases?per_page=30";
+
+    /** The newest release's set pieces zip as {url, digest ("sha256:..."), release name}; null when none has them. */
+    static String[] setPiecesAsset() throws Exception {
+        JSONArray rels = new JSONArray(Net.getString(ENDLESS_API));
+        for (int i = 0; i < rels.length(); i++) {
+            JSONObject r = rels.getJSONObject(i);
+            if (r.optBoolean("draft"))
+                continue;
+            JSONArray as = r.optJSONArray("assets");
+            for (int k = 0; as != null && k < as.length(); k++) {
+                JSONObject a = as.getJSONObject(k);
+                String n = a.optString("name");
+                if (n.startsWith("endless-keeper-setpieces") && n.endsWith(".zip"))
+                    return new String[]{a.optString("browser_download_url"), a.optString("digest"),
+                            r.optString("name", r.optString("tag_name"))};
+            }
+        }
+        return null;
+    }
+
+    static String sha256(File f) throws Exception {
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+        try (InputStream in = new FileInputStream(f)) {
+            byte[] buf = new byte[1 << 16];
+            for (int n; (n = in.read(buf)) > 0; )
+                md.update(buf, 0, n);
+        }
+        StringBuilder sb = new StringBuilder();
+        for (byte b : md.digest())
+            sb.append(String.format(Locale.ROOT, "%02x", b));
+        return sb.toString();
+    }
+
+    static int countPieces(File dir) {
+        int n = 0;
+        File[] list = dir.listFiles();
+        for (int i = 0; list != null && i < list.length; i++)
+            if (list[i].isDirectory() && new File(list[i], "setpiece.cfg").isFile())
+                n++;
+        return n;
+    }
+
+    /**
+     * The creator's set pieces into levels/endless_cfgs/setpieces/official (replaced as a whole; the player's own
+     * pieces beside it are never touched), unless the copy there is the newest release's already: GitHub's checksum
+     * of the zip is kept in official/release.sha256. Returns what to tell the player.
+     */
+    String applySetPieces(int from, int to) throws Exception {
+        File kfx = Paths.kfx(ctx);
+        File official = new File(kfx, "levels/endless_cfgs/setpieces/official");
+        File stamp = new File(official, "release.sha256");
+        step(from, from, "Looking for the creator's set pieces");
+        String[] asset = setPiecesAsset();
+        if (asset == null)
+            return "No release has set pieces yet.";
+        if (!asset[1].isEmpty() && stamp.isFile()
+                && asset[1].equalsIgnoreCase(new String(Files.readAllBytes(stamp.toPath()), "UTF-8").trim()))
+            return "You have the latest set-pieces already.";
+        File archive = new File(Paths.downloads(ctx), "endless-keeper-setpieces.zip");
+        int mid = from + (to - from) * 2 / 3;
+        step(from, mid, "Downloading the set pieces of " + asset[2]);
+        Net.download(asset[0], archive, -1, (done, total) -> {
+            emit(total > 0 ? (double) done / total : 0, mb(done) + " / " + (total > 0 ? mb(total) : "?"));
+            return !cancelled;
+        });
+        if (asset[1].startsWith("sha256:") && !asset[1].substring(7).equalsIgnoreCase(sha256(archive))) {
+            discard(archive);
+            throw new IOException("The set pieces download is damaged (its checksum is wrong).");
+        }
+        step(mid, to, "Installing the set pieces");
+        File fresh = new File(official.getParentFile(), "official.new");
+        deleteTree(fresh);
+        try (ZipFile zip = new ZipFile(archive)) {
+            List<String> names = new ArrayList<>();
+            for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
+                ZipEntry z = e.nextElement();
+                if (!z.isDirectory())
+                    names.add(z.getName().replace('\\', '/'));
+            }
+            String strip = commonPrefix(names);
+            if (!strip.isEmpty() && names.contains(strip + "setpiece.cfg"))
+                strip = ""; /* the zip's one top folder is itself a piece */
+            for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
+                ZipEntry z = e.nextElement();
+                check();
+                if (z.isDirectory())
+                    continue;
+                String rel = z.getName().replace('\\', '/').substring(strip.length());
+                if (!safeRelative(rel))
+                    continue;
+                File out = new File(fresh, rel);
+                out.getParentFile().mkdirs();
+                try (InputStream in = zip.getInputStream(z)) {
+                    Files.copy(in, out.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+        }
+        int n = countPieces(fresh);
+        if (n <= 0) {
+            deleteTree(fresh);
+            throw new IOException("The set pieces download holds no set pieces.");
+        }
+        deleteTree(official);
+        if (!fresh.renameTo(official))
+            throw new IOException("The set pieces could not be put in place.");
+        try (OutputStream o = new FileOutputStream(stamp)) {
+            o.write(asset[1].getBytes("UTF-8"));
+        }
+        discard(archive);
+        return "The set pieces of " + asset[2] + " are installed (" + n + ").";
+    }
+
+    /** Set pieces task (Settings, Download beside the option). */
+    void setPieces() throws Exception {
+        task = "setpieces";
+        if (!new File(Paths.kfx(ctx), "fxdata").isDirectory())
+            throw new IOException("Prepare the game first.");
+        String result = applySetPieces(0, 98);
+        step(98, 100, "Writing settings");
+        ConfigWriter.write(Paths.kfx(ctx), settings);
+        base = 100; span = 0; label = result;
         emit(1, null);
     }
 

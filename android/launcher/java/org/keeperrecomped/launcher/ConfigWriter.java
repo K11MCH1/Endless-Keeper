@@ -54,6 +54,7 @@ final class ConfigWriter {
         v.put("MAX_ZOOM_DISTANCE", Integer.toString(s.integer("max_zoom")));
         v.put("PARCHMENT_MAP_FADE", onOff(s.bool("parchment_map_fade")));
         v.put("CENSORSHIP", onOff(s.bool("censorship")));
+        v.put("OFFICIAL_SET_PIECES", onOff(s.bool("official_set_pieces")));
         v.put("FLEE_BUTTON_DEFAULT", onOff(s.bool("auto_flee")));
         v.put("IMPRISON_BUTTON_DEFAULT", onOff(s.bool("auto_imprison")));
         StringBuilder startup = new StringBuilder();

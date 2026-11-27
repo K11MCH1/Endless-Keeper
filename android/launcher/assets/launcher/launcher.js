@@ -352,6 +352,7 @@ function field(d) {
   } else {
     control = `<input type="text" data-key="${d.key}" value="${esc(d.value)}" spellcheck="false" autocapitalize="off">`;
   }
+  if (d.key === 'official_set_pieces') control = `<div class="row-buttons">${control}<button class="btn small" data-setpieces="1">Download</button></div>`;
   return `<div class="field"><div class="lbl">${esc(d.label)}${help}</div>${control}</div>`;
 }
 
@@ -378,6 +379,7 @@ document.addEventListener('click', (e) => {
   if (t.dataset.refresh === 'news') { loadNews(); return; }
   if (t.dataset.refresh === 'workshop') { loadWorkshop(); return; }
   if (t.dataset.license) { openModal(t.dataset.license, bridge ? bridge.license(t.dataset.license) : ''); return; }
+  if (t.dataset.setpieces) { const err = bridge ? bridge.downloadSetPieces() : 'Preview'; if (err) toast(err); else { renderForms(); startedTask(''); showTab('play'); } return; }
 });
 document.addEventListener('change', (e) => { if (e.target.dataset && e.target.dataset.key) onSettingChange(e.target); });
 document.addEventListener('input', (e) => {

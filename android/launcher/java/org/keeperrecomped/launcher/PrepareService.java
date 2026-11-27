@@ -94,6 +94,8 @@ public final class PrepareService extends Service {
                 prepare.update();
             } else if ("endless".equals(kind)) {
                 prepare.endless();
+            } else if ("setpieces".equals(kind)) {
+                prepare.setPieces();
             } else if ("build".equals(kind)) {
                 prepare.buildEngine();
             } else if ("version".equals(kind)) {

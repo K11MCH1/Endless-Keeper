@@ -116,6 +116,8 @@ final class Settings {
         bool("gameplay", "Game", "cheats", false, "Enable Cheats",
                 "Engine -alex option. Cheat menu and console commands need a keyboard for now.");
         bool("gameplay", "Game", "censorship", false, "Enable Censorship", null);
+        bool("gameplay", "Endless Keeper", "official_set_pieces", false, "Download and use the creator's set pieces",
+                "Maps the creator places in endless worlds. Off by default; when on, they come with each update. Download fetches them now.");
         bool("gameplay", "Game", "auto_flee", false, "Automatically enable flee", null);
         bool("gameplay", "Game", "auto_imprison", false, "Automatically enable imprison", null);
         integer("gameplay", "Game", "max_zoom", 60, 0, 120, "Max. zoom distance", "Default 60.");

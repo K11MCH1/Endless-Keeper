@@ -305,12 +305,26 @@ jobs:
           } > notes.md
           cat notes.md
 
+      # the creator's set pieces (setpieces/<piece>/: a map's files and its setpiece.cfg), one zip per release. The
+      # same pieces make the same zip byte for byte (fixed times, sorted names), so its GitHub checksum stays the same
+      # and the launcher can tell a player they have the latest already
+      - name: Set pieces
+        run: |
+          set -euo pipefail
+          if [ -d setpieces ] && [ -n "$(find setpieces -mindepth 2 -name setpiece.cfg -print -quit)" ]; then
+            find setpieces -exec touch -h -d '2000-01-01T00:00:00Z' {} +
+            ( cd setpieces && find . -type f ! -name '*.md' | LC_ALL=C sort | TZ=UTC zip -X -D -q -9 -@ "../out/endless-keeper-setpieces-$FILE.zip" )
+            unzip -l "out/endless-keeper-setpieces-$FILE.zip" | tail -1
+          else
+            echo "No set pieces in setpieces/: none attached"
+          fi
+
       - name: Publish
         id: publish
         run: |
           set -euo pipefail
           shopt -s nullglob
-          files=(out/EndlessKeeperSetup-*.exe out/endless-keeper-*-patch.zip out/endless-keeper-*-linux_x86_64.tar.gz out/EndlessKeeper-*.apk)
+          files=(out/EndlessKeeperSetup-*.exe out/endless-keeper-*-patch.zip out/endless-keeper-*-linux_x86_64.tar.gz out/EndlessKeeper-*.apk out/endless-keeper-setpieces-*.zip)
           ls -la "${files[@]}"
           flags=()
           [ "$STAGE" = Stable ] || flags+=(--prerelease)
