@@ -61,6 +61,10 @@ echo "== Unicode fonts"
   rm -f merged12.hex wenquanyi.hex unifont12.hex
   mkdir -p ../../pkg/fxdata && mv font*.fxfont ../../pkg/fxdata/ )
 
+echo "== the modern UI's improved icons (config/fxdata/ui_icons -> fxdata/ui_icons)"
+mkdir -p pkg/fxdata/ui_icons
+cp -r config/fxdata/ui_icons/. pkg/fxdata/ui_icons/
+
 echo "== Endless Mode stub level"
 mkdir -p pkg/levels/endless
 find levels/endless -maxdepth 1 -type f ! -name '*.txt' -exec cp {} pkg/levels/endless/ \;

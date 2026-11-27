@@ -133,10 +133,11 @@ struct SpCrRow;
 static const struct SpQuery *sp_q_now;   /* the Information or Creatures tab's state as painted this frame */
 static const struct SpCrRow *sp_rows_now;
 
+/** The modern side panel: in every level (endless worlds, campaigns, map packs, multiplayer) unless the window style
+ *  is Classic; the day's dial and the World Boss strip are endless pieces of their own. */
 TbBool world_side_panel_on(void)
 {
-    return world_mode_active() && (window_style != WinStyle_Classic) && !netstate_dedicated() &&
-        (menu_id_to_number(GMnu_MAIN) >= 0);
+    return (window_style != WinStyle_Classic) && !netstate_dedicated() && (menu_id_to_number(GMnu_MAIN) >= 0);
 }
 
 static int sp_px(float v)
@@ -2412,7 +2413,7 @@ static struct UmHost sp_boss_host;  /* slot 7 */
 
 TbBool world_side_hud_modern(void)
 {
-    return world_mode_active() && (window_style != WinStyle_Classic) && !netstate_dedicated();
+    return (window_style != WinStyle_Classic) && !netstate_dedicated(); /* (every level, as the side panel) */
 }
 
 /** The scale of the view's pieces: the side panel's (its menu's width), else the game's UI unit. */
@@ -3668,8 +3669,9 @@ static void sp_icon_dump(void)
 
 /******************************************************************************/
 /* Edited icons: a PNG at the icon's place (the names KFX_UI_ICONDUMP writes) is drawn instead of the game's sprite as cut
-   here - in fxdata/ui_icons/<folder>/<name>.png, or (on the PC, where the user edits them) in
-   new ui/Modern UI icons/<folder>/<name>.png in the game's folder. Looked for once per icon. */
+   here - from new ui/Modern UI icons/<folder>/<name>.png in the game's folder (on the PC, where the user edits them),
+   else from fxdata/ui_icons/<folder>/<name>.png (the copies the release ships, config/fxdata/ui_icons). Looked for once
+   per icon. */
 
 #define SP_OV_MAX 1024
 struct SpOverride {
@@ -3784,12 +3786,12 @@ unsigned char *world_ui_icon_override(int kind, long spr, int *w, int *h)
         if ((sp_ov[i].kind != kind) || (sp_ov[i].spr != spr))
             continue;
         char rel[260];
-        snprintf(rel, sizeof(rel), "ui_icons/%s.png", sp_ov[i].rel);
-        unsigned char *px = sp_png_read(prepare_file_path(FGrp_FxData, rel), w, h);
+        snprintf(rel, sizeof(rel), "new ui/Modern UI icons/%s.png", sp_ov[i].rel);
+        unsigned char *px = sp_png_read(rel, w, h); /* (the user's edits first: the package's copies may be older) */
         if (px == NULL)
         {
-            snprintf(rel, sizeof(rel), "new ui/Modern UI icons/%s.png", sp_ov[i].rel);
-            px = sp_png_read(rel, w, h);
+            snprintf(rel, sizeof(rel), "ui_icons/%s.png", sp_ov[i].rel);
+            px = sp_png_read(prepare_file_path(FGrp_FxData, rel), w, h);
         }
         if (px != NULL)
             SYNCLOG("UI icons: %s.png used (%dx%d)", sp_ov[i].rel, *w, *h);
