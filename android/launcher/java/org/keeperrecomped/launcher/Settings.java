@@ -94,6 +94,9 @@ final class Settings {
         bool("graphics", "Interface", "safe_bars", false, "Black bars at the screen edges",
                 "Draws the whole game inside the rounded screen corners and the camera hole, with black bars beside it, "
                         + "so nothing is cut off. Screen safe area is not needed then.");
+        choice("graphics", "Interface", "window_style", "MODERN", "Window style",
+                "Modern: the side panel, menus and windows in the new look. Classic: the original look everywhere.",
+                "MODERN|Modern", "CLASSIC|Classic");
         integer("graphics", "Interface", "ui_scale", 100, 50, 300, "UI scale (%)",
                 "Size of the in-game side panel, menus, messages and windows. Larger is easier to read and tap on a phone; "
                         + "the 3D view and the main menu keep their size.");

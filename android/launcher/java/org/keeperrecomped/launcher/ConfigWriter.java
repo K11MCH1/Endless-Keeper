@@ -64,6 +64,7 @@ final class ConfigWriter {
             startup.append(startup.length() > 0 ? " " : "").append("INTRO");
         v.put("STARTUP", startup.toString());
         v.put("CREATURE_STATUS_SIZE", Integer.toString(s.integer("creature_status_size")));
+        v.put("WINDOW_STYLE", "CLASSIC".equals(s.get("window_style")) ? "CLASSIC" : "MODERN");
         v.put("UI_SCALE", Integer.toString(s.integer("ui_scale")));
         v.put("HAND_SIZE", Integer.toString(s.integer("hand_size")));
         v.put("LINE_BOX_SIZE", Integer.toString(s.integer("line_box_size")));
