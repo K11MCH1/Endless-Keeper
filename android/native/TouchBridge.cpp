@@ -931,57 +931,76 @@ extern "C" void KfxAndroidPossessionLook(float* x, float* y) {
     *y = possessing && h > 0 ? lookY/(h*.5f)*2.4f : 0;
     lookX = lookY = 0;
 }
-static void disc(SDL_Renderer* r, SDL_FPoint c, float inner, float outer, SDL_FColor colour) {
+// The possession controls as one list of triangles (2026-11-27): the SDL_Renderer path draws it with one
+// SDL_RenderGeometry call, the Vulkan renderer takes it as it is and draws it on the GPU (on the software picture
+// it cost 10.5 ms a frame on a 2260x1200 phone).
+static std::vector<SDL_Vertex> touchVerts;
+static std::vector<int> touchIndex;
+static void disc(SDL_FPoint c, float inner, float outer, SDL_FColor colour) {
     constexpr int segments = 48;
-    std::vector<SDL_Vertex> v; std::vector<int> index;
-    if (inner <= 0) v.push_back({c, colour, {0,0}});
+    const int base = static_cast<int>(touchVerts.size());
+    if (inner <= 0) touchVerts.push_back({c, colour, {0,0}});
     for (int i = 0; i <= segments; i++) {
         float a = i*6.2831853f/segments, cs = std::cos(a), sn = std::sin(a);
-        v.push_back({{c.x+cs*outer, c.y+sn*outer}, colour, {0,0}});
-        if (inner > 0) v.push_back({{c.x+cs*inner, c.y+sn*inner}, colour, {0,0}});
+        touchVerts.push_back({{c.x+cs*outer, c.y+sn*outer}, colour, {0,0}});
+        if (inner > 0) touchVerts.push_back({{c.x+cs*inner, c.y+sn*inner}, colour, {0,0}});
     }
     for (int i = 0; i < segments; i++) {
-        if (inner <= 0) { index.insert(index.end(), {0, i+1, i+2}); continue; }
-        int o = i*2; index.insert(index.end(), {o, o+1, o+2, o+1, o+3, o+2});
+        if (inner <= 0) { touchIndex.insert(touchIndex.end(), {base, base+i+1, base+i+2}); continue; }
+        int o = base+i*2; touchIndex.insert(touchIndex.end(), {o, o+1, o+2, o+1, o+3, o+2});
     }
-    SDL_RenderGeometry(r, nullptr, v.data(), static_cast<int>(v.size()), index.data(), static_cast<int>(index.size()));
 }
-static void bar(SDL_Renderer* r, SDL_FPoint a, SDL_FPoint b, float width, SDL_FColor colour) {
+static void bar(SDL_FPoint a, SDL_FPoint b, float width, SDL_FColor colour) {
     float dx = b.x-a.x, dy = b.y-a.y, length = std::max(.001f, std::hypot(dx,dy));
     float nx = -dy/length*width*.5f, ny = dx/length*width*.5f;
-    SDL_Vertex v[4] = {{{a.x+nx,a.y+ny},colour,{0,0}}, {{a.x-nx,a.y-ny},colour,{0,0}}, {{b.x+nx,b.y+ny},colour,{0,0}}, {{b.x-nx,b.y-ny},colour,{0,0}}};
-    int index[6] = {0,1,2,1,3,2};
-    SDL_RenderGeometry(r, nullptr, v, 4, index, 6);
+    const int o = static_cast<int>(touchVerts.size());
+    touchVerts.insert(touchVerts.end(), {{{a.x+nx,a.y+ny},colour,{0,0}}, {{a.x-nx,a.y-ny},colour,{0,0}}, {{b.x+nx,b.y+ny},colour,{0,0}}, {{b.x-nx,b.y-ny},colour,{0,0}}});
+    touchIndex.insert(touchIndex.end(), {o, o+1, o+2, o+1, o+3, o+2});
 }
-extern "C" void KfxAndroidDrawTouchOverlay(SDL_Renderer* r) {
-    if (!possessing) return;
-    int w=0,h=0,ow=0,oh=0; GetSDLWindowSystem()->GetWindowSize(&w,&h);
-    if (w <= 0 || !SDL_GetCurrentRenderOutputSize(r,&ow,&oh)) return;
+// ow: the width of the picture drawn on, in pixels. False when nothing is to be drawn.
+static bool touchOverlayGeometry(int ow) {
+    touchVerts.clear(); touchIndex.clear();
+    if (!possessing) return false;
+    int w=0,h=0; GetSDLWindowSystem()->GetWindowSize(&w,&h);
+    if (w <= 0 || ow <= 0) return false;
     float k = static_cast<float>(ow)/w;
     auto at = [k](SDL_FPoint p) { return SDL_FPoint{p.x*k, p.y*k}; };
-    float sx=1,sy=1; SDL_BlendMode blend;
-    SDL_GetRenderScale(r,&sx,&sy); SDL_GetRenderDrawBlendMode(r,&blend);
-    SDL_SetRenderScale(r,1,1); SDL_SetRenderDrawBlendMode(r,SDL_BLENDMODE_BLEND);
     auto l = possessLayout();
     SDL_FPoint base = l.stick;
     for (const auto& f : possessFingers) if (f.second.role == Role::Stick) base = f.second.origin;
     const SDL_FColor light{1,.93f,.8f,.45f}, shade{0,0,0,.28f};
-    disc(r, at(base), 0, l.stickR*k, shade);
-    disc(r, at(base), l.stickR*k*.94f, l.stickR*k, light);
+    disc(at(base), 0, l.stickR*k, shade);
+    disc(at(base), l.stickR*k*.94f, l.stickR*k, light);
     // Faint ring where walking turns into running (stickRun of the knob's travel).
     float runAt = .12f + .88f*stickRun;
-    disc(r, at(base), l.stickR*k*(runAt-.02f), l.stickR*k*(runAt+.01f), SDL_FColor{1,.93f,.8f,.18f});
-    disc(r, at({base.x+stickX*l.stickR, base.y+stickY*l.stickR}), 0, l.stickR*.42f*k, SDL_FColor{1,.93f,.8f,.5f});
-    disc(r, at(l.attack), 0, l.attackR*k, attackDown ? SDL_FColor{.85f,.12f,.05f,.75f} : SDL_FColor{.6f,.08f,.03f,.5f});
-    disc(r, at(l.attack), l.attackR*k*.93f, l.attackR*k, light);
+    disc(at(base), l.stickR*k*(runAt-.02f), l.stickR*k*(runAt+.01f), SDL_FColor{1,.93f,.8f,.18f});
+    disc(at({base.x+stickX*l.stickR, base.y+stickY*l.stickR}), 0, l.stickR*.42f*k, SDL_FColor{1,.93f,.8f,.5f});
+    disc(at(l.attack), 0, l.attackR*k, attackDown ? SDL_FColor{.85f,.12f,.05f,.75f} : SDL_FColor{.6f,.08f,.03f,.5f});
+    disc(at(l.attack), l.attackR*k*.93f, l.attackR*k, light);
     // Three claw marks for attack, a cross for leaving the creature.
     SDL_FPoint c = at(l.attack); float a = l.attackR*k*.45f;
-    for (int i = -1; i <= 1; i++) bar(r, {c.x-a*.55f+i*a*.5f, c.y+a}, {c.x+a*.55f+i*a*.5f, c.y-a}, a*.2f, light);
-    disc(r, at(l.exit), 0, l.exitR*k, shade);
-    disc(r, at(l.exit), l.exitR*k*.88f, l.exitR*k, light);
+    for (int i = -1; i <= 1; i++) bar({c.x-a*.55f+i*a*.5f, c.y+a}, {c.x+a*.55f+i*a*.5f, c.y-a}, a*.2f, light);
+    disc(at(l.exit), 0, l.exitR*k, shade);
+    disc(at(l.exit), l.exitR*k*.88f, l.exitR*k, light);
     c = at(l.exit); a = l.exitR*k*.42f;
-    bar(r, {c.x-a,c.y-a}, {c.x+a,c.y+a}, a*.3f, light); bar(r, {c.x-a,c.y+a}, {c.x+a,c.y-a}, a*.3f, light);
+    bar({c.x-a,c.y-a}, {c.x+a,c.y+a}, a*.3f, light); bar({c.x-a,c.y+a}, {c.x+a,c.y-a}, a*.3f, light);
+    return !touchIndex.empty();
+}
+extern "C" void KfxAndroidDrawTouchOverlay(SDL_Renderer* r) {
+    int ow=0,oh=0;
+    if (!possessing || !SDL_GetCurrentRenderOutputSize(r,&ow,&oh) || !touchOverlayGeometry(ow)) return;
+    float sx=1,sy=1; SDL_BlendMode blend;
+    SDL_GetRenderScale(r,&sx,&sy); SDL_GetRenderDrawBlendMode(r,&blend);
+    SDL_SetRenderScale(r,1,1); SDL_SetRenderDrawBlendMode(r,SDL_BLENDMODE_BLEND);
+    SDL_RenderGeometry(r, nullptr, touchVerts.data(), static_cast<int>(touchVerts.size()), touchIndex.data(), static_cast<int>(touchIndex.size()));
     SDL_SetRenderScale(r,sx,sy); SDL_SetRenderDrawBlendMode(r,blend);
+}
+// The Vulkan renderer's way in: the controls for a picture out_w pixels wide (game thread, like the drawing).
+extern "C" int KfxAndroidTouchOverlayGeometry(int out_w, const SDL_Vertex** verts, int* nverts, const int** indices, int* nindices) {
+    if (!touchOverlayGeometry(out_w)) return 0;
+    *verts = touchVerts.data(); *nverts = static_cast<int>(touchVerts.size());
+    *indices = touchIndex.data(); *nindices = static_cast<int>(touchIndex.size());
+    return 1;
 }
 
 // ---- Two fingers hold the map (2026-11-19), after M3RT1N99's KeeperFX Android port (touch_gesture.c, touch_camera.c,

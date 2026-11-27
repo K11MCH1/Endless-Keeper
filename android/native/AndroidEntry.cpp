@@ -42,9 +42,9 @@ extern "C" void KfxAndroidConfigureWindow(SDL_Window* window) {
         LbSyncLog("AndroidDisplay requested_refresh=%.2f result=%d\n",rate,result);
     }
 }
-extern "C" void KfxAndroidDrawOverlay(SDL_Renderer* renderer) {
-    KfxAndroidDrawTouchOverlay(renderer);
-    if (!showFPS) return;
+// The FPS counter alone (the Vulkan renderer draws the touch controls itself, 2026-11-27): 1 when it drew.
+extern "C" int KfxAndroidDrawOverlayText(SDL_Renderer* renderer) {
+    if (!showFPS) return 0;
     float sx=1,sy=1;Uint8 r,g,b,a;
     SDL_GetRenderScale(renderer,&sx,&sy);SDL_GetRenderDrawColor(renderer,&r,&g,&b,&a);
     // Endless (2026-11-24): inside the screen safe area (rounded corners, the camera hole), in this renderer's units
@@ -61,6 +61,11 @@ extern "C" void KfxAndroidDrawOverlay(SDL_Renderer* renderer) {
     char text[32];std::snprintf(text,sizeof(text),"FPS %.1f",measuredFPS);
     SDL_RenderDebugText(renderer,6+ox,6+oy,text);
     SDL_SetRenderScale(renderer,sx,sy);SDL_SetRenderDrawColor(renderer,r,g,b,a);
+    return 1;
+}
+extern "C" void KfxAndroidDrawOverlay(SDL_Renderer* renderer) {
+    KfxAndroidDrawTouchOverlay(renderer);
+    KfxAndroidDrawOverlayText(renderer);
 }
 extern "C" void KfxAndroidFramePresented(void) {
     static uint64_t started=0, frames=0, last=0, overlayStart=0, overlayFrames=0;
