@@ -197,8 +197,9 @@ static void ttf_edt_line(const float *f, int n, float *d, int *v, float *z)
 static TbBool ttf_outline_from_distance(const float *cov, float *edge, int w, int h, int radius)
 {
     const int n = max(w, h);
-    float *f = malloc(sizeof(float) * n), *d = malloc(sizeof(float) * n), *z = malloc(sizeof(float) * (n + 1));
-    int *v = malloc(sizeof(int) * n);
+    /* (zeroed: gcc 13 on Linux took f for unset, -Werror=maybe-uninitialized) */
+    float *f = calloc((size_t)n, sizeof(float)), *d = calloc((size_t)n, sizeof(float)), *z = calloc((size_t)n + 1, sizeof(float));
+    int *v = calloc((size_t)n, sizeof(int));
     if ((f == NULL) || (d == NULL) || (z == NULL) || (v == NULL))
     {
         free(f);
