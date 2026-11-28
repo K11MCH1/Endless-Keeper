@@ -5,12 +5,19 @@
 # relocatable. Do not edit the generated copy in the build dir.
 
 set(_bin "${CMAKE_INSTALL_PREFIX}/keeperfx")
+# Endless Keeper (2026-11-28): Packaging.cmake has renamed the game endlesskeeper by the time this runs
+if(NOT EXISTS "${_bin}" AND EXISTS "${CMAKE_INSTALL_PREFIX}/endlesskeeper")
+    set(_bin "${CMAKE_INSTALL_PREFIX}/endlesskeeper")
+endif()
 if(NOT EXISTS "${_bin}")
     message(FATAL_ERROR "Deck bundle: ${_bin} not found — install the keeperfx target first")
 endif()
 set(_bins "${_bin}")
 if(EXISTS "${CMAKE_INSTALL_PREFIX}/keeperfx_hvlog")
     list(APPEND _bins "${CMAKE_INSTALL_PREFIX}/keeperfx_hvlog")
+endif()
+if(EXISTS "${CMAKE_INSTALL_PREFIX}/endlesskeeper_hvlog")
+    list(APPEND _bins "${CMAKE_INSTALL_PREFIX}/endlesskeeper_hvlog")
 endif()
 
 # Names we never bundle: the loader + glibc, the C++/GCC runtime (the Deck's is
