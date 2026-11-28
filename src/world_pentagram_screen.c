@@ -336,6 +336,19 @@ static void wps_zoom_at(float f, float mx, float my)
     wps.zay = my;
 }
 
+void world_pentagram_screen_pinch(float log_scale, long screen_x, long screen_y)
+{
+    if (!world_pentagram_screen_open() || !isfinite(log_scale))
+        return;
+    /* (straight, no easing: the web follows the fingers; the sharp repaint waits for them to rest, as for the wheel) */
+    wps_zoom_ms = LbTimerClock();
+    wps.zt = 0.0f;
+    const float ns = max(wps_min_s(), min(wps_min_s() * 7.0f, wps.s * expf(log_scale)));
+    wps.ox = (float)screen_x - ((float)screen_x - wps.ox) * ns / wps.s;
+    wps.oy = (float)screen_y - ((float)screen_y - wps.oy) * ns / wps.s;
+    wps.s = ns;
+}
+
 static void wps_fly_to(float wx, float wy)
 {
     wps.zt = 0.0f;

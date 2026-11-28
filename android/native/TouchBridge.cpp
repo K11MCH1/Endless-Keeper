@@ -48,6 +48,11 @@ extern "C" void world_parchment_magnifier(TbBool held);
 extern "C" TbBool world_parchment_magnifier_icon_at(long x, long y);
 extern "C" TbBool KfxAndroidPointerPlace(struct Coord3d *pos, unsigned char *context, ThingIndex *under); // front_input.c
 static bool endlessMap() { return get_local_view_type() == PVT_MapScreen && world_mode_active(); }
+// Endless Keeper (2026-11-28): the Pentagram's screen (Player Upgrades) - one finger drags the web as the mouse does,
+// a pinch zooms it round the fingers; nothing of the dungeon's camera or the hand while it is open.
+extern "C" TbBool world_pentagram_screen_open(void);
+extern "C" void world_pentagram_screen_pinch(float log_scale, long screen_x, long screen_y);
+static bool pentagramOpen() { return world_pentagram_screen_open() != 0; }
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -390,7 +395,7 @@ static bool handInForce(float x, float y) {
     const auto* ustate = get_local_user_state_prediction();
     if (user_state_invalid(ustate) || ustate->work_state != PSt_CtrlDungeon) return false;
     if ((get_local_user_state()->init_flags & (UsrIF_KeyboardInputDisabled | UsrIF_MouseInputDisabled)) != 0) return false;
-    if (a_menu_window_is_active()) return false;
+    if (a_menu_window_is_active() || pentagramOpen()) return false;
     auto p = gamePosition(x,y);
     return inEngineWindow(p) && !buttonAt(static_cast<int>(p.x), static_cast<int>(p.y))
         && !point_is_over_gui_box(static_cast<ScreenCoord>(p.x), static_cast<ScreenCoord>(p.y));
@@ -790,9 +795,9 @@ static void drain() {
             button(MActn_RBUTTONUP); break;
         case Kind::Pan: if (gripping) break; panX -= a.dx; panY -= a.dy; break;
         case Kind::Zoom:
-            if (gripping || endlessMap()) break; // the map's pinch goes by the fingers themselves (mapFrame)
+            if (gripping || endlessMap() || pentagramOpen()) break; // the map's and the Pentagram's pinches go by the fingers (mapFrame, pentagramFrame)
             zoomDelta += a.dx; break;
-        case Kind::Rotate: if (endlessMap() || gripping) break; rotationDelta += a.dx; break;
+        case Kind::Rotate: if (endlessMap() || gripping || pentagramOpen()) break; rotationDelta += a.dx; break;
         default: break;
         }
     }
@@ -1136,7 +1141,7 @@ static void cameraFrame() {
     const uint64_t nowNs = SDL_GetTicksNS();
     const float dtMs = std::clamp(gripLastNs ? static_cast<float>(nowNs - gripLastNs) / 1e6f : 16.0f, 1.0f, 100.0f);
     gripLastNs = nowNs;
-    bool two = gestFingers.size() == 2 && !possessing && !squareActive && digDrag == DigDrag::None && roomClick == RoomClick::None && !endlessMap();
+    bool two = gestFingers.size() == 2 && !possessing && !squareActive && digDrag == DigDrag::None && roomClick == RoomClick::None && !endlessMap() && !pentagramOpen();
     for (const auto& f : gestFingers) two = two && f.second.world;
     if (two && (!local_state.camera.ready || get_local_view_type() != PVT_DungeonTop || get_local_map_fade() != PVT_None || a_menu_window_is_active())) two = false;
     const int idx = two ? static_cast<int>(get_local_active_camera() - local_state.camera.current) : -1;
@@ -1188,6 +1193,25 @@ static void mapFrame() {
     }
     parchment_pinch(std::log(spread / mapPinchLast), static_cast<long>((pa.x + pb.x) * .5f) / pixel_size, static_cast<long>((pa.y + pb.y) * .5f) / pixel_size);
     mapPinchLast = spread;
+}
+// The Pentagram's screen: a pinch zooms every drawn frame by the fingers' own spread, round the point between them, as
+// the map's (a two-finger tap does not zoom).
+static bool pentPinchOpen = false, pentPinchTracking = false;
+static float pentPinchStart = 0, pentPinchLast = 0;
+static void pentagramFrame() {
+    if (!pentagramOpen() || gestFingers.size() != 2) { pentPinchTracking = pentPinchOpen = false; return; }
+    auto a = gestFingers.begin(), b = std::next(a);
+    const auto pa = gamePosition(a->second.x, a->second.y), pb = gamePosition(b->second.x, b->second.y);
+    const float spread = std::max(1.0f, std::hypot(pb.x - pa.x, pb.y - pa.y));
+    if (!pentPinchTracking) { pentPinchTracking = true; pentPinchOpen = false; pentPinchStart = pentPinchLast = spread; return; }
+    const float shortSide = static_cast<float>(std::max<long>(1, std::min(RendererPhysicalWidth(), RendererPhysicalHeight())));
+    if (!pentPinchOpen) {
+        if (std::fabs(spread - pentPinchStart) < shortSide * .02f) return;
+        pentPinchOpen = true;
+    }
+    world_pentagram_screen_pinch(std::log(spread / pentPinchLast), static_cast<long>((pa.x + pb.x) * .5f) / pixel_size,
+        static_cast<long>((pa.y + pb.y) * .5f) / pixel_size);
+    pentPinchLast = spread;
 }
 static bool magnifierHeld = false;
 static SDL_FingerID magnifierFinger = 0;
@@ -1251,7 +1275,7 @@ extern "C" int KfxAndroidTouchEvent(const SDL_Event* e) {
         // Menus and the sidebar retain normal mouse dragging; world drags pan. The endless world's map is
         // dragged like a mouse drags it (it follows the finger), so it gets the left button instead.
         const auto* player = get_my_player();
-        bool world = player && !endlessMap() && (get_local_view_type() == PVT_DungeonTop || get_local_view_type() == PVT_MapScreen);
+        bool world = player && !endlessMap() && !pentagramOpen() && (get_local_view_type() == PVT_DungeonTop || get_local_view_type() == PVT_MapScreen);
         if (windowOverViewAt(x, y)) world = false; // (a window over the view: its own finger, no pan, no grip)
         gestures.setPanEnabled(world && inEngineWindow(gamePosition(x,y)));
         // The first finger on the map is asked about by the hand's rules (it may come to drop or slap).
@@ -1292,6 +1316,7 @@ extern "C" void KfxAndroidTouchTick(void) {
     stepHand(now);
     cameraFrame();
     mapFrame();
+    pentagramFrame();
     if (magnifierHeld && !endlessMap()) endMagnifier();
     stepClick(now);
     stepDigDrag();

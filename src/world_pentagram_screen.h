@@ -17,6 +17,8 @@ extern "C" {
 TbBool world_pentagram_screen_open(void);
 void world_pentagram_screen_show(void);
 void world_pentagram_screen_close(void);
+/** Android (2026-11-28): a pinch zooms by e^log_scale round a screen point (game pixels), following the fingers. */
+void world_pentagram_screen_pinch(float log_scale, long screen_x, long screen_y);
 int world_pentagram_screen_test_all(TbBool reverse);
 void world_pentagram_screen_test_motion(long step); /* test hook: pan and zoom */ /* test hook: learn everything through the screen */
 /** Each frame (GameUI, over everything but the pointer). */
