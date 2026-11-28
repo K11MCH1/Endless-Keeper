@@ -24,10 +24,13 @@
 #include "world_wild.h"
 #include "world_attract.h"
 #include "world_threat.h"
+#include "kfx/renderer/RendererManager.h"
+#include "ui_molten.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <SDL3/SDL.h>
 #include "bflib_basics.h"
 #include "bflib_datetm.h"
 #include "bflib_fileio.h"
@@ -168,6 +171,11 @@ static double wc_distance(int64_t wx, int64_t wy)
 {
     wc_test_read();
     return world_dist_to_nearest_start(wx, wy) + (double)wc_test.far;
+}
+
+double world_circles_distance(int64_t wx, int64_t wy)
+{
+    return wc_distance(wx, wy);
 }
 
 int world_circle_at_world(int64_t wx, int64_t wy)
@@ -882,26 +890,141 @@ static void wc_draw_text(const char *text, int y, int units, int strength, TbBoo
 static struct TtfText *wc_ttf[2];
 static int wc_ttf_circle[2], wc_ttf_px[2];
 
+/** A text of the banner (k 0 the name, 1 the line) at px, smaller where it would be wider than room (measured first:
+ *  it is made once). Also run on the thread that makes the next circle's banner ahead: it touches no shared state. */
+static struct TtfText *wc_make_fitted(int k, const char *text, int px, int room)
+{
+    const enum TtfStyle style = (k == 0) ? TtfS_Red : TtfS_Parchment;
+    const int tracking = (k == 0) ? 90 : 15;
+    const int wide = ttf_text_width(text, px, tracking);
+    const int fit = (wide > room) ? (int)((long long)px * room / wide) : px;
+    return ttf_text_make(text, fit, style, tracking);
+}
+
+/* The next circle's banner, made ahead on a thread of its own while nothing is shown (the user, 2026-11-28: crossing
+   a circle stood the game still while its banner was made): when the keeper crosses into it, it only has to be shown.
+   Made again when the screen's size changes; taken only for the circle and the sizes it was made for. */
+struct WcPre {
+    int circle;              /* 0: none */
+    int px[2], room;
+    TbBool gpu;              /* made in true colour (OpenGL/Vulkan), else the palette version */
+    char text[2][WC_TEXT_MAX];
+    struct TtfText *made[2];
+    struct TtfRgba *rgba[2];
+};
+static struct WcPre wc_pre;
+static SDL_Thread *wc_pre_thread = NULL;
+
+/** The true-colour version of wc_make_fitted. */
+static struct TtfRgba *wc_make_fitted_rgba(int k, const char *text, int px, int room)
+{
+    const enum TtfStyle style = (k == 0) ? TtfS_Red : TtfS_Parchment;
+    const int tracking = (k == 0) ? 90 : 15;
+    const int wide = ttf_text_width(text, px, tracking);
+    const int fit = (wide > room) ? (int)((long long)px * room / wide) : px;
+    return ttf_text_make_rgba(text, fit, style, tracking);
+}
+
+static int SDLCALL wc_pre_run(void *data)
+{
+    struct WcPre *pre = (struct WcPre *)data;
+    for (int k = 0; k < 2; k++)
+    {
+        if (pre->gpu)
+            pre->rgba[k] = wc_make_fitted_rgba(k, pre->text[k], pre->px[k], pre->room);
+        else
+            pre->made[k] = wc_make_fitted(k, pre->text[k], pre->px[k], pre->room);
+    }
+    return 0;
+}
+
+/** The thread's making finished (waits for it: by the time it is asked, it has long been done). */
+static void wc_pre_join(void)
+{
+    if (wc_pre_thread == NULL)
+        return;
+    SDL_WaitThread(wc_pre_thread, NULL);
+    wc_pre_thread = NULL;
+}
+
+static void wc_pre_drop(void)
+{
+    wc_pre_join();
+    for (int k = 0; k < 2; k++)
+    {
+        ttf_text_free(wc_pre.made[k]);
+        wc_pre.made[k] = NULL;
+        ttf_rgba_free(wc_pre.rgba[k]);
+        wc_pre.rgba[k] = NULL;
+    }
+    wc_pre.circle = 0;
+}
+
 static const struct TtfText *wc_ttf_get(int k, int circle, const char *text, int px)
 {
     if ((wc_ttf_circle[k] != circle) || (wc_ttf_px[k] != px))
     {
+        const TbClockMSec made_from = LbTimerClock();
         ttf_text_free(wc_ttf[k]);
-        const enum TtfStyle style = (k == 0) ? TtfS_Red : TtfS_Parchment;
-        const int tracking = (k == 0) ? 90 : 15;
-        wc_ttf[k] = ttf_text_make(text, px, style, tracking);
-        /* wider than the screen: smaller, to fit */
+        wc_ttf[k] = NULL;
         const int room = MyScreenWidth * 94 / 100;
-        if ((wc_ttf[k] != NULL) && (wc_ttf[k]->w > room))
+        wc_pre_join();
+        const TbBool ahead = (wc_pre.circle == circle) && (wc_pre.px[k] == px) && (wc_pre.room == room) &&
+            (wc_pre.made[k] != NULL) && (strcmp(wc_pre.text[k], text) == 0);
+        if (ahead)
         {
-            const int fit = (int)((long long)px * room / wc_ttf[k]->w);
-            ttf_text_free(wc_ttf[k]);
-            wc_ttf[k] = ttf_text_make(text, fit, style, tracking);
-        }
+            wc_ttf[k] = wc_pre.made[k];
+            wc_pre.made[k] = NULL;
+        } else
+            wc_ttf[k] = wc_make_fitted(k, text, px, room);
         wc_ttf_circle[k] = circle;
         wc_ttf_px[k] = px;
+        /* (the log names the circle by its number only: the names are the players' to find) */
+        SYNCLOG("World circles: banner %s of circle %d %s at %d px in %ld ms (%dx%d)", (k == 0) ? "name" : "line", circle,
+            ahead ? "made ahead, shown" : "made", px, (long)(LbTimerClock() - made_from),
+            (wc_ttf[k] != NULL) ? wc_ttf[k]->w : 0, (wc_ttf[k] != NULL) ? wc_ttf[k]->h : 0);
     }
     return wc_ttf[k];
+}
+
+/** The banner's sizes on this screen: the bitmap font's units, and the letters' heights in pixels. */
+static void wc_banner_sizes(int *name_units, int *line_units, int *name_h, int *line_h)
+{
+    LbTextSetFont(winfont);
+    /* (40% smaller than the first banner's four and two times: the user, 2026-11-28: "too big") */
+    *name_units = units_per_pixel * 24 / 10;
+    *line_units = units_per_pixel * 12 / 10;
+    *name_h = LbTextLineHeight() * *name_units / 16;
+    *line_h = LbTextLineHeight() * *line_units / 16;
+}
+
+/** While no banner is shown: the next circle's banner made ahead, when it isn't yet (or the screen's size changed). */
+static void wc_pre_make_next(void)
+{
+    if (wc_pre_thread != NULL)
+        return;
+    const int next = wc_local_breached() + 1;
+    if ((next > WC_CIRCLES) || (engine_palette == NULL) || !ttf_available()) /* (ttf_available loads the font here) */
+        return;
+    int name_units, line_units, name_h, line_h;
+    wc_banner_sizes(&name_units, &line_units, &name_h, &line_h);
+    const int px0 = name_h * 11 / 10, px1 = line_h * 11 / 10, room = MyScreenWidth * 94 / 100;
+    const TbBool gpu = RendererIsGPUBackend();
+    if ((wc_pre.circle == next) && (wc_pre.px[0] == px0) && (wc_pre.px[1] == px1) && (wc_pre.room == room) && (wc_pre.gpu == gpu))
+        return;
+    wc_pre_drop();
+    wc_pre.circle = next;
+    wc_pre.px[0] = px0;
+    wc_pre.px[1] = px1;
+    wc_pre.room = room;
+    wc_pre.gpu = gpu;
+    wc_text(0, next, wc_pre.text[0]);
+    wc_text(1, next, wc_pre.text[1]);
+    for (char *c = wc_pre.text[0]; *c != 0; c++)
+        *c = (char)toupper((unsigned char)*c);
+    wc_pre_thread = SDL_CreateThread(wc_pre_run, "circle_banner", &wc_pre);
+    if (wc_pre_thread == NULL)
+        wc_pre.circle = 0; /* (no thread: it is made when it is shown, as before) */
 }
 
 /** TrueType text centred at the top of the screen, its letters' top at y, at a strength (0..1000) */
@@ -914,13 +1037,113 @@ static void wc_draw_ttf(const struct TtfText *t, int y, int strength)
         (step >= WC_FADE_STEPS - 4));
 }
 
+/* The banner in true colour on OpenGL and Vulkan (the user, 2026-11-28: "the text transition is rough"): its two texts
+   as pictures with no palette steps, put together into one picture (the main menu's second slot: free in a game) with
+   each text's strength as its opacity, in 64 steps - the palette version fades in 10 colour steps and its last ones
+   are see-through at a stroke. The picture is put together again only when a step changes; in between the renderer
+   keeps its copy. */
+static struct TtfRgba *wc_rgba[2];
+static int wc_rgba_circle[2], wc_rgba_px[2];
+static unsigned char *wc_pic = NULL;
+static size_t wc_pic_cap = 0;
+static uint32_t wc_pic_gen = 0;
+static int wc_pic_key[7];
+
+static const struct TtfRgba *wc_rgba_get(int k, int circle, const char *text, int px)
+{
+    if ((wc_rgba_circle[k] != circle) || (wc_rgba_px[k] != px))
+    {
+        const TbClockMSec made_from = LbTimerClock();
+        ttf_rgba_free(wc_rgba[k]);
+        wc_rgba[k] = NULL;
+        const int room = MyScreenWidth * 94 / 100;
+        wc_pre_join();
+        const TbBool ahead = wc_pre.gpu && (wc_pre.circle == circle) && (wc_pre.px[k] == px) && (wc_pre.room == room) &&
+            (wc_pre.rgba[k] != NULL) && (strcmp(wc_pre.text[k], text) == 0);
+        if (ahead)
+        {
+            wc_rgba[k] = wc_pre.rgba[k];
+            wc_pre.rgba[k] = NULL;
+        } else
+            wc_rgba[k] = wc_make_fitted_rgba(k, text, px, room);
+        wc_rgba_circle[k] = circle;
+        wc_rgba_px[k] = px;
+        SYNCLOG("World circles: banner %s of circle %d in true colour %s at %d px in %ld ms (%dx%d)", (k == 0) ? "name" : "line",
+            circle, ahead ? "made ahead, shown" : "made", px, (long)(LbTimerClock() - made_from),
+            (wc_rgba[k] != NULL) ? wc_rgba[k]->w : 0, (wc_rgba[k] != NULL) ? wc_rgba[k]->h : 0);
+    }
+    return wc_rgba[k];
+}
+
+/** src at q/64 of its strength over dst (premultiplied, dw wide), its top-left at dx, dy. */
+static void wc_pic_over(unsigned char *dst, int dw, int dx, int dy, const struct TtfRgba *src, int q)
+{
+    for (int y = 0; y < src->h; y++)
+    {
+        unsigned char *d = dst + ((size_t)(dy + y) * dw + dx) * 4;
+        const unsigned char *sp = src->px + (size_t)y * src->w * 4;
+        for (int x = 0; x < src->w; x++, d += 4, sp += 4)
+        {
+            const int sa = sp[3] * q / 64;
+            if (sa == 0)
+                continue;
+            const int inv = 255 - sa;
+            for (int k = 0; k < 3; k++)
+                d[k] = (unsigned char)min(255, sp[k] * q / 64 + d[k] * inv / 255);
+            d[3] = (unsigned char)min(255, sa + d[3] * inv / 255);
+        }
+    }
+}
+
+/** The banner as one true-colour picture; false: no such font or no GPU renderer (the palette version is drawn). */
+static TbBool wc_draw_true_colour(int circle, const char *name, const char *line, int name_h, int line_h, int y,
+    int name_s, int line_s)
+{
+    const struct TtfRgba *a = wc_rgba_get(0, circle, name, name_h * 11 / 10);
+    const struct TtfRgba *b = wc_rgba_get(1, circle, line, line_h * 11 / 10);
+    if ((a == NULL) || (b == NULL))
+        return false;
+    const int q0 = max(0, min(64, name_s * 64 / 1000)), q1 = max(0, min(64, line_s * 64 / 1000));
+    if ((q0 == 0) && (q1 == 0))
+        return true;
+    /* where the palette version puts them: each centred, the line under the name's letters */
+    const int top0 = y - a->pad;
+    const int top1 = y + (a->h - 2 * a->pad) + name_h / 10 - b->pad;
+    const int top = min(top0, top1), bottom = max(top0 + a->h, top1 + b->h);
+    const int pw = max(a->w, b->w), ph = bottom - top;
+    const int key[7] = {circle, q0, q1, pw, ph, a->w * 4096 + a->h, b->w * 4096 + b->h};
+    if ((wc_pic == NULL) || (memcmp(key, wc_pic_key, sizeof(key)) != 0))
+    {
+        const size_t need = (size_t)pw * ph * 4;
+        if (need > wc_pic_cap)
+        {
+            unsigned char *pic = (unsigned char *)realloc(wc_pic, need);
+            if (pic == NULL)
+                return false;
+            wc_pic = pic;
+            wc_pic_cap = need;
+        }
+        memset(wc_pic, 0, need);
+        if (q0 > 0)
+            wc_pic_over(wc_pic, pw, (pw - a->w) / 2, top0 - top, a, q0);
+        if (q1 > 0)
+            wc_pic_over(wc_pic, pw, (pw - b->w) / 2, top1 - top, b, q1);
+        memcpy(wc_pic_key, key, sizeof(key));
+        wc_pic_gen++;
+    }
+    return RendererSubmitUIImage(UmSl_Front2, (MyScreenWidth - pw) / 2, top, pw, ph, wc_pic, wc_pic_gen);
+}
+
 void world_circles_draw(void)
 {
-    if (wc_banner_circle == 0)
-        return;
     if (!world_mode_active() || world_attract_active())
     {
         wc_banner_circle = 0;
+        return;
+    }
+    if (wc_banner_circle == 0)
+    {
+        wc_pre_make_next();
         return;
     }
     wc_test_read();
@@ -946,14 +1169,13 @@ void world_circles_draw(void)
     wc_text(1, wc_banner_circle, line);
     for (char *c = name; *c != '\0'; c++)
         *c = (char)toupper((unsigned char)*c);
-    /* the sizes are those of the small font at four and two times; the large font is scaled to the same heights */
-    LbTextSetFont(winfont);
+    /* the sizes are those of the small font at 2.4 and 1.2 times; the large font is scaled to the same heights */
+    int name_units, line_units, name_h, line_h;
+    wc_banner_sizes(&name_units, &line_units, &name_h, &line_h);
     LbTextSetWindow(0, 0, MyScreenWidth, MyScreenHeight);
-    int name_units = units_per_pixel * 4;
-    int line_units = units_per_pixel * 2;
     const int y = MyScreenHeight * 7 / 100;
-    const int name_h = LbTextLineHeight() * name_units / 16;
-    const int line_h = LbTextLineHeight() * line_units / 16;
+    if (RendererIsGPUBackend() && wc_draw_true_colour(wc_banner_circle, name, line, name_h, line_h, y, name_s, line_s))
+        return;
     const struct TtfText *name_t = wc_ttf_get(0, wc_banner_circle, name, name_h * 11 / 10);
     const struct TtfText *line_t = wc_ttf_get(1, wc_banner_circle, line, line_h * 11 / 10);
     if ((name_t != NULL) && (line_t != NULL))
@@ -979,6 +1201,7 @@ void world_circles_draw(void)
 
 void world_circles_reset(void)
 {
+    wc_pre_drop();
     memset(wc_breached, 0, sizeof(wc_breached));
     wc_client_breached = 0;
     wc_banner_circle = 0;

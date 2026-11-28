@@ -1002,7 +1002,16 @@ static TbBool dn_raider_go_home(struct Thing *thing, struct DnInvasion *inv, TbB
     pos.y.val = subtile_coord_center(slab_subtile_center(by));
     pos.z.val = 0;
     if (!creature_can_navigate_to(thing, &pos, NavRtF_Default))
-        return true; /* no way there yet (not loaded, or dug shut): it waits, and leaves when the time is up */
+    {
+        /* no way back to its landing (its tunnel fell in behind it, or the way was dug or walled shut): it leaves where it
+           is now instead of standing in a dead end until the time is up (the user, 2026-11-28: heroes stuck in dead ends
+           outside the walls) */
+        if (in_update)
+            return true; /* it leaves on the invasions' turn, not inside its own update */
+        SYNCLOG("World: a raiding %s leaves where it is (no way back to its landing)", thing_model_name(thing));
+        dn_raider_leaves(thing);
+        return true;
+    }
     cleanup_current_thing_state(thing);
     if (setup_person_move_to_coord(thing, &pos, NavRtF_Default))
         thing->continue_state = CrSt_GoodDoingNothing;
@@ -1046,6 +1055,8 @@ static TbBool dn_raider_fleeing(const struct Thing *thing)
 #define RG_SCOUT_SLABS 120  /* slabs round without a way in before it looks for the nearest hole (and again after) */
 #define RG_PATHS 8          /* ways to a hole kept at once (one a leader) */
 #define RG_PATH_MAX 1024    /* slabs of such a way at the most */
+#define RG_GOAL_SHIFT 24    /* a heart this few slabs from the one the leader was going for is the same one, moved (Move
+                               The Heart carries it a slab at a time): the leader keeps its way round what bars it */
 enum { RG_Direct = 0, RG_Round, RG_Path };
 enum { RG_HandNone = 0, RG_HandRight, RG_HandLeft }; /* the side the obstacle is kept on */
 
@@ -1411,6 +1422,43 @@ static int rg_scout(const struct Thing *creatng, const struct RaidGuide *g, Play
 }
 
 /** The leader's next slab from where it stands. False: walled in on every side. */
+/** The leader can't get to the heart (the user, 2026-11-28: "Raiders are getting stuck at Impenetrable Rock"): it has
+ *  been round what bars its way twice with no way in, or a long way round with no hole in the ground anywhere round the
+ *  heart - a dungeon closed by its walls and rock, or a pocket of rock it landed in. It went round for ever, and while
+ *  its party was out no other raid came. Now the party goes home: back to its landing, or up through the ceiling where
+ *  there is no way back (dn_raider_go_home), and the next raid can come. */
+static void rg_give_up(struct Thing *leader, PlayerNumber target, const char *why)
+{
+    int n = 0;
+    struct CreatureControl *lctrl = creature_control_get_from_thing(leader);
+    if (!creature_control_invalid(lctrl))
+    {
+        lctrl->party.original_objective = DN_FLEEING_MARK;
+        lctrl->party.objective = CHeroTsk_DefendParty;
+        n++;
+    }
+    long guard = 0;
+    struct Thing *memb = get_first_follower_creature_in_group(leader);
+    while (thing_exists(memb) && (guard++ < CREATURES_COUNT))
+    {
+        struct CreatureControl *mctrl = creature_control_get_from_thing(memb);
+        if (creature_control_invalid(mctrl))
+            break;
+        struct Thing *next = (mctrl->next_in_group > 0) ? thing_get(mctrl->next_in_group) : INVALID_THING;
+        if ((memb != leader) && world_raid_hero(memb))
+        {
+            mctrl->party.original_objective = DN_FLEEING_MARK;
+            mctrl->party.objective = CHeroTsk_DefendParty;
+            n++;
+        }
+        memb = next;
+    }
+    if ((target >= 0) && (target < PLAYERS_MAX))
+        dn_inv[target].flee_turn = game.play_gameturn; /* (the chunk manager wants their landings from now on) */
+    SYNCLOG("World: the leader (index %d) raiding player %d finds no way to the heart (%s): its party of %d goes home",
+        (int)leader->index, (int)target, why, n);
+}
+
 static TbBool rg_step(const struct Thing *creatng, struct RaidGuide *g, PlayerNumber target, MapSlabCoord hx, MapSlabCoord hy,
     MapSlabCoord *nx, MapSlabCoord *ny)
 {
@@ -1418,6 +1466,15 @@ static TbBool rg_step(const struct Thing *creatng, struct RaidGuide *g, PlayerNu
     int64_t wcx, wcy, wgx, wgy;
     world_slab_to_world(cx, cy, &wcx, &wcy);
     world_slab_to_world(hx, hy, &wgx, &wgy);
+    /* the same heart, carried a little further (world_migrate.c): the leader goes for where it is now without starting
+       its way again - every slab the Soul Container moved used to send it straight back at the wall it was going round,
+       so it turned to and fro in a pocket outside the walls (the user, 2026-11-28) */
+    if (g->started && ((g->goal_x != wgx) || (g->goal_y != wgy)) &&
+        (llabs(wgx - g->goal_x) <= RG_GOAL_SHIFT) && (llabs(wgy - g->goal_y) <= RG_GOAL_SHIFT))
+    {
+        g->goal_x = wgx;
+        g->goal_y = wgy;
+    }
     /* a new heart, or the leader isn't where its way left it (a fight, the hand, a push): its line starts here */
     if (!g->started || (g->goal_x != wgx) || (g->goal_y != wgy) ||
         (g->leg_set && (llabs(wcx - g->leg_x) + llabs(wcy - g->leg_y) > 1)))
@@ -1549,6 +1606,11 @@ static TbBool rg_step(const struct Thing *creatng, struct RaidGuide *g, PlayerNu
                         (int)g->laps, (g->laps == 1) ? "" : "s", (int)g->round_steps);
                 }
                 g->round_steps = 0;
+                if (g->laps >= 2)
+                {
+                    rg_give_up((struct Thing *)creatng, target, "round what bars its way twice"); /* (the leader's own thing) */
+                    return false;
+                }
             }
         }
         g->dir = (uint8_t)dir;
@@ -1584,6 +1646,12 @@ static TbBool rg_step(const struct Thing *creatng, struct RaidGuide *g, PlayerNu
                     SYNCLOG("World: the leader (index %d) raiding player %d has gone round %d slabs without a way in, and"
                         " there is no hole in the ground known round the heart (%d chunks of it not known): it goes on round",
                         (int)creatng->index, (int)target, (int)g->round_total, unknown);
+            }
+            /* no hole after a second look (a fourth, while some of the ground round the heart isn't known): it gives up */
+            if ((slot <= 0) && (g->round_total >= 2 * RG_SCOUT_SLABS) && ((unknown == 0) || (g->round_total >= 4 * RG_SCOUT_SLABS)))
+            {
+                rg_give_up((struct Thing *)creatng, target, "no hole in the ground round the heart");
+                return false;
             }
         }
     }

@@ -6,7 +6,8 @@
  * @par Purpose:
  *     Decisions on the page's open points and on what this first version leaves out (the user was away; the
  *     recommended choice each time):
- *     - When: the countdown is 24 hours of game time, the first a day after the world began. It runs again only when
+ *     - When: the countdown is 24 hours of real time (the user, 2026-11-28: "it should be real time"; it was game
+ *       time, so it stood still while the game was paused or closed), the first a day after the world began. It runs again only when
  *       a boss has been beaten (the user, 2026-11-14): until then the event stays ready, and a lost fight puts it back
  *       to ready with the same boss, whole again. The schedule is the world's, so everyone on a server sees one timer.
  *     - Bosses: a hero-owned creature of the game, by turns the Avatar, the Horned Reaper, a Dragon and a Giant, at
@@ -82,6 +83,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "bflib_basics.h"
 #include "bflib_guibtns.h"
 #include "bflib_planar.h"
@@ -148,6 +150,7 @@
 #include "ui_safe_area.h"
 #include "world_side_panel.h"
 #include "world_pentagram.h"
+#include "replay.h"
 #include "post_inc.h"
 
 #define WB_EVERY_DEFAULT (24L * 60 * 60 * 20)  /* turns between two fights: 24 hours of game time */
@@ -272,6 +275,26 @@ static long wb_every_turns(void)
             SYNCLOG("World boss test: a fight every %ld turns", wb_every);
     }
     return wb_every;
+}
+
+/** The countdown to the next fight runs in real time (the user, 2026-11-28: "it should be real time"): its end is a
+ *  moment of the computer's clock (seconds since 1970, UTC) on the machine that runs the world, saved with it, so the
+ *  time also passes while the game is paused or closed. The turns the rest of the event counts in (world_boss_until,
+ *  which every machine's timer shows) are set from it every turn while the event waits. A replay being played back
+ *  keeps game time: the clock of its recording is not in it. 0: none yet (taken from the turns left at the next turn). */
+static int64_t wb_due_utc;
+
+static void wb_real_time_countdown(void)
+{
+    if (replay.load_enable)
+        return;
+    const int64_t now = (int64_t)time(NULL);
+    if (wb_due_utc == 0) /* a new countdown, or a world saved before: the time it had left, from now */
+        wb_due_utc = now + (int64_t)max((GameTurnDelta)0, (GameTurnDelta)(game.world_boss_until - game.play_gameturn)) / 20;
+    const int64_t left = max((int64_t)0, wb_due_utc - now);
+    game.world_boss_until = game.play_gameturn + (GameTurn)min(left * 20, (int64_t)0x3fffffff);
+    if (game.world_boss_until == 0)
+        game.world_boss_until = 1;
 }
 
 static TbBool wb_engine_box(MapSlabCoord *x1, MapSlabCoord *y1, MapSlabCoord *x2, MapSlabCoord *y2)
@@ -1587,6 +1610,7 @@ static void wb_end(TbBool won)
         game.world_boss_number++;
         game.world_boss_phase = WBP_Waiting;
         game.world_boss_until = game.play_gameturn + (GameTurn)wb_every_turns();
+        wb_due_utc = 0; /* (the real-time end: from these turns, at the next turn) */
         SYNCLOG("World boss: the countdown to fight %lu begins: %ld turns", (unsigned long)game.world_boss_number + 1,
             wb_every_turns());
     } else
@@ -2168,6 +2192,8 @@ void world_boss_turn(void)
     }
     if (game.world_boss_until == 0)
         game.world_boss_until = game.play_gameturn + (GameTurn)wb_every_turns(); /* a new world (or one saved before) */
+    if (game.world_boss_phase == WBP_Waiting)
+        wb_real_time_countdown();
     const TbBool due = ((GameTurnDelta)(game.play_gameturn - game.world_boss_until) >= 0);
     switch (game.world_boss_phase)
     {
@@ -2176,6 +2202,7 @@ void world_boss_turn(void)
         {
             /* ready, and it stays ready until a fight is won: no clock runs until a keeper joins */
             game.world_boss_phase = WBP_Open;
+            wb_due_utc = 0;
             game.world_boss_until = game.play_gameturn;
             memset(game.world_boss_joined, 0, sizeof(game.world_boss_joined));
             memset(wb_pick_n, 0, sizeof(wb_pick_n));
@@ -3771,6 +3798,7 @@ struct WbSaved {
 
 void world_boss_reset(void)
 {
+    wb_due_utc = 0;
     wb_arena_cut = false;
     wb_boss_idx = 0;
     wb_travel = 0;
@@ -3816,7 +3844,7 @@ size_t world_boss_save_size(void)
     size_t n = sizeof(struct WbSaved);
     for (int p = 0; p < PLAYERS_MAX; p++)
         n += sizeof(uint16_t) * min((size_t)wb_pick_n[p], (size_t)WB_TEAM_MAX);
-    return n;
+    return n + sizeof(int64_t); /* (and the real-time end of the countdown: 2026-11-28; older games don't read it) */
 }
 
 void world_boss_save(uint8_t *buf)
@@ -3851,6 +3879,8 @@ void world_boss_save(uint8_t *buf)
             memcpy(at, &idx, sizeof(idx));
             at += sizeof(idx);
         }
+    const int64_t due = (game.world_boss_phase == WBP_Waiting) ? wb_due_utc : 0;
+    memcpy(at, &due, sizeof(due));
 }
 
 TbBool world_boss_load(const uint8_t *buf, size_t len)
@@ -3903,6 +3933,15 @@ TbBool world_boss_load(const uint8_t *buf, size_t len)
             at += sizeof(idx);
             wb_picks[p][k] = (ThingIndex)idx;
         }
+    }
+    /* the real-time end of the countdown (saved since 2026-11-28): the time the game was closed has passed too. Without
+       it (an older save) the countdown goes on from the time it had left. */
+    if (len >= (size_t)(at - buf) + sizeof(int64_t))
+    {
+        int64_t due;
+        memcpy(&due, at, sizeof(due));
+        if (game.world_boss_phase == WBP_Waiting)
+            wb_due_utc = due;
     }
     wb_quiet_sum = -1;
     wb_quiet_since = game.play_gameturn;

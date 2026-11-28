@@ -949,7 +949,7 @@ static void draw_overhead_world_map(const struct TbRect *map_area, long block_si
                 {
                     int64_t wx, wy;
                     world_slab_to_world(view_x + i * CIRCLE_GRID, view_y + j * CIRCLE_GRID, &wx, &wy);
-                    dist[j * gx + i] = (float)world_dist_to_nearest_start(wx, wy);
+                    dist[j * gx + i] = (float)world_circles_distance(wx, wy); /* (with the circles' test hook too) */
                 }
             const TbPixel line_col = colours[9][3][2];
             const MapSlabCoord mid_y = tiles_y / 2;

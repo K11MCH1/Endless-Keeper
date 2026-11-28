@@ -253,7 +253,9 @@ static void sp_role_rect(int role, float *r)
     case SpR_Gold: r[0] = 40.0f; r[1] = SP_GOLD_Y; r[2] = 127.0f; r[3] = SP_GOLD_H; return;
     case SpR_Strip: r[0] = SP_COL_X; r[1] = SP_STRIP_Y; r[2] = SP_COL_W; r[3] = SP_STRIP_H; return;
     case SpR_Next: r[0] = SP_MAP_C - SP_NEXT_W * 0.5f; r[1] = SP_NEXT_Y; r[2] = SP_NEXT_W; r[3] = SP_NEXT_H; return;
-    case SpR_TrapInfo: r[0] = SP_COL_X + SP_COL_W - 22.0f; r[1] = SP_STRIP_Y + 4.0f; r[2] = 16.0f; r[3] = 20.0f; return;
+    /* the Workshop's build-info hammer: low on the strip's right, under the number to place (it covered it at the top;
+       the Workshop's strip has no bar there) */
+    case SpR_TrapInfo: r[0] = SP_COL_X + SP_COL_W - 22.0f; r[1] = SP_STRIP_Y + SP_STRIP_H - 22.0f; r[2] = 16.0f; r[3] = 20.0f; return;
     default:
         break;
     }
@@ -2566,6 +2568,8 @@ void world_side_panel_draw(void)
                 sp_test = 2;
             else if ((k == 'g') || (k == 'h') || (k == 'i')) /* (a creature taken over: its first page, its third, or */
                 sp_test = (k == 'g') ? 3 : (k == 'h') ? 4 : 5;  /*  its fourth and the wheel on: no Rap Sheet then) */
+            else if (k == 'k') /* (the Workshop with two Braced Doors to place, chosen: its strip and hammer) */
+                sp_test = 8;
             else if (k == 'u') /* (paused: the Paused button) */
                 set_packet_pause_toggle();
             else
@@ -2580,6 +2584,19 @@ void world_side_panel_draw(void)
         set_menu_visible_on(page); /* (as toggle_first_person_menu: the test's takeover leaves it hidden) */
         sp_test_turn = game.play_gameturn;
         sp_test = (sp_test == 5) ? 6 : 0;
+    }
+    if ((sp_test == 8) && (game.play_gameturn > 30))
+    {
+        const ThingModel braced = 2;
+        add_workshop_item_to_amounts(my_player_number, TCls_Door, braced);
+        add_workshop_item_to_amounts(my_player_number, TCls_Door, braced);
+        const int idx = get_manufacture_data_index_for_thing(TCls_Door, braced);
+        const struct ManufactureData *manufctr = get_manufacture_data(idx);
+        game.manufactr_element = idx;
+        game.manufactr_spridx = manufctr->bigsym_sprite_idx;
+        game.manufactr_tooltip = manufctr->tooltip_stridx;
+        set_menu_mode(GMnu_TRAP);
+        sp_test = 0;
     }
     if ((sp_test == 6) && (game.play_gameturn > sp_test_turn + 20))
     {

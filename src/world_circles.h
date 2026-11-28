@@ -23,6 +23,9 @@ extern "C" {
 #define WC_CIRCLE_SLABS 250 /* the first circle's width; the n-th is n times as wide */
 
 /** The circle (1..9) of a distance in slabs from the nearest start. */
+/** The distance a place counts as for the circles, in slabs: to the nearest start (and, with the test hook
+ *  KFX_WORLD_CIRCLETEST far=N, N more). The full-screen map draws the circles' lines by it too. */
+double world_circles_distance(int64_t wx, int64_t wy);
 int world_circle_of_distance(double distance);
 /** The circle (1..9) a world slab lies in. */
 int world_circle_at_world(int64_t wx, int64_t wy);

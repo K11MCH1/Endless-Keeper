@@ -97,6 +97,7 @@
 #include "world_fill.h"
 #include "world_expedition.h"
 #include "world_pentagram_hooks.h"
+#include "world_migrate.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -5678,8 +5679,12 @@ void process_person_moods_and_needs(struct Thing *thing)
         return;
     }
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
+    /* endless worlds: while its keeper's Soul Container is carried the creatures stay with it: they don't get hungry,
+       starve or go off to eat until it is home (the user, 2026-11-28: starvation took them away from the migrating Heart) */
+    const TbBool migrating = (world_migrate_state(thing->owner) != WMig_None);
     // Now process the needs
-    process_creature_hunger(thing);
+    if (!migrating)
+        process_creature_hunger(thing);
     if (process_creature_needs_to_heal_critical(thing)) {
         SYNCDBG(17,"The %s index %ld has a critical need to heal",thing_model_name(thing),(long)thing->index);
     } else
@@ -5689,7 +5694,7 @@ void process_person_moods_and_needs(struct Thing *thing)
     if (process_creature_needs_a_wage(thing, crconf)) {
         SYNCDBG(17,"The %s index %ld has a need to get its wage",thing_model_name(thing),(long)thing->index);
     } else
-    if (process_creature_needs_to_eat(thing, crconf)) {
+    if (!migrating && process_creature_needs_to_eat(thing, crconf)) {
         SYNCDBG(17,"The %s index %ld has a need to eat",thing_model_name(thing),(long)thing->index);
     } else
     if (anger_process_creature_anger(thing, crconf)) {

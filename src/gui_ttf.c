@@ -163,14 +163,111 @@ static unsigned char *ttf_rle_row(const short *px, int n, unsigned char *out)
     return out;
 }
 
-struct TtfText *ttf_text_make(const char *text, int px, enum TtfStyle style, int tracking)
+/** One line of an exact squared-distance transform (Felzenszwalb and Huttenlocher): d[i] = min over j of f[j] + (i-j)^2. */
+static void ttf_edt_line(const float *f, int n, float *d, int *v, float *z)
 {
-    if ((text == NULL) || (text[0] == '\0') || (px < 6) || (engine_palette == NULL) || !ttf_available())
-        return NULL;
+    int k = 0;
+    v[0] = 0;
+    z[0] = -1e30f;
+    z[1] = 1e30f;
+    for (int q = 1; q < n; q++)
+    {
+        float s = ((f[q] + (float)q * q) - (f[v[k]] + (float)v[k] * v[k])) / (2.0f * (float)(q - v[k]));
+        while (s <= z[k])
+        {
+            k--;
+            s = ((f[q] + (float)q * q) - (f[v[k]] + (float)v[k] * v[k])) / (2.0f * (float)(q - v[k]));
+        }
+        k++;
+        v[k] = q;
+        z[k] = s;
+        z[k + 1] = 1e30f;
+    }
+    k = 0;
+    for (int q = 0; q < n; q++)
+    {
+        while (z[k + 1] < (float)q)
+            k++;
+        d[q] = (float)(q - v[k]) * (float)(q - v[k]) + f[v[k]];
+    }
+}
+
+/** The outline's strength at each pixel: 1 within the radius of the letters (pixels at least half covered), the last
+ *  pixel soft, and never less than the pixel's own coverage. False: no memory. */
+static TbBool ttf_outline_from_distance(const float *cov, float *edge, int w, int h, int radius)
+{
+    const int n = max(w, h);
+    float *f = malloc(sizeof(float) * n), *d = malloc(sizeof(float) * n), *z = malloc(sizeof(float) * (n + 1));
+    int *v = malloc(sizeof(int) * n);
+    if ((f == NULL) || (d == NULL) || (z == NULL) || (v == NULL))
+    {
+        free(f);
+        free(d);
+        free(z);
+        free(v);
+        return false;
+    }
+    for (int i = 0; i < w * h; i++)
+        edge[i] = (cov[i] >= 0.5f) ? 0.0f : 1e20f; /* squared distances, built in place */
+    for (int x = 0; x < w; x++)
+    {
+        for (int y = 0; y < h; y++)
+            f[y] = edge[y * w + x];
+        ttf_edt_line(f, h, d, v, z);
+        for (int y = 0; y < h; y++)
+            edge[y * w + x] = d[y];
+    }
+    for (int y = 0; y < h; y++)
+    {
+        memcpy(f, &edge[y * w], sizeof(float) * w);
+        ttf_edt_line(f, w, d, v, z);
+        for (int x = 0; x < w; x++)
+        {
+            const float o = ttf_clamp01((float)radius + 0.75f - sqrtf(d[x]));
+            edge[y * w + x] = (o > cov[y * w + x]) ? o : cov[y * w + x];
+        }
+    }
+    free(f);
+    free(d);
+    free(z);
+    free(v);
+    return true;
+}
+
+int ttf_text_width(const char *text, int px, int tracking)
+{
+    if ((text == NULL) || (text[0] == '\0') || (px < 6) || !ttf_available())
+        return 0;
     if (px > TTF_MAX_PX)
         px = TTF_MAX_PX;
-    if ((style < 0) || (style >= TtfS_Count))
-        style = TtfS_Red;
+    const float scale = stbtt_ScaleForPixelHeight(&ttf_font, (float)px);
+    const int radius = max(1, (px + 10) / 22);
+    const int shadow = max(1, radius * 3 / 4 + 1);
+    const float track = (float)px * (float)tracking / 1000.0f;
+    const size_t len = strlen(text);
+    float pen = 0.0f;
+    for (size_t i = 0; i < len; i++)
+    {
+        const int cp = (unsigned char)text[i];
+        int advance, bearing;
+        stbtt_GetCodepointHMetrics(&ttf_font, cp, &advance, &bearing);
+        pen += (float)advance * scale;
+        if (i + 1 < len)
+            pen += (float)stbtt_GetCodepointKernAdvance(&ttf_font, cp, (unsigned char)text[i + 1]) * scale + track;
+    }
+    return (int)ceilf(pen) + 2 * (radius + shadow + 2);
+}
+
+/** A line's letters rasterised at px (coverage) and their outline (edge), with the sizes round them. */
+struct TtfRaster {
+    int w, h, pad, shadow;
+    float *cov, *edge;          /* w * h each, the caller frees them */
+};
+
+static TbBool ttf_raster(const char *text, int px, int tracking, struct TtfRaster *r)
+{
+    if (px > TTF_MAX_PX)
+        px = TTF_MAX_PX;
     const float scale = stbtt_ScaleForPixelHeight(&ttf_font, (float)px);
     int ascent, descent, gap;
     stbtt_GetFontVMetrics(&ttf_font, &ascent, &descent, &gap);
@@ -192,16 +289,14 @@ struct TtfText *ttf_text_make(const char *text, int px, enum TtfStyle style, int
     const int w = (int)ceilf(pen) + 2 * pad;
     const int h = (int)ceilf((float)(ascent - descent) * scale) + 2 * pad;
     if ((w <= 2 * pad) || (w > 16384))
-        return NULL;
+        return false;
     float *cov = calloc((size_t)w * h, sizeof(float));
     float *edge = calloc((size_t)w * h, sizeof(float));
-    short *row = malloc(sizeof(short) * TTF_TILE);
-    if ((cov == NULL) || (edge == NULL) || (row == NULL))
+    if ((cov == NULL) || (edge == NULL))
     {
         free(cov);
         free(edge);
-        free(row);
-        return NULL;
+        return false;
     }
     /* the letters' coverage */
     const int baseline = pad + (int)lroundf((float)ascent * scale);
@@ -244,33 +339,42 @@ struct TtfText *ttf_text_make(const char *text, int px, enum TtfStyle style, int
         if (i + 1 < len)
             x += (float)stbtt_GetCodepointKernAdvance(&ttf_font, cp, (unsigned char)text[i + 1]) * scale + track;
     }
-    /* the outline: the coverage spread over a disc of the radius */
-    const int reach = radius + 1;
-    for (int py = 0; py < h; py++)
+    /* the outline: everything within the radius of the letters, with a soft last pixel. From the distance of each
+       pixel to the nearest one the letters cover (an exact distance map, two passes): it was the coverage spread
+       over a disc, every pixel looking at all of the disc round it - over a second for a banner 2304 x 455 at 387 px,
+       and the game stood still meanwhile (the user, 2026-11-28: "pause almost 2 seconds") */
+    if (!ttf_outline_from_distance(cov, edge, w, h, radius))
     {
-        for (int qx = 0; qx < w; qx++)
-        {
-            float m = 0.0f;
-            for (int dy = -reach; (dy <= reach) && (m < 1.0f); dy++)
-            {
-                const int sy = py + dy;
-                if ((sy < 0) || (sy >= h))
-                    continue;
-                for (int dx = -reach; dx <= reach; dx++)
-                {
-                    const int sx = qx + dx;
-                    if ((sx < 0) || (sx >= w))
-                        continue;
-                    const float c = cov[sy * w + sx];
-                    if (c <= m)
-                        continue;
-                    const float wgt = ttf_clamp01((float)radius + 0.5f - sqrtf((float)(dx * dx + dy * dy)));
-                    if (c * wgt > m)
-                        m = c * wgt;
-                }
-            }
-            edge[py * w + qx] = m;
-        }
+        free(cov);
+        free(edge);
+        return false;
+    }
+    r->w = w;
+    r->h = h;
+    r->pad = pad;
+    r->shadow = shadow;
+    r->cov = cov;
+    r->edge = edge;
+    return true;
+}
+
+struct TtfText *ttf_text_make(const char *text, int px, enum TtfStyle style, int tracking)
+{
+    if ((text == NULL) || (text[0] == 0) || (px < 6) || (engine_palette == NULL) || !ttf_available())
+        return NULL;
+    if ((style < 0) || (style >= TtfS_Count))
+        style = TtfS_Red;
+    struct TtfRaster ras;
+    if (!ttf_raster(text, px, tracking, &ras))
+        return NULL;
+    const int w = ras.w, h = ras.h, pad = ras.pad, shadow = ras.shadow;
+    float *cov = ras.cov, *edge = ras.edge;
+    short *row = malloc(sizeof(short) * TTF_TILE);
+    if (row == NULL)
+    {
+        free(cov);
+        free(edge);
+        return NULL;
     }
     /* colours: the gradient over the outline over the shadow, dithered a little (the palette has few shades of one
        colour: a smooth gradient showed bands); the palette's nearest, remembered per colour (the palette's 6 bits) */
@@ -405,5 +509,73 @@ void ttf_text_free(struct TtfText *t)
             free((void *)t->spr[i].Data);
         free(t->spr);
     }
+    free(t);
+}
+
+struct TtfRgba *ttf_text_make_rgba(const char *text, int px, enum TtfStyle style, int tracking)
+{
+    if ((text == NULL) || (text[0] == 0) || (px < 6) || !ttf_available())
+        return NULL;
+    if ((style < 0) || (style >= TtfS_Count))
+        style = TtfS_Red;
+    struct TtfRaster ras;
+    if (!ttf_raster(text, px, tracking, &ras))
+        return NULL;
+    const int w = ras.w, h = ras.h, pad = ras.pad, shadow = ras.shadow;
+    struct TtfRgba *t = calloc(1, sizeof(struct TtfRgba));
+    unsigned char *out = (t != NULL) ? malloc((size_t)w * h * 4) : NULL;
+    if (out == NULL)
+    {
+        free(t);
+        free(ras.cov);
+        free(ras.edge);
+        return NULL;
+    }
+    const float text_top = (float)pad, text_h = (float)(h - 2 * pad);
+    for (int py = 0; py < h; py++)
+    {
+        const float gy = ttf_clamp01(((float)py - text_top) / max(text_h, 1.0f));
+        float fill[3];
+        for (int k = 0; k < 3; k++)
+            fill[k] = (float)ttf_top[style][k] + ((float)ttf_bottom[style][k] - (float)ttf_top[style][k]) * gy;
+        unsigned char *o = out + (size_t)py * w * 4;
+        for (int qx = 0; qx < w; qx++, o += 4)
+        {
+            const float c = ras.cov[py * w + qx];
+            const float e = ras.edge[py * w + qx];
+            const float a_text = (e > c) ? e : c;
+            float a_shadow = 0.0f;
+            if ((qx - shadow >= 0) && (py - shadow >= 0))
+                a_shadow = ras.edge[(py - shadow) * w + qx - shadow] * 0.6f;
+            const float a = a_text + a_shadow * (1.0f - a_text);
+            if (a < 0.004f)
+            {
+                o[0] = o[1] = o[2] = o[3] = 0;
+                continue;
+            }
+            /* the gradient over the outline, over a black shadow; premultiplied (the shadow adds only its cover) */
+            const float mix = (a_text > 0.0f) ? (c / a_text) : 0.0f;
+            for (int k = 0; k < 3; k++)
+            {
+                const float col = (float)ttf_outline[style][k] + (fill[k] - (float)ttf_outline[style][k]) * mix;
+                o[k] = (unsigned char)lroundf(max(0.0f, min(255.0f, col * a_text)));
+            }
+            o[3] = (unsigned char)lroundf(max(0.0f, min(255.0f, a * 255.0f)));
+        }
+    }
+    free(ras.cov);
+    free(ras.edge);
+    t->w = w;
+    t->h = h;
+    t->pad = pad;
+    t->px = out;
+    return t;
+}
+
+void ttf_rgba_free(struct TtfRgba *t)
+{
+    if (t == NULL)
+        return;
+    free(t->px);
     free(t);
 }
