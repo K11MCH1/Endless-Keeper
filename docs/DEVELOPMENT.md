@@ -94,6 +94,10 @@ cp -r config/fxdata/lua/. "$GAME/fxdata/lua/"
 
 To go back to plain KeeperFX, copy `keeperfx.exe.original` back over `keeperfx.exe`.
 
+In an Endless Keeper installation (from its setup or release archives) the game is named `EndlessKeeper.exe`, the
+64-bit one `x64\EndlessKeeper.exe`, and the launcher `ek-launcher.exe`: copy `out/keeperfx.exe` there as
+`EndlessKeeper.exe` (the build keeps the name `keeperfx`; the release packages rename it).
+
 ## 7. Run and test
 
 Start `keeperfx.exe` and choose **Endless Mode** in the main menu. Some command lines are handy while testing

@@ -65,7 +65,7 @@ VersionInfoVersion={#BaseVersion}.{#ReleaseNum}
 VersionInfoProductVersion={#BaseVersion}.{#ReleaseNum}
 VersionInfoTextVersion={#AppVersion}
 SetupIconFile=endless-keeper.ico
-UninstallDisplayIcon={app}\EndlessKeeper.exe
+UninstallDisplayIcon={app}\ek-launcher.exe
 UninstallDisplayName=Endless Keeper
 Compression=lzma2/max
 SolidCompression=yes
@@ -86,7 +86,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; 1. the KeeperFX base game is downloaded, checked and unpacked by InstallBase below, in one pass (a solid archive
 ;    unpacked file by file through [Files] would take hours); an update that has this base already skips it
 ; 2. Endless Keeper (the game settings file only on a new install: an update keeps the player's settings)
-Source: "{#PackageDir}\*"; Excludes: "\keeperfx.cfg"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+;    (not the bridge keeperfx.exe: only launchers of 18.1 and older, updating a folder, need it)
+Source: "{#PackageDir}\*"; Excludes: "\keeperfx.cfg,\keeperfx.exe,\x64\keeperfx.exe"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#PackageDir}\keeperfx.cfg"; DestDir: "{app}"; Flags: ignoreversion; Check: IsNewInstall
 ; 3. the original Dungeon Keeper files, from the player's own copy
 Source: "{code:DkFile|data\bluepal.dat}";   DestDir: "{app}\data"; DestName: "bluepal.dat";   Flags: external ignoreversion; Check: DkElsewhere
@@ -116,13 +117,14 @@ Filename: "{app}\endless-keeper.ini"; Section: "install"; Key: "version"; String
 Filename: "{app}\endless-keeper.ini"; Section: "install"; Key: "base"; String: "{#BaseName}"
 
 [Icons]
-; (the launcher: it starts the game, 64-bit where Windows can run it, and keeps Endless Keeper up to date)
-Name: "{group}\Endless Keeper"; Filename: "{app}\EndlessKeeper.exe"; WorkingDir: "{app}"
+; (the launcher, ek-launcher.exe: it starts the game, EndlessKeeper.exe, 64-bit where Windows can run it, and keeps
+;  Endless Keeper up to date; until 2026-11-28 the launcher was EndlessKeeper.exe and the game keeperfx.exe)
+Name: "{group}\Endless Keeper"; Filename: "{app}\ek-launcher.exe"; WorkingDir: "{app}"
 Name: "{group}\Uninstall Endless Keeper"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Endless Keeper"; Filename: "{app}\EndlessKeeper.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\Endless Keeper"; Filename: "{app}\ek-launcher.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\EndlessKeeper.exe"; WorkingDir: "{app}"; Description: "Start Endless Keeper"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\ek-launcher.exe"; WorkingDir: "{app}"; Description: "Start Endless Keeper"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const
@@ -470,6 +472,15 @@ begin
     { KeeperFX's launchers would update this folder to plain KeeperFX }
     DeleteFile(ExpandConstant('{app}\keeperfx-launcher-qt.exe'));
     DeleteFile(ExpandConstant('{app}\keeperfx-launcher-legacy.exe'));
+    { the game is EndlessKeeper.exe since 2026-11-28: the KeeperFX base's own keeperfx.exe, and an older Endless
+      Keeper's game, its 64-bit game and the bridge an old launcher's update brought, go }
+    DeleteFile(ExpandConstant('{app}\keeperfx.exe'));
+    DeleteFile(ExpandConstant('{app}\keeperfx.map'));
+    DeleteFile(ExpandConstant('{app}\keeperfx_hvlog.exe'));
+    DeleteFile(ExpandConstant('{app}\keeperfx_hvlog.map'));
+    DeleteFile(ExpandConstant('{app}\x64\keeperfx.exe'));
+    DeleteFile(ExpandConstant('{app}\x64\keeperfx.map'));
+    DeleteFile(ExpandConstant('{app}\EndlessKeeper.exe.old'));
     RemoveObsoleteFiles();
   end;
 end;

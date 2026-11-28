@@ -69,9 +69,9 @@ mv pkg/keeperfx-linux_*-patch.tar.gz "$OUTPUT"
 echo "== check: every library is found, none from the build folder"
 check=$(mktemp -d)
 tar -xzf "$OUTPUT" -C "$check"
-ldd "$check/keeperfx" > "$check/ldd.txt"
+ldd "$check/endlesskeeper" > "$check/ldd.txt" # (the game's name in the packages since 2026-11-28: Packaging.cmake)
 if grep -E "not found|$PWD" "$check/ldd.txt"; then
-  echo "keeperfx does not find all its libraries in the archive"
+  echo "endlesskeeper does not find all its libraries in the archive"
   exit 1
 fi
 echo "$(ls "$check/lib" | wc -l) files in lib/, $(grep -c "$check/lib" "$check/ldd.txt") libraries loaded from there"

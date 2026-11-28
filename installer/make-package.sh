@@ -38,13 +38,18 @@ mkdir -p pkg/data
 cp config/mods/zombie/data/zompal.pal pkg/data/
 rm -rf pkg/mods/zombie/data
 
-echo "== launcher (EndlessKeeper.exe: what players start)"
+echo "== launcher (ek-launcher.exe: what players start; the game is EndlessKeeper.exe since 2026-11-28)"
 launcher/build.sh out/launcher > /dev/null
-cp out/launcher/EndlessKeeper.exe pkg/
+cp out/launcher/ek-launcher.exe pkg/
+# the bridge keeperfx.exe (launcher/keeperfx_bridge.c): launchers of 18.1 and older accept only an update that holds a
+# keeperfx.exe and start the game by that name; it starts EndlessKeeper.exe. The new launcher removes it, the setup
+# leaves it out.
+mkdir -p pkg/x64
+cp out/launcher/keeperfx-bridge.exe pkg/keeperfx.exe
+cp out/launcher/keeperfx-bridge.exe pkg/x64/keeperfx.exe
 
 echo "== 64-bit game in x64 (with its SDL3 DLLs; started there, it plays from the game folder above)"
-mkdir -p pkg/x64
-cp out64/keeperfx.exe pkg/x64/
+cp out64/keeperfx.exe pkg/x64/EndlessKeeper.exe
 cp out64/deps/sdl3/SDL3-*/x86_64-w64-mingw32/bin/SDL3.dll \
    out64/deps/sdl3_mixer/SDL3_mixer-*/x86_64-w64-mingw32/bin/SDL3_mixer.dll \
    out64/deps/sdl3_image/SDL3_image-*/x86_64-w64-mingw32/bin/SDL3_image.dll pkg/x64/

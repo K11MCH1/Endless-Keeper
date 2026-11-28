@@ -1,6 +1,7 @@
 // Endless Keeper launcher: the release list from GitHub, downloads, and installing an update.
 #include "net.h"
 #include "json.h"
+#include "migrate.h"
 #include <windows.h>
 #include <winhttp.h>
 #include <bcrypt.h>
@@ -246,6 +247,8 @@ bool keep_players_own(const fs::path &rel, const fs::path &dest)
     const std::wstring first = rel.begin()->wstring(), name = rel.filename().wstring();
     if ((_wcsicmp(first.c_str(), L"save") == 0) || (_wcsicmp(name.c_str(), L"endlesskeeper-launcher.cfg") == 0))
         return true;
+    if (migrate_bridge_file(rel.wstring()))
+        return true; /* the bridge keeperfx.exe: only launchers of 18.1 and older need it (migrate.cpp) */
     return (_wcsicmp(rel.wstring().c_str(), L"keeperfx.cfg") == 0) && fs::exists(dest);
 }
 
@@ -332,11 +335,11 @@ static std::string program_name(const std::wstring &rel_path)
     const std::wstring file = (slash == std::wstring::npos) ? rel_path : rel_path.substr(slash + 1);
     if (file == L"keeperserver.exe")
         return "Keeper Server";
-    if (file == L"keeperfx.exe")
+    if ((file == L"endlesskeeper.exe") || (file == L"keeperfx.exe")) /* (the game: keeperfx.exe until 2026-11-28) */
         return "Endless Keeper (the game, or a world that Keeper Server runs)";
     if (file == L"endlessviewer.exe")
         return "Endless World Viewer";
-    if (file == L"endlesskeeper.exe")
+    if (file == L"ek-launcher.exe")
         return "Endless Keeper's launcher (another window of it)";
     return narrow(rel_path);
 }
@@ -455,7 +458,7 @@ bool install_release(const Release &rel, const std::wstring &game_dir, const std
     if (!wait_until_closed(game_dir, progress, cancel, why))
         return false;
     /* and the game's programs must be free to write (a program started from elsewhere that holds them) */
-    for (const wchar_t *exe : {L"keeperfx.exe", L"x64\\keeperfx.exe"})
+    for (const wchar_t *exe : {L"EndlessKeeper.exe", L"x64\\EndlessKeeper.exe", L"keeperfx.exe", L"x64\\keeperfx.exe"})
     {
         const fs::path p = fs::path(game_dir) / exe;
         if (!fs::exists(p, ec))
@@ -492,7 +495,7 @@ bool install_release(const Release &rel, const std::wstring &game_dir, const std
         if ((dirs == 1) && (files == 0))
             root = only;
     }
-    if (!fs::exists(root / L"keeperfx.exe", ec))
+    if (!fs::exists(root / L"EndlessKeeper.exe", ec) && !fs::exists(root / L"keeperfx.exe", ec))
     {
         why = "the update doesn't look like an Endless Keeper patch";
         return false;

@@ -1,4 +1,4 @@
-// EndlessKeeper.exe: the launcher's icon, its header picture and version
+// ek-launcher.exe: the launcher's icon, its header picture and version
 #include <winver.h>
 1 ICON "../installer/endless-keeper.ico"
 100 RCDATA "header.png"
@@ -29,7 +29,7 @@ BEGIN
       VALUE "FileDescription", "Endless Keeper"
       VALUE "ProductName", "Endless Keeper"
       VALUE "FileVersion", "1.0"
-      VALUE "OriginalFilename", "EndlessKeeper.exe"
+      VALUE "OriginalFilename", "ek-launcher.exe"
     END
   END
   BLOCK "VarFileInfo"

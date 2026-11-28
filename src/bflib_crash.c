@@ -455,10 +455,25 @@ _backtrace(int depth , LPCONTEXT context)
     int64_t keeperFxBaseAddr = 0x00000000;
     char mapFileLine[512];
 
+    /* Endless Keeper: the map beside the program, by its own name (EndlessKeeper.map for EndlessKeeper.exe, the
+       64-bit one's in x64; 2026-11-28: the programs were renamed, and the 64-bit game opened the 32-bit map of the
+       folder it plays from); the old fixed names after it */
+    FILE *mapFile = NULL;
+    {
+        char map_path[MAX_PATH + 8];
+        const DWORD n = GetModuleFileNameA(NULL, map_path, MAX_PATH);
+        if ((n > 4) && (n < MAX_PATH) && (_stricmp(map_path + n - 4, ".exe") == 0))
+        {
+            memcpy(map_path + n - 4, ".map", 5);
+            mapFile = fopen(map_path, "r");
+        }
+    }
     #if (BFDEBUG_LEVEL > 7)
-        FILE *mapFile = fopen("keeperfx_hvlog.map", "r");
+    if (mapFile == NULL)
+        mapFile = fopen("keeperfx_hvlog.map", "r");
     #else
-        FILE *mapFile = fopen("keeperfx.map", "r");
+    if (mapFile == NULL)
+        mapFile = fopen("keeperfx.map", "r");
     #endif
 
     if (mapFile)
@@ -551,7 +566,8 @@ _backtrace(int depth , LPCONTEXT context)
 
         // Check if the name of this module starts with 'keeperfx'
         // This can be done better but at this moment it should only match our own keeperfx.exe and keeperfx_hvlog.exe
-        if (strncmp(module_name, "keeperfx", strlen("keeperfx")) == 0)
+        if ((strncmp(module_name, "keeperfx", strlen("keeperfx")) == 0) ||
+            (_strnicmp(module_name, "EndlessKeeper", strlen("EndlessKeeper")) == 0)) /* (Endless Keeper's name since 2026-11-28) */
         {
 
             // Look up using the keeperfx.map file

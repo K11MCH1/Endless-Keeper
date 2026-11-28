@@ -4,7 +4,7 @@
 /** @file world_attract.h
  *     Endless Keeper: the launcher's background - the game itself, hidden, playing battles and handing its frames over.
  * @par Purpose:
- *     The launcher (launcher/, EndlessKeeper.exe) starts the game with "-attract <name>": the name of a piece of shared
+ *     The launcher (launcher/, ek-launcher.exe) starts the game with "-attract <name>": the name of a piece of shared
  *     memory it made. The game then runs an endless world without a window, sound, saves or input; a director stages
  *     battles by the keeper's dungeon (rival keepers, heroes, wild creatures; creatures of any level up to 100) and
  *     moves the camera slowly; every drawn frame is copied into the shared memory, where the launcher shows it behind

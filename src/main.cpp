@@ -160,6 +160,7 @@
 #include "server_admin.h"
 #include "net_diag.h"
 #include "net_portforward.h"
+#include "ek_handover.h"
 #include "post_inc.h"
 
 #ifdef _MSC_VER
@@ -2484,6 +2485,9 @@ int LbBullfrogMain(unsigned short argc, char *argv[])
 
 int kfxmain(int argc, char *argv[])
 {
+  /* Endless Keeper: once, after the programs were renamed, a shortcut's start goes to the launcher (ek_handover.c) */
+  if (ek_handover_to_launcher(argc))
+      return 0;
   try {
   LbBullfrogMain(argc, argv);
   } catch (...)

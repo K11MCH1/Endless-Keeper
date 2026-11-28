@@ -26,6 +26,7 @@
 #include "engine_view.h"
 #include "fx.h"
 #include "heart_sound.h"
+#include "migrate.h"
 #include "net.h"
 #include "../src/ver_defs.h"
 
@@ -780,10 +781,12 @@ static bool windows_is_64bit()
 
 static std::wstring game_exe()
 {
-    const std::wstring x64 = g_game_dir + L"\\x64\\keeperfx.exe";
+    /* the game is EndlessKeeper.exe (keeperfx.exe until 2026-11-28; that name is now only the bridge old launchers
+       need, which migrate.cpp removes) */
+    const std::wstring x64 = g_game_dir + L"\\x64\\EndlessKeeper.exe";
     if (!opt_32bit && windows_is_64bit() && (GetFileAttributesW(x64.c_str()) != INVALID_FILE_ATTRIBUTES))
         return x64;
-    return g_game_dir + L"\\keeperfx.exe";
+    return g_game_dir + L"\\EndlessKeeper.exe";
 }
 
 static std::string game_arguments()
@@ -808,7 +811,7 @@ static void play()
     const std::wstring exe = game_exe();
     if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES)
     {
-        g_message = "The game isn't in this folder: keeperfx.exe is missing beside the launcher.";
+        g_message = "The game isn't in this folder: EndlessKeeper.exe is missing beside the launcher.";
         return;
     }
     engine_view_pause(); /* the background's game makes way for the real one */
@@ -2140,6 +2143,7 @@ int main(int, char **)
     }
     start_mark("main");
     DeleteFileW((g_self_exe + L".old").c_str()); /* the launcher an update replaced */
+    migrate_program_names(g_game_dir); /* a folder an old launcher updated: shortcuts to ek-launcher.exe, the bridge gone */
     {
         /* and the files it had in use then, which the update renamed out of the way */
         const std::wstring list = g_game_dir + L"/endlesskeeper-launcher.old";

@@ -214,7 +214,8 @@ Planned:
    `keeper07.ogg`) into `music\` if you have it.
 4. Delete `keeperfx-launcher-qt.exe` and `keeperfx-launcher-legacy.exe`: KeeperFX's launcher would update the folder
    to plain KeeperFX.
-5. Start `EndlessKeeper.exe`, Endless Keeper's launcher.
+5. Delete KeeperFX's own `keeperfx.exe` (Endless Keeper's game is `EndlessKeeper.exe`), then start `ek-launcher.exe`,
+   Endless Keeper's launcher. `EndlessKeeper.exe` starts the game without the launcher.
 
 </details>
 
@@ -231,11 +232,11 @@ PulseAudio or PipeWire); everything else comes in its `lib/` folder.
 2. Copy the original Dungeon Keeper files into it, as in step 3 of *Installing by hand* above.
 3. Unpack `endless-keeper-…-linux_x86_64.tar.gz` from the [Releases](https://github.com/K11MCH1/Endless-Keeper/releases)
    page over it: `tar -xzf endless-keeper-*-linux_x86_64.tar.gz -C ~/Games/EndlessKeeper`
-4. Start it from that folder with `./keeperfx` and choose **Endless Mode** in the main menu. Options go in
-   `keeperfx.cfg`.
+4. Start it from that folder with `./endlesskeeper` and choose **Endless Mode** in the main menu. Options go in
+   `keeperfx.cfg`. (KeeperFX's own `keeperfx` from step 1 can go.)
 
 To update, unpack the newer Linux archive over the folder (it replaces `keeperfx.cfg`, so keep a copy of yours). If
-the game does not start, `ldd ./keeperfx | grep "not found"` shows which system library is missing; the game writes
+the game does not start, `ldd ./endlesskeeper | grep "not found"` shows which system library is missing; the game writes
 `keeperfx.log` in its folder.
 
 </details>

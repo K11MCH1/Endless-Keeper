@@ -68,6 +68,29 @@ install(TARGETS keeperfx_hvlog RUNTIME DESTINATION . OPTIONAL)
 install(FILES "${CMAKE_BINARY_DIR}/keeperfx.map" DESTINATION . OPTIONAL)
 install(FILES "${CMAKE_BINARY_DIR}/keeperfx_hvlog.map" DESTINATION . OPTIONAL)
 
+# Endless Keeper (2026-11-28): in the packages the game is EndlessKeeper.exe on Windows and endlesskeeper on Linux
+# (renamed after its install, which sets the Linux program's library path); the build keeps the target's own name,
+# keeperfx. The game data below goes in after this, so the bridge keeperfx.exe that installer/make-package.sh puts into
+# pkg/ for old launchers is not renamed.
+if(WIN32 OR MINGW OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(EK_GAME_NAME "EndlessKeeper")
+else()
+    set(EK_GAME_NAME "endlesskeeper")
+endif()
+foreach(_ek_pair "keeperfx${CMAKE_EXECUTABLE_SUFFIX}|${EK_GAME_NAME}${CMAKE_EXECUTABLE_SUFFIX}"
+                 "keeperfx_hvlog${CMAKE_EXECUTABLE_SUFFIX}|${EK_GAME_NAME}_hvlog${CMAKE_EXECUTABLE_SUFFIX}"
+                 "keeperfx.map|${EK_GAME_NAME}.map" "keeperfx_hvlog.map|${EK_GAME_NAME}_hvlog.map")
+    string(REPLACE "|" ";" _ek_names "${_ek_pair}")
+    list(GET _ek_names 0 _ek_from)
+    list(GET _ek_names 1 _ek_to)
+    install(CODE "
+        set(_ek_dir \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}\")
+        if(EXISTS \"\${_ek_dir}/${_ek_from}\")
+            file(RENAME \"\${_ek_dir}/${_ek_from}\" \"\${_ek_dir}/${_ek_to}\")
+        endif()
+    ")
+endforeach()
+
 # vcpkg's applocal deployment (VCPKG_APPLOCAL_DEPS, default ON) already copies
 # runtime DLLs next to the keeperfx binary in the build tree for every
 # toolchain preset. Install them too, so `cmake --install <builddir> --prefix
