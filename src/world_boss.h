@@ -38,6 +38,8 @@ enum WorldBossPhase {
 
 /** The simulation's turn of an endless world. */
 void world_boss_turn(void);
+/** A replay being played back: the recording's real-time countdown came due on this turn (replay.c, LTK_WorldBossDue). */
+void world_boss_replay_due(uint32_t turn);
 /** A piece of a player's join request (the packet): three of their creatures' thing indexes, the piece's place in the
  *  list and the list's length (see world_boss.c). */
 void world_boss_packet_join(PlayerNumber plyr_idx, uint32_t par1, uint32_t par2);

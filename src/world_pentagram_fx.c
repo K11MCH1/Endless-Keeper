@@ -362,6 +362,24 @@ HitPoints world_pentagram_door_max(const struct Thing *doortng, HitPoints base)
 
 static uint8_t wfx_applied_version[PLAYERS_MAX];
 static uint8_t wfx_applied_valid[PLAYERS_MAX];
+/* The share of Bolted Doors each keeper's doors carry now. It was a static inside wfx_refresh_creatures, neither saved nor
+   reset (audit 2026-11-28): after every load in a new game it was 0, and the loaded doors, which carry their share
+   already, were multiplied again (+25% a load, past their most health); another world's value carried over. A loaded
+   seat takes its web's share as it is (wfx_doors_loaded); a new world starts at 0. */
+static int16_t wfx_door_pct[PLAYERS_MAX];
+static uint8_t wfx_doors_loaded[PLAYERS_MAX];
+
+void world_pentagram_fx_reset(void)
+{
+    memset(wfx_door_pct, 0, sizeof(wfx_door_pct));
+    memset(wfx_doors_loaded, 0, sizeof(wfx_doors_loaded));
+}
+
+void world_pentagram_fx_loaded(PlayerNumber p)
+{
+    if ((p >= 0) && (p < PLAYERS_MAX))
+        wfx_doors_loaded[p] = 1;
+}
 
 /** The web changed: creatures' most health follows (health keeps its share). */
 static void wfx_refresh_creatures(PlayerNumber p)
@@ -383,8 +401,13 @@ static void wfx_refresh_creatures(PlayerNumber p)
         }
     }
     /* the keeper's doors keep their share of their most health (Bolted Doors) */
-    static int16_t door_pct[PLAYERS_MAX];
+    int16_t *door_pct = wfx_door_pct;
     const int want = FX(p, WFX_DOOR_HP_PCT);
+    if (wfx_doors_loaded[p])
+    {
+        wfx_doors_loaded[p] = 0;
+        door_pct[p] = (int16_t)want; /* (the saved doors have it already) */
+    }
     if (want != door_pct[p])
     {
         const struct StructureList *slist = get_list_for_thing_class(TCls_Door);

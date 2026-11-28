@@ -296,6 +296,13 @@ struct LocalCameraState {
     int32_t first_person_look_pitch;
     int32_t first_person_look_roll;
     int32_t possession_start_zoom;
+    /* Endless Keeper: third-person Possession (the user, 2026-11-28; C switches it). Local only, never replicated:
+       the camera sits behind and above the creature; the first-person eye is kept apart so its smoothing goes on */
+    unsigned char third_person; /* enum PossessionView: 0 first person, 1 behind, 2 farther behind */
+    TbBool third_person_chosen;
+    int32_t third_person_reach;
+    struct Coord3d third_person_eye;
+    ThingIndex third_person_eye_thing;
 };
 
 /* Miscellaneous state relating to this device and

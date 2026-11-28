@@ -218,7 +218,10 @@ static int wild_ground_at(MapSlabCoord x, MapSlabCoord y)
 
 static long wild_dist2(MapSlabCoord ax, MapSlabCoord ay, MapSlabCoord bx, MapSlabCoord by)
 {
-    return (long)(ax - bx) * (ax - bx) + (long)(ay - by) * (ay - by);
+    /* (64 bits, at most LONG_MAX: `long` is 32-bit on Windows and the square wrapped from ~46,000 slabs apart, e.g. a view
+       in the World Boss arena; audit 2026-11-28) */
+    const int64_t d2 = (int64_t)(ax - bx) * (ax - bx) + (int64_t)(ay - by) * (ay - by);
+    return (d2 > (int64_t)LONG_MAX) ? LONG_MAX : (long)d2;
 }
 
 /** Where the human players are: every human user's view and every human heart (game state, the same on every

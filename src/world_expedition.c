@@ -550,7 +550,10 @@ static void wex_found(const struct WexScan *scans, int nscans, MapSubtlCoord stl
         {
             const MapSlabCoord sx = subtile_slab(stl_x), sy = subtile_slab(stl_y);
             reveal_map_area(p, slab_subtile(sx - 5, 0), slab_subtile(sx + 5, 2), slab_subtile(sy - 5, 0), slab_subtile(sy + 5, 2));
+            /* (never one an Imp drags - its drag link would point at nothing - nor one in a room: a Library's book is in its
+               keeper's research and the room's storage count, which a plain delete leaves wrong: audit 2026-11-28) */
             if ((e->carry_model == 0) && (thing != NULL) && thing_exists(thing) && !thing_is_picked_up(thing) &&
+                !thing_is_dragged_or_pulled(thing) && room_is_invalid(get_room_thing_is_on(thing)) &&
                 ((kind == WExF_Book) || ((kind == WExF_Special) && (box_thing_to_special(thing) != SpcKind_IncrseLvl))))
             {
                 e->carry_model = thing->model;

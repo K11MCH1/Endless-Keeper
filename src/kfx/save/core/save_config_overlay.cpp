@@ -92,6 +92,8 @@ static int diff_struct(const struct SaveStructDesc *desc, const uint8_t *current
             const uint8_t *baseline_element = base + field->offset + (static_cast<size_t>(index) * elem);
             if (field->stored_type == SV_STRUCT)
             {
+                if (memcmp(current_element, baseline_element, elem) == 0)
+                    continue; /* (nothing in it differs: 2026-11-28, most of a save's config time) */
                 path[field_len] = 0;
                 if (count > 1)
                     path_append_index(path, pathcap, index);

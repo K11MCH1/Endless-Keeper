@@ -18,6 +18,8 @@
 /******************************************************************************/
 
 #include "pre_inc.h"
+#include <stdlib.h>
+#include <string.h>
 #include "globals.h"
 #include "bflib_planar.h"
 #include "map_columns.h"
@@ -210,10 +212,34 @@ void ceiling_partially_recompute_heights(MapSubtlCoord sx, MapSubtlCoord sy, Map
                     box[y * bw + x] = (wp_page_of_subtile(bx, by) == NULL) ? (signed char)-1 :
                         (signed char)ceiling_block_is_solid_including_corners_return_height(get_subtile_number(bx, by), bx, by);
                 }
+            /* Streaming study 2026-11-28 (on by default, KFX_WORLD_CEILSKIP=0 turns it off): subtiles of chunks that aren't loaded are
+               skipped. Their result went to the one scratch block every unloaded subtile shares, after the longest
+               search (nothing round them has a ceiling): 80% of a freeze's ceiling time. Only the last of them in
+               this order is still worked out, so that the scratch block ends as it always did. */
+            static int skip_unloaded = -1;
+            if (skip_unloaded < 0)
+            {
+                const char *v = getenv("KFX_WORLD_CEILSKIP");
+                skip_unloaded = ((v == NULL) || (strcmp(v, "0") != 0)) ? 1 : 0;
+            }
+            MapSubtlCoord last_ux = -1, last_uy = -1;
+            if (skip_unloaded)
+            {
+                for (MapSubtlCoord cy = computation_end_stl_y - 1; (cy >= computation_start_stl_y) && (last_ux < 0); cy--)
+                    for (MapSubtlCoord cx = computation_end_stl_x - 1; cx >= computation_start_stl_x; cx--)
+                        if (wp_page_of_subtile(cx, cy) == NULL)
+                        {
+                            last_ux = cx;
+                            last_uy = cy;
+                            break;
+                        }
+            }
             for (MapSubtlCoord cy = computation_start_stl_y; cy < computation_end_stl_y; cy++)
             {
                 for (MapSubtlCoord cx = computation_start_stl_x; cx < computation_end_stl_x; cx++)
                 {
+                    if (skip_unloaded && ((cx != last_ux) || (cy != last_uy)) && (wp_page_of_subtile(cx, cy) == NULL))
+                        continue;
                     int height = box[(cy - solid_check_start_stl_y) * bw + (cx - solid_check_start_stl_x)];
                     if (height <= -1)
                     {

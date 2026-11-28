@@ -220,10 +220,14 @@ const char *world_keeper_ai_personality_name(PlayerNumber plyr_idx)
     return kai_traits[kai[plyr_idx].personality].name;
 }
 
+/** Squared subtile distance, at most LONG_MAX. In 64 bits (audit 2026-11-28): `long` is 32-bit on Windows, and from about
+ *  15,450 slabs apart (the World Boss arena is 400,000 out) the square wrapped, often negative: a creature in the arena
+ *  counted as an intruder at home, and the keeper turtled, called to arms and filled its own corridors. */
 static long kai_dist2(const struct Coord3d *a, const struct Coord3d *b)
 {
-    const long dx = (long)a->x.stl.num - b->x.stl.num, dy = (long)a->y.stl.num - b->y.stl.num;
-    return dx * dx + dy * dy;
+    const int64_t dx = (int64_t)a->x.stl.num - b->x.stl.num, dy = (int64_t)a->y.stl.num - b->y.stl.num;
+    const int64_t d2 = dx * dx + dy * dy;
+    return (d2 > (int64_t)LONG_MAX) ? LONG_MAX : (long)d2;
 }
 
 #define KAI_SLABS2(s) ((long)(s) * STL_PER_SLB * (long)(s) * STL_PER_SLB)
@@ -272,6 +276,8 @@ static void kai_look(PlayerNumber p, const struct Coord3d *heart, struct KaiView
         i = t->next_of_class;
         if (thing_is_picked_up(t) || creature_is_dying(t))
             continue;
+        if (world_apart_thing(t))
+            continue; /* (the World Boss arena is no keeper's neighbourhood: pitfall of 2026-11-14, audit 2026-11-28) */
         const PlayerNumber o = t->owner;
         const long d2 = kai_dist2(&t->mappos, heart);
         const struct CreatureControl *cctrl = creature_control_get_from_thing(t);
@@ -367,8 +373,8 @@ static TbBool kai_cut_off(struct Computer2 *comp, PlayerNumber p, const struct C
     const int steps = max(abs(fx - hx), abs(fy - hy));
     for (int s = 0; s <= steps; s++)
     {
-        const MapSlabCoord x = fx + (MapSlabCoord)((long)(hx - fx) * s / max(steps, 1));
-        const MapSlabCoord y = fy + (MapSlabCoord)((long)(hy - fy) * s / max(steps, 1));
+        const MapSlabCoord x = fx + (MapSlabCoord)((int64_t)(hx - fx) * s / max(steps, 1)); /* (64 bits: audit 2026-11-28) */
+        const MapSlabCoord y = fy + (MapSlabCoord)((int64_t)(hy - fy) * s / max(steps, 1));
         if ((abs(x - hx) <= 3) && (abs(y - hy) <= 3))
             break; /* (never at the heart itself) */
         const struct SlabMap *slb = get_slabmap_block(x, y);
@@ -418,8 +424,8 @@ static TbBool kai_edge_toward(PlayerNumber p, const struct Coord3d *heart, const
     TbBool found = false;
     for (int s = 0; s <= steps; s++)
     {
-        const MapSlabCoord x = hx + (MapSlabCoord)((long)(tx - hx) * s / max(steps, 1));
-        const MapSlabCoord y = hy + (MapSlabCoord)((long)(ty - hy) * s / max(steps, 1));
+        const MapSlabCoord x = hx + (MapSlabCoord)((int64_t)(tx - hx) * s / max(steps, 1)); /* (64 bits: audit 2026-11-28) */
+        const MapSlabCoord y = hy + (MapSlabCoord)((int64_t)(ty - hy) * s / max(steps, 1));
         const struct SlabMap *slb = get_slabmap_block(x, y);
         if (slabmap_block_invalid(slb) || (slabmap_owner(slb) != p) || ((slb->kind != SlbT_CLAIMED) && (slb->room_index <= 0)))
             continue;
@@ -959,7 +965,8 @@ static void kai_fortify(struct Computer2 *comp, struct KaiState *ks, PlayerNumbe
             TbBool straight = false;
             if (!kai_corridor(p, x, y, &straight))
                 continue;
-            const long d = (long)(x - fx) * (x - fx) + (long)(y - fy) * (y - fy);
+            const int64_t d64 = (int64_t)(x - fx) * (x - fx) + (int64_t)(y - fy) * (y - fy); /* (audit 2026-11-28) */
+            const long d = (d64 > (int64_t)LONG_MAX) ? LONG_MAX : (long)d64;
             if ((n == KAI_FORT_N) && (d >= cd[n - 1]))
                 continue;
             int at = (n < KAI_FORT_N) ? n++ : n - 1;

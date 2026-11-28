@@ -69,6 +69,7 @@
 
 #include "keeperfx.hpp"
 #include "world_sword.h"
+#include "world_stream.h"
 #include "world_hand.h"
 #include "world_fill.h"
 #include "world_pentagram_hooks.h"
@@ -903,8 +904,12 @@ void leave_creature_as_controller(NetUserId user, struct Thing *thing)
     struct PlayerInfo *player = get_user_player(user);
     struct UserState* ustate = get_user_state(user);
     SYNCDBG(7,"Starting for player %d within %s index %d",(int)player->id_number,thing_model_name(thing),(int)thing->index);
-    if (((thing->owner != player->id_number) && (ustate->work_state != PSt_FreeCtrlDirect) &&
-        !world_sword_may_drive(user, thing)) /* endless worlds: a guest leading a raid */
+    /* endless worlds: a guest leading a raid; and leaving a hero it drives is always let go properly (audit 2026-11-28: once
+       the raid fled or the keeper invited another guest, world_sword_may_drive said no, and the hero stayed controlled,
+       unseen and still, with the guest's camera sent to the middle of the virtual map) */
+    const TbBool guest_hero = world_sword_may_drive(user, thing) || (world_mode_active() && (thing->owner == PLAYER_GOOD) &&
+        (thing->index == ustate->controlled_thing_idx) && ((thing->alloc_flags & TAlF_IsControlled) != 0));
+    if (((thing->owner != player->id_number) && (ustate->work_state != PSt_FreeCtrlDirect) && !guest_hero)
       || (thing->index != ustate->controlled_thing_idx))
     {
         set_user_instance(user, PI_Unset, false);

@@ -44,6 +44,8 @@
 #include "room_jobs.h"
 #include "room_list.h"
 
+#include "world_risen.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -337,6 +339,15 @@ TbBool prison_convert_creature_to_skeleton(struct Room *room, struct Thing *thin
     {
         // If not assigned or is unknown, default to the room creature creation.
         crmodel = get_room_create_creature_model(room->kind);
+    }
+    if (world_mode_active() && !world_risen_counts(room->owner, WRis_Skeleton, 1, crmodel))
+    {
+        /* endless worlds: at most 4 Skeletons, each more needing more prisoners dead in the last day and night
+           (world_risen.c, the user 2026-11-28): this one just dies */
+        if (creature_model_bleeds(thing->model))
+            create_effect_around_thing(thing, TngEff_Blood5);
+        kill_creature(thing, INVALID_THING, -1, CrDed_NoEffects);
+        return false;
     }
     if (creature_count_below_map_limit(1))
     {

@@ -153,6 +153,9 @@ TbBool recreate_repositioned_food_in_room_on_subtile(struct Room *room, MapSubtl
                 if (object_is_mature_food(foodtng)) {
                     foodtng->food.life_remaining = -1;
                 }
+                /* (suite errors 2026-11-28) counted: one put back on the second sweep was not, and the Garden then
+                   grew one more than it holds */
+                room->used_capacity++;
                 rrepos->used--;
                 rrepos->models[ri] = 0;
                 rrepos->exp_level[ri] = 0;
@@ -229,7 +232,10 @@ int check_food_on_subtile_for_reposition_in_room(struct Room *room, MapSubtlCoor
             if (object_is_infant_food(thing) || object_is_growing_food(thing) || object_is_mature_food(thing))
             {
                 // If exceeded capacity of the room
-                if (room->used_capacity >= room->total_capacity)
+                /* (suite errors 2026-11-28) with the things already counted on this subtile: two chickens on one
+                   subtile were both let in at total-1, so a recount gave e.g. 10/9 and room_grow_food logged
+                   "too much used capacity" every turn until one walked off */
+                if (room->used_capacity + matching_things_at_subtile >= room->total_capacity)
                 {
                     SYNCDBG(7,"Trying to place %s back in room %s, that is already at %d/%d capacity",thing_model_name(thing), room_code_name(room->kind),(int)room->used_capacity,(int)room->total_capacity);
                     return -1; // re-create all 

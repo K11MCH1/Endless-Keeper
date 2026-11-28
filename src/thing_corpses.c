@@ -42,6 +42,8 @@
 #include "world_progress.h"
 #include "world_misdeeds.h"
 #include "world_boss.h"
+#include "world_risen.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -167,13 +169,22 @@ void remove_body_from_graveyard(struct Thing *thing)
     room->used_capacity--;
     thing->corpse.laid_to_rest = 0;
     struct Dungeon* dungeon = get_dungeon(room->owner);
-    dungeon->bodies_rotten_for_vampire++;
     dungeon->lvstats.graveyard_bodys++;
+    /* endless: the Graveyard's level asks for a corpse or two fewer */
+    const int bodies_needed = max(1, (int)game.conf.rules[dungeon->owner].rooms.bodies_for_vampire -
+        world_room_bonus(dungeon->owner, WRB_GraveyardCorpses));
+    if (world_mode_active())
+    {
+        /* endless worlds: at most 4 Vampires, each more needing more corpses, and a corpse counts for a day and its
+           night (world_risen.c, the user 2026-11-28) */
+        if (creature_count_below_map_limit(0) &&
+            world_risen_counts(dungeon->owner, WRis_Vampire, bodies_needed, get_room_create_creature_model(room->kind)))
+            create_vampire_in_room(room);
+        return;
+    }
+    dungeon->bodies_rotten_for_vampire++;
     if (creature_count_below_map_limit(0))
     {
-        /* endless: the Graveyard's level asks for a corpse or two fewer */
-        const int bodies_needed = max(1, (int)game.conf.rules[dungeon->owner].rooms.bodies_for_vampire -
-            world_room_bonus(dungeon->owner, WRB_GraveyardCorpses));
         if (dungeon->bodies_rotten_for_vampire >= bodies_needed) {
             dungeon->bodies_rotten_for_vampire -= bodies_needed;
             create_vampire_in_room(room);

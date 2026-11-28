@@ -2941,8 +2941,10 @@ static void mirror_computer_keepers(void)
             struct Thing *hh = find_players_dungeon_heart(p);
             if (!thing_exists(hh))
                 continue;
-            const long dx = (long)hh->mappos.x.stl.num - cheart->mappos.x.stl.num, dy = (long)hh->mappos.y.stl.num - cheart->mappos.y.stl.num;
-            const long d = dx * dx + dy * dy;
+            /* (in 64 bits, at most LONG_MAX: `long` is 32-bit on Windows and the square wrapped from ~15,450 slabs apart, so
+               the "nearest" human could be a far one: audit 2026-11-28) */
+            const int64_t dx = (int64_t)hh->mappos.x.stl.num - cheart->mappos.x.stl.num, dy = (int64_t)hh->mappos.y.stl.num - cheart->mappos.y.stl.num;
+            const long d = (dx * dx + dy * dy > (int64_t)LONG_MAX) ? LONG_MAX : (long)(dx * dx + dy * dy);
             if (d < best)
             {
                 best = d;

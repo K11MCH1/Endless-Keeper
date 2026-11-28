@@ -42,6 +42,13 @@ int ek_handover_to_launcher(int argc)
     bridge[MAX_PATH + 31] = 0;
     if ((GetFileAttributesW(launcher) == INVALID_FILE_ATTRIBUTES) || (GetFileAttributesW(bridge) == INVALID_FILE_ATTRIBUTES))
         return 0;
+    /* (audit 2026-11-28) started by the launcher (Play with no options gives no arguments): never back to a launcher; and
+       a keeperfx.exe of megabytes is not the ~17 KB bridge but the old game, left by an update that stopped part way */
+    if (GetEnvironmentVariableW(L"EK_FROM_LAUNCHER", NULL, 0) > 0)
+        return 0;
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(bridge, GetFileExInfoStandard, &fa) || (fa.nFileSizeHigh != 0) || (fa.nFileSizeLow >= (1u << 20)))
+        return 0;
     _snwprintf(cmd, MAX_PATH + 40, L"\"%ls\"", launcher);
     cmd[MAX_PATH + 39] = 0;
     STARTUPINFOW si;

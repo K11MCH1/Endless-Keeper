@@ -445,6 +445,10 @@ void draw_swipe_graphic(void)
                 endspr++;
             }
             int units_per_px = (RendererPhysicalWidth() * 59 / 64) * 16 / allwidth;
+            /* endless: behind the creature (third-person Possession) the swipe is the creature's, not the screen's:
+               much smaller, still round the middle where the crosshair is (the user, 2026-11-28: it covered too much) */
+            if (local_possession_third_person())
+                units_per_px = max(1, units_per_px * 2 / 5);
             int scrpos_y = (MyScreenHeight * 16 / units_per_px - (startspr->SHeight + endspr->SHeight)) / 2;
             const struct TbSprite *spr;
             int scrpos_x;
@@ -514,7 +518,12 @@ long creature_available_for_combat_this_turn(struct Thing *creatng)
         return false;
     }
     CrtrStateId i = get_creature_state_besides_interruptions(creatng);
-    return can_change_from_state_to(creatng, i, CrSt_CreatureInCombat);
+    if (!can_change_from_state_to(creatng, i, CrSt_CreatureInCombat))
+        return false;
+    /* (suite errors 2026-11-28) a slapped creature cowers in CreatureSlapCowers, a transition state no combat state
+       may leave; the backup state above can still allow combat, so the look went on and set_creature_in_combat
+       logged "Failed to enter combat state" on each 8-turn check of the cower (computer keepers slap their Imps) */
+    return can_change_from_state_to(creatng, creatng->active_state, CrSt_CreatureInCombat);
 }
 
 struct Thing *get_players_soul_container_creature_can_see(struct Thing *creatng, PlayerNumber heart_owner)
@@ -4523,7 +4532,8 @@ void draw_creature_view(struct Thing *thing)
   // If no eye lens required - just draw on the screen, directly
   struct PlayerInfo* player = get_my_player();
   struct Camera* render_cam = get_local_active_camera();
-  if (!lens_is_ready())
+  /* endless: the creature's eye lens is its own sight, not a camera's behind it (third-person Possession) */
+  if (!lens_is_ready() || local_possession_third_person())
   {
       engine(player, render_cam);
       // Still need to draw swipe even when no lens effect is active.

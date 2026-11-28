@@ -749,7 +749,8 @@ TbBool world_pentagram_load(const uint8_t *buf, size_t len)
         return false;
     uint32_t hdr[2];
     memcpy(hdr, buf, 8);
-    if ((hdr[0] != WPG_SAVE_VERSION) || (len < 8 + (size_t)hdr[1] * (4 + sizeof(struct WorldPentagram))))
+    /* (the count checked by division, not a product that wraps on a 32-bit build: audit 2026-11-28) */
+    if ((hdr[0] != WPG_SAVE_VERSION) || (hdr[1] > PLAYERS_MAX) || (hdr[1] > (len - 8) / (4 + sizeof(struct WorldPentagram))))
         return false;
     size_t at = 8;
     for (uint32_t i = 0; i < hdr[1]; i++)
@@ -759,9 +760,11 @@ TbBool world_pentagram_load(const uint8_t *buf, size_t len)
         if (plyr < PLAYERS_MAX)
         {
             memcpy(&wpg_state[plyr], buf + at + 4, sizeof(struct WorldPentagram));
-            wpg_state[plyr].reaper_thing = 0; /* (a Reaper does not outlive the save) */
-            wpg_state[plyr].reaper_until = 0;
+            /* a Reaper out when the game was saved is in the saved things, at his saved index: his summon goes on (audit
+               2026-11-28: it was zeroed here, and he stayed for good as an ordinary level-100 creature; wrp_thing checks the
+               thing is still him) */
             wpg_state[plyr].version++;
+            world_pentagram_fx_loaded(plyr); /* (its doors carry their share of Bolted Doors already) */
         }
         at += 4 + sizeof(struct WorldPentagram);
     }
@@ -779,6 +782,9 @@ void world_pentagram_reset(void)
     memset(wpg_fx_valid, 0, sizeof(wpg_fx_valid));
     wpg_queue_n = 0;
     wpg_reset_wanted = false;
+    wpg_rest_wanted = false; /* (a Day of Rest asked for in the last world is not sent in the next: audit 2026-11-28) */
+    wpg_sent_turn = 0;
+    world_pentagram_fx_reset(); /* (the doors' applied share: a new world's doors carry none yet) */
 }
 
 /******************************************************************************/

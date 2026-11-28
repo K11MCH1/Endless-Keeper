@@ -523,7 +523,7 @@ TbBool world_watchfire_load(const uint8_t *buf, size_t len)
     if (len < 4)
         return false;
     memcpy(&n, buf, 4);
-    if ((size_t)n * sizeof(struct Watchfire) + 4 > len)
+    if (n > (len - 4) / sizeof(struct Watchfire)) /* (by division: the product wrapped on 32-bit builds; audit 2026-11-28) */
         return false;
     for (uint32_t i = 0; (i < n) && (i < WATCHFIRES_MAX); i++)
         memcpy(&wf[i], buf + 4 + (size_t)i * sizeof(struct Watchfire), sizeof(struct Watchfire));

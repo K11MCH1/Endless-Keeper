@@ -64,12 +64,16 @@
 #include "net_zdict.h"
 #include "kfx/profiling/KfxProfilingC.h"
 #include "server_roles.h"
+#include "server_admin.h"
 #include "chat_box.h"
 #include "bflib_sndlib.h"
 #include "scrcapt.h"
 #include "gui_parchment.h"
 #include "world_colours.h"
 #include "net_anticheat.h"
+#include "net_kscm.h"
+#include "kfx/save/core/save_schema.h"
+#include "kfx/save/core/schema/save_tables_decl.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -93,6 +97,8 @@ enum NsKind {
     NsK_PageSetEnd,
     NsK_Events,
     NsK_ThingLines,    /* thing u16, then lines as MemLines (one thing, as this client has it) */
+    NsK_MemRuns,       /* region u8, page varint, runs varint, then per run: gap varint (from the last run's end), length
+                          varint, the bytes (KFX_NET_RUNS, 2026-11-28: a few changed bytes cost 6-9 bytes, not 24) */
 };
 
 enum NsFlags {
@@ -133,7 +139,7 @@ struct NsRegionDef {
 /******************************************************************************/
 /* shared */
 static struct NsRegionDef regions[NsR_Count];
-static struct NsExcl excl[64];
+static struct NsExcl excl[96];
 static int excl_count;
 
 /* server */
@@ -602,6 +608,30 @@ static void excl_setup(void)
     EXCL_FIELD(computer_task);
     EXCL_FIELD(script);
     EXCL_FIELD(navigation_map);
+    /* Streaming study 2026-11-28 (on by default, KFX_NET_TRIM=0 turns it off; on the server and the client): fields only the server's
+       simulation reads, which changed every turn and were most of the shared part at 100 keepers (field stats:
+       82% of its bytes). Clients never read them: no update runs there, and the effects they drive (room flames,
+       hatchery chickens, wandering) reach clients as things. */
+    const char *trim = getenv("KFX_NET_TRIM");
+    if ((trim == NULL) || (strcmp(trim, "0") != 0))
+    {
+        /* set for every light that follows a thing, every turn (light_set_light_position): 54% */
+        excl_add(offsetof(struct Game, lish) + offsetof(struct LightsShadows, lights) + offsetof(struct Light, last_turn_moved),
+            sizeof(((struct Light *)0)->last_turn_moved), sizeof(struct Light), LIGHTS_COUNT);
+        /* where each room's next flame goes (process_room_surrounding_flames): 19% */
+#define EXCL_ROOM_FIELD(field) excl_add(offsetof(struct Game, rooms) + offsetof(struct Room, field), \
+    sizeof(((struct Room *)0)->field), sizeof(struct Room), ROOMS_COUNT)
+        EXCL_ROOM_FIELD(flame_stl);
+        EXCL_ROOM_FIELD(flame_slb);
+        EXCL_ROOM_FIELD(flames_around_idx);
+        EXCL_ROOM_FIELD(hatch_gameturn); /* a hatchery's last chicken turn: 3% */
+#undef EXCL_ROOM_FIELD
+        /* the keepers' wander points (wander_point_update), read only by creatures' wandering: 7% */
+        excl_add(offsetof(struct Game, players) + offsetof(struct PlayerInfo, wandr_within),
+            sizeof(((struct PlayerInfo *)0)->wandr_within), sizeof(struct PlayerInfo), PLAYERS_MAX);
+        excl_add(offsetof(struct Game, players) + offsetof(struct PlayerInfo, wandr_outside),
+            sizeof(((struct PlayerInfo *)0)->wandr_outside), sizeof(struct PlayerInfo), PLAYERS_MAX);
+    }
 }
 
 /** Copies the excluded bytes of `src` into `dst` (both laid out as `game`). */
@@ -818,6 +848,161 @@ static void diff_page(uint8_t *shad, const uint8_t *live, size_t len, void (*hea
     }
 }
 
+/* Test switch KFX_NET_FIELDSTATS=1 (streaming study, 2026-11-28): the shared part's changed bytes are put down to the
+ * field of struct Game they lie in (and the field of its element, for arrays of structs), by the build's own save
+ * tables; the 30 largest go to the log every 200 turns. The shared diff runs on the main thread meanwhile. A changed
+ * byte counts 1, a changed 8-byte word 1 more (its byte mask): what the record carries for it, before compression. */
+static int fieldstats = -1;
+static uint64_t fs_shared_z, fs_shared_zs; /* the shared part compressed (zlib, zstd), summed over the 200 turns */
+/* counts by field path ("lish.lights.mappos"; array indices left out), in a small open hash table */
+#define FS_SLOTS 4096
+static struct FsSlot { uint64_t key; uint64_t count; char path[96]; } *fs_slot;
+static TbBool fieldstats_on(void)
+{
+    if (fieldstats < 0)
+    {
+        fieldstats = (getenv("KFX_NET_FIELDSTATS") != NULL) ? 1 : 0;
+        if (fieldstats)
+        {
+            fs_slot = (struct FsSlot *)calloc(FS_SLOTS, sizeof(struct FsSlot));
+            if (fs_slot == NULL)
+                fieldstats = 0;
+        }
+    }
+    return fieldstats > 0;
+}
+
+static int fs_find(const struct SaveStructDesc *d, size_t off)
+{
+    for (uint32_t i = 0; i < d->field_count; i++)
+    {
+        const struct SaveFieldDesc *f = &d->fields[i];
+        if ((off >= f->offset) && (off < (size_t)f->offset + f->mem_size))
+            return (int)i;
+    }
+    return -1;
+}
+
+static void fs_add(const char *path, uint64_t cost)
+{
+    uint64_t h = 1469598103934665603ull;
+    for (const char *c = path; *c; c++)
+        h = (h ^ (uint8_t)*c) * 1099511628211ull;
+    h |= 1;
+    for (uint32_t i = 0; i < FS_SLOTS; i++)
+    {
+        struct FsSlot *sl = &fs_slot[(h + i) & (FS_SLOTS - 1)];
+        if (sl->key == 0)
+        {
+            sl->key = h;
+            snprintf(sl->path, sizeof(sl->path), "%s", path);
+        }
+        if (sl->key == h)
+        {
+            sl->count += cost;
+            return;
+        }
+    }
+}
+
+static void fs_path_of(size_t goff, char *path, size_t room)
+{
+    int n = 0;
+    path[0] = 0;
+    const struct SaveStructDesc *d = &save_desc_Game;
+    size_t off = goff;
+    for (int depth = 0; (depth < 4) && (d != NULL); depth++)
+    {
+        const int i = fs_find(d, off);
+        if (i < 0)
+        {
+            n += snprintf(path + n, room - n, "%s(gap)", (depth > 0) ? "." : "");
+            break;
+        }
+        const struct SaveFieldDesc *f = &d->fields[i];
+        n += snprintf(path + n, room - n, "%s%s", (depth > 0) ? "." : "", f->name);
+        if (n >= (int)room - 24)
+            break;
+        off -= f->offset;
+        if ((f->sub == NULL) || (f->sub->size == 0))
+            break;
+        off %= f->sub->size;
+        d = f->sub;
+    }
+}
+
+static void fs_note(size_t goff, uint64_t cost)
+{
+    char path[96];
+    int n = 0;
+    const struct SaveStructDesc *d = &save_desc_Game;
+    size_t off = goff;
+    for (int depth = 0; (depth < 4) && (d != NULL); depth++)
+    {
+        const int i = fs_find(d, off);
+        if (i < 0)
+        {
+            n += snprintf(path + n, sizeof(path) - n, "%s(gap)", (depth > 0) ? "." : "");
+            break;
+        }
+        const struct SaveFieldDesc *f = &d->fields[i];
+        n += snprintf(path + n, sizeof(path) - n, "%s%s", (depth > 0) ? "." : "", f->name);
+        if (n >= (int)sizeof(path) - 24)
+            break;
+        off -= f->offset;
+        if ((f->sub == NULL) || (f->sub->size == 0))
+            break;
+        off %= f->sub->size;
+        d = f->sub;
+    }
+    fs_add(path, cost);
+}
+
+/** Before diff_page of a `game` page: what it is going to send, by field. */
+static void fs_page(const uint8_t *shad, const uint8_t *live, size_t off, size_t len)
+{
+    for (size_t wo = 0; wo < len; wo += 8)
+    {
+        const size_t wn = (wo + 8 <= len) ? 8 : len - wo;
+        if (memcmp(shad + wo, live + wo, wn) == 0)
+            continue;
+        TbBool first = true;
+        for (size_t b = 0; b < wn; b++)
+            if (shad[wo + b] != live[wo + b])
+            {
+                fs_note(off + wo + b, first ? 2 : 1);
+                first = false;
+            }
+    }
+}
+
+static void fs_report(void)
+{
+    uint64_t total = 0;
+    for (uint32_t e = 0; e < FS_SLOTS; e++)
+        total += fs_slot[e].count;
+    char line[3000];
+    int n = 0;
+    for (int pick = 0; (pick < 40) && (n < (int)sizeof(line) - 140); pick++)
+    {
+        int best = -1;
+        for (uint32_t e = 0; e < FS_SLOTS; e++)
+            if ((fs_slot[e].count > 0) && ((best < 0) || (fs_slot[e].count > fs_slot[best].count)))
+                best = (int)e;
+        if (best < 0)
+            break;
+        n += snprintf(line + n, sizeof(line) - n, " %s %llu;", fs_slot[best].path,
+            (unsigned long long)(fs_slot[best].count / 200));
+        fs_slot[best].count = 0;
+    }
+    SYNCLOG("Thin-client server: field stats, shared bytes a turn before compression (%llu in all; compressed: zlib %llu, "
+        "zstd %llu):%s", (unsigned long long)(total / 200), (unsigned long long)(fs_shared_z / 200),
+        (unsigned long long)(fs_shared_zs / 200), line);
+    fs_shared_z = fs_shared_zs = 0;
+    for (uint32_t e = 0; e < FS_SLOTS; e++)
+        fs_slot[e].count = 0;
+}
+
 struct MemHeadCtx {
     uint8_t region;
     uint32_t page;
@@ -828,6 +1013,87 @@ static void mem_head(const void *ctx)
     rec_u8(NsK_MemLines);
     rec_u8(c->region);
     rec_u32(c->page);
+}
+
+/* Test switch KFX_NET_RUNS=1 (server; streaming study, 2026-11-28): the shared part's pages go as runs of changed
+ * bytes (NsK_MemRuns) instead of line, word and byte masks, when every streaming client reads them (NS_CAP_RUNS1).
+ * At 100 keepers most changed pages of `game` hold a few changed bytes, and the masks and page head were two thirds of
+ * the shared part once the server-only fields were left out (KFX_NET_TRIM). */
+static TbBool ns_runs_turn; /* this turn's shared part goes as runs */
+#define NS_RUNS_GAP 2       /* equal bytes between two changed ones that are sent rather than starting a new run */
+
+static size_t put_varint(uint8_t *o, uint32_t v)
+{
+    size_t n = 0;
+    while (v >= 0x80)
+    {
+        o[n++] = (uint8_t)(v | 0x80);
+        v >>= 7;
+    }
+    o[n++] = (uint8_t)v;
+    return n;
+}
+
+/** The runs of one page (len <= NS_PAGE) into out (room 5 * NS_PAGE): head written by the caller first. Returns the
+ *  body's length, 0 when nothing changed; the shadow takes the live bytes. */
+static size_t runs_encode(uint8_t *out, uint8_t *shad, const uint8_t *live, size_t len)
+{
+    if (memcmp(shad, live, len) == 0)
+        return 0;
+    /* first the runs into a list, then their count, then the runs */
+    static __thread uint16_t rs[NS_PAGE / 2 + 1], rl[NS_PAGE / 2 + 1];
+    uint32_t nr = 0;
+    size_t i = 0;
+    while (i < len)
+    {
+        if (shad[i] == live[i])
+        {
+            i++;
+            continue;
+        }
+        size_t j = i + 1, last = i;
+        while (j < len)
+        {
+            if (shad[j] != live[j])
+                last = j;
+            else if (j - last > NS_RUNS_GAP)
+                break;
+            j++;
+        }
+        rs[nr] = (uint16_t)i;
+        rl[nr] = (uint16_t)(last - i + 1);
+        nr++;
+        i = last + 1;
+    }
+    size_t n = put_varint(out, nr), prev_end = 0;
+    for (uint32_t k = 0; k < nr; k++)
+    {
+        n += put_varint(out + n, (uint32_t)(rs[k] - prev_end));
+        n += put_varint(out + n, rl[k]);
+        memcpy(out + n, live + rs[k], rl[k]);
+        n += rl[k];
+        prev_end = (size_t)rs[k] + rl[k];
+    }
+    memcpy(shad, live, len);
+    return n;
+}
+
+static size_t runs_head(uint8_t *o, uint8_t region, uint32_t page)
+{
+    o[0] = NsK_MemRuns;
+    o[1] = region;
+    return 2 + put_varint(o + 2, page);
+}
+
+static void diff_page_runs(uint8_t *shad, const uint8_t *live, size_t len, uint8_t region, uint32_t page)
+{
+    static uint8_t body[5 * NS_PAGE + 16];
+    uint8_t head[8];
+    const size_t bn = runs_encode(body, shad, live, len);
+    if (bn == 0)
+        return;
+    rec_put(head, runs_head(head, region, page));
+    rec_put(body, bn);
 }
 
 struct PageHeadCtx {
@@ -933,7 +1199,12 @@ static void diff_region(int r)
         struct MemHeadCtx c = {(uint8_t)r, (uint32_t)(off / NS_PAGE)};
         stats_pages_compared++;
         const size_t before = rec_len;
-        diff_page(shadow[r] + off, rd->base + off, n, mem_head, &c);
+        if ((r == NsR_Game) && fieldstats_on())
+            fs_page(shadow[r] + off, rd->base + off, off, n);
+        if (ns_runs_turn)
+            diff_page_runs(shadow[r] + off, rd->base + off, n, c.region, c.page);
+        else
+            diff_page(shadow[r] + off, rd->base + off, n, mem_head, &c);
         if (rec_len != before)
             stats_pages_changed++;
         int part = NsP_Statics;
@@ -1004,7 +1275,19 @@ static void diff_region_page_w(struct NsPiece *pc, int r, size_t off)
     struct MemHeadCtx c = {(uint8_t)r, (uint32_t)(off / NS_PAGE)};
     pc->compared++;
     const size_t before = pc->w.len;
-    diff_page_w(&pc->w, shadow[r] + off, rd->base + off, n, mem_head_w, &c);
+    if (ns_runs_turn)
+    {
+        static __thread uint8_t body[5 * NS_PAGE + 16];
+        uint8_t head[8];
+        const size_t bn = runs_encode(body, shadow[r] + off, rd->base + off, n);
+        if (bn > 0)
+        {
+            w_put(&pc->w, head, runs_head(head, c.region, c.page));
+            w_put(&pc->w, body, bn);
+        }
+    }
+    else
+        diff_page_w(&pc->w, shadow[r] + off, rd->base + off, n, mem_head_w, &c);
     if (pc->w.len != before)
         pc->changed++;
     int part = NsP_Statics;
@@ -1585,7 +1868,7 @@ static uint8_t *simcheck_cc;
 
 /* zstd with trained dictionaries (2026-11-09): only to clients that said they read it (NETMSG_STATE_CAPS after each
    keyframe; a keyframe forgets it, so a client that reconnects in the slot starts on zlib); the others, and every
-   keyframe, zlib */
+   keyframe, zlib (KFX_NET_KFZSTD: keyframes too, for a client that asked; see NS_CAP_KFZ1) */
 #define NS_CAP_ZSTD1 0x1u           /* zstd with the dictionaries 17001 (shared part) and 17002 (own part) */
 #define NS_WIRE_ZSTD 0x80000000u    /* in NsWire.raw_len */
 #define NS_CAP_DUAL1 0x2u           /* takes each turn twice: reliably, and an unreliable copy (the first to come is used) */
@@ -1594,10 +1877,67 @@ static uint8_t *simcheck_cc;
    without it has things of 2244 bytes: it can't use this server's state (its keyframe check says so in its log only),
    so the server turns it away as a different version */
 #define NS_CAP_LAYOUT2 0x8u
+/* after the caps word (audit 2026-11-28): "LAY1", the client's sizeof(struct Game) and its page payload size */
+#define NS_LAYOUT_MAGIC 0x3159414Cu
 #define NS_WIRE_COPY 0x40000000u    /* in NsWire.raw_len: this is the unreliable copy of a turn */
 #define NS_ZSTD_LEVEL 3
 static uint32_t ns_caps[MAX_NET_CONNECTIONS];
 static uint8_t ns_caps_changes[MAX_NET_CONNECTIONS]; /* changes since its last keyframe */
+/* Keyframes in zstd (2026-11-28; on by default on a server, KFX_NET_KFZSTD=0 turns it off). A keyframe clears what a client
+   reads (above), so a client says before each keyframe that the NEXT one may be zstd: NS_CAP_KFZ1 in the caps it sends
+   at level start, before it asks for a keyframe and after each keyframe. The server keeps that apart (kf_zcaps), uses
+   it for one keyframe and forgets it, and forgets it when the slot gets a new occupant: an older client never says it
+   and always gets zlib. A new client's first keyframe waits up to NS_KF_CAPS_WAIT turns for its caps. */
+#define NS_CAP_KFZ1 0x10u           /* its next keyframe may be zstd with the own-part dictionary */
+#define NS_KF_CAPS_WAIT 20
+static TbBool kf_zcaps[MAX_NET_CONNECTIONS];     /* said NS_CAP_KFZ1 since its last keyframe */
+static TbBool kf_use_zstd[MAX_NET_CONNECTIONS];  /* the keyframe being made for it is zstd */
+static GameTurn kf_caps_wait[MAX_NET_CONNECTIONS]; /* a new client's first keyframe waits for its caps until this turn */
+/* KSC-M keyframes (net_kscm.c, 2026-11-28; on by default on a server, KFX_NET_KFKSC=0 turns it off): the same handshake with
+   NS_CAP_KFM1. The body carries a hash of the save tables it was made with: a client of another build refuses it, asks
+   for a keyframe again and stops saying NS_CAP_KFM1 (client_kscm_refused). */
+#define NS_CAP_KFM1 0x20u           /* its next keyframe may be KSC-M */
+#define NS_CAP_RUNS1 0x40u          /* reads NsK_MemRuns (KFX_NET_RUNS, 2026-11-28) */
+#define NS_WIRE_KSCM 0x20000000u    /* in NsWire.raw_len: the record is a KSC-M body */
+static TbBool kf_mcaps[MAX_NET_CONNECTIONS];     /* said NS_CAP_KFM1 since its last keyframe */
+static TbBool kf_use_kscm[MAX_NET_CONNECTIONS];  /* the keyframe being made for it is KSC-M */
+static TbBool client_kscm_ready, client_kscm_refused;
+static TbBool kf_kscm_switch(void)
+{
+    static int on = -1;
+    if (on < 0)
+        on = ((getenv("KFX_NET_KFKSC") != NULL) && (atoi(getenv("KFX_NET_KFKSC")) <= 0)) ? 0 : 1; /* (on unless =0) */
+    return on != 0;
+}
+/** A client says what it reads (after each keyframe, and before one: level start, asking for one). KFX_NET_NOZSTD=1:
+ *  zlib only, as older clients; KFX_NET_NOKSCM=1: no KSC-M keyframes. */
+static void client_send_caps(void)
+{
+    const TbBool zstd = (getenv("KFX_NET_NOZSTD") == NULL);
+    const TbBool kscm = zstd && client_kscm_ready && !client_kscm_refused && (getenv("KFX_NET_NOKSCM") == NULL);
+    const uint32_t caps = (zstd ? (NS_CAP_ZSTD1 | NS_CAP_KFZ1) : 0u) | (kscm ? NS_CAP_KFM1 : 0u) |
+        ((getenv("KFX_NET_NODUAL") != NULL) ? 0u : NS_CAP_DUAL1) | NS_CAP_ROLES1 |
+        ((getenv("KFX_NET_OLDLAYOUT") != NULL) ? 0u : NS_CAP_LAYOUT2) | /* test hook: as an older client says */
+        ((getenv("KFX_NET_NORUNS") != NULL) ? 0u : NS_CAP_RUNS1);
+    /* and the size of what the stream copies (audit 2026-11-28): a client of another release, whose struct Game is
+       another size, is turned away by the server; it used to wait for ever on keyframes it could not use (its log
+       said "a different version", its screen nothing; World List servers and their players run any release).
+       Older servers read the first 4 bytes only. Test switch KFX_NET_TESTLAYOUT=1: as a client of another release. */
+    const uint32_t layout[3] = {NS_LAYOUT_MAGIC,
+        (uint32_t)sizeof(struct Game) + ((getenv("KFX_NET_TESTLAYOUT") != NULL) ? 8u : 0u), (uint32_t)NS_PG_SIZE};
+    char *wp = begin_net_message(NETMSG_STATE_CAPS);
+    memcpy(wp, &caps, 4);
+    memcpy(wp + 4, layout, sizeof(layout));
+    send_message_buffer(SERVER_ID, wp + 4 + sizeof(layout));
+}
+
+static TbBool kf_zstd_switch(void)
+{
+    static int on = -1;
+    if (on < 0)
+        on = ((getenv("KFX_NET_KFZSTD") != NULL) && (atoi(getenv("KFX_NET_KFZSTD")) <= 0)) ? 0 : 1; /* (on unless =0) */
+    return on != 0;
+}
 static ZSTD_CDict *ns_cdict_shared, *ns_cdict_own;
 static ZSTD_DDict *ns_ddict_shared, *ns_ddict_own;
 static __thread ZSTD_CCtx *ns_cctx;
@@ -1656,8 +1996,28 @@ void netstate_server_caps(NetUserId source, const char *buffer, size_t size)
             netstate.sp->drop_user(source, NetJoin_Version);
         return;
     }
+    if (size >= 4 + 3 * sizeof(uint32_t))
+    {
+        uint32_t layout[3];
+        memcpy(layout, buffer + 4, sizeof(layout));
+        if ((layout[0] == NS_LAYOUT_MAGIC) && ((layout[1] != (uint32_t)sizeof(struct Game)) || (layout[2] != (uint32_t)NS_PG_SIZE)))
+        {
+            /* another release (audit 2026-11-28): its game state can't take this server's */
+            WARNLOG("Thin-client server: user %d's game state is %u bytes with pages of %u (here %u and %u): another version, "
+                "turned away", (int)source, (unsigned)layout[1], (unsigned)layout[2], (unsigned)sizeof(struct Game),
+                (unsigned)NS_PG_SIZE);
+            server_admin_log("warn", "%s runs another version of the game: turned away", netstate.users[source].name);
+            if ((netstate.sp != NULL) && (netstate.sp->drop_user != NULL))
+                netstate.sp->drop_user(source, NetJoin_Version);
+            return;
+        }
+    }
     if ((caps & NS_CAP_ZSTD1) && !ns_zstd_ready())
         caps &= ~NS_CAP_ZSTD1;
+    kf_zcaps[source] = ((caps & NS_CAP_KFZ1) != 0) && ((caps & NS_CAP_ZSTD1) != 0);
+    kf_mcaps[source] = ((caps & NS_CAP_KFM1) != 0);
+    kf_caps_wait[source] = 0; /* (it has spoken: its first keyframe waits no longer) */
+    caps &= ~(NS_CAP_KFZ1 | NS_CAP_KFM1); /* (not lasting caps: they are for the next keyframe) */
     /* a client says its caps once or twice a connection; one that flips them on and on wrote a log line and got the
        roles table every time (audit 2026-11-21): after eight changes its caps stay as they are */
     if ((ns_caps[source] != caps) && (ns_caps_changes[source] >= 8))
@@ -2048,6 +2408,8 @@ static TbBool compress_shared(const uint8_t *buf, size_t len)
    thread (the state as it is that turn); a worker thread compresses it. Until it is sent, the client's turn records
    are held, and then go after it, in order (the reliable channel keeps the order). */
 #define NS_KF_JOBS 3     /* each holds a keyframe and its compressed copy: about 110 MB */
+#define NS_KF_PAGES_BYTES ((size_t)224 << 20) /* a keyframe takes pages up to this size (records may be 256 MiB) */
+#define NS_PAGE_ADDS_TURN 128 /* pages added to one client's record in a turn at most (~8.6 MB); the rest next turn */
 #define NS_KF_PER_TURN 2 /* keyframes started a turn */
 struct NsKfJob {
     SDL_Thread *thread;
@@ -2060,8 +2422,25 @@ struct NsKfJob {
     char *msg;
     size_t msg_len;
     int64_t build_ns, compress_ns;
+    TbBool zstd;               /* zstd level 1 with the own-part dictionary (KFX_NET_KFZSTD; the client reads zstd) */
+    TbBool kscm;               /* KSC-M (KFX_NET_KFKSC; the client said it reads it) */
+    int check;                 /* KFX_NET_KSCMCHECK: 1 decoded back the same, 2 not */
+    int used;                  /* what it went as: 0 zlib, 1 zstd, 2 KSC-M */
 };
 static struct NsKfJob kf_jobs[NS_KF_JOBS];
+/* Test switch KFX_NET_KFZSTD=1 (research prototype 2026-11-28): a keyframe for a client that reads zstd goes as zstd
+   level 1 with the own-part dictionary instead of zlib: such clients already read any record marked NS_WIRE_ZSTD with
+   that dictionary, so nothing changes for them. libdeflate took 330-400 ms a keyframe on a worker. */
+static ZSTD_CDict *ns_cdict_kf;
+static TbBool kf_zstd_wanted(NetUserId c)
+{
+    /* (decided as the keyframe was built: the client's caps are cleared there) */
+    if (!kf_use_zstd[c] || !ns_zstd_ready())
+        return false;
+    if (ns_cdict_kf == NULL)
+        ns_cdict_kf = ZSTD_createCDict(ns_zdict_own, ns_zdict_own_len, 1);
+    return ns_cdict_kf != NULL;
+}
 struct NsHeld {
     struct NsHeld *next;
     size_t len;
@@ -2079,12 +2458,50 @@ static GameTurn kf_last_turn[MAX_NET_CONNECTIONS]; /* the last keyframe's turn *
 static uint8_t kf_streak[MAX_NET_CONNECTIONS];     /* keyframes close together: the gap doubles with each */
 
 /** zlib's format at its fastest level in a message; thread-safe (each thread has its own compressor). */
-static char *make_state_message(const uint8_t *raw, size_t len, size_t *msg_len)
+static char *make_state_message(const uint8_t *raw, size_t len, size_t *msg_len, TbBool zstd, TbBool kscm, int *used)
 {
-    uLongf comp_len = kfx_zlib_bound(len);
+    *used = 0;
+    if ((zstd || kscm) && (len > (256u << 20)))
+        return NULL;
+    if (kscm)
+    {
+        uint8_t *body = NULL;
+        size_t bl = 0;
+        char *km = NULL;
+        if (kscm_encode(raw, len, &body, &bl))
+            km = (char *)malloc(1 + sizeof(struct NsWire) + bl);
+        if (km != NULL)
+        {
+            km[0] = NETMSG_STATE_TURN;
+            struct NsWire kw = {(uint32_t)len | NS_WIRE_KSCM, (uint32_t)bl, 0, 0};
+            memcpy(km + 1, &kw, sizeof(kw));
+            memcpy(km + 1 + sizeof(kw), body, bl);
+            *msg_len = 1 + sizeof(struct NsWire) + bl;
+            free(body);
+            *used = 2;
+            return km;
+        }
+        free(body); /* (it couldn't be made: zstd or zlib, as the client also reads) */
+    }
+    uLongf comp_len = zstd ? (uLongf)ZSTD_COMPRESSBOUND(len) : kfx_zlib_bound(len);
     char *msg = (char *)malloc(1 + sizeof(struct NsWire) + comp_len);
     if (msg == NULL)
         return NULL;
+    if (zstd)
+    {
+        size_t zl = comp_len;
+        if (!ns_zstd_compress((uint8_t *)(msg + 1 + sizeof(struct NsWire)), &zl, raw, len, ns_cdict_kf))
+        {
+            free(msg);
+            return NULL;
+        }
+        msg[0] = NETMSG_STATE_TURN;
+        struct NsWire zw = {(uint32_t)len | NS_WIRE_ZSTD, (uint32_t)zl, 0, 0};
+        memcpy(msg + 1, &zw, sizeof(zw));
+        *msg_len = 1 + sizeof(struct NsWire) + zl;
+        *used = 1;
+        return msg;
+    }
     if (!ns_compress((uint8_t *)(msg + 1 + sizeof(struct NsWire)), &comp_len, raw, len))
     {
         free(msg);
@@ -2101,8 +2518,19 @@ static int kf_worker(void *data)
 {
     struct NsKfJob *job = (struct NsKfJob *)data;
     const uint64_t t0 = SDL_GetTicksNS();
-    job->msg = make_state_message(job->raw, job->raw_len, &job->msg_len);
+    job->msg = make_state_message(job->raw, job->raw_len, &job->msg_len, job->zstd, job->kscm, &job->used);
     job->compress_ns = (int64_t)(SDL_GetTicksNS() - t0);
+    job->check = 0;
+    if ((job->used == 2) && (job->msg != NULL) && (getenv("KFX_NET_KSCMCHECK") != NULL))
+    {
+        /* test hook: the body decoded again here and compared with the record (logged by kf_poll) */
+        uint8_t *back = (uint8_t *)malloc(job->raw_len);
+        job->check = 2;
+        if ((back != NULL) && kscm_decode((const uint8_t *)job->msg + 1 + sizeof(struct NsWire), job->msg_len - 1 - sizeof(struct NsWire),
+            back, job->raw_len) && (memcmp(back, job->raw, job->raw_len) == 0))
+            job->check = 1;
+        free(back);
+    }
     free(job->raw);
     job->raw = NULL;
     SDL_SetAtomicInt(&job->done, 1);
@@ -2142,8 +2570,97 @@ static void held_add(NetUserId c, const uint8_t *buf, size_t len)
 
 /** The keyframe record just made in `rec` for client c goes to a worker (the record buffer goes with it; the next
  *  record gets a new one). Without a worker it is compressed and sent here, as before. */
+/* Test hook KFX_NET_DUMPKF=<folder> (research 2026-11-28): raw keyframes (kf_<n>.bin) and, once, the
+   memory layout of struct Game, Map and SlabMap from the save tables (layout.bin), for trying other compressors;
+   up to four keyframes, of different turns. */
+static const struct SaveStructDesc *kfd_structs[512];
+static int kfd_count;
+static int kfd_add(const struct SaveStructDesc *d)
+{
+    for (int i = 0; i < kfd_count; i++)
+        if (kfd_structs[i] == d)
+            return i;
+    if (kfd_count >= (int)(sizeof(kfd_structs) / sizeof(kfd_structs[0])))
+        return -1;
+    const int me = kfd_count++;
+    kfd_structs[me] = d;
+    for (uint32_t f = 0; f < d->field_count; f++)
+        if (d->fields[f].sub != NULL)
+            kfd_add(d->fields[f].sub);
+    return me;
+}
+static void kfd_str(FILE *f, const char *s)
+{
+    const uint16_t l = (uint16_t)strlen(s);
+    fwrite(&l, 2, 1, f);
+    fwrite(s, 1, l, f);
+}
+static void kfd_u32(FILE *f, uint32_t v) { fwrite(&v, 4, 1, f); }
+static void kf_dump(const uint8_t *data, size_t len)
+{
+    static int dumped = 0;
+    static GameTurn last_turn = 0;
+    const char *dir = getenv("KFX_NET_DUMPKF");
+    if ((dir == NULL) || (dir[0] == '\0') || (dumped >= 4) || ((dumped > 0) && (game.play_gameturn == last_turn)))
+        return;
+    last_turn = game.play_gameturn;
+    char path[300];
+    if (dumped == 0)
+    {
+        kfd_add(&save_desc_Game);
+        kfd_add(&save_desc_Map);
+        kfd_add(&save_desc_SlabMap);
+        snprintf(path, sizeof(path), "%s/layout.bin", dir);
+        FILE *f = fopen(path, "wb");
+        if (f != NULL)
+        {
+            fwrite("KLY1", 1, 4, f);
+            kfd_u32(f, (uint32_t)sizeof(struct NsHeader));
+            kfd_u32(f, (uint32_t)NS_PG_MAP); kfd_u32(f, (uint32_t)NS_PG_STAT); kfd_u32(f, (uint32_t)NS_PG_LIGHT);
+            kfd_u32(f, (uint32_t)NS_PG_SLAB); kfd_u32(f, (uint32_t)NS_PG_EXT);
+            kfd_u32(f, (uint32_t)kfd_count);
+            for (int i = 0; i < kfd_count; i++)
+            {
+                const struct SaveStructDesc *d = kfd_structs[i];
+                kfd_str(f, d->name);
+                kfd_u32(f, d->size);
+                kfd_u32(f, d->field_count);
+                for (uint32_t k = 0; k < d->field_count; k++)
+                {
+                    const struct SaveFieldDesc *fd = &d->fields[k];
+                    uint32_t count = 1;
+                    for (int dd = 0; (dd < 3) && (fd->dims[dd] != 0); dd++)
+                        count *= fd->dims[dd];
+                    kfd_str(f, fd->name);
+                    kfd_u32(f, fd->offset);
+                    kfd_u32(f, fd->mem_size);
+                    kfd_u32(f, count);
+                    fwrite(&fd->stored_type, 1, 1, f);
+                    int sub = -1;
+                    for (int j = 0; (fd->sub != NULL) && (j < kfd_count); j++)
+                        if (kfd_structs[j] == fd->sub)
+                            sub = j;
+                    kfd_u32(f, (uint32_t)sub);
+                    const uint8_t uni = (fd->uni != NULL) ? 1 : 0;
+                    fwrite(&uni, 1, 1, f);
+                }
+            }
+            fclose(f);
+        }
+    }
+    snprintf(path, sizeof(path), "%s/kf_%d.bin", dir, dumped);
+    FILE *f = fopen(path, "wb");
+    if (f != NULL)
+    {
+        fwrite(data, 1, len, f);
+        fclose(f);
+    }
+    dumped++;
+}
+
 static void kf_start(NetUserId c, int64_t build_ns)
 {
+    kf_dump(rec, rec_len);
     kf_cl[c].gen++;
     held_drop(c);
     kf_cl[c].waiting = false;
@@ -2162,6 +2679,8 @@ static void kf_start(NetUserId c, int64_t build_ns)
         job->msg_len = 0;
         job->build_ns = build_ns;
         job->compress_ns = 0;
+        job->zstd = kf_zstd_wanted(c);
+        job->kscm = kf_use_kscm[c] && client_kscm_ready; /* (its plan is made at level start) */
         SDL_SetAtomicInt(&job->done, 0);
         job->thread = SDL_CreateThread(kf_worker, "keyframe_compress", job);
         if (job->thread != NULL)
@@ -2211,9 +2730,9 @@ static void kf_poll(NetUserMask clients)
                 for (struct NsHeld *h = kf_cl[c].held; h != NULL; h = h->next, held++)
                     send_record(h->data, h->len, c);
                 SYNCLOG("Thin-client server: keyframe of turn %lu for user %d sent at turn %lu, then %d held turns "
-                    "(made in %.1f ms, compressed in %.1f ms on a worker, %u bytes)", (unsigned long)job->turn, (int)c,
+                    "(made in %.1f ms, compressed in %.1f ms on a worker, %u bytes%s)", (unsigned long)job->turn, (int)c,
                     (unsigned long)game.play_gameturn, held, (double)job->build_ns / 1e6, (double)job->compress_ns / 1e6,
-                    (unsigned)job->msg_len);
+                    (unsigned)job->msg_len, (job->used == 2) ? ((job->check == 1) ? ", kscm, checked: same" : (job->check == 2) ? ", kscm, CHECK FAILED" : ", kscm") : (job->used == 1) ? ", zstd" : "");
             } else
             {
                 WARNLOG("Thin-client server: the keyframe for user %d couldn't be compressed; another one is made", (int)c);
@@ -2365,6 +2884,10 @@ static void build_keyframe_for(NetUserId c)
     struct NsInterest in;
     interest_of(c, &in);
     fog_update_client(c, &in);
+    kf_use_zstd[c] = kf_zstd_switch() && kf_zcaps[c]; /* (its word for this keyframe, used once) */
+    kf_use_kscm[c] = kf_kscm_switch() && kf_mcaps[c];
+    kf_zcaps[c] = false;
+    kf_mcaps[c] = false;
     ns_caps[c] = 0; /* it says again what it reads once it has this keyframe */
     ns_caps_changes[c] = 0;
     if (!cl_init(c))
@@ -2426,6 +2949,11 @@ static void build_keyframe_for(NetUserId c)
         {
             numask_del(&ps->known, c);
             if (!chunk_in_interest(&in, ps->cx, ps->cy) || !fog_page_ok(&in, ps, c))
+                continue;
+            /* (a keyframe stays well under the 256 MiB a record may be: a full world's watcher had every loaded page, and
+               from about 1,925 pages its keyframe could not be made in zstd/KSC-M or was thrown away by the client; the
+               pages left out come in the next turns, as any page coming into a client's area: audit 2026-11-28) */
+            if (rec_len + 9 + NS_PG_SIZE > NS_KF_PAGES_BYTES)
                 continue;
             page_fresh(ps);
             rec_u8(NsK_PageAdd);
@@ -2943,6 +3471,7 @@ static void stream_clients(NetUserMask clients, size_t shared_end)
         j->failed = false;
         j->held = kf_cl[c].waiting;
         j->things_bytes = 0;
+        int page_adds = 0;
         for (int b = 0; b < NS_PAGE_BUCKETS; b++)
         {
             for (struct NsPageShadow *ps = page_shadows[b]; ps != NULL; ps = ps->next)
@@ -2954,6 +3483,9 @@ static void stream_clients(NetUserMask clients, size_t shared_end)
                         job_put(j, rec + ps->diff_off, ps->diff_len);
                 } else if (want)
                 {
+                    if (page_adds >= NS_PAGE_ADDS_TURN)
+                        continue; /* (the rest in the next turns: one record never carries hundreds of pages; audit 2026-11-28) */
+                    page_adds++;
                     page_fresh(ps);
                     const uint8_t k = NsK_PageAdd;
                     job_put(j, &k, 1);
@@ -3022,6 +3554,7 @@ static void stream_clients(NetUserMask clients, size_t shared_end)
     }
 }
 
+static void runs_check(size_t shared_end);
 void netstate_server_after_turn(void)
 {
     if (!netstate_is_server())
@@ -3093,6 +3626,7 @@ void netstate_server_after_turn(void)
             kf_next_turn[c] = 0; /* a new client in this slot: no waiting */
             kf_streak[c] = 0;
             kf_last_turn[c] = 0;
+            kf_caps_wait[c] = game.play_gameturn + NS_KF_CAPS_WAIT; /* (KFX_NET_KFZSTD: a moment for its caps) */
         }
     keyframe_wanted = numask_or(keyframe_wanted, new_clients);
     known_clients = numask_or(known_clients, clients);
@@ -3108,7 +3642,11 @@ void netstate_server_after_turn(void)
         if ((ns_cl[c].slot != NULL) && !numask_has(clients, c))
             cl_free(c);
         if (!numask_has(clients, c))
+        {
             ns_caps[c] = 0;
+            kf_zcaps[c] = false;
+            kf_mcaps[c] = false;
+        }
     }
     {
         /* A record carries the game turn, and a client takes each turn once. On a pass where the turn hasn't moved
@@ -3129,11 +3667,20 @@ void netstate_server_after_turn(void)
         last_record_known = true;
     }
     /* the shared part of the turn: everything but the things, and the chunk pages' changes (kept per page) */
+    {
+        static int runs_switch = -1;
+        if (runs_switch < 0)
+            runs_switch = (getenv("KFX_NET_RUNS") != NULL) ? 1 : 0;
+        ns_runs_turn = (runs_switch > 0);
+        for (NetUserId c = 0; (c < MAX_NET_CONNECTIONS) && ns_runs_turn; c++)
+            if (numask_has(clients, c) && !sim_client(c) && ((ns_caps[c] & NS_CAP_RUNS1) == 0))
+                ns_runs_turn = false; /* one that doesn't read them: lines for all (the shared part is made once) */
+    }
     rec_begin(0);
     KFX_C_PLOT("Stream: clients", numask_count(clients));
     int64_t tp = get_time_tick_ns();
     KFX_C_ZONE_BEGIN(z_shared, "stream: shared diff");
-    if (kfx_job_threads() > 1)
+    if ((kfx_job_threads() > 1) && !fieldstats_on())
     {
         if (parcheck_turn())
             parcheck_shared();
@@ -3145,6 +3692,7 @@ void netstate_server_after_turn(void)
             diff_region(r);
     KFX_C_ZONE_END(z_shared);
     const size_t shared_end = rec_len;
+    runs_check(shared_end);
     int64_t tn = get_time_tick_ns();
     stats_t[NsT_Shared] += tn - tp;
     KFX_C_ZONE_BEGIN(z_scomp, "stream: shared compress");
@@ -3155,6 +3703,11 @@ void netstate_server_after_turn(void)
         compress_shared_zstd(rec, shared_end, clients);
     else
         shared_zs_raw = 0;
+    if (fieldstats_on())
+    {
+        fs_shared_z += (shared_z_raw == shared_end) ? shared_z_len : 0;
+        fs_shared_zs += (shared_zs_raw == shared_end) ? shared_zs_len : 0;
+    }
     KFX_C_ZONE_END(z_scomp);
     tp = tn;
     gone_count = 0;
@@ -3220,6 +3773,8 @@ void netstate_server_after_turn(void)
     {
         if (!numask_has(kf, c) || (game.play_gameturn < kf_next_turn[c]))
             continue; /* not asked, or it had one a moment ago: it waits (still wanted) */
+        if ((kf_zstd_switch() || kf_kscm_switch()) && (game.play_gameturn < kf_caps_wait[c]) && !sim_client(c))
+            continue; /* a new client: its caps may be on the way (an older client never sends them: zlib after the wait) */
         const int64_t kt0 = get_time_tick_ns();
         build_keyframe_for(c);
         rec_u8(NsK_End);
@@ -3265,6 +3820,8 @@ void netstate_server_after_turn(void)
             (unsigned)(stats_part[NsP_Pages] / 200), (unsigned)(stats_part[NsP_Events] / 200));
         SYNCLOG("Thin-client server: the simulation took %.2f ms a turn", (double)stats_sim_ns / 200e6);
         stats_sim_ns = 0;
+        if (fieldstats_on())
+            fs_report();
         SYNCLOG("Thin-client server: ms a turn by part: shared diff %.2f (4 KB pages: %u compared, %u changed), chunk pages %.2f, "
             "client things %.2f, compress %.2f, send %.2f, keyframes %.2f",
             (double)stats_t[NsT_Shared] / 200e6, (unsigned)(stats_pages_compared / 200), (unsigned)(stats_pages_changed / 200),
@@ -3290,6 +3847,8 @@ void netstate_server_user_reset(NetUserId user)
     idle_turns[user] = 0;
     clear_user_packet_history(user);
     numask_del(&known_clients, user); /* a keyframe goes to the new occupant */
+    kf_zcaps[user] = false;
+    kf_mcaps[user] = false;
     kf_next_turn[user] = 0;
     kf_streak[user] = 0;
     kf_last_turn[user] = 0;
@@ -3591,7 +4150,8 @@ TbError netstate_client_receive(const char *buffer, size_t size)
     memcpy(&w, buffer, sizeof(w));
     const TbBool zstd = (w.raw_len & NS_WIRE_ZSTD) != 0;
     const TbBool copy = (w.raw_len & NS_WIRE_COPY) != 0;
-    w.raw_len &= ~(NS_WIRE_ZSTD | NS_WIRE_COPY);
+    const TbBool kscm = (w.raw_len & NS_WIRE_KSCM) != 0;
+    w.raw_len &= ~(NS_WIRE_ZSTD | NS_WIRE_COPY | NS_WIRE_KSCM);
     if ((w.comp_len != size - sizeof(w)) || (w.raw_len < sizeof(struct NsHeader)) || (w.raw_len > (256u << 20)) ||
         (w.shared_raw > w.raw_len) || (w.shared_comp > w.comp_len) || ((w.shared_raw == 0) != (w.shared_comp == 0)))
     {
@@ -3604,6 +4164,30 @@ TbError netstate_client_receive(const char *buffer, size_t size)
     const Bytef *z = (const Bytef *)buffer + sizeof(w);
     size_t shared_len = 0, own_len = 0;
     TbBool ok = true;
+    if (kscm)
+    {
+        /* a KSC-M keyframe (this client said it reads it): another build's layout, or damaged, is refused; then it asks
+           for a keyframe again and no longer says it reads KSC-M */
+        static TbBool spoiled;
+        if (!spoiled && (getenv("KFX_NET_KSCMTESTBAD") != NULL))
+        {
+            spoiled = true;
+            kscm_test_spoil_layout(); /* test hook: as a client with another layout (it must refuse KSC-M and carry on) */
+        }
+        const int64_t kt0 = get_time_tick_ns();
+        ok = (w.shared_raw == 0) && kscm_decode(z, w.comp_len, raw, w.raw_len);
+        if (ok)
+            SYNCLOG("Thin client: KSC-M keyframe, %u bytes from %u, decoded in %.1f ms", (unsigned)w.raw_len, (unsigned)w.comp_len,
+                (double)(get_time_tick_ns() - kt0) / 1e6);
+        else
+        {
+            WARNLOG("Thin client: a KSC-M keyframe could not be decoded; asking for another without it");
+            client_kscm_refused = true;
+            client_send_caps();
+            network_spectator_request_resync();
+            client_keyframe_asked = true;
+        }
+    } else
     if (zstd)
     {
         /* zstd with the trained dictionaries (a client says it reads them; 2026-11-09) */
@@ -3672,6 +4256,7 @@ TbError netstate_client_receive(const char *buffer, size_t size)
         if (!client_keyframe_asked)
         {
             WARNLOG("Thin client: %d turns behind the server; asking for a keyframe", queue_count);
+            client_send_caps(); /* (before it: its keyframe may be zstd) */
             network_spectator_request_resync();
             client_keyframe_asked = true;
         }
@@ -3712,6 +4297,8 @@ TbError netstate_client_receive(const char *buffer, size_t size)
 void netstate_client_await_keyframe(void)
 {
     client_has_keyframe = false;
+    if (netstate_is_client())
+        client_send_caps(); /* (its next keyframe may be zstd) */
 }
 
 int netstate_client_queued(void)
@@ -3736,6 +4323,24 @@ static TbBool rd_get(struct NsReader *r, void *dst, size_t n)
         memcpy(dst, r->p, n);
     r->p += n;
     return true;
+}
+
+static void rd_varint(struct NsReader *r, uint32_t *v)
+{
+    uint32_t x = 0;
+    for (int shift = 0; shift < 35; shift += 7)
+    {
+        uint8_t b;
+        if (!rd_get(r, &b, 1))
+            return;
+        x |= (uint32_t)(b & 0x7F) << shift;
+        if ((b & 0x80) == 0)
+        {
+            *v = x;
+            return;
+        }
+    }
+    r->bad = true;
 }
 
 /** Applies the lines of one page entry to `dst` (`len` bytes long from the page's start). */
@@ -3979,6 +4584,45 @@ static void client_apply(const uint8_t *data, size_t len)
                 excl_copy_page(regions[region].base, excl_save, off, n);
             break;
         }
+        case NsK_MemRuns:
+        {
+            uint8_t region = 0;
+            uint32_t page = 0, nr = 0;
+            rd_get(&r, &region, 1);
+            rd_varint(&r, &page);
+            rd_varint(&r, &nr);
+            const TbBool skip = !r.bad && (region == NsR_Statics) && statics_foreign;
+            if (!skip && (r.bad || (region >= NsR_Count) || (regions[region].base == NULL) ||
+                ((size_t)page * NS_PAGE >= regions[region].len) || (nr > NS_PAGE)))
+            {
+                r.bad = true;
+                break;
+            }
+            const size_t off = (size_t)page * NS_PAGE;
+            const size_t n = skip ? NS_PAGE : min((size_t)NS_PAGE, regions[region].len - off);
+            uint8_t *dst = skip ? tmp : regions[region].base + off;
+            const TbBool keep_own = !skip && (region == NsR_Game) && (excl_save != NULL);
+            if (keep_own)
+                excl_copy_page(excl_save, regions[region].base, off, n);
+            size_t at = 0;
+            for (uint32_t k = 0; (k < nr) && !r.bad; k++)
+            {
+                uint32_t gap = 0, rl = 0;
+                rd_varint(&r, &gap);
+                rd_varint(&r, &rl);
+                if (r.bad || ((size_t)gap + rl > n - at) || (rl == 0))
+                {
+                    r.bad = true;
+                    break;
+                }
+                at += gap;
+                rd_get(&r, dst + at, rl);
+                at += rl;
+            }
+            if (keep_own)
+                excl_copy_page(regions[region].base, excl_save, off, n);
+            break;
+        }
         case NsK_MemFull:
         {
             uint8_t region;
@@ -4111,6 +4755,7 @@ static void client_apply(const uint8_t *data, size_t len)
         WARNLOG("Thin client: a broken record at turn %lu; asking for a keyframe", (unsigned long)h.turn);
         if (!client_keyframe_asked)
         {
+            client_send_caps(); /* (before it: its keyframe may be zstd) */
             network_spectator_request_resync();
             client_keyframe_asked = true;
         }
@@ -4128,15 +4773,7 @@ static void client_apply(const uint8_t *data, size_t len)
             const long safe_lvnum = (lvnum > 0) ? lvnum : 1;
             play_music_track(3 + (int)((safe_lvnum - 1) % 4)); /* tracks 3..6 */
         }
-        {
-            /* what this client reads: zstd with the dictionaries (KFX_NET_NOZSTD=1: zlib only, as older clients) */
-            const uint32_t caps = ((getenv("KFX_NET_NOZSTD") != NULL) ? 0u : NS_CAP_ZSTD1) |
-                ((getenv("KFX_NET_NODUAL") != NULL) ? 0u : NS_CAP_DUAL1) | NS_CAP_ROLES1 |
-                ((getenv("KFX_NET_OLDLAYOUT") != NULL) ? 0u : NS_CAP_LAYOUT2); /* test hook: as an older client says */
-            char *wp = begin_net_message(NETMSG_STATE_CAPS);
-            memcpy(wp, &caps, 4);
-            send_message_buffer(SERVER_ID, wp + 4);
-        }
+        client_send_caps();
         {
             /* test hook KFX_NET_TESTCHAT=<user>:<text>: once seated, one chat line naming that user as its sender
                (an endless server makes it this client's own) */
@@ -4356,6 +4993,133 @@ static void client_play_events(struct NsReader *r)
 }
 
 /******************************************************************************/
+/* Test switch KFX_NET_RUNSCHECK=1 (server; streaming study, 2026-11-28): the turn's shared part is read back as a
+ * client reads it (MemLines and MemRuns) into a mirror of the regions, and every 20 turns the mirror is compared with
+ * the shadows (what every client has); a difference outside the excluded bytes is logged. Checks the record formats
+ * and what the server leaves out, not the network. */
+static void runs_check(size_t shared_end)
+{
+    static int on = -1;
+    static uint8_t *mirror[NsR_Count];
+    static uint32_t checks, bad_checks;
+    if (on < 0)
+        on = (getenv("KFX_NET_RUNSCHECK") != NULL) ? 1 : 0;
+    if (!on || rec_failed)
+        return;
+    TbBool started = false;
+    for (int g = 0; g < NsR_Count; g++)
+    {
+        if ((mirror[g] == NULL) && (shadow[g] != NULL))
+        {
+            /* every region's mirror starts in the same turn, as the shadows are after this turn's lines */
+            mirror[g] = (uint8_t *)malloc(regions[g].len);
+            if (mirror[g] == NULL)
+            {
+                on = 0;
+                return;
+            }
+            memcpy(mirror[g], shadow[g], regions[g].len);
+            started = true;
+        }
+    }
+    if (started)
+        return; /* this turn's lines are in the shadows already: read from the next turn on */
+    struct NsReader r = {rec + sizeof(struct NsHeader), rec + shared_end, false};
+    while (r.p < r.end && !r.bad)
+    {
+        uint8_t kind = 0, region = 0;
+        rd_get(&r, &kind, 1);
+        rd_get(&r, &region, 1);
+        if (r.bad || (region >= NsR_Count) || (mirror[region] == NULL))
+        {
+            r.bad = true;
+            break;
+        }
+        if (kind == NsK_MemLines)
+        {
+            uint32_t page = 0;
+            rd_get(&r, &page, 4);
+            const size_t off = (size_t)page * NS_PAGE;
+            if (off >= regions[region].len) { r.bad = true; break; }
+            apply_lines(&r, mirror[region] + off, regions[region].len - off);
+        } else if (kind == NsK_MemRuns)
+        {
+            uint32_t page = 0, nr = 0;
+            rd_varint(&r, &page);
+            rd_varint(&r, &nr);
+            const size_t off = (size_t)page * NS_PAGE;
+            if (off >= regions[region].len) { r.bad = true; break; }
+            const size_t n = min((size_t)NS_PAGE, regions[region].len - off);
+            size_t at = 0;
+            for (uint32_t k = 0; (k < nr) && !r.bad; k++)
+            {
+                uint32_t gap = 0, rl = 0;
+                rd_varint(&r, &gap);
+                rd_varint(&r, &rl);
+                if (r.bad || ((size_t)gap + rl > n - at) || (rl == 0)) { r.bad = true; break; }
+                at += gap;
+                rd_get(&r, mirror[region] + off + at, rl);
+                at += rl;
+            }
+        } else
+            r.bad = true;
+    }
+    if (r.bad)
+    {
+        bad_checks++;
+        WARNLOG("Thin-client server: runs check: the shared part could not be read back at turn %lu", (unsigned long)game.play_gameturn);
+        return;
+    }
+    if ((game.play_gameturn % 20) != 0)
+        return;
+    checks++;
+    size_t differ = 0, first = (size_t)-1;
+    int first_region = -1;
+    if (mirror[NsR_Game] != NULL)
+    {
+        /* what never goes in the shared part: the excluded bytes, the things and creature controls (per client), the
+           skipped fields - taken as the shadow has them */
+        excl_copy(mirror[NsR_Game], shadow[NsR_Game]);
+        const size_t t1 = offsetof(struct Game, things_data), c1 = offsetof(struct Game, cctrl_data);
+        memcpy(mirror[NsR_Game] + t1, shadow[NsR_Game] + t1, sizeof(game.things_data));
+        memcpy(mirror[NsR_Game] + c1, shadow[NsR_Game] + c1, sizeof(game.cctrl_data));
+        for (int i = 0; i < skip_count; i++)
+            memcpy(mirror[NsR_Game] + skips[i].off, shadow[NsR_Game] + skips[i].off, skips[i].len);
+    }
+    for (int g = 0; g < NsR_Count; g++)
+    {
+        if (mirror[g] == NULL)
+            continue;
+        for (size_t off = 0; off < regions[g].len; off += NS_PAGE)
+        {
+            const size_t n = min((size_t)NS_PAGE, regions[g].len - off);
+            if (memcmp(mirror[g] + off, shadow[g] + off, n) == 0)
+                continue;
+            for (size_t b = 0; b < n; b++)
+                if (mirror[g][off + b] != shadow[g][off + b])
+                {
+                    differ++;
+                    if (first == (size_t)-1)
+                    {
+                        first = off + b;
+                        first_region = g;
+                    }
+                }
+        }
+    }
+    if (differ > 0)
+        bad_checks++;
+    char where[96] = "";
+    if ((first_region == NsR_Game) && (first != (size_t)-1))
+        fs_path_of(first, where, sizeof(where));
+    if (differ > 0)
+        SYNCLOG("Thin-client server: runs check: first difference in region %d, %s", first_region, where);
+    if ((differ > 0) || ((checks % 50) == 0))
+        SYNCLOG("Thin-client server: runs check at turn %lu: %s (%lu bytes differ, first at %ld; %u checks, %u bad; this turn %s)",
+            (unsigned long)game.play_gameturn, (differ == 0) ? "identical" : "DIFFERENT", (unsigned long)differ,
+            (long)((first == (size_t)-1) ? -1 : (long)first), (unsigned)checks, (unsigned)bad_checks, ns_runs_turn ? "runs" : "lines");
+}
+
 /* KFX_NET_SIMCHECK */
 static void simcheck_apply(const uint8_t *from, const uint8_t *to)
 {
@@ -4460,8 +5224,16 @@ void netstate_level_start(void)
     replay_rewind_tracked_statics(&st, &st_len);
     regions[NsR_Statics].base = st;
     regions[NsR_Statics].len = st_len;
+    {
+        /* KSC-M keyframes: the plan from the save tables (a client says it reads them only once this is ready) */
+        const struct KscmFrame kfr = {(uint32_t)sizeof(struct NsHeader), (uint8_t)NsK_MemFull, (uint8_t)NsK_PageAdd, (uint8_t)NsR_Game,
+            (uint32_t)NS_PG_MAP, (uint32_t)NS_PG_STAT, (uint32_t)NS_PG_LIGHT, (uint32_t)NS_PG_SLAB, (uint32_t)NS_PG_EXT};
+        client_kscm_ready = (kscm_init(&kfr) != 0);
+    }
     excl_setup();
     netstate_take_all_users();
+    if (netstate_is_client())
+        client_send_caps(); /* (a joiner says it before its first keyframe) */
     /* a thin client that stops for a while (a dragged window, a hang) holds nobody up, so it is kept for a minute */
     if (network_is_active() && (getenv("KFX_NET_LOCKSTEP") == NULL))
         LbNetwork_SetPeerTimeout(60000);

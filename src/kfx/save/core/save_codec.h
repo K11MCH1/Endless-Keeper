@@ -84,8 +84,29 @@ enum SaveChunkFlags {
      *  is stored in that machine's byte order. A reader with the other byte order can't use those bytes. */
     SCF_RawBytes  = 0x08,
     /** With SCF_RawBytes: the machine that wrote the chunk was big endian. */
-    SCF_RawBigEndian = 0x10
+    SCF_RawBigEndian = 0x10,
+    /** The stored bytes are one zstd frame (KFX_SAVE_CODEC=zstd or ksc, research prototype 2026-11-28). */
+    SCF_Zstd      = 0x20,
+    /** The stored bytes are a KSC body (save_ksc.h): decoded with the file's SCHM chunk, which comes before it. */
+    SCF_Ksc       = 0x40
 };
+
+/** SCF_Zlib, SCF_Zstd or SCF_Ksc: the stored bytes are not the raw bytes. */
+#define SCF_PACKED (SCF_Zlib | SCF_Zstd | SCF_Ksc)
+
+/** How a Save's chunks are packed (KFX_SAVE_CODEC; zstd by default since 2026-11-28). */
+enum SaveCodecChoice {
+    /** zlib level 1, as every build before 2026-11-28 (KFX_SAVE_CODEC=zlib) */
+    SCC_Zlib = 0,
+    /** zstd level 1 (the default) */
+    SCC_Zstd = 1,
+    /** the GAME record as KSC, the other chunks zstd level 1 */
+    SCC_Ksc = 2
+};
+/** KFX_SAVE_CODEC = zstd (default), zlib or ksc; read once. */
+enum SaveCodecChoice save_codec_choice(void);
+/** The value save_chunk_add's `compress` takes for zstd (1: zlib). */
+#define SAVE_PACK_ZSTD 2
 
 /** The outcome of a codec call. Anything but SVR_Ok comes with a message in the SaveError. */
 enum SaveResult {
@@ -167,6 +188,14 @@ enum SaveResult save_chunk_head(const uint8_t *bytes, uint32_t after, struct Sav
 enum SaveResult save_reader_next(struct SaveReader *reader, struct SaveChunk *chunk, struct SaveError *err);
 /** Decompresses and CRC-checks a chunk into a malloc'd buffer the caller frees. */
 enum SaveResult save_chunk_unpack(const struct SaveChunk *chunk, uint8_t **out, uint32_t *out_len, struct SaveError *err);
+/** As save_chunk_unpack; a KSC chunk is decoded with `schema` (the file's unpacked SCHM chunk, NULL if none yet). */
+enum SaveResult save_chunk_unpack_schema(const struct SaveChunk *chunk, const uint8_t *schema, uint32_t schema_len,
+    uint8_t **out, uint32_t *out_len, struct SaveError *err);
+/** Appends a chunk whose record (of struct `root`) is coded as KSC with `schema` (zstd if that fails). */
+int save_chunk_add_ksc(struct SaveBuffer *buffer, uint32_t id, uint32_t flags, const struct SaveBuffer *payload,
+    const uint8_t *schema, uint32_t schema_len, const char *root);
+/** crc32 (zlib's value), computed by libdeflate: about four times faster. */
+uint32_t save_crc32(const void *data, uint32_t len);
 /******************************************************************************/
 #ifdef __cplusplus
 }

@@ -80,6 +80,7 @@
 #include "world_keeper_panel.h"
 #include "world_side_panel.h"
 #include "world_attract.h"
+#include "possession_view.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -568,7 +569,10 @@ void redraw_creature_view(void)
     struct Thing* thing = thing_get(get_user_state(get_displayed_user())->controlled_thing_idx);
     TRACE_THING(thing);
     if (thing_exists(thing))
+    {
       draw_creature_view(thing);
+      draw_possession_crosshair(); /* endless: third-person Possession's aim */
+    }
     remove_explored_flags_for_viewed_power_sights(player);
     GameUI_DrawFrame(player);
     if (!creature_control_invalid(creature_control_get_from_thing(thing))) {

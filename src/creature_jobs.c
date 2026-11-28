@@ -50,6 +50,7 @@
 #include "creature_states_wrshp.h"
 #include "creature_states_lair.h"
 #include "creature_states_pray.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -297,7 +298,9 @@ TbBool attempt_anger_job_leave_dungeon(struct Thing *creatng)
     if (!can_change_from_state_to(creatng, creatng->active_state, CrSt_CreatureLeaves)) {
         return false;
     }
-    struct Room* room = find_nearest_room_of_role_for_thing(creatng, creatng->owner, get_room_role_for_job(Job_EXEMPT), NavRtF_Default);
+    struct Room* room = world_leave_portal(creatng); /* endless: the main portal a migration chose (world_stream.c) */
+    if (room_is_invalid(room))
+        room = find_nearest_room_of_role_for_thing(creatng, creatng->owner, get_room_role_for_job(Job_EXEMPT), NavRtF_Default);
     if (room_is_invalid(room)) {
         return false;
     }

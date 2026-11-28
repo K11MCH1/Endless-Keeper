@@ -816,6 +816,7 @@ static void play()
     }
     engine_view_pause(); /* the background's game makes way for the real one */
     std::wstring cmd = L"\"" + exe + L"\"" + widen(game_arguments());
+    SetEnvironmentVariableW(L"EK_FROM_LAUNCHER", L"1"); /* (the game never hands back to a launcher: ek_handover.c, audit 2026-11-28) */
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     memset(&si, 0, sizeof(si));
@@ -2173,6 +2174,7 @@ int main(int, char **)
     {
         const std::wstring exe = game_exe();
         std::wstring cmd = L"\"" + exe + L"\"" + widen(game_arguments());
+        SetEnvironmentVariableW(L"EK_FROM_LAUNCHER", L"1"); /* (see above: no hand-back) */
         STARTUPINFOW si;
         PROCESS_INFORMATION pi;
         memset(&si, 0, sizeof(si));

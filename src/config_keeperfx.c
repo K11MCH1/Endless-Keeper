@@ -77,6 +77,7 @@ static unsigned char parchment_map_fade_turns = 0;
 unsigned char viewport_mode = VpMode_Original;
 unsigned char window_style = WinStyle_Modern;
 unsigned short ui_scale_percent = 100;
+unsigned char possession_third_person_default = 0;
 TbBool exit_on_lua_error = false;
 TbBool FLEE_BUTTON_DEFAULT = false;
 TbBool IMPRISON_BUTTON_DEFAULT = false;
@@ -195,6 +196,7 @@ const struct NamedCommand conf_commands[] = {
   {"WINDOW_STYLE"                  , 59},
   {"OFFICIAL_SET_PIECES"           , 60},
   {"UI_SCALE"                      , 61},
+  {"POSSESSION_VIEW"               , 62},
   {NULL,                   0},
   };
 
@@ -203,6 +205,13 @@ const struct NamedCommand conf_commands[] = {
   {"FULL",           VpMode_Full},
   {"FULL_LETTERBOX", VpMode_FullLetterbox},
   {NULL,             0},
+  };
+
+  const struct NamedCommand possession_view_desc[] = {
+  {"FIRST",        1},
+  {"THIRD",        2},
+  {"THIRD_FAR",    3},
+  {NULL,           0},
   };
 
   const struct NamedCommand window_style_desc[] = {
@@ -1225,6 +1234,15 @@ static void load_string_configuration(const char *buf, int32_t len, const char *
               break;
           }
           world_official_setpieces = (i == 1);
+          break;
+      case 62: // POSSESSION_VIEW: the view a Possession starts in (FIRST, THIRD or THIRD_FAR); C goes round them
+          i = recognize_conf_parameter(buf, &pos, len, possession_view_desc);
+          if (i <= 0)
+          {
+              CONFWRNLOG("Couldn't recognize \"%s\" command parameter in %s file.", COMMAND_TEXT(cmd_num), config_textname);
+              break;
+          }
+          possession_third_person_default = (unsigned char)(i - 1); /* enum PossessionView */
           break;
       case ccr_comment:
           break;

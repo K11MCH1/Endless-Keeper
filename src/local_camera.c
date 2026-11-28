@@ -43,6 +43,7 @@
 #include "creature_control.h"
 #include "bflib_datetm.h"
 #include "world_pages.h"
+#include "map_blocks.h"
 
 #include <math.h>
 #include "net_state.h"
@@ -402,20 +403,12 @@ static void snap_back_first_person_look(struct Camera *cam, const struct Thing *
     cam->rotation_angle_y = (cam->rotation_angle_y + delta_pitch / 2) & ANGLE_MASK;
 }
 
-static void update_local_first_person_camera(struct Thing *ctrltng)
+static void update_local_first_person_eye(struct Thing *ctrltng)
 {
     struct Camera* cam = &local_state.camera.destination[CamIV_FirstPerson];
     struct Thing *viewtng = get_local_possession_view(ctrltng);
     int eye_height = get_creature_eye_height(ctrltng);
     update_first_person_position(cam, viewtng, get_local_creature_control(ctrltng), eye_height);
-    if (netstate_is_client()) {
-        /* a thin client's turns come in bursts: the eye moves between turns exactly as the creature is drawn (from its
-           previous position), not from wherever the camera was a burst ago */
-        struct Camera *prev = &local_state.camera.previous[CamIV_FirstPerson];
-        prev->mappos.x.val = cam->mappos.x.val - (viewtng->mappos.x.val - viewtng->previous_mappos.x.val);
-        prev->mappos.y.val = cam->mappos.y.val - (viewtng->mappos.y.val - viewtng->previous_mappos.y.val);
-        prev->mappos.z.val = cam->mappos.z.val - (viewtng->mappos.z.val - viewtng->previous_mappos.z.val);
-    }
 
     // A replay shows the recorded look as the creature took it.
     if (replay.load_enable)
@@ -439,6 +432,138 @@ static void update_local_first_person_camera(struct Thing *ctrltng)
     cam->rotation_angle_y = local_state.camera.first_person_look_pitch;
     if ((ctrltng->movement_flags & TMvF_Flying) != 0) {
         cam->rotation_angle_z = local_state.camera.first_person_look_roll;
+    }
+}
+
+/* Endless Keeper: third-person Possession (the user, 2026-11-28: "Camera behind the creature. Crosshair for aiming.").
+   The camera keeps the creature's yaw and pitch and sits behind and above its eye, offset at right angles to the look:
+   the creature's aim (its yaw and pitch) then stays parallel to the view, so the crosshair (possession_view.c)
+   stays near the middle and rises to it with distance. Rock between the eye and the camera pulls the camera in at once;
+   it eases back out over a few turns. */
+#define THIRD_PERSON_REACH_FULL 1024
+#define THIRD_PERSON_REACH_EASE_OUT 128
+#define THIRD_PERSON_CLEARANCE 48
+#define THIRD_PERSON_TRACE_STEPS 32
+
+static TbBool third_person_point_blocked(MapCoord x, MapCoord y, MapCoord z)
+{
+    static const signed char corners[6][3] = {{-1,-1,0},{1,-1,0},{-1,1,0},{1,1,0},{0,0,1},{0,0,-1}};
+    for (int i = 0; i < 6; i++)
+    {
+        struct Coord3d pos;
+        const MapCoord px = x + corners[i][0] * THIRD_PERSON_CLEARANCE;
+        const MapCoord py = y + corners[i][1] * THIRD_PERSON_CLEARANCE;
+        const MapCoord pz = z + corners[i][2] * THIRD_PERSON_CLEARANCE;
+        if ((px < 0) || (py < 0) || (pz < 0)) {
+            return true;
+        }
+        if ((px >= game.map_subtiles_x * COORD_PER_STL) || (py >= game.map_subtiles_y * COORD_PER_STL)) {
+            return true;
+        }
+        pos.x.val = px;
+        pos.y.val = py;
+        pos.z.val = pz;
+        if (point_in_map_is_solid(&pos)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+TbBool local_possession_third_person(void)
+{
+    if (!local_state.camera.ready || (local_state.camera.third_person == PossV_FirstPerson) || is_observer_camera_active()
+     || (get_my_player() == &local_observer_player) || (get_local_active_camera_index() != CamIV_FirstPerson)) {
+        return false;
+    }
+    const struct Thing *ctrltng = thing_get(get_local_user_state()->controlled_thing_idx);
+    return thing_is_creature(ctrltng);
+}
+
+/** The possession view shown now: PossV_FirstPerson whenever the camera is not behind a possessed creature. */
+unsigned char local_possession_view(void)
+{
+    return local_possession_third_person() ? local_state.camera.third_person : PossV_FirstPerson;
+}
+
+/* C (and the Android button) go round the three views: first person, behind, farther behind (the user, 2026-11-28) */
+void toggle_local_possession_view(void)
+{
+    static const char *names[PossV_Count] = {"first person", "behind", "farther behind"};
+    local_state.camera.third_person = (local_state.camera.third_person + 1) % PossV_Count;
+    local_state.camera.third_person_chosen = true;
+    /* into the near view from first person the camera eases out from the eye; between the two behind views it
+       glides from where it is */
+    if (local_state.camera.third_person != PossV_FarBehind) {
+        local_state.camera.third_person_reach = 0;
+    }
+    SYNCLOG("Possession view: %s", names[local_state.camera.third_person]);
+}
+
+static void place_third_person_camera(struct Camera *cam, const struct Thing *viewtng, int eye_height)
+{
+    const int32_t yaw = cam->rotation_angle_x;
+    const int32_t pitch = cam->rotation_angle_y;
+    /* farther behind: half as far again, and as much higher (the user, 2026-11-28: "a bit farther") */
+    const int32_t reach_scale = (local_state.camera.third_person == PossV_FarBehind) ? 3 : 2;
+    const int32_t back = (384 + eye_height) * reach_scale / 2;
+    const int32_t up = (96 + eye_height / 4) * reach_scale / 2;
+    const int64_t cos_p = LbCosL(pitch);
+    const int64_t sin_p = LbSinL(pitch);
+    /* behind along the look and above it at right angles: forward f = (cos p, sin p), up u = (-sin p, cos p) */
+    const int32_t horiz = (int32_t)((-(int64_t)back * cos_p - (int64_t)up * sin_p) >> LbFPMath_TrigmBits);
+    const int32_t vert = (int32_t)((-(int64_t)back * sin_p + (int64_t)up * cos_p) >> LbFPMath_TrigmBits);
+    const MapCoord pivot_x = viewtng->mappos.x.val;
+    const MapCoord pivot_y = viewtng->mappos.y.val;
+    /* the creature's own height, not the first-person eye's: the eye bobs with every step, which behind the creature
+       only shook the view (the user, 2026-11-28) */
+    const MapCoord pivot_z = viewtng->mappos.z.val + eye_height;
+    const MapCoordDelta dx = distance_with_angle_to_coord_x(horiz, yaw);
+    const MapCoordDelta dy = distance_with_angle_to_coord_y(horiz, yaw);
+    const MapCoordDelta dz = vert;
+    /* the farthest clear point on the line from the eye to the wanted place, a step short of the rock */
+    int32_t clear = 0;
+    for (int i = 1; i <= THIRD_PERSON_TRACE_STEPS; i++)
+    {
+        if (third_person_point_blocked(pivot_x + dx * i / THIRD_PERSON_TRACE_STEPS, pivot_y + dy * i / THIRD_PERSON_TRACE_STEPS,
+                pivot_z + dz * i / THIRD_PERSON_TRACE_STEPS)) {
+            break;
+        }
+        clear = i;
+    }
+    clear = clear * THIRD_PERSON_REACH_FULL / THIRD_PERSON_TRACE_STEPS;
+    int32_t reach = local_state.camera.third_person_reach + THIRD_PERSON_REACH_EASE_OUT;
+    if (reach > clear) {
+        reach = clear;
+    }
+    local_state.camera.third_person_reach = reach;
+    view_set_camera_position(cam, pivot_x + dx * reach / THIRD_PERSON_REACH_FULL, pivot_y + dy * reach / THIRD_PERSON_REACH_FULL);
+    cam->mappos.z.val = pivot_z + dz * reach / THIRD_PERSON_REACH_FULL;
+}
+
+static void update_local_first_person_camera(struct Thing *ctrltng)
+{
+    struct Camera* cam = &local_state.camera.destination[CamIV_FirstPerson];
+    struct Thing *viewtng = get_local_possession_view(ctrltng);
+    /* the eye's own place, without last turn's third-person offset: its height is smoothed from where it was */
+    if (local_state.camera.third_person_eye_thing == ctrltng->index) {
+        cam->mappos = local_state.camera.third_person_eye;
+    }
+    update_local_first_person_eye(ctrltng);
+    local_state.camera.third_person_eye = cam->mappos;
+    local_state.camera.third_person_eye_thing = ctrltng->index;
+    if (local_possession_third_person()) {
+        place_third_person_camera(cam, viewtng, get_creature_eye_height(ctrltng));
+    } else {
+        local_state.camera.third_person_reach = 0;
+    }
+    if (netstate_is_client()) {
+        /* a thin client's turns come in bursts: the eye moves between turns exactly as the creature is drawn (from its
+           previous position), not from wherever the camera was a burst ago */
+        struct Camera *prev = &local_state.camera.previous[CamIV_FirstPerson];
+        prev->mappos.x.val = cam->mappos.x.val - (viewtng->mappos.x.val - viewtng->previous_mappos.x.val);
+        prev->mappos.y.val = cam->mappos.y.val - (viewtng->mappos.y.val - viewtng->previous_mappos.y.val);
+        prev->mappos.z.val = cam->mappos.z.val - (viewtng->mappos.z.val - viewtng->previous_mappos.z.val);
     }
 }
 
@@ -751,6 +876,12 @@ void record_local_possession_start(NetUserId user)
 {
     if (!local_camera_shows_user(user) || !local_state.camera.ready)
         return;
+    /* the keeperfx.cfg POSSESSION_VIEW until the player switches with C; then the last choice for the session */
+    if (!local_state.camera.third_person_chosen) {
+        local_state.camera.third_person = possession_third_person_default;
+    }
+    local_state.camera.third_person_reach = 0;
+    local_state.camera.third_person_eye_thing = 0;
     if (is_observer_camera_active()) {
         local_state.camera.possession_start_zoom = 0;
     } else {

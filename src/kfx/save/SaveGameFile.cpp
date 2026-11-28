@@ -5,6 +5,7 @@
 /******************************************************************************/
 #include "pre_inc.h"
 #include "bflib_basics.h"
+#include "bflib_datetm.h"
 #include "game_legacy.h"
 #include "game_merge.h"
 #include "kfx/platform/IPlatform.h"
@@ -31,13 +32,17 @@ enum SaveResult Build(const Game *game_state, const IntralevelData *ilvl, const 
     const char *lua_data, uint32_t lua_len, const CatalogueEntry *centry, SaveBuffer *out, SaveError *err)
 {
     SaveBufferOwner meta, schema_buffer, nams, conf, gamebuf, ilvlbuf;
+    int64_t bt[8] = {0}; /* (singleplayer pass 2026-11-28: where building a save goes) */
+    bt[0] = get_time_tick_ns();
     uint32_t root_count;
     const SaveStructDesc *const *roots = save_root_structs(&root_count);
     enum SaveResult result = save_encode_record(&meta, &save_desc_CatalogueEntry, centry, SVM_Save, err);
     if (result == SVR_Ok)
         result = save_schema_encode(&schema_buffer, roots, root_count, SVM_Save, err);
+    bt[1] = get_time_tick_ns();
     if (result == SVR_Ok)
         result = save_names_write(game_state, &nams, err);
+    bt[2] = get_time_tick_ns();
     if (result == SVR_Ok)
     {
         if (baseline != nullptr)
@@ -45,10 +50,24 @@ enum SaveResult Build(const Game *game_state, const IntralevelData *ilvl, const 
         else if (save_buf_u32(&conf, 0) != 0) /* no level set up yet: an overlay with no entries */
             result = save_fail(err, SVR_NoMemory, "out of memory");
     }
+    bt[3] = get_time_tick_ns();
     if (result == SVR_Ok)
         result = save_encode_record(&gamebuf, &save_desc_Game, game_state, SVM_Save, err);
+    bt[4] = get_time_tick_ns();
+    if ((result == SVR_Ok) && (getenv("KFX_SAVE_ENCCHECK") != nullptr))
+    {
+        /* test switch: the GAME record built again field by field, compared byte for byte */
+        SaveBufferOwner walk;
+        SaveError werr;
+        const bool same = (save_encode_record_walk(&walk, &save_desc_Game, game_state, SVM_Save, &werr) == SVR_Ok) &&
+            (walk.len == gamebuf.len) && (memcmp(walk.data, gamebuf.data, gamebuf.len) == 0) &&
+            (walk.has_raw_bytes == gamebuf.has_raw_bytes);
+        SAVELOG("encode check: GAME record %u bytes, %s", (unsigned)gamebuf.len, same ? "identical to the field walk" : "DIFFERENT");
+        bt[4] = get_time_tick_ns();
+    }
     if (result == SVR_Ok)
         result = save_encode_record(&ilvlbuf, &save_desc_IntralevelData, ilvl, SVM_Save, err);
+    bt[5] = get_time_tick_ns();
 
     // The container: the header, then the chunks in this order.
     bool succeeded = (result == SVR_Ok) && (save_file_begin(out, SFK_Save) == 0);
@@ -59,10 +78,21 @@ enum SaveResult Build(const Game *game_state, const IntralevelData *ilvl, const 
     add(SCID_Schema, schema_buffer, true);
     add(SCID_Names, nams, true);
     add(SCID_Config, conf, true);
-    add(SCID_Game, gamebuf, true);
+    const int64_t game_t0 = get_time_tick_ns();
+    const uint32_t game_at = out->len;
+    if (save_codec_choice() == SCC_Ksc)
+        succeeded = succeeded && (save_chunk_add_ksc(out, SCID_Game, SCF_Required, &gamebuf, schema_buffer.data,
+            schema_buffer.len, "Game") == 0); /* KFX_SAVE_CODEC=ksc (research prototype 2026-11-28) */
+    else
+        add(SCID_Game, gamebuf, true);
+    if (succeeded)
+        SAVELOG("GAME chunk: %u bytes stored as %u (%s) in %.1f ms", (unsigned)gamebuf.len, (unsigned)(out->len - game_at - 20),
+            (save_codec_choice() == SCC_Ksc) ? "ksc" : (save_codec_choice() == SCC_Zstd) ? "zstd" : "zlib",
+            (double)(get_time_tick_ns() - game_t0) / 1e6);
     add(SCID_Level, ilvlbuf, true);
     if (lua_len > 0)
         succeeded = succeeded && (save_chunk_add(out, SCID_Lua, 0, lua_data, lua_len, true) == 0);
+    bt[6] = get_time_tick_ns();
     if (succeeded && (game_state == &game) && world_mode_active())
     {
         unsigned char *world_data = nullptr;
@@ -77,6 +107,11 @@ enum SaveResult Build(const Game *game_state, const IntralevelData *ilvl, const 
         }
         free(world_data);
     }
+    bt[7] = get_time_tick_ns();
+    SAVELOG("building: schema %.1f ms, names %.1f, config %.1f, GAME record %.1f, level %.1f, chunks %.1f, world %.1f",
+        (double)(bt[1] - bt[0]) / 1e6, (double)(bt[2] - bt[1]) / 1e6, (double)(bt[3] - bt[2]) / 1e6,
+        (double)(bt[4] - bt[3]) / 1e6, (double)(bt[5] - bt[4]) / 1e6, (double)(bt[6] - bt[5]) / 1e6,
+        (double)(bt[7] - bt[6]) / 1e6);
     if ((result == SVR_Ok) && !succeeded)
         result = save_fail(err, SVR_NoMemory, "out of memory");
     if (result != SVR_Ok)
@@ -157,7 +192,9 @@ enum SaveResult read_raw_chunks(const uint8_t *filebuf, uint32_t filelen, RawChu
         if (dst == nullptr)
             continue;
         uint8_t *raw = nullptr;
-        result = save_chunk_unpack(&chunk, &raw, &dst->len, err);
+        /* a KSC chunk (KFX_SAVE_CODEC=ksc) is decoded with the schema, which a writer puts before it */
+        result = save_chunk_unpack_schema(&chunk, chunks.schema.present ? chunks.schema.data.get() : nullptr,
+            chunks.schema.len, &raw, &dst->len, err);
         dst->data.reset(raw);
         if (result != SVR_Ok)
             return result;
@@ -206,9 +243,13 @@ enum SaveResult Read(IFileSystem &filesystem, const char *fname, CatalogueEntry 
     if (result != SVR_Ok)
         return result;
     RawChunks chunks;
+    const int64_t read_t0 = get_time_tick_ns();
     result = read_raw_chunks(filebuf.data(), (uint32_t)filebuf.size(), chunks, err);
     if (result != SVR_Ok)
         return result;
+    SAVELOG("read \"%s\": %u bytes, chunks unpacked in %.1f ms (GAME %s)", fname, (unsigned)filebuf.size(),
+        (double)(get_time_tick_ns() - read_t0) / 1e6,
+        (chunks.game.flags & SCF_Ksc) ? "ksc" : (chunks.game.flags & SCF_Zstd) ? "zstd" : (chunks.game.flags & SCF_Zlib) ? "zlib" : "raw");
     if (!chunks.meta.present || !chunks.schema.present || !chunks.game.present || !chunks.ilvl.present)
         return save_fail(err, SVR_Damaged, "the save is missing a required chunk");
 
@@ -229,7 +270,24 @@ enum SaveResult Read(IFileSystem &filesystem, const char *fname, CatalogueEntry 
         if (result == SVR_Ok)
         {
             save_decoder_set_chunk_flags(&decoder, chunks.game.flags);
+            const int64_t dt0 = get_time_tick_ns();
             result = save_decode_record(&decoder, &save_desc_Game, chunks.game.data.get(), chunks.game.len, &used, game_state, err);
+            SAVELOG("GAME record read in %.1f ms", (double)(get_time_tick_ns() - dt0) / 1e6);
+            if ((result == SVR_Ok) && (getenv("KFX_SAVE_DECCHECK") != nullptr))
+            {
+                /* test switch: the GAME record read again field by field into another copy, compared byte for byte */
+                Game *walk = static_cast<Game *>(calloc(1, sizeof(Game)));
+                SaveDecoderOwner d2;
+                save_decoder_init(&d2, &file_schema, SVM_Save);
+                save_decoder_set_chunk_flags(&d2, chunks.game.flags);
+                uint32_t used2 = 0;
+                SaveError e2;
+                const bool same = (walk != nullptr) &&
+                    (save_decode_record_walk(&d2, &save_desc_Game, chunks.game.data.get(), chunks.game.len, &used2, walk, &e2) == SVR_Ok) &&
+                    (used2 == used) && (memcmp(walk, game_state, sizeof(Game)) == 0);
+                SAVELOG("decode check: GAME record %s", same ? "identical to the field walk" : "DIFFERENT");
+                free(walk);
+            }
         }
         if (result == SVR_Ok)
         {

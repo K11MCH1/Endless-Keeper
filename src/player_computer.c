@@ -574,7 +574,10 @@ TbBool computer_finds_nearest_room_to_pos(struct Computer2 *comp, struct Room **
             room_center_pos.z.val = get_floor_height_at(&room_center_pos);
 
             long distance = get_2d_distance_squared(&room_center_pos, nearpos);
-            if (distance < nearest_distance)
+            /* (the first room counts whatever its distance: the squared distance stops at INT32_MAX from about 60 slabs,
+               so in an endless world no room that far was ever "nearer" than the start value and no attack could be
+               planned; Endless Keeper, audit 2026-11-28) */
+            if ((*retroom == NULL) || (distance < nearest_distance))
             {
                 nearest_distance = distance;
                 *retroom = room;
@@ -583,9 +586,7 @@ TbBool computer_finds_nearest_room_to_pos(struct Computer2 *comp, struct Room **
         }
 
     }
-    if (nearest_distance == INT32_MAX)
-        return false;
-    return true;
+    return (*retroom != NULL);
 }
 
 long setup_computer_attack(struct Computer2 *comp, struct ComputerProcess *cproc, struct Coord3d *pos, long victim_plyr_idx)

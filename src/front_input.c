@@ -3029,6 +3029,9 @@ static void get_creature_control_nonaction_inputs(void)
             creature_movement_accum_y = 0.0f;
         }
         
+        /* Endless (2026-11-28): the speed key (Shift) runs (packets.c, apply_creature_movement_controls) */
+        if (is_game_key_pressed(Gkey_SpeedMod, false, true))
+            set_packet_control(pckt, PCtr_Run);
         if (flag_is_set(thing->movement_flags, TMvF_Flying))
         {
             if (is_game_key_pressed(Gkey_Ascend, false, true))
@@ -3250,6 +3253,13 @@ static short get_inputs(void)
     get_screen_capture_inputs();
     unsigned char view_type = get_local_view_type();
     SYNCDBG(7,"Getting inputs for view %d",(int)view_type);
+    /* Endless Keeper: C goes round Possession's views - first person, behind, farther behind (the user, 2026-11-28);
+       the camera only */
+    if (((view_type == PVT_CreatureContrl) || (view_type == PVT_CreaturePasngr)) && is_key_pressed(KC_C, KMod_NONE))
+    {
+        clear_key_pressed(KC_C);
+        toggle_local_possession_view();
+    }
     switch (view_type)
     {
     case PVT_DungeonTop:

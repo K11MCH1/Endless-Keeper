@@ -41,6 +41,7 @@ TbBool local_possession_look_frozen(struct Thing *thing);
 TbBool local_possession_sounded_shot(const struct Thing *firing);
 TbBool local_possession_sounded_footstep(const struct Thing *thing);
 void offset_local_possession_shot(const struct Thing *shotng, struct Coord3d *pos);
+void offset_local_possession_view(const struct Thing *thing, struct Coord3d *pos);
 void set_packet_possession_target(struct Packet *pckt);
 
 /******************************************************************************/

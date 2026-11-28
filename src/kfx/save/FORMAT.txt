@@ -73,11 +73,15 @@ CONTENTS
     0x04  -          reserved, never set, never read
     0x08  RAWBYTES   body holds raw memory (7.3, 7.4)
     0x10  RAWBIG     with RAWBYTES: the writer was big endian
+    0x20  ZSTD       body is one zstd frame (research prototype 2026-11-28,
+                     KFX_SAVE_CODEC=zstd or ksc)
+    0x40  KSC        body is a KSC body (save_ksc.cpp), decoded with the
+                     file's SCHM chunk, which comes before it (KFX_SAVE_CODEC=ksc)
 
   Read rules
     stored_len > bytes left in the file               damaged
     raw_len > 268435456                               damaged
-    no ZLIB and raw_len != stored_len                 damaged
+    none of ZLIB, ZSTD, KSC and raw_len != stored_len damaged
     unknown id and REQUIRED                           too new
     unknown id and not REQUIRED                       skipped
     unpacked length != raw_len, or crc mismatch       damaged
@@ -461,6 +465,7 @@ CONTENTS
 15  SOURCE FILES                                                src/kfx/save
 --------------------------------------------------------------------------------
   core/save_codec.[ch]            file header, chunks, crc, zlib       2, 3
+  core/save_ksc.[ch]              KSC: a record coded by its schema    3
   core/save_schema.[ch]           tables, stored types, flags          5
   core/save_schema_file.cpp       SCHM chunk                           5
   core/save_encode.cpp            record encoding                      6, 7

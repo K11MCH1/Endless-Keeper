@@ -71,6 +71,7 @@
 #include "roomspace_input.h"
 #include "net_spectator.h"
 #include "creature_graphics.h"
+#include "possession_view.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -560,6 +561,7 @@ void update(void)
 #endif
         game.play_gameturn++;
         world_after_turn();
+        possession_view_test_turn(); /* endless: KFX_POSSESS_VIEW_TEST */
         if (replay.turns_packetoff == game.play_gameturn)
             exit_keeper = 1;
     }

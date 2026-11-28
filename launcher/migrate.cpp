@@ -129,12 +129,30 @@ static int move_shortcuts(const std::wstring &old_target, const std::wstring &ne
     return moved;
 }
 
+/** The bridge is a small program (~17 KB); a keeperfx.exe of megabytes is the old game. */
+static bool small_file(const std::wstring &p)
+{
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    if (!GetFileAttributesExW(p.c_str(), GetFileExInfoStandard, &a))
+        return false;
+    return (a.nFileSizeHigh == 0) && (a.nFileSizeLow < (1u << 20));
+}
+
 void migrate_program_names(const std::wstring &game_dir)
 {
     const std::wstring bridge = game_dir + L"\\keeperfx.exe", game = game_dir + L"\\EndlessKeeper.exe";
     const std::wstring launcher = game_dir + L"\\ek-launcher.exe";
     if (!exists(bridge) || !exists(game) || !exists(launcher))
         return;
+    /* (audit 2026-11-28) only the real bridge, and only with the x64 game in place: after an update that stopped part
+       way (EndlessKeeper.exe new, keeperfx.exe still the old game) the old programs were deleted and nothing offered
+       to finish the update */
+    const std::wstring x64_dir = game_dir + L"\\x64";
+    if (!small_file(bridge) || (exists(x64_dir) && !exists(x64_dir + L"\\EndlessKeeper.exe")))
+    {
+        note(game_dir, "keeperfx.exe is not the bridge, or x64\\EndlessKeeper.exe is missing (an update not finished): nothing moved or removed");
+        return;
+    }
     const HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     const int moved = move_shortcuts(game, launcher, game_dir);
     if (SUCCEEDED(co))

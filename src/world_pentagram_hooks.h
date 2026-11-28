@@ -46,6 +46,8 @@ HitPoints world_pentagram_heal(const struct Thing *thing, HitPoints amount);
 GoldAmount world_pentagram_power_price(PlayerNumber plyr_idx, PowerKind pwkind, KeepPwrLevel power_level, GoldAmount price);
 KeepPwrLevel world_pentagram_price_level(PlayerNumber plyr_idx, KeepPwrLevel power_level);
 GoldAmount world_pentagram_spell_pay(PlayerNumber plyr_idx, PowerKind pwkind, GoldAmount price);
+/** The rest of the price could not be paid: the Soul Harvest credit world_pentagram_spell_pay used goes back. */
+void world_pentagram_spell_unpay(PlayerNumber plyr_idx, GoldAmount credit);
 void world_pentagram_soul_harvest(PlayerNumber plyr_idx);
 KeepPwrLevel world_pentagram_cast_begin(PlayerNumber plyr_idx, PowerKind pwkind, KeepPwrLevel power_level);
 void world_pentagram_cast_end(PlayerNumber plyr_idx, PowerKind pwkind, KeepPwrLevel power_level, MapSubtlCoord stl_x,

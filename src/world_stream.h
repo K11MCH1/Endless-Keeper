@@ -157,6 +157,13 @@ struct Room;
 struct Room *world_spawn_portal(PlayerNumber plyr_idx);
 /** A seat begins again: its first portal is chosen again. */
 void world_spawn_portal_reset(PlayerNumber plyr_idx);
+/** The keeper's Heart moved beside this portal (world_migrate.c, the user 2026-11-28): it is the main portal from now on,
+ *  where new creatures come in and leaving ones go out (until it is lost: then the one nearest the Heart comes in). */
+void world_spawn_portal_set_main(PlayerNumber plyr_idx, const struct Room *room);
+/** The portal a leaving creature makes for: its keeper's main portal, when a migration chose it and the creature can get
+ *  there; INVALID_ROOM: the nearest portal, as the game does. */
+struct Thing;
+struct Room *world_leave_portal(struct Thing *creatng);
 TbBool world_player_owns_portal_in(PlayerNumber plyr_idx, uint32_t biome_mask);
 /** Version 7 worlds: is the land in this box of world slabs fit to build on: no Dead Man's Land and no ocean (nor,
  *  with no_provinces, the river provinces either), its biomes sampled every 8 slabs? Always true in a version 6

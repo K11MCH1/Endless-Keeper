@@ -43,6 +43,8 @@
 #include "world_pages.h"
 #include "world_progress.h"
 #include "world_pentagram_hooks.h"
+#include "world_risen.h"
+#include "world_stream.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -282,6 +284,13 @@ void convert_creature_to_ghost(struct Room *room, struct Thing *thing)
         // If not assigned or is unknown, default to the room creature creation.
         crmodel = get_room_create_creature_model(room->kind);
     }
+    if (world_mode_active() && !world_risen_counts(room->owner, WRis_Ghost, 1, crmodel))
+    {
+        /* endless worlds: at most 4 Ghosts, each more needing more creatures dead under torture in the last day and
+           night (world_risen.c, the user 2026-11-28): this one just dies */
+        kill_creature(thing, INVALID_THING, -1, CrDed_DiedInBattle);
+        return;
+    }
     struct Thing* newthing = INVALID_THING;
     if (creature_count_below_map_limit(1))
     {
@@ -294,6 +303,10 @@ void convert_creature_to_ghost(struct Room *room, struct Thing *thing)
     } else
     {
         WARNLOG("Could not create creature %s to transform %s to due to creature limit", creature_code_name(crmodel), thing_model_name(thing));
+        /* (no ghost: the creature dies all the same; the code below went on with the invalid thing, giving it a level and
+           copying a name into the invalid creature control; audit 2026-11-28) */
+        kill_creature(thing, INVALID_THING, -1, CrDed_NoEffects|CrDed_DiedInBattle);
+        return;
     }
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     struct CreatureControl* newcctrl = creature_control_get_from_thing(newthing);

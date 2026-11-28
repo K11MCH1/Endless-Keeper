@@ -88,7 +88,38 @@ struct Plan {
 
 struct DecoderState {
     std::vector<std::unique_ptr<Plan>> plans;
+    /* Zero elements (singleplayer pass, 2026-11-28): per array-of-structs op, the stored bytes of an element that
+       read as nothing into an element that was all zero (an unused slot). The decoder is a function of the bytes and
+       the plan, so the same bytes later read as nothing again: they are stepped over when that element is all zero
+       too. A save's GAME record is mostly such slots. */
+    std::vector<std::pair<const void *, std::unique_ptr<std::vector<uint8_t>>>> zero_sigs; /* (heap vectors: nested reads add entries meanwhile) */
 };
+static thread_local bool zero_read_forced; /* (KFX_SAVE_DECCHECK: the second read walks every element) */
+static bool zero_read_on(void)
+{
+    static int on = -1;
+    if (on < 0)
+    {
+        const char *v = getenv("KFX_SAVE_ZEROFAST");
+        on = ((v == nullptr) || (strcmp(v, "0") != 0)) ? 1 : 0;
+    }
+    return (on > 0) && !zero_read_forced;
+}
+static bool mem_all_zero(const uint8_t *p, size_t n)
+{
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8)
+    {
+        uint64_t v;
+        memcpy(&v, p + i, 8);
+        if (v != 0)
+            return false;
+    }
+    for (; i < n; i++)
+        if (p[i] != 0)
+            return false;
+    return true;
+}
 
 void save_decoder_init(struct SaveDecoder *decoder, const struct SaveFileSchema *schema, enum SaveMode mode)
 {
@@ -551,13 +582,35 @@ private:
     enum SaveResult Apply(const Target &target, const SubOp &op)
     {
         uint8_t *base = target.dst + op.build.field->offset;
+        const bool fast = (op.file.count >= 4) && zero_read_on();
+        DecoderState *state = static_cast<DecoderState *>(decoder_->priv);
+        const std::vector<uint8_t> *sig = nullptr;
+        if (fast)
+            for (const auto &z : state->zero_sigs)
+                if (z.first == &op)
+                    sig = z.second.get();
         for (uint32_t element_index = 0; element_index < op.file.count; element_index++)
         {
             uint32_t build_element_index;
             const bool in_range = build_index(op.file, op.build, element_index, build_element_index);
+            uint8_t *elem_dst = base + (static_cast<size_t>(build_element_index) * op.build.elem);
+            const bool was_zero = fast && in_range && mem_all_zero(elem_dst, op.build.elem);
+            if (was_zero && (sig != nullptr) && (reader_.left() >= sig->size()) &&
+                (memcmp(reader_.data() + reader_.pos(), sig->data(), sig->size()) == 0))
+            {
+                reader_.Take(static_cast<uint32_t>(sig->size())); /* (reads as nothing: the element stays all zero) */
+                continue;
+            }
+            const uint32_t start = reader_.pos();
             const enum SaveResult result = ReadStruct(target, op, base, build_element_index, in_range);
             if (result != SVR_Ok)
                 return result;
+            if (was_zero && (sig == nullptr) && (reader_.pos() > start) && mem_all_zero(elem_dst, op.build.elem))
+            {
+                auto bytes = std::make_unique<std::vector<uint8_t>>(reader_.data() + start, reader_.data() + reader_.pos());
+                sig = bytes.get();
+                state->zero_sigs.emplace_back(&op, std::move(bytes));
+            }
         }
         return SVR_Ok;
     }
@@ -683,6 +736,15 @@ private:
     ByteReader &reader_;
     SaveError *err_;
 };
+
+enum SaveResult save_decode_record_walk(struct SaveDecoder *decoder, const struct SaveStructDesc *desc,
+    const uint8_t *data, uint32_t len, uint32_t *used, void *dst, struct SaveError *err)
+{
+    zero_read_forced = true;
+    const enum SaveResult result = save_decode_record(decoder, desc, data, len, used, dst, err);
+    zero_read_forced = false;
+    return result;
+}
 
 enum SaveResult save_decode_record(struct SaveDecoder *decoder, const struct SaveStructDesc *desc,
     const uint8_t *data, uint32_t len, uint32_t *used, void *dst, struct SaveError *err)

@@ -93,6 +93,8 @@
 #include "config.h"
 #include "config_crtrstates.h"
 #include "player_instances.h"
+#include "gui_topmsg.h"
+#include "creature_states_lair.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -171,6 +173,48 @@ static TbBool wm_home_fits(PlayerNumber p, MapSlabCoord cx, MapSlabCoord cy)
             if (!wm_home_slab(p, cx + i, cy + j))
                 return false;
     return true;
+}
+
+/** The keeper's room of a role nearest the new home's middle, with a slab of it within WORLD_MIGRATE_NEED_REACH slabs
+ *  (a circle) of it; INVALID_ROOM: none. */
+static struct Room *wm_room_near(PlayerNumber p, MapSlabCoord cx, MapSlabCoord cy, RoomRole role)
+{
+    const int r = WORLD_MIGRATE_NEED_REACH;
+    struct Room *best = INVALID_ROOM;
+    long best_d = LONG_MAX;
+    for (int j = -r; j <= r; j++)
+        for (int i = -r; i <= r; i++)
+        {
+            const long d = (long)i * i + (long)j * j;
+            if ((d > (long)r * r) || (d >= best_d))
+                continue;
+            const MapSlabCoord x = cx + i, y = cy + j;
+            if ((x < 0) || (y < 0) || (x >= game.map_tiles_x) || (y >= game.map_tiles_y))
+                continue;
+            struct Room *room = slab_room_get(x, y);
+            if (room_is_invalid(room) || (room->owner != p) || !room_role_matches(room->kind, role))
+                continue;
+            best = room;
+            best_d = d;
+        }
+    return best;
+}
+
+/** The rooms the new home lacks near it (the user, 2026-11-28: "The Soul Container can only be placed if a Portal and
+ *  Lair is within a 20 slabs radius"): NULL when it has both, else what is missing. */
+static const char *wm_home_lacks(PlayerNumber p, MapSlabCoord cx, MapSlabCoord cy)
+{
+    const TbBool portal = !room_is_invalid(wm_room_near(p, cx, cy, RoRoF_CrPoolSpawn));
+    const TbBool lair = !room_is_invalid(wm_room_near(p, cx, cy, RoRoF_LairStorage));
+    if (portal && lair)
+        return NULL;
+    return (!portal && !lair) ? "a Portal and a Lair" : (!portal ? "a Portal" : "a Lair");
+}
+
+static void wm_lacks_text(char *buf, size_t size, const char *lacks)
+{
+    snprintf(buf, size, "The Soul Container needs a Portal and a Lair of yours within %d slabs of its new home (missing: %s).",
+        WORLD_MIGRATE_NEED_REACH, lacks);
 }
 
 /** Can the Heart be carried over this slab? */
@@ -728,6 +772,14 @@ static void wm_start(PlayerNumber p, MapSlabCoord tx, MapSlabCoord ty)
         tell_keeper(p, "The Soul Container needs 5 by 5 slabs of your own claimed floor, with no room on it.");
         return;
     }
+    const char *lacks = wm_home_lacks(p, tx, ty);
+    if (lacks != NULL)
+    {
+        char text[200];
+        wm_lacks_text(text, sizeof(text), lacks);
+        tell_keeper(p, text);
+        return;
+    }
     const MapSlabCoord hx = subtile_slab(heart->mappos.x.stl.num), hy = subtile_slab(heart->mappos.y.stl.num);
     if (!wm_find_path(p, hx, hy, tx, ty))
     {
@@ -919,6 +971,59 @@ static void wm_follow(PlayerNumber p, const struct Thing *heart)
     wm_gather(p, heart, false, WM_FOLLOW_SLABS * COORD_PER_SLB);
 }
 
+#define WM_ESCORT_SLABS 14   /* creatures this near the Soul Container when it is set down were its escort */
+
+/** The Heart is in its new home (the user, 2026-11-28): the Portal near it is the main entrance and exit from now on,
+ *  and the creatures that followed and guarded it make their new lairs in the Lair near it (each walks to a free place
+ *  there and its old lair goes; a creature for which the Lair has no room keeps its old one). */
+static void wm_new_home_rooms(PlayerNumber p, const struct Thing *heart, MapSlabCoord gx, MapSlabCoord gy)
+{
+    struct Room *portal = wm_room_near(p, gx, gy, RoRoF_CrPoolSpawn);
+    if (!room_is_invalid(portal))
+        world_spawn_portal_set_main(p, portal);
+    struct Room *lair = wm_room_near(p, gx, gy, RoRoF_LairStorage);
+    const struct Dungeon *dungeon = get_players_num_dungeon(p);
+    if (room_is_invalid(lair) || dungeon_invalid(dungeon))
+        return;
+    long room_left = (long)lair->total_capacity - (long)lair->used_capacity;
+    int moved = 0, full = 0;
+    long i = dungeon->creatr_list_start;
+    unsigned long guard = 0;
+    while ((i != 0) && (guard++ < CREATURES_COUNT))
+    {
+        struct Thing *thing = thing_get(i);
+        struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        if (creature_control_invalid(cctrl))
+            break;
+        i = cctrl->players_next_creature_idx;
+        if (!wm_imp_can_carry(thing) || thing_is_creature_digger(thing) || (thing->alloc_flags & TAlF_IsControlled))
+            continue;
+        if (get_chessboard_distance(&thing->mappos, &heart->mappos) > WM_ESCORT_SLABS * COORD_PER_SLB)
+            continue;
+        const struct CreatureModelConfig *crconf = creature_stats_get_from_thing(thing);
+        if ((crconf->lair_size <= 0) || (cctrl->lair_room_id == lair->index))
+            continue;
+        if (crconf->lair_size > room_left)
+        {
+            full++;
+            continue;
+        }
+        cleanup_current_thing_state(thing);
+        remove_creature_lair(thing);
+        if (setup_head_for_random_unused_lair_subtile(thing, lair))
+        {
+            thing->continue_state = CrSt_CreatureAtNewLair;
+            room_left -= crconf->lair_size;
+            moved++;
+        } else
+            set_start_state(thing); /* (it finds a lair of its own later) */
+    }
+    SYNCLOG("World: migration of player %d: the main portal is the one at subtile (%d,%d); %d of its escort make their lairs "
+        "in the Lair at subtile (%d,%d)%s", (int)p, room_is_invalid(portal) ? -1 : (int)portal->central_stl_x,
+        room_is_invalid(portal) ? -1 : (int)portal->central_stl_y, moved, (int)lair->central_stl_x, (int)lair->central_stl_y,
+        (full > 0) ? " (it is full for the others)" : "");
+}
+
 static void wm_arrive(PlayerNumber p, struct Thing *heart, MapSlabCoord gx, MapSlabCoord gy)
 {
     if (wm[p].state == WMig_Going)
@@ -959,6 +1064,7 @@ static void wm_arrive(PlayerNumber p, struct Thing *heart, MapSlabCoord gx, MapS
         wm[p].state = WMig_None;
         wm_path_clear(p);
         wm_follow(p, heart);
+        wm_new_home_rooms(p, heart, gx, gy);
         tell_keeper(p, "The Soul Container is in its new home.");
         return;
     }
@@ -1388,6 +1494,16 @@ TbBool world_migrate_inputs(void)
             MapSlabCoord x, y;
             if (wm_pointed(&x, &y))
             {
+                const char *lacks = wm_home_fits(my_player_number, x, y) ? wm_home_lacks(my_player_number, x, y) : NULL;
+                if (lacks != NULL)
+                {
+                    /* the rooms it needs near it: said at the top of the screen (the user, 2026-11-28); the Hand keeps
+                       the Soul Container, so the keeper can place it elsewhere */
+                    char text[200];
+                    wm_lacks_text(text, sizeof(text), lacks);
+                    show_onscreen_msg(turns_per_second * 6, "%s", text);
+                    SYNCLOG("World: migration: slab (%d,%d) refused for the new home (missing %s)", (int)x, (int)y, lacks);
+                } else
                 if (wm_home_fits(my_player_number, x, y))
                 {
                     /* the placing sounds of a room of many slabs (player_build_room_at), on this machine */
@@ -1638,7 +1754,19 @@ static void wm_test_turn(void)
                 continue;
             wm_test_slab(p, x, hy + j, SlbT_CLAIMED, &skipped);
         }
-    reveal_map_area(p, slab_subtile(hx, 0), slab_subtile(tx + 4, 2), slab_subtile(min(hy, ty) - 4, 0), slab_subtile(max(hy, ty) + 4, 2));
+    /* a Lair and a Portal beside the new home (2026-11-28: it needs both within WORLD_MIGRATE_NEED_REACH slabs): 3x3 each,
+       north and south of it, each joined to it by a claimed slab */
+    for (int s = -1; s <= 1; s += 2)
+    {
+        for (int j = 3; j <= 6; j++)
+            for (int i = -1; i <= 1; i++)
+                if ((j > 3) || (i == 0))
+                    wm_test_slab(p, tx + i, ty + s * j, SlbT_CLAIMED, &skipped);
+        for (int j = 4; j <= 6; j++)
+            for (int i = -1; i <= 1; i++)
+                wm_test_slab(p, tx + i, ty + s * j, (s < 0) ? SlbT_LAIR : SlbT_ENTRANCE, &skipped);
+    }
+    reveal_map_area(p, slab_subtile(hx, 0), slab_subtile(tx + 4, 2), slab_subtile(min(hy, ty) - 7, 0), slab_subtile(max(hy, ty) + 7, 2));
     if (creatures > 0)
     {
         /* a bigger dungeon: south-west of the Heart a claimed hall with a Treasure Room and a Library (3x3), a Lair, a

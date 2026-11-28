@@ -101,6 +101,16 @@ bool http_request(const std::string &url, const std::function<bool(const char *,
         why = win_error("no internet session");
         return false;
     }
+    {
+        /* TLS 1.2 or later (audit 2026-11-28): WinHTTP on Windows 7 SP1 offers TLS 1.0 unless asked (GitHub refuses it);
+           1.2 with 1.3 is refused where 1.3 is unknown, so then 1.2 alone. Without KB3140245 both fail: as before. */
+        DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | 0x00002000u /* WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3 */;
+        if (!WinHttpSetOption(session.h, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols)))
+        {
+            protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+            WinHttpSetOption(session.h, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols));
+        }
+    }
     WinHttpSetTimeouts(session.h, 8000, 8000, 15000, 30000);
     connect.h = WinHttpConnect(session.h, host, uc.nPort, 0);
     if (connect.h == nullptr)

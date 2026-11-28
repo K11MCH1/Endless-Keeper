@@ -228,6 +228,7 @@ void create_frontview_map_volume_box(struct Camera *cam, unsigned char stl_width
 void update_engine_settings(void);
 void draw_view(struct Camera *cam, unsigned char a2);
 void draw_frontview_engine(struct Camera *cam);
+TbBool map_to_screen_in_front(const struct Coord3d *pos, int32_t *screen_x, int32_t *screen_y);
 TbBool map_to_screen(struct Coord3d *pos, int32_t *screen_x, int32_t *screen_y);
 
 // Rasterize the bucket list built by the most recent draw_view()/

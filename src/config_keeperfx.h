@@ -135,6 +135,9 @@ extern unsigned char window_style;
 #define UI_SCALE_PERCENT_MIN 50
 #define UI_SCALE_PERCENT_MAX 300
 extern unsigned short ui_scale_percent;
+/** Endless Keeper: POSSESSION_VIEW=THIRD (or THIRD_FAR, farther back) starts every Possession behind the creature (the
+ *  user, 2026-11-28); the C key goes round first person, behind and farther behind. enum PossessionView. */
+extern unsigned char possession_third_person_default;
 extern const struct NamedCommand lang_type[];
 extern const struct NamedCommand scrshot_type[];
 extern char cmd_char;

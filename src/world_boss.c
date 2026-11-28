@@ -280,21 +280,50 @@ static long wb_every_turns(void)
 /** The countdown to the next fight runs in real time (the user, 2026-11-28: "it should be real time"): its end is a
  *  moment of the computer's clock (seconds since 1970, UTC) on the machine that runs the world, saved with it, so the
  *  time also passes while the game is paused or closed. The turns the rest of the event counts in (world_boss_until,
- *  which every machine's timer shows) are set from it every turn while the event waits. A replay being played back
- *  keeps game time: the clock of its recording is not in it. 0: none yet (taken from the turns left at the next turn). */
+ *  which every machine's timer shows) are set from it every turn while the event waits. 0: none yet (taken from the
+ *  turns left at the next turn). */
 static int64_t wb_due_utc;
+/* The clock is no input a replay has (audit 2026-11-28: a recording at 8x opened the fight at turn 4,684 by the clock,
+   its playback at turn 600 by game time): the turn the countdown came due on is decided a turn ahead and goes into the
+   replay (LTK_WorldBossDue); a replay played back opens the fight on that turn and never by its own clock or game time.
+   0: not due yet. */
+static GameTurn wb_due_turn;
+
+/** From a replay being played back (replay.c): the recording's countdown came due on this turn. */
+void world_boss_replay_due(uint32_t turn)
+{
+    wb_due_turn = (GameTurn)turn;
+}
 
 static void wb_real_time_countdown(void)
 {
     if (replay.load_enable)
+    {
+        /* (an older replay has no such turn: its fight does not come) */
+        game.world_boss_until = (wb_due_turn != 0) ? wb_due_turn : game.play_gameturn + (GameTurn)0x3fffffff;
         return;
+    }
+    if (wb_due_turn != 0)
+    {
+        game.world_boss_until = wb_due_turn; /* (due: it opens on that turn) */
+        return;
+    }
     const int64_t now = (int64_t)time(NULL);
     if (wb_due_utc == 0) /* a new countdown, or a world saved before: the time it had left, from now */
         wb_due_utc = now + (int64_t)max((GameTurnDelta)0, (GameTurnDelta)(game.world_boss_until - game.play_gameturn)) / 20;
     const int64_t left = max((int64_t)0, wb_due_utc - now);
-    game.world_boss_until = game.play_gameturn + (GameTurn)min(left * 20, (int64_t)0x3fffffff);
-    if (game.world_boss_until == 0)
-        game.world_boss_until = 1;
+    if (left > 0)
+    {
+        game.world_boss_until = game.play_gameturn + (GameTurn)min(left * 20, (int64_t)0x3fffffff);
+        if (game.world_boss_until == 0)
+            game.world_boss_until = 1;
+        return;
+    }
+    wb_due_turn = game.play_gameturn + 1;
+    if (wb_due_turn == 0)
+        wb_due_turn = 1;
+    game.world_boss_until = wb_due_turn;
+    replay_record_world_boss_due((uint32_t)wb_due_turn);
 }
 
 static TbBool wb_engine_box(MapSlabCoord *x1, MapSlabCoord *y1, MapSlabCoord *x2, MapSlabCoord *y2)
@@ -1611,6 +1640,7 @@ static void wb_end(TbBool won)
         game.world_boss_phase = WBP_Waiting;
         game.world_boss_until = game.play_gameturn + (GameTurn)wb_every_turns();
         wb_due_utc = 0; /* (the real-time end: from these turns, at the next turn) */
+        wb_due_turn = 0;
         SYNCLOG("World boss: the countdown to fight %lu begins: %ld turns", (unsigned long)game.world_boss_number + 1,
             wb_every_turns());
     } else
@@ -2203,6 +2233,7 @@ void world_boss_turn(void)
             /* ready, and it stays ready until a fight is won: no clock runs until a keeper joins */
             game.world_boss_phase = WBP_Open;
             wb_due_utc = 0;
+            wb_due_turn = 0;
             game.world_boss_until = game.play_gameturn;
             memset(game.world_boss_joined, 0, sizeof(game.world_boss_joined));
             memset(wb_pick_n, 0, sizeof(wb_pick_n));
@@ -3799,6 +3830,7 @@ struct WbSaved {
 void world_boss_reset(void)
 {
     wb_due_utc = 0;
+    wb_due_turn = 0;
     wb_arena_cut = false;
     wb_boss_idx = 0;
     wb_travel = 0;

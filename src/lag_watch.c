@@ -240,9 +240,14 @@ static void lw_window(int64_t now)
     const double seconds = (double)span / 1e9;
     const double speed = (double)lw.turns / seconds;
     const TbBool slow_speed = (turns_per_second > 0) && (speed < LW_SPEED_SHARE * turns_per_second);
-    if (!lw.void_window && (slow_speed || (lw.slow > 0)) && (lw.turns > 0))
+    static int always = -1; /* test switch KFX_LAG_ALWAYS=1 (singleplayer pass, 2026-11-28): the speed line every
+                               stretch, lag or not (frame rate and drawing cost of a normal game); no detailed timer */
+    if (always < 0)
+        always = (getenv("KFX_LAG_ALWAYS") != NULL) ? 1 : 0;
+    if (!lw.void_window && (slow_speed || (lw.slow > 0) || always) && (lw.turns > 0))
     {
-        lw_lagged();
+        if (slow_speed || (lw.slow > 0))
+            lw_lagged();
         char mem[192];
         lag_watch_memory_text(mem, sizeof(mem));
         SYNCLOG("Lag: %.1f turns a second of %d over %.0f s (turn %lu): a turn %.1f ms on average (most %.0f), "

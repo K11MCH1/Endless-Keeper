@@ -1143,30 +1143,53 @@ short dump_first_held_thing_on_map(PlayerNumber plyr_idx, MapSubtlCoord stl_x, M
     return 1;
 }
 
+/** A keeper with a dungeon that exists, or NULL. */
+static struct Dungeon *dump_dungeon_of(PlayerNumber plyr_idx)
+{
+    if ((plyr_idx < 0) || (plyr_idx >= PLAYERS_COUNT) || !player_exists(get_player(plyr_idx)))
+        return NULL;
+    struct Dungeon *dungeon = get_players_num_dungeon(plyr_idx);
+    return dungeon_invalid(dungeon) ? NULL : dungeon;
+}
+
 void dump_thing_held_by_any_player(struct Thing *thing)
 {
-    int i;
-    for (i=0; i<PLAYERS_COUNT; i++)
+    /* Put down ONCE (Endless Keeper, audit 2026-11-28): the thing was put down at every keeper's place in turn. The first
+       drop placed it in the map there, the later ones only moved its position (place_thing_in_mapwho returns at once for
+       a thing already placed), so it lay in one map block with its position in another; when it went, that other block's
+       thing list was overwritten - on ground not loaded, the one shared block every unloaded subtile reads. With 104 seats
+       an Endless Expedition's Imps (out of the map, so "picked up") did it whenever their keeper's Heart fell.
+       Now: where it is held (a hand or a computer's hand), else its owner's place, else the first keeper's. */
+    struct Dungeon *at = NULL;
+    for (PlayerNumber i = 0; (i < PLAYERS_COUNT) && (at == NULL); i++)
     {
-        struct PlayerInfo *player;
-        player = get_player(i);
-        if (player_exists(player))
-        {
-            struct Dungeon *dungeon;
-            dungeon = get_players_num_dungeon(i);
-            if (dungeon_invalid(dungeon)) {
-                continue;
-            }
-            const struct Coord3d *pos;
-            pos = &dungeon->essential_pos;
-            // Remove from human player hand
-            drop_held_thing_on_ground(dungeon, thing, pos);
-            remove_thing_from_power_hand_list(thing, dungeon->owner);
-            // Remove from computer player hand
-            struct Computer2 *comp;
-            comp = get_computer_player(dungeon->owner);
-            computer_force_dump_specific_held_thing(comp, thing, pos);
-        }
+        struct Dungeon *dungeon = dump_dungeon_of(i);
+        if ((dungeon != NULL) && (thing_is_in_power_hand_list(thing, i) || (get_computer_player(i)->held_thing_idx == thing->index)))
+            at = dungeon;
+    }
+    if (at == NULL)
+        at = dump_dungeon_of(thing->owner);
+    for (PlayerNumber i = 0; (i < PLAYERS_COUNT) && (at == NULL); i++)
+        at = dump_dungeon_of(i);
+    if (at == NULL)
+        return;
+    if ((thing->state_flags & TF1_InCtrldLimbo) != 0)
+    {
+        /* out of the map in a creature's own limbo (not a hand): back where it waits */
+        remove_thing_from_creature_controlled_limbo(thing);
+    } else
+        drop_held_thing_on_ground(at, thing, &at->essential_pos);
+    for (PlayerNumber i = 0; i < PLAYERS_COUNT; i++)
+    {
+        struct Dungeon *dungeon = dump_dungeon_of(i);
+        if (dungeon == NULL)
+            continue;
+        // Remove from human player hand
+        remove_thing_from_power_hand_list(thing, dungeon->owner);
+        // Remove from computer player hand (put down above)
+        struct Computer2 *comp = get_computer_player(dungeon->owner);
+        if (comp->held_thing_idx == thing->index)
+            comp->held_thing_idx = 0;
     }
 }
 

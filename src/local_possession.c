@@ -404,6 +404,18 @@ void offset_local_possession_shot(const struct Thing *shotng, struct Coord3d *po
     pos->z.val += shot_offset->offset.z.val * fade;
 }
 
+/** Endless Keeper: third-person Possession draws the possessed creature where this machine predicts it (the camera
+ *  follows the prediction too), not a few lagged turns behind it */
+void offset_local_possession_view(const struct Thing *thing, struct Coord3d *pos)
+{
+    if ((thing->class_id != TCls_Creature) || !possession_is_predicted(thing)) {
+        return;
+    }
+    pos->x.val += possession_view.mappos.x.val - thing->mappos.x.val;
+    pos->y.val += possession_view.mappos.y.val - thing->mappos.y.val;
+    pos->z.val += possession_view.mappos.z.val - thing->mappos.z.val;
+}
+
 void set_packet_possession_target(struct Packet *pckt)
 {
     struct Thing *thing = thing_get(get_local_user_state()->controlled_thing_idx);

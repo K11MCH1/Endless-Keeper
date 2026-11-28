@@ -49,6 +49,7 @@
 #include "replay_rewind.h"
 #include "world_pages.h"
 #include "world_stream.h"
+#include "world_boss.h"
 #include "net_state.h"
 #include "post_inc.h"
 
@@ -695,6 +696,7 @@ enum LongTurnReplayRecordKind {
     LTK_NetworkStopped = 5, // no payload: lost the host, continued locally
     LTK_SpectatorNotice = 6, // payload: uint8_t joined, uint8_t icon, spectator name (NUL-terminated)
     LTK_WorldBudget = 7, // Endless Keeper: payload uint32_t turn, uint16_t chunk ops, uint16_t book steps (from that turn on)
+    LTK_WorldBossDue = 8, // Endless Keeper (audit 2026-11-28): payload uint32_t turn the World Boss countdown came due on (its clock)
     // TODO: resyncs / state transfers?
     // Could also carry cheat menu buttons, API actions, etc.
 };
@@ -878,6 +880,14 @@ static TbBool read_long_turn_records(TbBool apply)
             memcpy(&ops, wb + 4, 2);
             memcpy(&steps, wb + 6, 2);
             world_replay_budget_set(turn, ops, steps);
+        } else
+        if (apply && (kind == LTK_WorldBossDue) && (len >= 4))
+        {
+            uint32_t turn;
+            if (!read_packet_bytes(&turn, sizeof(turn)))
+                return false;
+            used = sizeof(turn);
+            world_boss_replay_due(turn);
         }
         if ((len > used) && !skip_packet_bytes(len - used))
             return false;
@@ -1230,6 +1240,15 @@ void replay_record_world_budget(uint32_t turn, uint16_t ops, uint16_t steps)
     memcpy(payload + 4, &ops, 2);
     memcpy(payload + 6, &steps, 2);
     replay_write_record(LTK_WorldBudget, payload, sizeof(payload));
+}
+
+/** Endless Keeper (audit 2026-11-28): the turn the World Boss countdown came due on by this machine's clock, so a replay
+ *  opens the fight on that turn (world_boss.c, wb_real_time_countdown). */
+void replay_record_world_boss_due(uint32_t turn)
+{
+    if (!replay.save_enable || !replay.fopened)
+        return;
+    replay_write_record(LTK_WorldBossDue, &turn, sizeof(turn));
 }
 
 void replay_record_spectator_notice(const char *notice, size_t size)

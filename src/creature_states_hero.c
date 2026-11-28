@@ -1562,6 +1562,16 @@ long creature_tunnel_to(struct Thing *creatng, struct Coord3d *pos, short speed)
        the point is that close and not in a wall, it steps onto it; otherwise it is pushed as before. */
     static MapCoordDelta olddist[CREATURES_COUNT];
     static unsigned long identical[CREATURES_COUNT];
+    /* (kept with the creature's creation turn: a control slot used again, or a level or save loaded in the same run,
+       starts its own count instead of inheriting one - the step or push came on another turn than in a replay of it;
+       audit 2026-11-28) */
+    static GameTurn counted_for[CREATURES_COUNT];
+    if (counted_for[creatng->ccontrol_idx] != creatng->creation_turn + 1)
+    {
+        counted_for[creatng->ccontrol_idx] = creatng->creation_turn + 1;
+        olddist[creatng->ccontrol_idx] = 0;
+        identical[creatng->ccontrol_idx] = 0;
+    }
     if (olddist[creatng->ccontrol_idx] == dist)
     {
         identical[creatng->ccontrol_idx] += 1;

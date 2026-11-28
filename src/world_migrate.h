@@ -32,6 +32,8 @@ enum WorldMigrateState {
 
 #define WORLD_MIGRATE_ROOM_SIZE 5     /* the new home: 5x5 slabs */
 #define WORLD_MIGRATE_ROOM_REACH 40   /* slabs from the Heart: farther rooms are left alone after a migration */
+#define WORLD_MIGRATE_NEED_REACH 20   /* slabs: a Portal and a Lair of the keeper's must be this near the new home (the user,
+                                         2026-11-28); that Portal is the main one after the move, the escort lairs in that Lair */
 
 /** The keeper's migration: WMig_* (on every machine: struct Game). */
 int world_migrate_state(PlayerNumber plyr_idx);

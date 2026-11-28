@@ -8,6 +8,9 @@
 
 #include <array>
 #include <cstring>
+#include <cstdlib>
+#include <vector>
+#include <memory>
 
 #include <algorithm>
 /******************************************************************************/
@@ -81,6 +84,76 @@ static enum SaveResult encode_union(struct SaveBuffer *out, const struct SaveStr
     return SVR_Ok;
 }
 
+/* Zero elements (singleplayer pass, 2026-11-28): most of the game's big arrays of structs are unused slots, all zero
+ * bytes in memory (8,192 creature controls of 11 KB, 32,767 things). An all-zero element is always written the same
+ * way, so its bytes are worked out once per struct and mode (per thread: a save may be built on its own thread) and
+ * copied for every such element. The record is byte for byte what the field walk writes (KFX_SAVE_ENCCHECK=1 builds
+ * every record both ways and compares them). KFX_SAVE_ZEROFAST=0: the field walk for every element, as before. */
+struct ZeroImage {
+    const struct SaveStructDesc *desc;
+    int mode;
+    bool ok;
+    std::vector<uint8_t> bytes;
+};
+static thread_local std::vector<std::unique_ptr<ZeroImage>> *zero_images; /* (heap entries: nested structs add theirs meanwhile) */
+static bool zero_fast_on(void)
+{
+    static int on = -1;
+    if (on < 0)
+    {
+        const char *v = getenv("KFX_SAVE_ZEROFAST");
+        on = ((v == nullptr) || (strcmp(v, "0") != 0)) ? 1 : 0;
+    }
+    return on > 0;
+}
+static thread_local bool zero_walk_forced; /* (KFX_SAVE_ENCCHECK: the second build walks every field) */
+
+static bool bytes_all_zero(const uint8_t *p, size_t n)
+{
+    size_t i = 0;
+    for (; (i < n) && ((reinterpret_cast<uintptr_t>(p + i) & 7) != 0); i++)
+        if (p[i] != 0)
+            return false;
+    for (; i + 32 <= n; i += 32)
+    {
+        uint64_t a, b, c, d;
+        memcpy(&a, p + i, 8); memcpy(&b, p + i + 8, 8); memcpy(&c, p + i + 16, 8); memcpy(&d, p + i + 24, 8);
+        if ((a | b | c | d) != 0)
+            return false;
+    }
+    for (; i < n; i++)
+        if (p[i] != 0)
+            return false;
+    return true;
+}
+
+static const ZeroImage *zero_image_of(const struct SaveStructDesc *desc, uint32_t elem, enum SaveMode mode, int depth)
+{
+    if (zero_images == nullptr)
+        zero_images = new std::vector<std::unique_ptr<ZeroImage>>();
+    for (const auto &zp : *zero_images)
+        if ((zp->desc == desc) && (zp->mode == static_cast<int>(mode)))
+            return zp->ok ? zp.get() : nullptr;
+    auto holder = std::make_unique<ZeroImage>();
+    ZeroImage &z = *holder;
+    z.desc = desc;
+    z.mode = static_cast<int>(mode);
+    z.ok = false;
+    std::vector<uint8_t> zeros(std::max<uint32_t>(elem, desc->size), 0);
+    struct SaveBuffer tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    struct SaveError e;
+    if ((encode_struct(&tmp, desc, zeros.data(), mode, &e, depth) == SVR_Ok) && !tmp.has_raw_bytes)
+    {
+        z.bytes.assign(tmp.data, tmp.data + tmp.len);
+        z.ok = true;
+    }
+    save_buf_free(&tmp);
+    const ZeroImage *made = z.ok ? holder.get() : nullptr;
+    zero_images->push_back(std::move(holder));
+    return made;
+}
+
 static enum SaveResult encode_struct(struct SaveBuffer *out, const struct SaveStructDesc *desc, const uint8_t *src,
     enum SaveMode mode, struct SaveError *err, int depth)
 {
@@ -105,9 +178,17 @@ static enum SaveResult encode_struct(struct SaveBuffer *out, const struct SaveSt
         }
         if (field->stored_type == SV_STRUCT)
         {
+            const ZeroImage *zi = ((count >= 4) && zero_fast_on() && !zero_walk_forced) ? zero_image_of(field->sub, elem, mode, depth + 1) : nullptr;
             for (uint32_t index = 0; index < count; index++)
             {
-                const enum SaveResult result = encode_struct(out, field->sub, bytes + (static_cast<size_t>(index) * elem), mode, err, depth + 1);
+                const uint8_t *eb = bytes + (static_cast<size_t>(index) * elem);
+                if ((zi != nullptr) && bytes_all_zero(eb, elem))
+                {
+                    if (save_buf_append(out, zi->bytes.data(), static_cast<uint32_t>(zi->bytes.size())) != 0)
+                        return save_fail(err, SVR_NoMemory, "out of memory");
+                    continue;
+                }
+                const enum SaveResult result = encode_struct(out, field->sub, eb, mode, err, depth + 1);
                 if (result != SVR_Ok)
                     return result;
             }
@@ -141,4 +222,13 @@ enum SaveResult save_encode_record(struct SaveBuffer *out, const struct SaveStru
     enum SaveMode mode, struct SaveError *err)
 {
     return encode_struct(out, desc, static_cast<const uint8_t *>(src), mode, err, 0);
+}
+
+enum SaveResult save_encode_record_walk(struct SaveBuffer *out, const struct SaveStructDesc *desc, const void *src,
+    enum SaveMode mode, struct SaveError *err)
+{
+    zero_walk_forced = true;
+    const enum SaveResult result = encode_struct(out, desc, static_cast<const uint8_t *>(src), mode, err, 0);
+    zero_walk_forced = false;
+    return result;
 }

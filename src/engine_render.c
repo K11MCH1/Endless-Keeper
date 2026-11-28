@@ -240,6 +240,8 @@ static long bpos;
 static long split1at;
 static long split2at;
 static long map_x_pos;
+static ThingIndex third_person_shown_thing;
+static long third_person_near_depth;
 static long map_y_pos;
 static long map_z_pos;
 static int normal_shade_front;
@@ -392,6 +394,7 @@ struct ThingInterpolateResult interpolate_thing(struct Thing *thing)
         result.floor_height = thing->floor_height;
     }
     offset_local_possession_shot(thing, &result.mappos);
+    offset_local_possession_view(thing, &result.mappos);
 
     return result;
 }
@@ -6850,6 +6853,16 @@ void draw_view(struct Camera *cam, unsigned char a2)
 
     getpoly = poly_pool;
     memset(buckets, 0, sizeof(buckets));
+    /* third-person Possession: the possessed creature (hidden in first person) is drawn, without its flower */
+    third_person_shown_thing = ((lens_mode != 0) && local_possession_third_person()) ? get_local_user_state()->controlled_thing_idx : 0;
+    third_person_near_depth = 0;
+    if (third_person_shown_thing != 0)
+    {
+        /* things much nearer the camera than the creature (a Heart it walks past, a creature close behind it) would
+           cover the screen: they are left out, as the camera's view goes past them */
+        const struct ThingInterpolateResult tp = interpolate_thing(thing_get(third_person_shown_thing));
+        third_person_near_depth = get_2d_distance(&tp.mappos, &cam->mappos) / 2;
+    }
     world_migrate_cursor_box(); /* endless worlds: the 5x5 highlight of Move The Heart's placing */
     world_reaper_cursor_box(); /* endless worlds: the Reaper's placing (green: he can be summoned there) */
     if (map_volume_box.visible)
@@ -7118,6 +7131,23 @@ static TbBool convert_world_coord_to_front_view_screen_coord(struct Coord3d* pos
     }
 
     return result;
+}
+
+/** Endless Keeper (third-person Possession, 2026-11-28): like map_to_screen for the 3D view just drawn, but false for a
+ *  point behind the camera (the perspective view's divide makes those land anywhere). Screen pixels, window included. */
+TbBool map_to_screen_in_front(const struct Coord3d *pos, int32_t *screen_x, int32_t *screen_y)
+{
+    struct EngineCoord coord = {0};
+    coord.x = pos->x.val - map_x_pos;
+    coord.y = pos->z.val - map_z_pos;
+    coord.z = map_y_pos - pos->y.val;
+    rotpers(&coord, &camera_matrix);
+    if (coord.z < 32) {
+        return false;
+    }
+    *screen_x = local_state.engine_window_x + coord.view_width * pixel_size;
+    *screen_y = local_state.engine_window_y + coord.view_height * pixel_size;
+    return true;
 }
 
 TbBool map_to_screen(struct Coord3d *pos, int32_t *screen_x, int32_t *screen_y)
@@ -8939,7 +8969,7 @@ static void do_map_who_for_thing(struct Thing *thing)
         // Height movement, falling or going up steps. This is applied after shadows, because shadows are always drawn at the floor height.
         ecor.y = (render_pos_y - map_z_pos);
 
-        if (thing->class_id == TCls_Creature)
+        if ((thing->class_id == TCls_Creature) && (thing->index != third_person_shown_thing))
         {
             add_draw_status_box(thing, &ecor);
             // Draw path the creature is following
@@ -8948,6 +8978,8 @@ static void do_map_who_for_thing(struct Thing *thing)
             }
         }
         rotpers(&ecor, &camera_matrix);
+        if ((third_person_near_depth > 0) && (thing->index != third_person_shown_thing) && (ecor.z < third_person_near_depth))
+            break;
         if (getpoly < poly_pool_end)
         {
             if ( lens_mode )
@@ -9049,7 +9081,9 @@ static void do_map_who(short tnglist_idx)
         }
         i = thing->next_on_mapblk;
         // Per thing code start
-        if (((thing->rendering_flags & TRF_Invisible) == 0) && !world_boss_loot_hidden(thing)) /* endless: World Boss loot */
+        /* endless: World Boss loot; the possessed creature itself in third-person Possession */
+        if ((((thing->rendering_flags & TRF_Invisible) == 0) || ((third_person_shown_thing != 0) && (thing->index == third_person_shown_thing)))
+         && !world_boss_loot_hidden(thing))
         {
             do_map_who_for_thing(thing);
         }

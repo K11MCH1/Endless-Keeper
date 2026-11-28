@@ -17,6 +17,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include <string.h>
 #include "custom_sprites.h"
 #include "custom_zip.h"
 #include "creature_graphics.h"
@@ -42,6 +43,7 @@
 #include "world_expedition.h"
 #include "world_progress.h"
 #include "world_reaper.h"
+#include "bflib_datetm.h"
 #include "post_inc.h"
 #include "bflib_sprite.h"
 
@@ -474,7 +476,151 @@ void init_custom_campaign_sprites(const char *dir_path, const char *dir_desc)
     }
 }
 
+/* Sprite cache (streaming study, 2026-11-28; on by default, KFX_SPRITE_CACHE=0 turns it off): the sprites, icons and
+ * lenses loaded here stay when the
+ * next call would load exactly the same files - the same required zips (by checksum), the same zips in the campaign's
+ * folder (names and sizes), the same level zip and the same mods - and nothing has added sprites since. A game start
+ * loaded the nine zips twice (the menu's call, then the level's), about 470 ms each time on the test machine. */
+static uint64_t sc_fnv(uint64_t h, const void *p, size_t n)
+{
+    const unsigned char *b = (const unsigned char *)p;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ b[i]) * 1099511628211ull;
+    return h;
+}
+static uint64_t sc_str(uint64_t h, const char *t)
+{
+    return sc_fnv(h, (t != NULL) ? t : "", (t != NULL) ? strlen(t) + 1 : 1);
+}
+/** The zips a folder holds (names and sizes), as load_dir_sprites would read them. */
+static uint64_t sc_dir(uint64_t h, const char *dname)
+{
+    if ((dname == NULL) || (dname[0] == 0))
+        return h; /* (no folder reads as a folder with no zips) */
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s", dname, "*.zip");
+    struct TbFileEntry fe;
+    struct TbFileFind *ff = LbFileFindFirst(path, &fe);
+    if (ff)
+    {
+        do {
+            char zp[1024];
+            snprintf(zp, sizeof(zp), "%s/%s", dname, fe.Filename);
+            const long len = LbFileLengthRnc(zp);
+            h = sc_str(h, zp); /* (the folder counts only when it holds zips) */
+            h = sc_fnv(h, &len, sizeof(len));
+        } while (LbFileFindNext(ff, &fe) >= 0);
+        LbFileFindEnd(ff);
+    }
+    return h;
+}
+/** What load_sprites_for_mod_list would read for these mods (their folders' zips, their level zip). */
+static uint64_t sc_mods(uint64_t h, const struct ModConfigItem *items, long cnt, LevelNumber lvnum)
+{
+    h = sc_fnv(h, &cnt, sizeof(cnt));
+    for (long i = 0; i < cnt; i++)
+    {
+        const struct ModExistState *st = &items[i].state;
+        if (st->mod_dir == 0)
+            continue;
+        char mod_dir[256];
+        snprintf(mod_dir, sizeof(mod_dir), "%s/%s", MODS_DIR_NAME, items[i].name);
+        h = sc_str(h, items[i].name);
+        if (st->fx_data)
+            h = sc_dir(h, prepare_file_path_mod(mod_dir, FGrp_FxData, NULL));
+        if (st->cmpg_config)
+            h = sc_dir(h, prepare_file_path_mod(mod_dir, FGrp_CmpgConfig, NULL));
+        if (st->cmpg_lvls)
+        {
+            const char *f = prepare_file_fmtpath_mod(mod_dir, FGrp_CmpgLvls, "map%05lu.zip", lvnum);
+            const long len = ((f != NULL) && (strlen(f) > 0) && LbFileExists(f)) ? LbFileLengthRnc(f) : -1;
+            h = sc_fnv(h, &len, sizeof(len));
+            if (len >= 0)
+                h = sc_str(h, f);
+        }
+    }
+    return h;
+}
+static uint64_t sprites_input_key(LevelNumber lvnum, TbBigChecksum *zip_sums)
+{
+    uint64_t h = 1469598103934665603ull;
+    char path[1024];
+    const char *dname = prepare_file_path(FGrp_FxData, NULL);
+    for (int i = 0; i < REQUIRED_SPRITE_ZIP_COUNT; i++)
+    {
+        snprintf(path, sizeof(path), "%s/%s", (dname != NULL) ? dname : "", required_sprite_zips[i]);
+        zip_sums[i] = LbFileExists(path) ? calculate_file_checksum(path) : 0;
+        h = sc_fnv(h, &zip_sums[i], sizeof(zip_sums[i]));
+    }
+    const char *cdir = prepare_file_path(FGrp_CmpgConfig, NULL);
+    h = sc_dir(h, cdir);
+    const char *mzip = prepare_file_fmtpath(get_level_fgroup(lvnum), "map%05lu.zip", lvnum);
+    const long mzlen = LbFileExists(mzip) ? LbFileLengthRnc(mzip) : -1;
+    h = sc_fnv(h, &mzlen, sizeof(mzlen));
+    if (mzlen >= 0)
+        h = sc_str(h, mzip);
+    h = sc_mods(h, mods_conf.after_base_item, mods_conf.after_base_cnt, lvnum);
+    h = sc_mods(h, mods_conf.after_campaign_item, mods_conf.after_campaign_cnt, lvnum);
+    h = sc_mods(h, mods_conf.after_map_item, mods_conf.after_map_cnt, lvnum);
+    if (getenv("KFX_SPRITE_TIMING") != NULL)
+        JUSTLOG("Sprite key: campaign dir %s, level zip %s (%ld), mods %ld/%ld/%ld, key %016llx", (cdir != NULL) ? cdir : "-", mzip, mzlen, (long)mods_conf.after_base_cnt, (long)mods_conf.after_campaign_cnt, (long)mods_conf.after_map_cnt, (unsigned long long)h);
+    return h;
+}
+static uint64_t sprites_tables_digest(void)
+{
+    uint64_t h = 1469598103934665603ull;
+    h = sc_fnv(h, &next_free_sprite, sizeof(next_free_sprite));
+    h = sc_fnv(h, &num_added_sprite, sizeof(num_added_sprite));
+    h = sc_fnv(h, &num_added_icons, sizeof(num_added_icons));
+    h = sc_fnv(h, creature_table_add, sizeof(creature_table_add));
+    h = sc_fnv(h, td_to_fp_sprite_add, sizeof(td_to_fp_sprite_add));
+    h = sc_fnv(h, fp_to_td_sprite_add, sizeof(fp_to_td_sprite_add));
+    for (int i = 0; i < num_added_sprite; i++)
+    {
+        h = sc_str(h, added_sprites[i].name);
+        h = sc_fnv(h, &added_sprites[i].num, sizeof(added_sprites[i].num));
+    }
+    for (int i = 0; i < num_added_icons; i++)
+    {
+        h = sc_str(h, added_icons[i].name);
+        h = sc_fnv(h, &added_icons[i].num, sizeof(added_icons[i].num));
+    }
+    return h;
+}
+static uint64_t sc_last_key;
+static int sc_last_sprites = -1, sc_last_added = -1, sc_last_icons = -1;
+
+static void init_custom_sprites_load(LevelNumber lvnum);
 void init_custom_sprites(LevelNumber lvnum)
+{
+    static int cache = -1;
+    if (cache < 0)
+    {
+        const char *v = getenv("KFX_SPRITE_CACHE");
+        cache = ((v == NULL) || (strcmp(v, "0") != 0)) ? 1 : 0;
+    }
+    const TbBool timing = (getenv("KFX_SPRITE_TIMING") != NULL);
+    LevelNumber eff = (lvnum == SPRITE_LAST_LEVEL) ? game.last_level : lvnum;
+    TbBigChecksum sums[REQUIRED_SPRITE_ZIP_COUNT];
+    const uint64_t key = (cache || timing) ? sprites_input_key(eff, sums) : 0;
+    if (cache && (key == sc_last_key) && (sc_last_sprites == next_free_sprite) && (sc_last_added == num_added_sprite) &&
+        (sc_last_icons == num_added_icons) && !(world_attract_active() && (eff <= 0) && !is_campaign_loaded()))
+    {
+        if ((lvnum != SPRITE_LAST_LEVEL) && (lvnum > 0))
+            game.last_level = lvnum;
+        JUSTLOG("Custom sprites: the same files as loaded: kept (tables %016llx)", (unsigned long long)sprites_tables_digest());
+        return;
+    }
+    init_custom_sprites_load(lvnum);
+    sc_last_key = key;
+    sc_last_sprites = next_free_sprite;
+    sc_last_added = num_added_sprite;
+    sc_last_icons = num_added_icons;
+    if (timing || cache)
+        JUSTLOG("Custom sprites: loaded (tables %016llx)", (unsigned long long)sprites_tables_digest());
+}
+
+static void init_custom_sprites_load(LevelNumber lvnum)
 {
     SYNCDBG(8, "Starting");
     free_spritesheet(&custom_sprites);
@@ -557,8 +703,14 @@ void init_custom_sprites(LevelNumber lvnum)
                 ERRORLOG("Required /fxdata/%s is missing", required_sprite_zips[i]);
                 continue;
             }
+            /* test switch KFX_SPRITE_TIMING (streaming study, 2026-11-28): what each zip's checksum and load cost */
+            const int64_t st0 = (getenv("KFX_SPRITE_TIMING") != NULL) ? get_time_tick_ns() : 0;
             required_sprite_zip_checksums[i] = calculate_file_checksum(full_path);
+            const int64_t st1 = (st0 != 0) ? get_time_tick_ns() : 0;
             int add_flag = load_file_sprites(full_path, NULL, normal_load_flags);
+            if (st0 != 0)
+                JUSTLOG("Sprite timing: %s: checksum %.1f ms, load %.1f ms", required_sprite_zips[i],
+                    (double)(st1 - st0) / 1e6, (double)(get_time_tick_ns() - st1) / 1e6);
             if (add_flag & CLF_Sprites) {
                 cnt_sprite++;
             }
@@ -583,7 +735,10 @@ void init_custom_sprites(LevelNumber lvnum)
     }
 
     dname = prepare_file_path(FGrp_CmpgConfig, NULL);
+    const int64_t sd0 = (getenv("KFX_SPRITE_TIMING") != NULL) ? get_time_tick_ns() : 0;
     load_dir_sprites(dname, "Main CmpgConfig dir", normal_load_flags);
+    if (sd0 != 0)
+        JUSTLOG("Sprite timing: campaign config dir %.1f ms", (double)(get_time_tick_ns() - sd0) / 1e6);
 
     if (mods_conf.after_campaign_cnt > 0)
     {

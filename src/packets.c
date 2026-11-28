@@ -1476,7 +1476,18 @@ void apply_creature_movement_controls(struct Thing *thing, struct CreatureContro
     if (!can_process_creature_input(thing)) {
         return;
     }
-    const int32_t speed_limit = get_creature_speed(thing);
+    int32_t speed_limit = get_creature_speed(thing);
+    /* Endless (the user, 2026-11-28: "During Possession mode, hold SHIFT for the creature to run at slapped speed"):
+       with the speed key held it runs as fast as a slap makes it (twice its speed, as calculate_correct_creature_maxspeed
+       has it), not more when a slap or a timebomb already does; from the packet, so every machine and the possession
+       prediction agree */
+    if (((pckt->control_flags & PCtr_Run) != 0) && !creature_affected_by_slap(thing)
+        && !creature_under_spell_effect(thing, CSAfF_Timebomb))
+    {
+        speed_limit *= 2;
+        if (speed_limit > MAX_VELOCITY)
+            speed_limit = MAX_VELOCITY;
+    }
     if ((pckt->control_flags & PCtr_MoveUp) != 0) {
         cctrl->move_speed = compute_controlled_speed_increase(cctrl->move_speed, speed_limit);
         cctrl->creature_control_flags |= CCFlg_MoveY;

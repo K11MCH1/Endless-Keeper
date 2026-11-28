@@ -1667,7 +1667,10 @@ void remove_thing_from_mapwho(struct Thing *thing)
             WARNLOG("Moving lost %s %d from %d, %d", thing_class_and_model_name(thing->class_id, thing->model),
                     thing->index, thing->mappos.x.stl.num, thing->mappos.y.stl.num);
         }
-        set_mapwho_thing_index(mapblk, thing->next_on_mapblk);
+        /* chunked world: never write the shared block of ground that isn't loaded (as place_thing_in_mapwho never links
+           into it); a thing found "there" was placed elsewhere and moved without being moved in the map (audit 2026-11-28) */
+        if (!(world_paged && map_block_invalid(mapblk)))
+            set_mapwho_thing_index(mapblk, thing->next_on_mapblk);
     }
     if (thing->next_on_mapblk > 0)
     {

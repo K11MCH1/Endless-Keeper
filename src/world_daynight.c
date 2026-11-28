@@ -87,6 +87,7 @@
 #include "world_side_panel.h"
 #include "world_pentagram.h"
 #include "world_caretaker.h"
+#include "world_risen.h"
 #include "post_inc.h"
 
 /******************************************************************************/
@@ -3294,6 +3295,7 @@ void world_daynight_turn(void)
     dn_killleader_hook();
     dn_threattest_hook();
     world_boss_turn();
+    world_risen_test_turn(); /* (test switch KFX_WORLD_RISENTEST) */
     world_truce_turn();
     world_defectors_turn();
     world_crusade_turn();

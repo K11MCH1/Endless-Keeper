@@ -294,6 +294,9 @@ struct SaveDecoder {
 
 enum SaveResult save_encode_record(struct SaveBuffer *out, const struct SaveStructDesc *desc, const void *src,
     enum SaveMode mode, struct SaveError *err);
+/** As save_encode_record, every element walked field by field (no zero-element shortcut): for checking it. */
+enum SaveResult save_encode_record_walk(struct SaveBuffer *out, const struct SaveStructDesc *desc, const void *src,
+    enum SaveMode mode, struct SaveError *err);
 
 void save_decoder_init(struct SaveDecoder *decoder, const struct SaveFileSchema *schema, enum SaveMode mode);
 /** Tells the decoder which chunk its next records come from. Raw memory in a chunk that was written by a
@@ -302,6 +305,9 @@ void save_decoder_set_chunk_flags(struct SaveDecoder *decoder, uint32_t chunk_fl
 void save_decoder_free(struct SaveDecoder *decoder);
 
 enum SaveResult save_decode_record(struct SaveDecoder *decoder, const struct SaveStructDesc *desc,
+    const uint8_t *data, uint32_t len, uint32_t *used, void *dst, struct SaveError *err);
+/** As save_decode_record, every element read field by field (no zero-element shortcut): for checking it. */
+enum SaveResult save_decode_record_walk(struct SaveDecoder *decoder, const struct SaveStructDesc *desc,
     const uint8_t *data, uint32_t len, uint32_t *used, void *dst, struct SaveError *err);
 
 struct SaveValue {

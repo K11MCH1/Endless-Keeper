@@ -895,7 +895,9 @@ void sp_script_run(const struct SpScript *sc, const struct SpScriptPlace *pl, st
         const struct SpsStmt *st = &sc->st[i];
         if (st->op <= SO_IfSlabType)
         {
-            i = ((st->op != SO_IfFalse) && sps_condition(&ps, st)) ? i + 1 : st->end + 1;
+            /* (an IF nested past the parser's 64 levels has no end: it runs to the end of the script. Its end + 1 was 0, so
+               a false condition started the pass again from the top, for ever in one turn: audit 2026-11-28) */
+            i = ((st->op != SO_IfFalse) && sps_condition(&ps, st)) ? i + 1 : ((st->end >= 0) ? st->end + 1 : sc->n);
             continue;
         }
         if (st->op == SO_EndIf)

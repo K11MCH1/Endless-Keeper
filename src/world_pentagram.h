@@ -140,6 +140,9 @@ void world_pentagram_reset(void);
 /** Each world turn (the simulating machine): the skills that keep time (regeneration, Heartfire, Garrison, Living
  *  Fortress, the Reaper). */
 void world_pentagram_turn(void);
+/** The doors' applied Bolted Doors share: none (a new world), or as the seat's loaded web gives it (world_pentagram_fx.c). */
+void world_pentagram_fx_reset(void);
+void world_pentagram_fx_loaded(PlayerNumber plyr_idx);
 /** The skill's icon as RGBA (decoded once; NULL: none). */
 const unsigned char *world_pentagram_icon(int icon, int *w, int *h);
 /** The Heart's picture's icon (the Reaper's painted portrait). */

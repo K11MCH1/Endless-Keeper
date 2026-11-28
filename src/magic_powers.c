@@ -959,8 +959,8 @@ TbBool pay_for_spell(PlayerNumber plyr_idx, PowerKind pwkind, KeepPwrLevel power
         return false;
     if (power_level >= MAGIC_OVERCHARGE_LEVELS)
         power_level = MAGIC_OVERCHARGE_LEVELS;
-    price = compute_power_price(plyr_idx, pwkind, power_level);
-    price = world_pentagram_spell_pay(plyr_idx, pwkind, price); /* endless: Eclipse, Soul Harvest */
+    const GoldAmount full_price = compute_power_price(plyr_idx, pwkind, power_level);
+    price = world_pentagram_spell_pay(plyr_idx, pwkind, full_price); /* endless: Eclipse, Soul Harvest */
     if (price <= 0)
         return true;
     // Try to take money
@@ -968,6 +968,7 @@ TbBool pay_for_spell(PlayerNumber plyr_idx, PowerKind pwkind, KeepPwrLevel power
     {
         return true;
     }
+    world_pentagram_spell_unpay(plyr_idx, full_price - price); /* endless: the Soul Harvest credit back */
     // If failed, say "you do not have enough gold"
     output_player_message(plyr_idx, SMsg_GoldNotEnough, 0);
     return false;

@@ -32,6 +32,7 @@
 #include "bflib_datetm.h"
 #include "game_legacy.h"
 #include "globals.h"
+#include "world_genahead.h"
 #include "map_data.h"
 #include "map_blocks.h"
 #include "map_columns.h"
@@ -74,6 +75,7 @@
 #include "kfx_jobs.h"
 #include "replay.h"
 #include "kfx/save/core/save_codec.h"
+#include "../deps/zstd/zstd.h"
 #include "kfx/save/core/save_schema.h"
 #include "kfx/save/core/schema/save_tables_decl.h"
 #include "map_ceiling.h"
@@ -119,6 +121,7 @@
 #define XXH_INLINE_ALL
 #include "../deps/xxhash/xxhash.h"
 #include "world_boss.h"
+#include "world_risen.h"
 #include "world_truce.h"
 #include "world_defectors.h"
 #include "world_crusade.h"
@@ -140,6 +143,7 @@
 #include "world_keeper_ai.h"
 #include "world_rivals.h"
 #include "world_pentagram.h"
+#include "world_pentagram_screen.h"
 #include "world_reaper.h"
 #include "post_inc.h"
 
@@ -193,6 +197,7 @@ void delete_attached_lights_on_slab(MapSlabCoord slb_x, MapSlabCoord slb_y);
 #define WORLD_EXTRA_POOLS 0x31504C50u   /* "PLP1": each keeper's creature pool (world_pools.c) */
 #define WORLD_EXTRA_SEATDAYS 0x31594453u /* "SDY1": the day each keeper's dungeon began (world_daynight.c) */
 #define WORLD_EXTRA_BOSS 0x31534F42u     /* "BOS1": World Bosses: the schedule, who joined, the boss, the arena */
+#define WORLD_EXTRA_RISEN 0x31534952u    /* "RIS1": the last day's corpses and deaths that raise Vampires, Skeletons, Ghosts (world_risen.c) */
 #define WORLD_EXTRA_STORAGE 0x31525453u  /* "STR1": the loot registry (world_storage.c) */
 #define WORLD_EXTRA_TRUCE 0x31435254u    /* "TRC1": friendly fire between keepers who are allied or truced (world_truce.c) */
 #define WORLD_EXTRA_DEFECTORS 0x31464544u /* "DEF1": each defector's line: the keeper it left, why, the day */
@@ -2254,6 +2259,7 @@ static TbBool regrade_hero(int64_t wx, int64_t wy, long *model, uint8_t *level)
 
 static void cm_soon_mats(int32_t cx, int32_t cy, struct WorldChunkData *cd);
 
+static TbBool gen_ahead_hit; /* KFX_WORLD_CMTRACE: the last generated chunk came from the worker */
 static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData *cd)
 {
     static struct WgChunk ch;
@@ -2263,7 +2269,9 @@ static TbBool generate_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData 
     cd->fresh = 1;
     int64_t gt[7] = {0}; /* KFX_WORLD_PROFILE: when each part of making the chunk was done */
     const int64_t gt0 = world_prof_now();
-    if (wg_generate_chunk(W.gen, cx, cy, &ch) != 0)
+    const TbBool ahead = wga_take_full(cx, cy, &ch); /* (KFX_WORLD_GENAHEAD: made ahead) */
+    gen_ahead_hit = ahead;
+    if (!ahead && (wg_generate_chunk(W.gen, cx, cy, &ch) != 0))
     {
         ERRORLOG("World: chunk (%d,%d) could not be generated", (int)cx, (int)cy);
         for (int i = 0; i < WG_CHUNK_CELLS; i++)
@@ -2437,8 +2445,10 @@ static uint32_t rec_peek_u32(const struct RecReader *r)
     return v;
 }
 
+static TbBool pack_zstd(const uint8_t *raw, uint32_t raw_len, uint8_t **out, uint32_t *out_len);
+
 /** Compressed blob: u32 raw length, then the zlib stream. */
-static TbBool pack(const uint8_t *raw, uint32_t raw_len, uint8_t **out, uint32_t *out_len)
+static TbBool pack_zlib(const uint8_t *raw, uint32_t raw_len, uint8_t **out, uint32_t *out_len)
 {
     size_t zlen = kfx_zlib_bound(raw_len); /* libdeflate: zlib's format, about twice as fast (2026-11-09) */
     uint8_t *z = (uint8_t *)malloc(zlen + 4);
@@ -2458,6 +2468,44 @@ static TbBool pack(const uint8_t *raw, uint32_t raw_len, uint8_t **out, uint32_t
 /* The whole world blob may be far bigger than one chunk's record (audit 2026-11-21: a busy server's loaded pages and
    explored chunks can pass 64 MiB, and such a save was written but refused when loaded: "saved world is damaged"). */
 #define WORLD_BLOB_RAW_MAX (1024u * 1024u * 1024u)
+/* In a packed blob's raw length: the stream is zstd, not zlib (KFX_SAVE_CODEC=zstd or ksc, research prototype
+   2026-11-28: the world blob of a 15-day save, 13.8 MB, packed in 5 ms instead of 25). */
+#define WORLD_PACK_ZSTD 0x80000000u
+
+/* each thread its own (chunk records are packed on the job threads) */
+static __thread ZSTD_CCtx *pack_cctx;
+static __thread ZSTD_DCtx *pack_dctx;
+
+/** A blob or a chunk record packed as zstd level 1, with WORLD_PACK_ZSTD in its length (a chunk record: 8 us
+ *  instead of libdeflate's 103, read back in 6 instead of 48, measured 2026-11-28). */
+static TbBool pack_zstd(const uint8_t *raw, uint32_t raw_len, uint8_t **out, uint32_t *out_len)
+{
+    if ((pack_cctx == NULL) && ((pack_cctx = ZSTD_createCCtx()) == NULL))
+        return false;
+    const size_t cap = (size_t)raw_len + (raw_len >> 8) + 64; /* >= ZSTD_COMPRESSBOUND (whose test against its max is always false for a u32 on 64-bit: -Werror=type-limits) */
+    uint8_t *z = (uint8_t *)malloc(cap + 4);
+    if (z == NULL)
+        return false;
+    const size_t zl = ZSTD_compressCCtx(pack_cctx, z + 4, cap, raw, raw_len, 1);
+    if (ZSTD_isError(zl))
+    {
+        free(z);
+        return false;
+    }
+    const uint32_t mark = raw_len | WORLD_PACK_ZSTD;
+    memcpy(z, &mark, 4);
+    *out = z;
+    *out_len = (uint32_t)zl + 4;
+    return true;
+}
+
+/** A chunk record or the world blob: zstd with KFX_SAVE_CODEC (research prototype 2026-11-28), else zlib as before. */
+static TbBool pack(const uint8_t *raw, uint32_t raw_len, uint8_t **out, uint32_t *out_len)
+{
+    if (save_codec_choice() != SCC_Zlib)
+        return pack_zstd(raw, raw_len, out, out_len);
+    return pack_zlib(raw, raw_len, out, out_len);
+}
 
 static TbBool unpack_max(const uint8_t *z, uint32_t zlen, uint8_t **out, uint32_t *out_len, uint32_t max_raw)
 {
@@ -2465,13 +2513,21 @@ static TbBool unpack_max(const uint8_t *z, uint32_t zlen, uint8_t **out, uint32_
         return false;
     uint32_t raw_len;
     memcpy(&raw_len, z, 4);
+    const TbBool zstd = (raw_len & WORLD_PACK_ZSTD) != 0;
+    raw_len &= ~WORLD_PACK_ZSTD;
     if (raw_len > max_raw)
         return false;
     uint8_t *raw = (uint8_t *)malloc(raw_len ? raw_len : 1);
     if (raw == NULL)
         return false;
     size_t rl = 0;
-    if (!kfx_zlib_uncompress(raw, raw_len, z + 4, zlen - 4, &rl) || (rl != raw_len))
+    if (zstd)
+    {
+        rl = ((pack_dctx != NULL) || ((pack_dctx = ZSTD_createDCtx()) != NULL)) ? ZSTD_decompressDCtx(pack_dctx, raw, raw_len, z + 4, zlen - 4) : (size_t)-1;
+        if (ZSTD_isError(rl))
+            rl = (size_t)-1;
+    }
+    if ((zstd && (rl != raw_len)) || (!zstd && (!kfx_zlib_uncompress(raw, raw_len, z + 4, zlen - 4, &rl) || (rl != raw_len))))
     {
         free(raw);
         return false;
@@ -3993,15 +4049,23 @@ static void apart_chunk_data(int32_t cx, int32_t cy, struct WorldChunkData *cd)
     }
 }
 
+static char cm_data_source = '?'; /* KFX_WORLD_CMTRACE: where chunk_data_for's last record came from */
 static struct WorldChunkData *chunk_data_for(int32_t cx, int32_t cy)
 {
     struct WorldChunkData *cd = (struct WorldChunkData *)malloc(sizeof(struct WorldChunkData));
     if (cd == NULL)
         return NULL;
+    cm_data_source = 'S';
     if (chunk_apart(cx, cy))
+    {
         apart_chunk_data(cx, cy, cd); /* the world apart: never from the store, never from the generator */
+        cm_data_source = 'A';
+    }
     else if (!load_chunk_record(cx, cy, cd))
+    {
         generate_chunk_data(cx, cy, cd);
+        cm_data_source = gen_ahead_hit ? 'g' : 'G';
+    }
     return cd;
 }
 
@@ -4524,7 +4588,8 @@ static void update_creature_limit(void)
    slab), as rooms are made again when their chunk comes back. Saved: FPO1. */
 struct SpawnPortal {
     int64_t x, y;   /* the first portal's middle, world slab */
-    uint8_t state;  /* 0 none yet, 1 the first portal, 2 lost (the nearest to the Heart from now on) */
+    uint8_t state;  /* 0 none yet, 1 the first portal, 2 lost (the nearest to the Heart from now on), 3 the portal a
+                       migration chose (world_migrate.c): the entrance, and the exit of leaving creatures */
 };
 static struct SpawnPortal spawn_portal[PLAYERS_MAX];
 
@@ -4563,7 +4628,7 @@ struct Room *world_spawn_portal(PlayerNumber p)
         SYNCLOG("World: player %d's creatures come from its first portal, at world slab (%ld,%ld)", (int)p, (long)sp->x, (long)sp->y);
         return nearest;
     }
-    if (sp->state == 1)
+    if ((sp->state == 1) || (sp->state == 3))
     {
         MapSlabCoord ex, ey;
         if (world_engine_slab(sp->x, sp->y, &ex, &ey))
@@ -4578,6 +4643,37 @@ struct Room *world_spawn_portal(PlayerNumber p)
         /* (not loaded: the nearest one meanwhile) */
     }
     return nearest;
+}
+
+void world_spawn_portal_set_main(PlayerNumber p, const struct Room *room)
+{
+    if (!W.active || (p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX) || room_is_invalid(room))
+        return;
+    struct SpawnPortal *sp = &spawn_portal[p];
+    sp->x = world_slab_x_of(subtile_slab(room->central_stl_x));
+    sp->y = world_slab_y_of(subtile_slab(room->central_stl_y));
+    sp->state = 3;
+    SYNCLOG("World: player %d's main portal is at world slab (%ld,%ld) (its Heart moved beside it): its creatures come in and "
+        "leave there", (int)p, (long)sp->x, (long)sp->y);
+}
+
+struct Room *world_leave_portal(struct Thing *creatng)
+{
+    if (!W.active || !thing_exists(creatng))
+        return INVALID_ROOM;
+    const PlayerNumber p = creatng->owner;
+    if ((p < 0) || (p >= PLAYERS_COUNT) || (p >= PLAYERS_MAX) || (spawn_portal[p].state != 3))
+        return INVALID_ROOM;
+    struct Room *room = world_spawn_portal(p);
+    if (room_is_invalid(room) || !room_role_matches(room->kind, RoRoF_CrPoolLeave))
+        return INVALID_ROOM;
+    struct Coord3d pos;
+    pos.x.val = subtile_coord_center(room->central_stl_x);
+    pos.y.val = subtile_coord_center(room->central_stl_y);
+    pos.z.val = 0;
+    if (!creature_can_navigate_to(creatng, &pos, NavRtF_Default))
+        return INVALID_ROOM; /* (cut off from it: the nearest portal, as before) */
+    return room;
 }
 
 void world_spawn_portal_reset(PlayerNumber p)
@@ -4640,7 +4736,7 @@ static TbBool spawn_portal_load(const uint8_t *buf, size_t len)
     {
         struct SpawnPortalSaved s;
         memcpy(&s, buf + 4 + i * sizeof(s), sizeof(s));
-        if ((s.plyr < PLAYERS_MAX) && (s.state <= 2))
+        if ((s.plyr < PLAYERS_MAX) && (s.state <= 3))
         {
             spawn_portal[s.plyr].x = s.x;
             spawn_portal[s.plyr].y = s.y;
@@ -5362,15 +5458,24 @@ static void gold_tick(void)
     WORLD_PROF(WPS_CmGold, check_map_for_gold());
 }
 
+static int64_t cm_rf_us[4]; /* KFX_WORLD_CMTRACE: the last refresh's navigation, ceilings, light, minimap (us) */
 /** Navigation, ceilings, static light and the minimap round a chunk that was loaded or freed. */
 static void cm_refresh_chunk(int32_t ecx, int32_t ecy)
 {
     const MapSubtlCoord x1 = (MapSubtlCoord)ecx * CHUNK_STL, y1 = (MapSubtlCoord)ecy * CHUNK_STL;
     const MapSubtlCoord x2 = x1 + CHUNK_STL - 1, y2 = y1 + CHUNK_STL - 1;
+    int64_t q0 = get_time_tick_ns();
     WORLD_PROF(WPS_RfNav, nav_refresh_area(x1 - CM_MARGIN_STL, y1 - CM_MARGIN_STL, x2 + CM_MARGIN_STL, y2 + CM_MARGIN_STL));
+    int64_t q1 = get_time_tick_ns();
+    cm_rf_us[0] = (q1 - q0) / 1000;
     WORLD_PROF(WPS_RfCeil, ceiling_partially_recompute_heights(x1 - CM_MARGIN_STL, y1 - CM_MARGIN_STL, x2 + CM_MARGIN_STL, y2 + CM_MARGIN_STL));
+    q0 = get_time_tick_ns();
+    cm_rf_us[1] = (q0 - q1) / 1000;
     WORLD_PROF(WPS_RfLight, light_stat_refresh_area(x1 - CM_LIGHT_MARGIN_STL, y1 - CM_LIGHT_MARGIN_STL, x2 + CM_LIGHT_MARGIN_STL, y2 + CM_LIGHT_MARGIN_STL));
+    q1 = get_time_tick_ns();
+    cm_rf_us[2] = (q1 - q0) / 1000;
     WORLD_PROF(WPS_RfPanel, panel_map_update(x1 - CM_MARGIN_STL, y1 - CM_MARGIN_STL, CHUNK_STL + 2 * CM_MARGIN_STL, CHUNK_STL + 2 * CM_MARGIN_STL));
+    cm_rf_us[3] = (get_time_tick_ns() - q1) / 1000;
 }
 
 /** After chunks came or went: what the window's shift rebuilt for the whole map, minus what cm_refresh_chunk did. */
@@ -5434,6 +5539,23 @@ static int cm_candidate_cmp(const void *a, const void *b)
    burst's share of each: a raid's landing or a new start loads 9 or 25 chunks in one turn) */
 static int64_t cm_ns_data, cm_ns_fill, cm_ns_refresh;
 
+/* Test switch KFX_WORLD_CMTRACE=1 (streaming study, 2026-11-28): a line for every chunk the manager loads or freezes,
+   with where its data came from and what each step cost (microseconds), for counting chunks that come and go. */
+static TbBool cm_trace_on(void)
+{
+    static int on = -1;
+    if (on < 0)
+    {
+        on = (getenv("KFX_WORLD_CMTRACE") != NULL) ? 1 : 0;
+        if (on)
+            SYNCLOG("CMTRACE sizes: page %u, chunk record (unpacked) %u, map block %u, slab %u, thing %u, creature control %u, "
+                "game %u", (unsigned)sizeof(struct WorldPage), (unsigned)sizeof(struct WorldChunkData), (unsigned)sizeof(struct Map),
+                (unsigned)sizeof(struct SlabMap), (unsigned)sizeof(struct Thing), (unsigned)sizeof(struct CreatureControl),
+                (unsigned)sizeof(struct Game));
+    }
+    return on > 0;
+}
+
 /** Loads one world chunk into a new page. */
 static TbBool cm_load_chunk(int64_t cx, int64_t cy, uint32_t now)
 {
@@ -5446,7 +5568,9 @@ static TbBool cm_load_chunk(int64_t cx, int64_t cy, uint32_t now)
     fc.lcx = (int)(cx - W.origin_cx);
     fc.lcy = (int)(cy - W.origin_cy);
     const int64_t t0 = world_prof_now();
+    const int64_t tr0 = cm_trace_on() ? get_time_tick_ns() : 0;
     WORLD_PROF(WPS_LdData, fc.cd = chunk_data_for((int32_t)cx, (int32_t)cy));
+    const int64_t tr1 = cm_trace_on() ? get_time_tick_ns() : 0;
     if (fc.cd == NULL)
     {
         wp_free(ecx, ecy);
@@ -5462,7 +5586,12 @@ static TbBool cm_load_chunk(int64_t cx, int64_t cy, uint32_t now)
         area_set(tot, room, 1);
     }
     const int64_t t2 = world_prof_now();
+    const int64_t tr2 = cm_trace_on() ? get_time_tick_ns() : 0;
     cm_refresh_chunk(ecx, ecy);
+    if (tr0 != 0)
+        SYNCLOG("CMTRACE L %ld %ld %c %ld %ld %ld nav %ld ceil %ld light %ld panel %ld", (long)cx, (long)cy, cm_data_source,
+            (long)((tr1 - tr0) / 1000), (long)((tr2 - tr1) / 1000), (long)((get_time_tick_ns() - tr2) / 1000),
+            (long)cm_rf_us[0], (long)cm_rf_us[1], (long)cm_rf_us[2], (long)cm_rf_us[3]);
     if (W.lair_wait_count > 0)
         lair_waits_process();
     if (t0 != 0)
@@ -5483,6 +5612,7 @@ static void cm_unload_chunk(int64_t cx, int64_t cy)
     area_take();
     dungeon_area_of_page(wp_page(ecx, ecy), area_tot, area_room);
     nav_defer_begin(); /* cm_refresh_chunk refreshes the chunk's navigation after */
+    const int64_t tr0 = cm_trace_on() ? get_time_tick_ns() : 0;
     WORLD_PROF(WPS_FzRecord, stored = freeze_window_chunk((int)(cx - W.origin_cx), (int)(cy - W.origin_cy)));
     const MapSlabCoord sx0 = (MapSlabCoord)ecx * WORLD_CHUNK_SLABS, sy0 = (MapSlabCoord)ecy * WORLD_CHUNK_SLABS;
     WORLD_PROF(WPS_FzClear, clear_band(sx0, sy0, sx0 + WORLD_CHUNK_SLABS - 1, sy0 + WORLD_CHUNK_SLABS - 1));
@@ -5510,7 +5640,12 @@ static void cm_unload_chunk(int64_t cx, int64_t cy)
     }
     wp_free(ecx, ecy);
     area_set(area_tot, area_room, -1);
+    const int64_t tr1 = cm_trace_on() ? get_time_tick_ns() : 0;
     cm_refresh_chunk(ecx, ecy);
+    if (tr0 != 0)
+        SYNCLOG("CMTRACE F %ld %ld %ld %ld nav %ld ceil %ld light %ld panel %ld", (long)cx, (long)cy, (long)((tr1 - tr0) / 1000),
+            (long)((get_time_tick_ns() - tr1) / 1000), (long)cm_rf_us[0], (long)cm_rf_us[1], (long)cm_rf_us[2],
+            (long)cm_rf_us[3]);
 }
 
 static int count_creatures_with_lairs(void)
@@ -5669,6 +5804,11 @@ static void cm_plan_pass(uint32_t now)
         qsort(cand, (size_t)ncand, sizeof(struct CmCandidate), cm_candidate_cmp);
         for (int i = 0; (i < ncand) && (cm_load_n < CM_LOAD_BUDGET); i++)
             cm_load_q[cm_load_n++] = cand[i];
+        /* KFX_WORLD_GENAHEAD: this pass's loads after the first and the next passes' are made ahead (those with no
+           record: the generator's part of their load) */
+        for (int i = 1; wga_enabled() && (i < ncand) && (i < CM_LOAD_BUDGET + 12); i++)
+            if (!chunk_apart(cand[i].cx, cand[i].cy) && (table_find(&W.store, (int32_t)cand[i].cx, (int32_t)cand[i].cy) == NULL))
+                wga_request((int32_t)cand[i].cx, (int32_t)cand[i].cy, true);
     }
     free(cand);
     cm_last_ncand = ncand;
@@ -5856,8 +5996,85 @@ static void world_books_ahead(void)
     }
 }
 
+/* Test switch KFX_WORLD_ACTDUMP=<period> (streaming study, 2026-11-28): every period turns, logs/actdump_<turn>.txt
+   lists what keeps ground loaded, in world slabs: creatures (C x y owner human), hearts (H x y owner), slabs owned
+   by a player or a keeper (O x y owner), dig orders (D x y owner), awake keepers' boxes (K x1 y1 x2 y2) and the loaded
+   chunks (P cx cy). For working out offline what other chunk sizes or shapes would keep loaded. */
+static void world_actdump(void)
+{
+    static int period = -1;
+    if (period < 0)
+    {
+        const char *v = getenv("KFX_WORLD_ACTDUMP");
+        period = (v != NULL) ? max(1, atoi(v)) : 0;
+    }
+    if ((period == 0) || !world_paged || ((game.play_gameturn % (GameTurn)period) != 0))
+        return;
+    char name[96];
+    snprintf(name, sizeof(name), "logs/actdump_%06lu.txt", (unsigned long)game.play_gameturn);
+    FILE *f = fopen(name, "w");
+    if (f == NULL)
+        return;
+    const PlayerBitFlags humans = world_human_mask();
+    const struct StructureList *creatures = get_list_for_thing_class(TCls_Creature);
+    long cguard = 0;
+    for (ThingIndex ci = creatures->index; (ci > 0) && (cguard++ <= (long)THINGS_COUNT);)
+    {
+        struct Thing *thing = thing_get(ci);
+        if (thing_is_invalid(thing))
+            break;
+        ci = thing->next_of_class;
+        if (!thing_exists(thing) || (thing->class_id != TCls_Creature) || thing_is_picked_up(thing))
+            continue;
+        fprintf(f, "C %lld %lld %d %d\n", (long long)world_slab_x_of(subtile_slab(thing->mappos.x.stl.num)),
+            (long long)world_slab_y_of(subtile_slab(thing->mappos.y.stl.num)), (int)thing->owner,
+            (owner_in_mask(thing->owner, humans) || world_raid_hero(thing) || world_alarm_hero(thing)) ? 1 : 0);
+    }
+    for (PlayerNumber p = 0; p < PLAYERS_COUNT; p++)
+    {
+        const struct Thing *h = find_players_dungeon_heart(p);
+        if (thing_exists(h))
+            fprintf(f, "H %lld %lld %d\n", (long long)world_slab_x_of(subtile_slab(h->mappos.x.stl.num)),
+                (long long)world_slab_y_of(subtile_slab(h->mappos.y.stl.num)), (int)p);
+        struct Dungeon *dungeon = get_dungeon(p);
+        if (dungeon_invalid(dungeon))
+            continue;
+        for (long t = min((long)dungeon->highest_task_number, (long)MAPTASKS_COUNT) - 1; t >= 0; t--)
+        {
+            const struct MapTask *mtask = &dungeon->task_list[t];
+            if (mtask->kind != 0)
+                fprintf(f, "D %lld %lld %d\n", (long long)world_slab_x_of(subtile_slab(stl_num_decode_x(mtask->coords))),
+                    (long long)world_slab_y_of(subtile_slab(stl_num_decode_y(mtask->coords))), (int)p);
+        }
+    }
+    for (int k = 0; k < W.keeper_count; k++)
+        if (W.keepers[k].state == WKSt_Active)
+            fprintf(f, "K %lld %lld %lld %lld %d\n", (long long)W.keepers[k].bbox_x1, (long long)W.keepers[k].bbox_y1,
+                (long long)W.keepers[k].bbox_x2, (long long)W.keepers[k].bbox_y2, (int)W.keepers[k].slot);
+    for (struct WorldPage *pg = wp_first(); pg != NULL; pg = pg->next)
+    {
+        fprintf(f, "P %lld %lld\n", (long long)page_world_cx(pg), (long long)page_world_cy(pg));
+        for (int i = 0; i < WP_CHUNK_SLAB_CELLS; i++)
+        {
+            const PlayerNumber o = slabmap_owner(&pg->slab[i]);
+            if ((o == game.neutral_player_num) || (o == PLAYER_GOOD) || (o < 0) || (o >= PLAYERS_COUNT))
+                continue;
+            fprintf(f, "O %lld %lld %d\n", (long long)(page_world_cx(pg) * WORLD_CHUNK_SLABS + i % WP_CHUNK_SLABS),
+                (long long)(page_world_cy(pg) * WORLD_CHUNK_SLABS + i / WP_CHUNK_SLABS), (int)o);
+        }
+    }
+    fclose(f);
+}
+
 static void chunk_manager_turn(void)
 {
+    if (wga_enabled() && ((game.play_gameturn % 2000) == 0))
+    {
+        unsigned long rq, us, mk, dr;
+        wga_stats(&rq, &us, &mk, &dr);
+        SYNCLOG("World: generated ahead: %lu asked, %lu made, %lu used, %lu dropped", rq, mk, us, dr);
+    }
+    world_actdump();
     world_lair_test();
     if (start_coming_n > 0)
         starts_coming_check();
@@ -6015,8 +6232,10 @@ static struct PeekEntry *peek_get(int64_t wcx, int64_t wcy, struct WorldChunkDat
         }
         pe->valid = 1;
         (*stored)++;
-    } else if (wg_generate_chunk(W.gen, (int32_t)wcx, (int32_t)wcy, &peek_gen) == 0)
+    } else if (wga_peek((int32_t)wcx, (int32_t)wcy, peek_gen.slabs, peek_gen.owners) ||
+        (wg_generate_chunk(W.gen, (int32_t)wcx, (int32_t)wcy, &peek_gen) == 0))
     {
+        /* (KFX_WORLD_GENAHEAD: the worker's slabs and owners, the same bytes the generator gives here) */
         for (int k = 0; k < WG_CHUNK_CELLS; k++)
         {
             const uint8_t s = peek_gen.slabs[k];
@@ -6037,6 +6256,24 @@ int world_peek_warm(MapSlabCoord x1, MapSlabCoord y1, MapSlabCoord x2, MapSlabCo
     const int64_t wcy1 = floor_div(world_slab_y_of(y1), WG_CHUNK), wcy2 = floor_div(world_slab_y_of(y2), WG_CHUNK);
     struct WorldChunkData *cd = NULL;
     int stored = 0, generated = 0, done = 0;
+    if (wga_enabled())
+    {
+        /* KFX_WORLD_GENAHEAD: the worker makes the box's unstored chunks; this turn does nothing more (the search reads
+           the worker's copies, or makes what isn't there yet itself) */
+        for (int64_t wcy = wcy1; wcy <= wcy2; wcy++)
+            for (int64_t wcx = wcx1; wcx <= wcx2; wcx++)
+            {
+                if ((wp_page(engine_chunk_of(wcx), engine_chunk_of(wcy)) != NULL) || chunk_apart(wcx, wcy) ||
+                    (table_find(&W.store, (int32_t)wcx, (int32_t)wcy) != NULL))
+                    continue;
+                if ((peek_cache != NULL) && peek_cache_slot(wcx, wcy)->valid && (peek_cache_slot(wcx, wcy)->cx == wcx) &&
+                    (peek_cache_slot(wcx, wcy)->cy == wcy))
+                    continue;
+                wga_request((int32_t)wcx, (int32_t)wcy, false);
+                done++;
+            }
+        return done;
+    }
     for (int64_t wcy = wcy1; (wcy <= wcy2) && (done < budget); wcy++)
     {
         for (int64_t wcx = wcx1; (wcx <= wcx2) && (done < budget); wcx++)
@@ -6416,6 +6653,8 @@ static TbBool world_init_state(void)
         wg_world_set_rival_min_dist(W.gen, atoi(getenv("KFX_WORLD_RIVALNEAR")));
         SYNCLOG("World: TEST: rival pairs from %d slabs from the start (the rule: 220)", atoi(getenv("KFX_WORLD_RIVALNEAR")));
     }
+    if (W.gen != NULL)
+        wga_start(W.seed, W.gen_version, (getenv("KFX_WORLD_RIVALNEAR") != NULL) ? atoi(getenv("KFX_WORLD_RIVALNEAR")) : 0);
     stamp_src_n = stamp_src_next = 0; /* (a new generator: the start's chunks kept for the stamps were another's, */
     book_starts_forget();             /* and so were the starts' nearest reward caves) */
     if (W.gen == NULL)
@@ -8951,16 +9190,18 @@ static TbBool world_autoshift(void)
         W.last_shift_turn = game.play_gameturn;
         step++;
         done_in_step = 0;
+        const int64_t t0 = get_time_tick_ns();
         if (dir == 'V')
         {
             SaveManager_FillSlot(n, "World test");
             int ok = SaveManager_Save(n);
-            SYNCLOG("World autoshift: saved slot %d (%s)", n, ok ? "ok" : "failed");
+            SYNCLOG("World autoshift: saved slot %d (%s) in %.1f ms", n, ok ? "ok" : "failed", (double)(get_time_tick_ns() - t0) / 1e6);
         } else
         {
             enum SaveCheckResult why;
             enum SaveLoadOutcome outcome = SaveManager_Load(n, &why);
-            SYNCLOG("World autoshift: loaded slot %d, outcome %d, check %d", n, (int)outcome, (int)why);
+            SYNCLOG("World autoshift: loaded slot %d, outcome %d, check %d in %.1f ms", n, (int)outcome, (int)why,
+                (double)(get_time_tick_ns() - t0) / 1e6);
             if (outcome == SvLoad_Done)
                 network_after_save_loaded(); /* as the game's other load paths do (a server: its stream again) */
             W.last_shift_turn = game.play_gameturn;
@@ -12046,6 +12287,8 @@ void world_level_end(void)
     netstate_level_end();
     world_progress_level_end();
     world_hand_reset(); /* the slaps' hurries were this world's */
+    world_pentagram_screen_close(); /* (open as the world ended - a drop, a kick, a defeat: the game's sound stayed at 0
+                                       and the screen came up in the next world; audit 2026-11-28) */
     world_extras_reset();
     world_levels_reset();
     world_perks_reset();
@@ -12056,6 +12299,7 @@ void world_level_end(void)
     peek_cache_drop();
     if (world_paged)
         wp_set_paged(false);
+    wga_stop();
     if (W.gen != NULL)
         wg_world_destroy(W.gen);
     table_free(&W.store);
@@ -12491,6 +12735,7 @@ static const struct WorldExtra world_extras[] = {
     {WORLD_EXTRA_SWORD, world_sword_save_size, world_sword_save, world_sword_load, world_sword_reset},
     {WORLD_EXTRA_SEATDAYS, world_seatdays_save_size, world_seatdays_save, world_seatdays_load, world_seatdays_reset},
     {WORLD_EXTRA_BOSS, world_boss_save_size, world_boss_save, world_boss_load, world_boss_reset},
+    {WORLD_EXTRA_RISEN, world_risen_save_size, world_risen_save, world_risen_load, world_risen_reset},
     {WORLD_EXTRA_STORAGE, world_storage_save_size, world_storage_save, world_storage_load, world_storage_reset},
     {WORLD_EXTRA_TRUCE, world_truce_save_size, world_truce_save, world_truce_load, world_truce_reset},
     {WORLD_EXTRA_DEFECTORS, world_defectors_save_size, world_defectors_save, world_defectors_load, world_defectors_reset},
@@ -12987,9 +13232,12 @@ TbBool world_save_blob(unsigned char **data, uint32_t *len)
         free(w.buf);
         return false;
     }
-    TbBool ok = pack(w.buf, w.len, data, len);
+    /* (a blob for the network stays zlib: other builds read it) */
+    const int64_t pack_t0 = get_time_tick_ns();
+    TbBool ok = blob_for_network ? pack_zlib(w.buf, w.len, data, len) : pack(w.buf, w.len, data, len);
     if (ok)
-        SYNCLOG("World: saved world %lu bytes (%lu packed), %ld chunk pages", (unsigned long)w.len, (unsigned long)*len,
+        SYNCLOG("World: saved world %lu bytes (%lu packed in %.1f ms), %ld chunk pages", (unsigned long)w.len, (unsigned long)*len,
+            (double)(get_time_tick_ns() - pack_t0) / 1e6,
             (long)wp_count());
     free(w.buf);
     return ok;

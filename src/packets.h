@@ -243,6 +243,7 @@ enum TbPacketControl {
         PCtr_Ascend         = 0x80000,
         PCtr_Descend        = 0x100000,
         PCtr_ViewZoomPos    = 0x200000,
+        PCtr_Run            = 0x400000, //!< Endless: possessing, the speed key (Shift) is held: run at slapped speed
 };
 
 /**

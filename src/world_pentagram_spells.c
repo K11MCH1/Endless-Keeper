@@ -90,6 +90,15 @@ GoldAmount world_pentagram_spell_pay(PlayerNumber plyr_idx, PowerKind pwkind, Go
     return price;
 }
 
+void world_pentagram_spell_unpay(PlayerNumber plyr_idx, GoldAmount credit)
+{
+    /* (the cast failed for want of gold: the credit was spent before the gold was taken; audit 2026-11-28) */
+    struct WorldPentagram *s = world_pentagram_state(plyr_idx);
+    if ((s == NULL) || (credit <= 0))
+        return;
+    s->soul_credit += (uint32_t)credit;
+}
+
 /** A creature died in the keeper's Prison or Torture Room: Soul Harvest banks gold for the next spell. */
 void world_pentagram_soul_harvest(PlayerNumber plyr_idx)
 {

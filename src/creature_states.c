@@ -2570,7 +2570,9 @@ short cleanup_creature_leaves_or_dies(struct Thing* creatng)
 short creature_leaving_dungeon(struct Thing *creatng)
 {
     TRACE_THING(creatng);
-    struct Room* room = find_nearest_room_of_role_for_thing(creatng, creatng->owner, RoRoF_CrPoolLeave, NavRtF_Default);
+    struct Room* room = world_leave_portal(creatng); /* endless: the main portal a migration chose (world_stream.c) */
+    if (room_is_invalid(room))
+        room = find_nearest_room_of_role_for_thing(creatng, creatng->owner, RoRoF_CrPoolLeave, NavRtF_Default);
     if (room_is_invalid(room))
     {
         set_start_state(creatng);
@@ -2627,7 +2629,9 @@ struct Thing *find_random_creature_for_persuade(PlayerNumber plyr_idx, struct Co
 
 TbBool make_creature_leave_dungeon(struct Thing *creatng)
 {
-    struct Room* room = find_nearest_room_of_role_for_thing(creatng, creatng->owner, RoRoF_CrPoolLeave, NavRtF_Default);
+    struct Room* room = world_leave_portal(creatng); /* endless: the main portal a migration chose (world_stream.c) */
+    if (room_is_invalid(room))
+        room = find_nearest_room_of_role_for_thing(creatng, creatng->owner, RoRoF_CrPoolLeave, NavRtF_Default);
     if (room_is_invalid(room)) {
         set_start_state(creatng);
         return false;
